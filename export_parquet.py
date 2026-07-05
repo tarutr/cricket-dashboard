@@ -314,7 +314,12 @@ def sql_batting():
     ),
     -- Batting position: rank of first appearance at the crease, ordered by the
     -- first delivery where the player is batter or non_striker; on that same
-    -- delivery the striker (batter) ranks before the non-striker.
+    -- delivery the striker (batter) ranks before the non-striker. Players whose
+    -- only trace is a wickets row (came to the crease, never on record for a
+    -- delivery, e.g. immediate retirement) slot in at the ball where their
+    -- wicket/retirement is recorded, AFTER the two on-strike players of that
+    -- ball (owner ruling: they take the position where they actually arrived,
+    -- e.g. a #4 who retires immediately is position 4, not 11).
     appearances AS (
         SELECT match_id, innings_number, batter_id AS pid,
                over_number, ball_index, 0 AS role_rank  -- striker before non-striker
@@ -323,6 +328,10 @@ def sql_batting():
         SELECT match_id, innings_number, non_striker_id AS pid,
                over_number, ball_index, 1 AS role_rank
         FROM d
+        UNION ALL
+        SELECT match_id, innings_number, player_out_id AS pid,
+               over_number, ball_index, 2 + wicket_index AS role_rank
+        FROM kept_wickets
     ),
     first_app AS (
         SELECT match_id, innings_number, pid,
@@ -749,6 +758,12 @@ def run_gates(con, out_dir):
     bat_rows = rows("batting_innings.parquet")
     gate(bat_rows == indep, "batting_rows == crease-appearance count",
          f"{bat_rows} vs {indep}")
+
+    # Every crease appearance gets a batting position (owner ruling).
+    null_pos = q(
+        f"SELECT COUNT(*) FROM read_parquet('{bat_p}') WHERE batting_position IS NULL"
+    )
+    gate(null_pos == 0, "batting_position never NULL", f"{null_pos} NULL positions")
 
     # --- Gate: Hundred sanity ---
     # For balls_per_over=5 matches, every odi_* column IS NULL in both files,
