@@ -1,0 +1,10 @@
+secrets.md
+data/
+v1_reference/
+.env
+.env.*
+node_modules/
+__pycache__/
+*.parquet
+.DS_Store
+.claude/settings.local.json
