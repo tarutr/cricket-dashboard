@@ -7,6 +7,7 @@
 <link rel="preload" href="/vendor/fonts/bricolage-grotesque-variable.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="/vendor/fonts/inter-variable.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="/styles.css" />
+<script src="/vendor/chartjs/chart.umd.min.js"></script>
 </head>
 <body>
   <div class="app">
@@ -15,10 +16,16 @@
         <h1 class="app-header__title"><span class="app-header__wordmark">cricdb</span></h1>
         <p class="app-header__scope" id="scope-sentence" aria-live="polite"></p>
       </div>
-      <div class="app-header__discipline">
-        <div class="segmented" data-role="discipline" role="group" aria-label="Discipline">
-          <button type="button" class="segmented__btn" data-value="batting">Batting</button>
-          <button type="button" class="segmented__btn" data-value="bowling">Bowling</button>
+      <div class="app-header__controls">
+        <div class="segmented" data-role="view" role="group" aria-label="View">
+          <button type="button" class="segmented__btn" data-value="table">Table</button>
+          <button type="button" class="segmented__btn" data-value="graph">Graph Builder</button>
+        </div>
+        <div class="app-header__discipline">
+          <div class="segmented" data-role="discipline" role="group" aria-label="Discipline">
+            <button type="button" class="segmented__btn" data-value="batting">Batting</button>
+            <button type="button" class="segmented__btn" data-value="bowling">Bowling</button>
+          </div>
         </div>
       </div>
     </header>
@@ -36,11 +43,13 @@
           <div id="advanced-panel" class="advanced-panel-container" hidden></div>
         </section>
 
-        <div class="player-search">
+        <div class="player-search" id="player-search-section">
           <input type="text" id="player-search-input" class="input" placeholder="Search players…" aria-label="Search players" />
         </div>
 
         <section class="table-section" id="table-area" aria-label="Player stats table"></section>
+
+        <section class="graph-section" id="graph-area" aria-label="Graph Builder" hidden></section>
       </div>
     </main>
 

@@ -10,6 +10,7 @@ import { mountFilters } from "./filters.js";
 import { mountAdvanced, activeConditionCount } from "./advanced.js";
 import { mountTable } from "./table.js";
 import { getMetric } from "./metrics.js";
+import { mountGraph } from "./graph/graph.js";
 
 const DEFAULT_SORT_KEY = { batting: "runs", bowling: "wickets" };
 
@@ -18,12 +19,15 @@ const appContentEl = document.getElementById("app-content");
 const scopeSentenceEl = document.getElementById("scope-sentence");
 const footerDataDateEl = document.getElementById("footer-data-date");
 const disciplineToggleEl = document.querySelector('[data-role="discipline"]');
+const viewToggleEl = document.querySelector('[data-role="view"]');
 const filterBarEl = document.getElementById("filter-bar");
 const advancedToggleEl = document.getElementById("advanced-toggle");
 const advancedCountEl = document.getElementById("advanced-count");
 const advancedPanelEl = document.getElementById("advanced-panel");
+const playerSearchSectionEl = document.getElementById("player-search-section");
 const playerSearchInputEl = document.getElementById("player-search-input");
 const tableAreaEl = document.getElementById("table-area");
+const graphAreaEl = document.getElementById("graph-area");
 
 function describeProgress(progress) {
   switch (progress.stage) {
@@ -62,6 +66,7 @@ let store;
 let tableController;
 let advancedController;
 let filterController;
+let graphController;
 
 // Tracks the columns array we last auto-applied as a "default preset" per
 // discipline, so we can tell whether the user has since customized columns
@@ -104,6 +109,28 @@ function updateAdvancedCount() {
   advancedCountEl.textContent = String(n);
 }
 
+function updateViewToggle() {
+  const state = store.get();
+  viewToggleEl.querySelectorAll(".segmented__btn").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.value === state.view);
+  });
+}
+
+/** Show/hide the table vs graph panels for the current state.view (§6: same page, no iframe). */
+function applyView() {
+  const state = store.get();
+  const graph = state.view === "graph";
+  tableAreaEl.hidden = graph;
+  playerSearchSectionEl.hidden = graph;
+  graphAreaEl.hidden = !graph;
+  updateViewToggle();
+  if (graph) {
+    graphController.onShow();
+  } else {
+    tableController.load();
+  }
+}
+
 function onFiltersChanged() {
   // Drop columns/conditions orphaned by the new scope BEFORE anything renders,
   // so the advanced panel, count badge, and query all agree (§8.4 honesty).
@@ -113,7 +140,12 @@ function onFiltersChanged() {
   // Re-render the advanced panel too: its metric dropdown must reflect the
   // current format scope (§8.9 phase-metric gating) whenever formats change.
   if (advancedController) advancedController.render();
-  tableController.load();
+  // Only the visible view re-queries; the other refreshes when switched to.
+  if (store.get().view === "graph") {
+    graphController.onScopeChanged();
+  } else {
+    tableController.load();
+  }
 }
 
 function boot() {
@@ -192,9 +224,20 @@ function boot() {
       });
 
       tableController = mountTable(tableAreaEl, store);
+      graphController = mountGraph(graphAreaEl, store);
+
+      viewToggleEl.addEventListener("click", (e) => {
+        const btn = e.target.closest(".segmented__btn");
+        if (!btn) return;
+        const view = btn.dataset.value;
+        if (view === store.get().view) return;
+        store.set({ view });
+        applyView();
+      });
 
       updateScopeSentence();
       updateAdvancedCount();
+      updateViewToggle();
       tableController.load();
     })
     .catch((err) => {

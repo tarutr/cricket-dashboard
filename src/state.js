@@ -65,6 +65,7 @@ export function createInitialState(maxMonth) {
   const dateTo = maxMonth ?? null;
   const dateFrom = maxMonth ? monthsAgo(maxMonth, 36) : null;
   return {
+    view: "table", // "table" | "graph" (SPEC §6 Graph Builder)
     discipline: "batting",
     gender: "female",
     formats: ["T20"],
