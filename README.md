@@ -38,6 +38,20 @@ Verify with: `curl -s -I -H "Origin: https://cricdb.vercel.app" https://pub-<has
 
 ## Local development
 
+Serve the repo root with any static server on port 8000 (the port allowed by the
+R2 CORS policy): `python3 -m http.server 8000`, then open http://localhost:8000/debug/.
+
+There is **no build step**. The only tooling ever used is a one-time vendoring
+command (already run; repeat only when upgrading duckdb-wasm) that inlines its
+`apache-arrow` dependency so browsers can import it without a bundler:
+
+```sh
+npm install @duckdb/duckdb-wasm@<version> apache-arrow esbuild
+npx esbuild node_modules/@duckdb/duckdb-wasm/dist/duckdb-browser.mjs \
+  --bundle --format=esm --minify --outfile=vendor/duckdb-wasm/duckdb-browser.mjs
+# then copy dist/*.worker.js and dist/*.wasm alongside it, update vendor/duckdb-wasm/VERSION
+```
+
 ## Adding a metric
 
 ## Triggering a data refresh

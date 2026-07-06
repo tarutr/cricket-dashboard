@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>cricdb — debug console</title>
+<style>
+  :root {
+    --bg: #f7f5f0;
+    --fg: #1a1a1a;
+    --muted: #6b6b6b;
+    --line: #d8d4c8;
+    --panel: #ffffff;
+    --good: #1b7a3d;
+    --bad: #b3261e;
+    --accent: #1a4fd6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 1.5rem;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "SF Mono", "Menlo", "Consolas", "Liberation Mono", monospace;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  h1 { font-size: 1.1rem; margin: 0 0 0.25rem; }
+  h2 { font-size: 0.95rem; margin: 1.5rem 0 0.5rem; border-bottom: 1px solid var(--line); padding-bottom: 0.25rem; }
+  .sub { color: var(--muted); margin: 0 0 1rem; }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+  }
+  .row { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.5rem; }
+  label { color: var(--muted); }
+  input[type="text"], input[type="number"], input[type="date"], select, textarea {
+    font-family: inherit;
+    font-size: inherit;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: #fff;
+    color: var(--fg);
+  }
+  textarea { width: 100%; min-height: 90px; resize: vertical; }
+  button {
+    font-family: inherit;
+    font-size: inherit;
+    padding: 0.4rem 0.9rem;
+    border: 1px solid var(--fg);
+    border-radius: 4px;
+    background: var(--fg);
+    color: var(--bg);
+    cursor: pointer;
+  }
+  button:hover { opacity: 0.85; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.secondary { background: transparent; color: var(--fg); }
+  .checks { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+  .checks label { color: var(--fg); display: flex; align-items: center; gap: 0.25rem; }
+  table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; font-size: 12.5px; }
+  th, td { border: 1px solid var(--line); padding: 0.3rem 0.5rem; text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child, th.text, td.text { text-align: left; }
+  thead th { background: #efece3; position: sticky; top: 0; }
+  tbody tr:nth-child(even) { background: #fbfaf7; }
+  .table-wrap { max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: 4px; }
+  .badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    font-weight: bold;
+    color: #fff;
+  }
+  .badge.good { background: var(--good); }
+  .badge.bad { background: var(--bad); }
+  .badge.neutral { background: var(--muted); }
+  .error-box {
+    border: 1px solid var(--bad);
+    background: #fdecea;
+    color: var(--bad);
+    padding: 0.75rem;
+    border-radius: 4px;
+    margin-top: 0.5rem;
+  }
+  .error-box button { margin-top: 0.5rem; }
+  .loading {
+    color: var(--muted);
+    margin-top: 0.5rem;
+  }
+  .loading::after {
+    content: "";
+    display: inline-block;
+    width: 0.6em;
+  }
+  .muted { color: var(--muted); }
+  code { background: #efece3; padding: 0.05rem 0.3rem; border-radius: 3px; }
+  .status-line { margin: 0.15rem 0; }
+</style>
+</head>
+<body>
+
+<h1>cricdb — debug console</h1>
+<p class="sub">Phase 1 data-layer sanity checks. Not the final design. See <a href="/index.html">/</a> for the site placeholder.</p>
+
+<section id="status-section">
+  <h2>Status</h2>
+  <div id="status-body">
+    <p class="status-line loading">Initializing DuckDB-WASM…</p>
+  </div>
+</section>
+
+<section id="benchmark-section">
+  <h2>Benchmark — Top 10 women's T20/IT20 run scorers, 2024–2026, min 10 innings</h2>
+  <div class="row">
+    <button id="benchmark-run" disabled>Run benchmark</button>
+    <span id="benchmark-badge"></span>
+  </div>
+  <div id="benchmark-result"></div>
+</section>
+
+<section id="lookup-section">
+  <h2>Player career lookup</h2>
+  <div class="row">
+    <label>Name contains <input type="text" id="lookup-name" placeholder="e.g. sharma" /></label>
+    <label>Gender
+      <select id="lookup-gender">
+        <option value="any">Any</option>
+        <option value="female" selected>Female</option>
+        <option value="male">Male</option>
+      </select>
+    </label>
+  </div>
+  <div class="row">
+    <span class="muted">Formats:</span>
+    <div class="checks" id="lookup-formats">
+      <label><input type="checkbox" value="T20" checked /> T20</label>
+      <label><input type="checkbox" value="IT20" checked /> IT20</label>
+      <label><input type="checkbox" value="ODI" /> ODI</label>
+      <label><input type="checkbox" value="ODM" /> ODM</label>
+      <label><input type="checkbox" value="Test" /> Test</label>
+      <label><input type="checkbox" value="MDM" /> MDM</label>
+    </div>
+  </div>
+  <div class="row">
+    <label>From <input type="date" id="lookup-from" /></label>
+    <label>To <input type="date" id="lookup-to" /></label>
+    <button id="lookup-run" disabled>Look up</button>
+  </div>
+  <div id="lookup-result"></div>
+</section>
+
+<section id="sql-section">
+  <h2>Free SQL</h2>
+  <p class="sub">Runs against the <code>players</code>, <code>matches</code>, <code>batting</code>, <code>bowling</code> views. Results capped at 200 rows.</p>
+  <textarea id="sql-input" spellcheck="false">SELECT * FROM batting LIMIT 20;</textarea>
+  <div class="row">
+    <button id="sql-run" disabled>Run</button>
+    <span id="sql-timing" class="muted"></span>
+  </div>
+  <div id="sql-result"></div>
+</section>
+
+<script type="module">
+import { initDB, query, getManifest } from "/src/db.js";
+
+const statusBody = document.getElementById("status-body");
+const benchmarkRunBtn = document.getElementById("benchmark-run");
+const benchmarkBadge = document.getElementById("benchmark-badge");
+const benchmarkResult = document.getElementById("benchmark-result");
+const lookupRunBtn = document.getElementById("lookup-run");
+const lookupResult = document.getElementById("lookup-result");
+const lookupFrom = document.getElementById("lookup-from");
+const lookupTo = document.getElementById("lookup-to");
+const sqlRunBtn = document.getElementById("sql-run");
+const sqlInput = document.getElementById("sql-input");
+const sqlTiming = document.getElementById("sql-timing");
+const sqlResult = document.getElementById("sql-result");
+
+const allButtons = [benchmarkRunBtn, lookupRunBtn, sqlRunBtn];
+
+// ---------- helpers ----------
+
+function esc(s) {
+  return String(s).replace(/'/g, "''");
+}
+
+function fmtVal(v) {
+  if (v === null || v === undefined) return "—";
+  if (typeof v === "number" && !Number.isInteger(v)) return v.toFixed(2);
+  return String(v);
+}
+
+function renderTable(container, rows, { limit } = {}) {
+  container.innerHTML = "";
+  if (!rows || rows.length === 0) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "No rows.";
+    container.appendChild(p);
+    return;
+  }
+  const shown = limit ? rows.slice(0, limit) : rows;
+  const cols = Object.keys(shown[0]);
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const c of cols) {
+    const th = document.createElement("th");
+    th.textContent = c;
+    if (typeof shown[0][c] === "string") th.classList.add("text");
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  for (const row of shown) {
+    const tr = document.createElement("tr");
+    for (const c of cols) {
+      const td = document.createElement("td");
+      td.textContent = fmtVal(row[c]);
+      if (typeof row[c] === "string") td.classList.add("text");
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  container.appendChild(wrap);
+  if (limit && rows.length > limit) {
+    const note = document.createElement("p");
+    note.className = "muted";
+    note.textContent = `Showing first ${limit} of ${rows.length} rows.`;
+    container.appendChild(note);
+  }
+}
+
+function renderLoading(container, label) {
+  container.innerHTML = `<p class="loading">${label}</p>`;
+}
+
+function renderError(container, err, retryFn) {
+  container.innerHTML = "";
+  const box = document.createElement("div");
+  box.className = "error-box";
+  const msg = document.createElement("div");
+  msg.textContent = err.userMessage || err.message || String(err);
+  box.appendChild(msg);
+  if (retryFn) {
+    const btn = document.createElement("button");
+    btn.textContent = "Retry";
+    btn.addEventListener("click", retryFn);
+    box.appendChild(btn);
+  }
+  container.appendChild(box);
+}
+
+function setButtonsEnabled(enabled) {
+  for (const b of allButtons) b.disabled = !enabled;
+}
+
+// ---------- status / init ----------
+
+function renderStatus(lines) {
+  statusBody.innerHTML = "";
+  for (const line of lines) {
+    const p = document.createElement("p");
+    p.className = "status-line";
+    p.innerHTML = line;
+    statusBody.appendChild(p);
+  }
+}
+
+async function boot() {
+  setButtonsEnabled(false);
+  renderStatus([`<span class="loading">Initializing DuckDB-WASM…</span>`]);
+  const startedAt = performance.now();
+  try {
+    await initDB((progress) => {
+      renderStatus([`<span class="loading">${describeProgress(progress)}</span>`]);
+    });
+    const totalMs = Math.round(performance.now() - startedAt);
+    const manifest = getManifest();
+    const lines = [];
+    lines.push(`<strong>DuckDB-WASM ready.</strong> Total init time: ${totalMs} ms.`);
+    if (manifest) {
+      lines.push(
+        `Manifest: generated_at=<code>${manifest.generated_at}</code>, ` +
+        `match_count=<code>${manifest.data?.match_count}</code>, ` +
+        `date range=<code>${manifest.data?.min_match_date}</code> to <code>${manifest.data?.max_match_date}</code>`
+      );
+      if (manifest.data?.min_match_date) lookupFrom.value = manifest.data.min_match_date;
+      if (manifest.data?.max_match_date) lookupTo.value = manifest.data.max_match_date;
+    }
+    renderStatus(lines);
+    setButtonsEnabled(true);
+  } catch (err) {
+    const totalMs = Math.round(performance.now() - startedAt);
+    statusBody.innerHTML = "";
+    const p = document.createElement("p");
+    p.className = "status-line";
+    p.innerHTML = `<strong>Initialization failed</strong> after ${totalMs} ms.`;
+    statusBody.appendChild(p);
+    renderError(statusBody, err, boot);
+  }
+}
+
+function describeProgress(progress) {
+  switch (progress.stage) {
+    case "manifest": return "Fetching manifest.json…";
+    case "loading-duckdb": return "Loading DuckDB-WASM module…";
+    case "connecting": return "Opening database connection…";
+    case "registering-data": return progress.file ? `Registering ${progress.file}…` : "Registering Parquet files…";
+    case "ready": return "Finalizing…";
+    default: return "Working…";
+  }
+}
+
+boot();
+
+// ---------- benchmark ----------
+
+const BENCHMARK_SQL = `SELECT batter_name, COUNT(*) AS innings, SUM(runs) AS runs,
+       ROUND(SUM(runs)*100.0/NULLIF(SUM(balls_faced),0),2) AS strike_rate
+FROM batting
+WHERE gender='female' AND match_type IN ('T20','IT20')
+  AND match_date >= DATE '2024-01-01' AND match_date <= DATE '2026-12-31'
+GROUP BY batter_id, batter_name HAVING COUNT(*) >= 10
+ORDER BY runs DESC LIMIT 10`;
+
+async function runBenchmark() {
+  benchmarkBadge.innerHTML = "";
+  renderLoading(benchmarkResult, "Running benchmark…");
+  try {
+    const { rows, ms } = await query(BENCHMARK_SQL);
+    const rounded = Math.round(ms);
+    const good = ms < 1500;
+    benchmarkBadge.innerHTML = `<span class="badge ${good ? "good" : "bad"}">${rounded} ms</span>`;
+    renderTable(benchmarkResult, rows);
+  } catch (err) {
+    benchmarkBadge.innerHTML = `<span class="badge bad">error</span>`;
+    renderError(benchmarkResult, err, runBenchmark);
+  }
+}
+
+benchmarkRunBtn.addEventListener("click", runBenchmark);
+
+// ---------- player career lookup ----------
+
+function selectedFormats() {
+  return [...document.querySelectorAll("#lookup-formats input:checked")].map((i) => i.value);
+}
+
+function buildLookupWhere() {
+  const nameRaw = document.getElementById("lookup-name").value.trim();
+  const gender = document.getElementById("lookup-gender").value;
+  const formats = selectedFormats();
+  const from = lookupFrom.value;
+  const to = lookupTo.value;
+
+  const clauses = [];
+  if (gender !== "any") clauses.push(`gender = '${esc(gender)}'`);
+  if (formats.length > 0) {
+    clauses.push(`match_type IN (${formats.map((f) => `'${esc(f)}'`).join(", ")})`);
+  } else {
+    clauses.push("FALSE"); // no format selected -> no rows, not "all"
+  }
+  if (from) clauses.push(`match_date >= DATE '${esc(from)}'`);
+  if (to) clauses.push(`match_date <= DATE '${esc(to)}'`);
+
+  return { nameClause: nameRaw, where: clauses.join(" AND ") };
+}
+
+async function runLookup() {
+  const { nameClause, where } = buildLookupWhere();
+  renderLoading(lookupResult, "Looking up player(s)…");
+
+  const battingSql = `
+    SELECT batter_id, batter_name,
+           COUNT(*) AS innings,
+           SUM(runs) AS runs,
+           SUM(balls_faced) AS balls_faced,
+           SUM(dismissed) AS dismissals,
+           ROUND(SUM(runs)*1.0/NULLIF(SUM(dismissed),0), 2) AS average,
+           ROUND(SUM(runs)*100.0/NULLIF(SUM(balls_faced),0), 2) AS strike_rate,
+           SUM(fours_hit) AS fours,
+           SUM(sixes_hit) AS sixes,
+           MAX(runs) AS high_score
+    FROM batting
+    WHERE batter_name ILIKE '%${esc(nameClause)}%' AND ${where}
+    GROUP BY batter_id, batter_name
+    ORDER BY runs DESC
+    LIMIT 20`;
+
+  const bowlingSql = `
+    SELECT bowler_id, bowler_name,
+           COUNT(*) AS innings,
+           SUM(balls) AS balls,
+           SUM(runs_conceded) AS runs_conceded,
+           SUM(wickets) AS wickets,
+           ROUND(SUM(runs_conceded)*1.0/NULLIF(SUM(wickets),0), 2) AS average,
+           ROUND(SUM(runs_conceded)*6.0/NULLIF(SUM(balls),0), 2) AS economy,
+           MAX(wickets) AS best
+    FROM bowling
+    WHERE bowler_name ILIKE '%${esc(nameClause)}%' AND ${where}
+    GROUP BY bowler_id, bowler_name
+    ORDER BY wickets DESC
+    LIMIT 20`;
+
+  lookupResult.innerHTML = "";
+  const battingHeading = document.createElement("h3");
+  battingHeading.textContent = "Batting career";
+  const battingDiv = document.createElement("div");
+  const bowlingHeading = document.createElement("h3");
+  bowlingHeading.textContent = "Bowling career";
+  const bowlingDiv = document.createElement("div");
+  lookupResult.appendChild(battingHeading);
+  lookupResult.appendChild(battingDiv);
+  lookupResult.appendChild(bowlingHeading);
+  lookupResult.appendChild(bowlingDiv);
+  renderLoading(battingDiv, "Running…");
+  renderLoading(bowlingDiv, "Running…");
+
+  try {
+    const { rows: battingRows } = await query(battingSql);
+    renderTable(battingDiv, battingRows);
+  } catch (err) {
+    renderError(battingDiv, err, runLookup);
+  }
+
+  try {
+    const { rows: bowlingRows } = await query(bowlingSql);
+    renderTable(bowlingDiv, bowlingRows);
+  } catch (err) {
+    renderError(bowlingDiv, err, runLookup);
+  }
+}
+
+lookupRunBtn.addEventListener("click", runLookup);
+
+// ---------- free SQL ----------
+
+async function runFreeSql() {
+  sqlTiming.textContent = "";
+  renderLoading(sqlResult, "Running query…");
+  const sql = sqlInput.value.trim();
+  if (!sql) {
+    renderError(sqlResult, { userMessage: "Enter a SQL statement first." }, null);
+    return;
+  }
+  try {
+    const { rows, ms } = await query(sql);
+    sqlTiming.textContent = `${Math.round(ms)} ms, ${rows.length} row(s)${rows.length > 200 ? " (showing first 200)" : ""}`;
+    renderTable(sqlResult, rows, { limit: 200 });
+  } catch (err) {
+    renderError(sqlResult, err, runFreeSql);
+  }
+}
+
+sqlRunBtn.addEventListener("click", runFreeSql);
+</script>
+
+</body>
+</html>
