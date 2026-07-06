@@ -14,6 +14,7 @@ const VIEWS = {
   matches: "matches.parquet",
   batting: "batting_innings.parquet",
   bowling: "bowling_innings.parquet",
+  player_matches: "player_matches.parquet",
 };
 
 let initPromise = null;

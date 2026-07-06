@@ -8,6 +8,7 @@ export const PARQUET_FILES = [
   "matches.parquet",
   "batting_innings.parquet",
   "bowling_innings.parquet",
+  "player_matches.parquet",
 ];
 
 export const VENDOR_DUCKDB = "/vendor/duckdb-wasm/";

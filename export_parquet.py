@@ -53,12 +53,13 @@ BOWLER_WICKET_KINDS = (
 # Dismissal kinds that DO NOT count as a batter dismissal.
 NON_DISMISSAL_KINDS = ("retired hurt", "retired not out")
 
-# The four export files and their primary keys (for the duplicate-PK gate).
+# The export files and their primary keys (for the duplicate-PK gate).
 EXPORT_FILES = {
     "players.parquet": ["player_id"],
     "matches.parquet": ["match_id"],
     "batting_innings.parquet": ["match_id", "innings_number", "batter_id"],
     "bowling_innings.parquet": ["match_id", "innings_number", "bowler_id"],
+    "player_matches.parquet": ["match_id", "player_id"],
 }
 
 CONTENT_TYPES = {
@@ -66,6 +67,7 @@ CONTENT_TYPES = {
     "matches.parquet": "application/vnd.apache.parquet",
     "batting_innings.parquet": "application/vnd.apache.parquet",
     "bowling_innings.parquet": "application/vnd.apache.parquet",
+    "player_matches.parquet": "application/vnd.apache.parquet",
     "manifest.json": "application/json",
 }
 
@@ -84,7 +86,38 @@ CONTENT_TYPES = {
 # fours_hit, sixes_hit; bowling -> wickets, runs_conceded, balls, bowl_innings.
 # (Batting "innings" = batting_innings rows; "bowl_innings" = bowling rows.)
 # ---------------------------------------------------------------------------
-SPOT_CHECKS = []  # type: list[dict]
+# Owner-verified 2026-07-06 against ESPNcricinfo for span 2025-01-01..2025-12-31.
+# NOTE: international T20s largely live under match_type 'T20' in Cricsheet
+# (IT20 is sparsely used), so T20 checks span both types.
+_T20S = ["T20", "IT20"]
+_2025 = {"date_from": "2025-01-01", "date_to": "2025-12-31"}
+SPOT_CHECKS = [
+    {"player_name": "V Kohli", "gender": "male", "match_types": _T20S, **_2025,
+     "expect": {"innings": 15, "runs": 657, "balls_faced": 454, "dismissals": 12,
+                "fours_hit": 66, "sixes_hit": 19, "high_score": 73}},
+    {"player_name": "S Mandhana", "gender": "female", "match_types": _T20S, **_2025,
+     "expect": {"innings": 17, "runs": 538, "balls_faced": 395, "dismissals": 17,
+                "fours_hit": 76, "sixes_hit": 14, "high_score": 112}},
+    # Owner's pasted line (950/14) excluded the Sydney Test (started 3 Jan 2025,
+    # season-vs-calendar quirk in the source); owner confirmed calendar-year rule.
+    {"player_name": "Shubman Gill", "gender": "male", "match_types": ["Test"], **_2025,
+     "expect": {"innings": 16, "runs": 983, "balls_faced": 1543, "dismissals": 14,
+                "fours_hit": 112, "sixes_hit": 15, "high_score": 269}},
+    {"player_name": "BA Stokes", "gender": "male", "match_types": ["Test"], **_2025,
+     "expect": {"innings": 16, "runs": 496, "balls_faced": 1081, "dismissals": 16,
+                "fours_hit": 50, "sixes_hit": 3, "high_score": 141,
+                "bowl_innings": 17, "balls": 1350, "runs_conceded": 763, "wickets": 33}},
+    {"player_name": "M Kapp", "gender": "female", "match_types": ["ODI"], **_2025,
+     "expect": {"innings": 11, "runs": 395, "balls_faced": 401, "dismissals": 8,
+                "fours_hit": 36, "sixes_hit": 10, "high_score": 121,
+                "bowl_innings": 13, "balls": 492, "runs_conceded": 349, "wickets": 17}},
+    {"player_name": "NR Sciver-Brunt", "gender": "female", "match_types": _T20S, **_2025,
+     "expect": {"innings": 36, "runs": 1229, "balls_faced": 847, "dismissals": 32,
+                "fours_hit": 184, "sixes_hit": 12, "high_score": 81,
+                "bowl_innings": 21, "balls": 348, "runs_conceded": 482, "wickets": 18}},
+    {"player_name": "Mohammed Siraj", "gender": "male", "match_types": ["Test"], **_2025,
+     "expect": {"bowl_innings": 19, "balls": 1869, "runs_conceded": 1170, "wickets": 43}},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -634,6 +667,129 @@ def odi_phase_wba():
     """
 
 
+def sql_player_matches():
+    """
+    One row per (match_id, player_id): every player who PLAYED a match.
+
+    Purpose (owner): count matches PLAYED per player. A player can be in the XI
+    yet bat/bowl in no innings; in Tests/MDMs a match has multiple innings but a
+    player counts ONCE per match. Also powers a "teams this player has played
+    for" selector.
+
+    Base source is `match_players` (the playing XIs). COMPLETENESS rule: also
+    include any (match_id, player) that appears in `deliveries`
+    (batter_id / bowler_id / non_striker_id) or in `wickets` (player_out_id) but
+    is MISSING from match_players (concussion / COVID replacements etc.). For
+    those derived rows we take team = the batting team (batter / non_striker /
+    player_out) or the bowling team (bowler); if genuinely underivable, NULL.
+
+    Super-over exclusion: super overs are excluded from ALL stats, so the derived
+    (deliveries/wickets) side only looks at non-super-over innings. This does not
+    affect match_players rows (XI membership is per match, not per innings).
+
+    Dedup: match_players has (in this data) two (match_id, player_id) pairs listed
+    under two different teams — a scorecard quirk. The PK is (match_id, player_id)
+    so we collapse to one row, picking team = MIN(team) deterministically. Derived
+    extra rows likewise collapse to one row per (match_id, player_id) with a
+    deterministic team choice (batting-side preferred, then MIN).
+    """
+    return """
+    WITH kept_innings AS (
+        SELECT match_id, innings_number, batting_team
+        FROM innings
+        WHERE super_over IS NOT TRUE
+    ),
+    m_ctx AS (
+        SELECT
+            match_id, team_1, team_2,
+            match_type, gender, team_type,
+            match_date_1 AS match_date,
+            CAST(EXTRACT(year  FROM match_date_1) AS INTEGER) AS year,
+            CAST(EXTRACT(month FROM match_date_1) AS INTEGER) AS month
+        FROM matches
+    ),
+    -- Base XI membership, one row per (match, player). Two known dup pairs list
+    -- a player under two teams; collapse deterministically with MIN(team).
+    base AS (
+        SELECT match_id, player_id,
+               ANY_VALUE(player_name) AS player_name,
+               MIN(team) AS team
+        FROM match_players
+        WHERE player_id IS NOT NULL
+        GROUP BY match_id, player_id
+    ),
+    -- COMPLETENESS: active players from kept (non-super-over) deliveries/wickets
+    -- with a derived candidate team. batter / non_striker / player_out -> the
+    -- batting team; bowler -> the NON-batting team (the other of team_1/team_2).
+    active AS (
+        SELECT ki.match_id, dv.batter_id AS pid, dv.batter AS pname,
+               ki.batting_team AS team, 0 AS side
+        FROM deliveries dv
+        JOIN kept_innings ki
+          ON dv.match_id = ki.match_id AND dv.innings_number = ki.innings_number
+        WHERE dv.batter_id IS NOT NULL
+        UNION ALL
+        SELECT ki.match_id, dv.non_striker_id AS pid, dv.non_striker AS pname,
+               ki.batting_team AS team, 0 AS side
+        FROM deliveries dv
+        JOIN kept_innings ki
+          ON dv.match_id = ki.match_id AND dv.innings_number = ki.innings_number
+        WHERE dv.non_striker_id IS NOT NULL
+        UNION ALL
+        SELECT ki.match_id, w.player_out_id AS pid, w.player_out AS pname,
+               ki.batting_team AS team, 0 AS side
+        FROM wickets w
+        JOIN kept_innings ki
+          ON w.match_id = ki.match_id AND w.innings_number = ki.innings_number
+        WHERE w.player_out_id IS NOT NULL
+        UNION ALL
+        SELECT ki.match_id, dv.bowler_id AS pid, dv.bowler AS pname,
+               CASE WHEN mc.team_1 = ki.batting_team THEN mc.team_2 ELSE mc.team_1 END AS team,
+               1 AS side
+        FROM deliveries dv
+        JOIN kept_innings ki
+          ON dv.match_id = ki.match_id AND dv.innings_number = ki.innings_number
+        JOIN m_ctx mc ON dv.match_id = mc.match_id
+        WHERE dv.bowler_id IS NOT NULL
+    ),
+    -- Extra rows: active players NOT already in the XI base. Collapse to one row
+    -- per (match, player); prefer the batting-side team (side=0) deterministically,
+    -- then MIN(team). Name from the delivery/wicket record.
+    extra AS (
+        SELECT a.match_id, a.pid AS player_id,
+               ANY_VALUE(a.pname) AS player_name,
+               MIN(a.team) AS team_any,
+               MIN(CASE WHEN a.side = 0 THEN a.team END) AS team_bat
+        FROM active a
+        LEFT JOIN base b
+          ON a.match_id = b.match_id AND a.pid = b.player_id
+        WHERE b.player_id IS NULL
+        GROUP BY a.match_id, a.pid
+    ),
+    combined AS (
+        SELECT match_id, player_id, player_name, team FROM base
+        UNION ALL
+        SELECT match_id, player_id, player_name,
+               COALESCE(team_bat, team_any) AS team
+        FROM extra
+    )
+    SELECT
+        c.match_id,
+        c.player_id,
+        c.player_name,
+        c.team,
+        mc.match_type,
+        mc.gender,
+        mc.team_type,
+        mc.match_date,
+        mc.year,
+        mc.month
+    FROM combined c
+    JOIN m_ctx mc ON c.match_id = mc.match_id
+    ORDER BY mc.match_date, c.match_id, c.player_id
+    """
+
+
 # ---------------------------------------------------------------------------
 # Parquet writing
 # ---------------------------------------------------------------------------
@@ -822,6 +978,67 @@ def run_gates(con, out_dir):
     gate(hundred_phase_gap == 0, "hundred phase splits sum to totals",
          f"{hundred_phase_gap} bowling rows with phase gaps")
 
+    # --- player_matches gates ---
+    pm_p = paths["player_matches.parquet"]
+
+    # Gate 1a (coverage): every (match_id, batter_id) in batting_innings must
+    # exist in player_matches. This also folds in the matches-vs-innings sanity
+    # (gate 3): if every batting (match, batter) is covered, then the set of
+    # distinct match_ids in batting_innings is a subset of those covered, so
+    # SUM over players of matches-played >= distinct-match coverage of batting.
+    bat_missing = q(
+        f"""
+        SELECT COUNT(*) FROM (
+            SELECT DISTINCT match_id, batter_id FROM read_parquet('{bat_p}')
+        ) b
+        LEFT JOIN read_parquet('{pm_p}') pm
+          ON b.match_id = pm.match_id AND b.batter_id = pm.player_id
+        WHERE pm.player_id IS NULL
+        """
+    )
+    gate(bat_missing == 0, "player_matches covers all batting (match,batter)",
+         f"{bat_missing} batting (match,batter) pairs missing from player_matches")
+
+    # Gate 1b (coverage): every (match_id, bowler_id) in bowling_innings must
+    # exist in player_matches.
+    bowl_missing = q(
+        f"""
+        SELECT COUNT(*) FROM (
+            SELECT DISTINCT match_id, bowler_id FROM read_parquet('{bowl_p}')
+        ) b
+        LEFT JOIN read_parquet('{pm_p}') pm
+          ON b.match_id = pm.match_id AND b.bowler_id = pm.player_id
+        WHERE pm.player_id IS NULL
+        """
+    )
+    gate(bowl_missing == 0, "player_matches covers all bowling (match,bowler)",
+         f"{bowl_missing} bowling (match,bowler) pairs missing from player_matches")
+
+    # Gate 2 (XI sanity): count (match, team) groups where a team has != 11 rows
+    # with a non-null team. Historical data legitimately has XII / substitutes,
+    # so this is a WARNING, never a hard failure.
+    xi_anomalies = q(
+        f"""
+        SELECT COUNT(*) FROM (
+            SELECT match_id, team
+            FROM read_parquet('{pm_p}')
+            WHERE team IS NOT NULL
+            GROUP BY match_id, team
+            HAVING COUNT(*) != 11
+        )
+        """
+    )
+    total_team_groups = q(
+        f"""
+        SELECT COUNT(*) FROM (
+            SELECT DISTINCT match_id, team FROM read_parquet('{pm_p}')
+            WHERE team IS NOT NULL
+        )
+        """
+    )
+    log(f"  WARN  XI sanity: {xi_anomalies} of {total_team_groups} (match,team) "
+        f"groups have != 11 players (not a failure; XII/substitutes/data quirks)")
+
     log("All structural / cross-check gates passed.")
 
 
@@ -860,7 +1077,7 @@ def run_spot_checks(con, out_dir):
 
         # Batting-side expectations (column order matches the SELECT below)
         bat_keys = ["runs", "balls_faced", "innings", "dismissals",
-                    "fours_hit", "sixes_hit"]
+                    "fours_hit", "sixes_hit", "high_score"]
         bowl_keys = ["wickets", "runs_conceded", "balls", "bowl_innings"]
 
         if set(expect) & set(bat_keys):
@@ -872,7 +1089,8 @@ def run_spot_checks(con, out_dir):
                     COUNT(*),
                     COALESCE(SUM(dismissed),0),
                     COALESCE(SUM(fours_hit),0),
-                    COALESCE(SUM(sixes_hit),0)
+                    COALESCE(SUM(sixes_hit),0),
+                    COALESCE(MAX(runs),0)
                 FROM read_parquet('{bat_p}')
                 WHERE batter_name = '{name_sql}' AND {common_sql}
                 """
@@ -1042,6 +1260,9 @@ def main():
 
     log("Writing bowling_innings.parquet ...")
     write_parquet(con, sql_bowling(), os.path.join(args.out, "bowling_innings.parquet"))
+
+    log("Writing player_matches.parquet ...")
+    write_parquet(con, sql_player_matches(), os.path.join(args.out, "player_matches.parquet"))
 
     # Gates + spot checks (all before any upload).
     try:
