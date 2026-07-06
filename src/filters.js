@@ -1,0 +1,341 @@
+// src/filters.js
+//
+// The filter bar (SPEC §5.1, with owner adjustments from the Phase 2 brief):
+// Gender segmented control, Format chips (5 buckets), Date range (month+year),
+// Team multi-select (checkbox dropdown with search), Team type, Min innings.
+// Advanced filters (AND/OR condition builder) live in src/advanced.js.
+//
+// This module only renders/wires the DOM and calls store.set(...); it never
+// queries the database directly — src/table.js owns re-querying on state change.
+
+import { FORMAT_BUCKETS, expandFormats } from "./state.js";
+import { query } from "./db.js";
+
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function monthOptionsHTML(minMonth, maxMonth, selected) {
+  if (!minMonth || !maxMonth) return "";
+  const [minY, minM] = minMonth.split("-").map(Number);
+  const [maxY, maxM] = maxMonth.split("-").map(Number);
+  const opts = [];
+  for (let y = maxY; y >= minY; y--) {
+    const mFrom = y === maxY ? maxM : 12;
+    const mTo = y === minY ? minM : 1;
+    for (let m = mFrom; m >= mTo; m--) {
+      const val = `${y}-${String(m).padStart(2, "0")}`;
+      opts.push(`<option value="${val}" ${val === selected ? "selected" : ""}>${MONTH_NAMES[m - 1]} ${y}</option>`);
+    }
+  }
+  return opts.join("");
+}
+
+function esc(s) {
+  return String(s).replace(/'/g, "''");
+}
+
+/**
+ * Query DISTINCT teams present under the current gender+format+date+team_type
+ * scope (excluding the team filter itself, and excluding minInnings/search —
+ * those don't affect which teams exist). batting_team for batting, bowling_team
+ * for bowling.
+ */
+async function fetchTeamOptions(state) {
+  const view = state.discipline === "batting" ? "batting" : "bowling";
+  const teamCol = state.discipline === "batting" ? "batting_team" : "bowling_team";
+  const clauses = buildScopeClauses(state, { includeTeams: false });
+  const where = clauses.length ? clauses.join(" AND ") : "TRUE";
+  const sql = `SELECT DISTINCT ${teamCol} AS team FROM ${view} WHERE ${where} AND ${teamCol} IS NOT NULL ORDER BY team`;
+  const { rows } = await query(sql);
+  return rows.map((r) => r.team);
+}
+
+/** Shared WHERE-clause builder for gender/format/date/team_type/(team) — used by
+ * both the team-options lookup and src/table.js's main query. Exported so
+ * table.js builds an identical scope. */
+export function buildScopeClauses(state, { includeTeams = true, teamColumn } = {}) {
+  const clauses = [];
+  clauses.push(`gender = '${esc(state.gender)}'`);
+
+  const matchTypes = expandFormats(state.formats);
+  if (matchTypes.length === 0) {
+    clauses.push("FALSE"); // no format selected -> no rows, never "all"
+  } else {
+    clauses.push(`match_type IN (${matchTypes.map((t) => `'${esc(t)}'`).join(", ")})`);
+  }
+
+  if (state.dateFrom) clauses.push(`match_date >= DATE '${esc(state.dateFrom)}-01'`);
+  if (state.dateTo) {
+    // Inclusive of the whole "to" month: use the first day of the FOLLOWING month.
+    const [y, m] = state.dateTo.split("-").map(Number);
+    const nextY = m === 12 ? y + 1 : y;
+    const nextM = m === 12 ? 1 : m + 1;
+    clauses.push(`match_date < DATE '${nextY}-${String(nextM).padStart(2, "0")}-01'`);
+  }
+
+  if (state.teamType === "international") clauses.push(`team_type = 'international'`);
+  else if (state.teamType === "club") clauses.push(`team_type = 'club'`);
+  // "both" -> no predicate
+
+  if (includeTeams && state.teams && state.teams.length > 0 && teamColumn) {
+    clauses.push(`${teamColumn} IN (${state.teams.map((t) => `'${esc(t)}'`).join(", ")})`);
+  }
+
+  return clauses;
+}
+
+/**
+ * Mount the filter bar into `container`. Calls `onChange()` after any state
+ * mutation so the caller (main.js) can re-render the table. Returns an object
+ * with `refreshTeamOptions()` so table.js/main.js can force a repopulate.
+ */
+export function mountFilters(container, store, onChange, onFormatsChanged) {
+  container.innerHTML = `
+    <div class="filter-bar">
+      <div class="filter-group filter-group--gender">
+        <span class="filter-label">Gender</span>
+        <div class="segmented" data-role="gender" role="group" aria-label="Gender">
+          <button type="button" class="segmented__btn" data-value="female">Women</button>
+          <button type="button" class="segmented__btn" data-value="male">Men</button>
+        </div>
+      </div>
+
+      <div class="filter-group filter-group--format">
+        <span class="filter-label">Format</span>
+        <div class="chip-group" data-role="formats" role="group" aria-label="Format">
+          ${FORMAT_BUCKETS.map(
+            (b) => `<button type="button" class="chip" data-value="${b.key}">${b.label}</button>`
+          ).join("")}
+        </div>
+      </div>
+
+      <div class="filter-group filter-group--dates">
+        <span class="filter-label">Date range</span>
+        <div class="date-range">
+          <select class="select" data-role="dateFrom" aria-label="From"></select>
+          <span class="date-range__sep">–</span>
+          <select class="select" data-role="dateTo" aria-label="To"></select>
+        </div>
+      </div>
+
+      <div class="filter-group filter-group--team">
+        <span class="filter-label">Team</span>
+        <div class="team-dropdown" data-role="team-dropdown">
+          <button type="button" class="team-dropdown__toggle" data-role="team-toggle" aria-haspopup="true" aria-expanded="false">
+            All teams
+          </button>
+          <div class="team-dropdown__panel" data-role="team-panel" hidden>
+            <input type="text" class="team-dropdown__search" data-role="team-search" placeholder="Search teams…" />
+            <div class="team-dropdown__list" data-role="team-list"></div>
+            <div class="team-dropdown__actions">
+              <button type="button" class="link-btn" data-role="team-clear">Clear</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="filter-group filter-group--teamtype">
+        <span class="filter-label">Team type</span>
+        <div class="segmented" data-role="teamType" role="group" aria-label="Team type">
+          <button type="button" class="segmented__btn" data-value="international">International</button>
+          <button type="button" class="segmented__btn" data-value="club">Club</button>
+          <button type="button" class="segmented__btn" data-value="both">Both</button>
+        </div>
+      </div>
+
+      <div class="filter-group filter-group--mininnings">
+        <label class="filter-label" for="min-innings-input">Min innings</label>
+        <input type="number" id="min-innings-input" class="input input--number" data-role="minInnings" min="1" step="1" />
+      </div>
+    </div>
+  `;
+
+  const els = {
+    gender: container.querySelector('[data-role="gender"]'),
+    formats: container.querySelector('[data-role="formats"]'),
+    dateFrom: container.querySelector('[data-role="dateFrom"]'),
+    dateTo: container.querySelector('[data-role="dateTo"]'),
+    teamToggle: container.querySelector('[data-role="team-toggle"]'),
+    teamPanel: container.querySelector('[data-role="team-panel"]'),
+    teamSearch: container.querySelector('[data-role="team-search"]'),
+    teamList: container.querySelector('[data-role="team-list"]'),
+    teamClear: container.querySelector('[data-role="team-clear"]'),
+    teamType: container.querySelector('[data-role="teamType"]'),
+    minInnings: container.querySelector('[data-role="minInnings"]'),
+  };
+
+  let teamOptionsCache = []; // all available team names for the current scope
+  let lastTeamScopeKey = null;
+
+  function scopeKeyFor(state) {
+    return JSON.stringify([state.discipline, state.gender, state.formats, state.dateFrom, state.dateTo, state.teamType]);
+  }
+
+  function syncSegmented(el, value) {
+    el.querySelectorAll(".segmented__btn").forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.value === value);
+    });
+  }
+
+  function syncChips(el, values) {
+    el.querySelectorAll(".chip").forEach((btn) => {
+      btn.classList.toggle("is-active", values.includes(btn.dataset.value));
+    });
+  }
+
+  function syncDateOptions(minMonth, maxMonth, state) {
+    els.dateFrom.innerHTML = monthOptionsHTML(minMonth, maxMonth, state.dateFrom);
+    els.dateTo.innerHTML = monthOptionsHTML(minMonth, maxMonth, state.dateTo);
+  }
+
+  function renderTeamList(filterText) {
+    const q = (filterText || "").trim().toLowerCase();
+    const selected = new Set(store.get().teams);
+    const filtered = teamOptionsCache.filter((t) => t.toLowerCase().includes(q));
+    els.teamList.innerHTML = filtered
+      .map(
+        (t) => `<label class="team-dropdown__item">
+          <input type="checkbox" data-team="${t.replace(/"/g, "&quot;")}" ${selected.has(t) ? "checked" : ""} />
+          <span>${t}</span>
+        </label>`
+      )
+      .join("") || `<p class="team-dropdown__empty">No teams match.</p>`;
+
+    els.teamList.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const current = new Set(store.get().teams);
+        if (cb.checked) current.add(cb.dataset.team);
+        else current.delete(cb.dataset.team);
+        store.set({ teams: [...current] });
+        updateTeamToggleLabel();
+        onChange();
+      });
+    });
+  }
+
+  function updateTeamToggleLabel() {
+    const teams = store.get().teams;
+    els.teamToggle.textContent = teams.length === 0 ? "All teams" : teams.length === 1 ? teams[0] : `${teams.length} teams`;
+  }
+
+  async function refreshTeamOptions({ preserveSelection = true } = {}) {
+    const state = store.get();
+    const key = scopeKeyFor(state);
+    if (key === lastTeamScopeKey) return;
+    lastTeamScopeKey = key;
+    try {
+      teamOptionsCache = await fetchTeamOptions(state);
+    } catch (e) {
+      teamOptionsCache = [];
+    }
+    if (preserveSelection) {
+      const validSet = new Set(teamOptionsCache);
+      const stillValid = state.teams.filter((t) => validSet.has(t));
+      if (stillValid.length !== state.teams.length) {
+        store.set({ teams: stillValid });
+      }
+    }
+    renderTeamList(els.teamSearch.value);
+    updateTeamToggleLabel();
+  }
+
+  function render() {
+    const state = store.get();
+    syncSegmented(els.gender, state.gender);
+    syncChips(els.formats, state.formats);
+    syncSegmented(els.teamType, state.teamType);
+    els.minInnings.value = state.minInnings;
+    updateTeamToggleLabel();
+  }
+
+  // ---- wire events ----
+  els.gender.addEventListener("click", (e) => {
+    const btn = e.target.closest(".segmented__btn");
+    if (!btn) return;
+    store.set({ gender: btn.dataset.value, teams: [] });
+    render();
+    refreshTeamOptions().then(onChange);
+    onChange();
+  });
+
+  els.formats.addEventListener("click", (e) => {
+    const btn = e.target.closest(".chip");
+    if (!btn) return;
+    const state = store.get();
+    const value = btn.dataset.value;
+    const set = new Set(state.formats);
+    if (set.has(value)) set.delete(value);
+    else set.add(value);
+    store.set({ formats: [...set], teams: [] });
+    render();
+    if (onFormatsChanged) onFormatsChanged();
+    refreshTeamOptions().then(onChange);
+    onChange();
+  });
+
+  els.dateFrom.addEventListener("change", () => {
+    store.set({ dateFrom: els.dateFrom.value });
+    refreshTeamOptions().then(onChange);
+    onChange();
+  });
+  els.dateTo.addEventListener("change", () => {
+    store.set({ dateTo: els.dateTo.value });
+    refreshTeamOptions().then(onChange);
+    onChange();
+  });
+
+  els.teamType.addEventListener("click", (e) => {
+    const btn = e.target.closest(".segmented__btn");
+    if (!btn) return;
+    store.set({ teamType: btn.dataset.value, teams: [] });
+    render();
+    refreshTeamOptions().then(onChange);
+    onChange();
+  });
+
+  els.minInnings.addEventListener("change", () => {
+    const v = Math.max(1, parseInt(els.minInnings.value, 10) || 1);
+    els.minInnings.value = v;
+    store.set({ minInnings: v });
+    onChange();
+  });
+
+  els.teamToggle.addEventListener("click", () => {
+    const isOpen = !els.teamPanel.hidden;
+    els.teamPanel.hidden = isOpen;
+    els.teamToggle.setAttribute("aria-expanded", String(!isOpen));
+    if (!isOpen) {
+      els.teamSearch.value = "";
+      renderTeamList("");
+      els.teamSearch.focus();
+    }
+  });
+  document.addEventListener("click", (e) => {
+    if (!container.contains(e.target)) return;
+    if (e.target.closest('[data-role="team-dropdown"]')) return;
+    els.teamPanel.hidden = true;
+    els.teamToggle.setAttribute("aria-expanded", "false");
+  });
+  document.addEventListener("click", (e) => {
+    if (container.contains(e.target)) return;
+    els.teamPanel.hidden = true;
+    els.teamToggle.setAttribute("aria-expanded", "false");
+  });
+
+  els.teamSearch.addEventListener("input", () => renderTeamList(els.teamSearch.value));
+  els.teamClear.addEventListener("click", () => {
+    store.set({ teams: [] });
+    renderTeamList(els.teamSearch.value);
+    updateTeamToggleLabel();
+    onChange();
+  });
+
+  render();
+
+  return {
+    render,
+    refreshTeamOptions,
+    setDateBounds(minMonth, maxMonth) {
+      syncDateOptions(minMonth, maxMonth, store.get());
+    },
+  };
+}
