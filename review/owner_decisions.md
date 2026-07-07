@@ -60,5 +60,7 @@ change requires a new owner decision recorded here. Dates are decision dates.
     active as agreed).
 - Manual resolutions of `ambiguous_matches.csv` (owner edits resolution column, then
   D2 encodes them into `review/manual_matches.csv` — permanent forever).
-- D0 gate handover clicks: disable old "Update Data" workflow, then set
-  DB_UPLOAD_ENABLED=true, then first full run with DB upload.
+- ~~D0 gate handover clicks~~ DONE 2026-07-07: old workflow disabled (verified via
+  API), DB_UPLOAD_ENABLED=true set, first full run green — cricket.duckdb on R2
+  written by this repo at 08:27:05 UTC (run 28852362763). This repo now owns the DB.
+  Awaiting owner's real-world spot-check to formally close the D0 gate.
