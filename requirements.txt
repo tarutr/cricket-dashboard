@@ -2,3 +2,4 @@ duckdb
 boto3
 requests
 tqdm
+numpy
