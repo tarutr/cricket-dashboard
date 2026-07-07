@@ -83,3 +83,13 @@ change requires a new owner decision recorded here. Dates are decision dates.
   API), DB_UPLOAD_ENABLED=true set, first full run green — cricket.duckdb on R2
   written by this repo at 08:27:05 UTC (run 28852362763). This repo now owns the DB.
   Awaiting owner's real-world spot-check to formally close the D0 gate.
+
+## 2026-07-07 — D3 acceptance gate PASSED
+
+16. **D3 acceptance verified end-to-end** (all with owner watching): simulated
+    upstream sheet edit propagated to the live site in one run; deliberate broken
+    URL → site served last-good copy, DB + exports shipped, real alert email
+    received by owner, run red only at the final tripwire; restoring the URL
+    self-healed everything with no intervention. Note: the Dropbox folder belongs
+    to the third-party data provider — the owner cannot edit the sheet, so
+    staleness alerts mean "the provider stopped updating".
