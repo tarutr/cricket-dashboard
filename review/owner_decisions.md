@@ -51,8 +51,13 @@ change requires a new owner decision recorded here. Dates are decision dates.
 
 ## Pending owner decisions (asked, not yet answered)
 
-- Ingest-failure visibility: red vs green vs alert-email-but-stay-green (owner asked
-  for implications before deciding — explained 2026-07-07, awaiting choice).
+11. **Ingest-failure visibility: GREEN + ALERT EMAIL** (decided 2026-07-07). Runs stay
+    green and the site keeps updating when individual files fail; the D3 Gmail alert
+    module emails the owner specifically ("file X failed ingestion for N days").
+    Until D3 exists, current green behavior stands.
+12. **Old "Update Data" workflow in wt20-guide: DISABLED** — verified via GitHub API
+    2026-07-07 (state=disabled_manually; Deploy to Pages and Feedback Digest left
+    active as agreed).
 - Manual resolutions of `ambiguous_matches.csv` (owner edits resolution column, then
   D2 encodes them into `review/manual_matches.csv` — permanent forever).
 - D0 gate handover clicks: disable old "Update Data" workflow, then set
