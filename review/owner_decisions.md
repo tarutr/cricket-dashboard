@@ -103,3 +103,17 @@ change requires a new owner decision recorded here. Dates are decision dates.
 
 - Manual resolutions of `ambiguous_matches.csv` (in progress, will take a while;
   applied automatically once pushed).
+
+## 2026-07-07 — D4 build decisions
+
+19. **D4 build list (owner picks):** matchup stats (batter × bowling-style, bowler ×
+    batting-hand, men-only, always with "based on N of M balls"); the three free
+    splits (batting-position, opposition, dismissal-type — UI only); bowler
+    wicket-type breakdown columns; innings-progression splits. SPELL figures:
+    later / maybe never.
+20. **Venue + team normalization DEFERRED.** No venue splits; opposition splits ship
+    for INTERNATIONAL cricket only (country names are clean); club-opposition waits
+    for a future curated mapping project. Partnership stats deferred with it.
+21. **Missing-data display (resolves deferred decision 8): SHOW INERT with "–".**
+    Sections/filters with no mapped data (incl. all women's matchups) appear greyed
+    with an honest "no style data" note — never hidden, never silently empty.
