@@ -60,6 +60,7 @@ EXPORT_FILES = {
     "batting_innings.parquet": ["match_id", "innings_number", "batter_id"],
     "bowling_innings.parquet": ["match_id", "innings_number", "bowler_id"],
     "player_matches.parquet": ["match_id", "player_id"],
+    "player_profiles.parquet": ["player_id"],
 }
 
 CONTENT_TYPES = {
@@ -68,6 +69,7 @@ CONTENT_TYPES = {
     "batting_innings.parquet": "application/vnd.apache.parquet",
     "bowling_innings.parquet": "application/vnd.apache.parquet",
     "player_matches.parquet": "application/vnd.apache.parquet",
+    "player_profiles.parquet": "application/vnd.apache.parquet",
     "manifest.json": "application/json",
 }
 
@@ -286,6 +288,17 @@ def sql_players():
     FROM player_registry pr
     WHERE pr.player_id IN (SELECT DISTINCT player_id FROM match_players WHERE player_id IS NOT NULL)
     ORDER BY pr.player_id
+    """
+
+
+def sql_player_profiles():
+    # player_profiles is a NON-Cricsheet enrichment table built by
+    # pipeline/build_profiles.py (Phase D2). Exported verbatim — one row per
+    # matched player_id — with the same conventions as the other exports.
+    return """
+    SELECT *
+    FROM player_profiles
+    ORDER BY player_id
     """
 
 
@@ -1248,6 +1261,19 @@ def main():
 
     con = duckdb.connect(args.db, read_only=True)
 
+    # player_profiles is required from Phase D2 onward. Fail loudly on pre-D2 DBs
+    # (the table is built by pipeline/build_profiles.py before this step runs).
+    has_profiles = con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables "
+        "WHERE table_schema = 'main' AND table_name = 'player_profiles'"
+    ).fetchone()[0]
+    if not has_profiles:
+        raise SystemExit(
+            "player_profiles table not found in the database. It must be built by "
+            "pipeline/build_profiles.py (Phase D2) before export_parquet.py runs. "
+            "Aborting rather than shipping exports without profiles."
+        )
+
     # Build each export.
     log("Writing players.parquet ...")
     write_parquet(con, sql_players(), os.path.join(args.out, "players.parquet"))
@@ -1263,6 +1289,9 @@ def main():
 
     log("Writing player_matches.parquet ...")
     write_parquet(con, sql_player_matches(), os.path.join(args.out, "player_matches.parquet"))
+
+    log("Writing player_profiles.parquet ...")
+    write_parquet(con, sql_player_profiles(), os.path.join(args.out, "player_profiles.parquet"))
 
     # Gates + spot checks (all before any upload).
     try:

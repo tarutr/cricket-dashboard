@@ -30,8 +30,14 @@ jobs:
       - name: Ingest new Cricsheet data
         run: python pipeline/ingest.py
 
-      # D2: fetch profiles sheet from Dropbox (added from Phase D2 onward)
-      # D2: rebuild player_profiles table inside cricket.duckdb (added from Phase D2 onward)
+      - name: Fetch profiles sheet from Dropbox
+        run: |
+          curl -fL --retry 3 -o data/profiles.csv "${{ secrets.DROPBOX_PROFILES_URL }}"
+          head -1 data/profiles.csv | grep -q '^player_id,' \
+            || { echo "Downloaded profiles.csv does not start with 'player_id,' header"; exit 1; }
+
+      - name: Rebuild player_profiles
+        run: python pipeline/build_profiles.py --db data/cricket.duckdb --csv data/profiles.csv
 
       - name: Upload cricket.duckdb to R2
         if: vars.DB_UPLOAD_ENABLED == 'true'
