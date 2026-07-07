@@ -491,12 +491,12 @@ def build_profiles_table(con):
             s.country_name                                   AS country,
             TRY_CAST(substr(s.date_of_birth, 1, 10) AS DATE) AS dob,
             s.position_name                                  AS playing_role,
+            -- role_group (owner-approved 2026-07-07): wicketkeepers group under Batter.
             CASE
                 WHEN s.position_name IN
-                     ('Batter','Top-order batter','Middle-order batter','Opening batter')
+                     ('Batter','Top-order batter','Middle-order batter','Opening batter',
+                      'Wicketkeeper','Wicketkeeper batter')
                     THEN 'Batter'
-                WHEN s.position_name IN ('Wicketkeeper','Wicketkeeper batter')
-                    THEN 'Wicketkeeper'
                 WHEN s.position_name IN
                      ('Allrounder','Bowling allrounder','Batting allrounder')
                     THEN 'Allrounder'
@@ -504,8 +504,45 @@ def build_profiles_table(con):
                     THEN 'Bowler'
                 ELSE NULL                                    -- 'Unknown' / anything else
             END                                              AS role_group,
+            -- role_subgroup: position detail for batters, split for allrounders.
+            CASE
+                WHEN s.position_name IN ('Wicketkeeper','Wicketkeeper batter')
+                    THEN 'Wicketkeeper'
+                WHEN s.position_name = 'Opening batter'      THEN 'Opening'
+                WHEN s.position_name = 'Top-order batter'    THEN 'Top-order'
+                WHEN s.position_name = 'Middle-order batter' THEN 'Middle-order'
+                WHEN s.position_name = 'Batting allrounder'  THEN 'Batting allrounder'
+                WHEN s.position_name = 'Bowling allrounder'  THEN 'Bowling allrounder'
+                ELSE NULL                                    -- plain Batter/Allrounder/Bowler/Unknown
+            END                                              AS role_subgroup,
             s.batting_style,
             s.bowling_style,
+            -- bowling_arm: parsed from the style text only, plus one owner-approved
+            -- cricket definition: a legbreak (incl. googly) is right-arm by
+            -- definition (the left-arm equivalent is listed as Left-arm wrist-spin).
+            -- NEVER inferred from batting hand (owner directive).
+            CASE
+                WHEN s.bowling_style IS NULL OR trim(s.bowling_style) = '' THEN NULL
+                WHEN lower(s.bowling_style) LIKE '%right-arm%' THEN 'Right'
+                WHEN lower(s.bowling_style) LIKE '%left-arm%'  THEN 'Left'
+                WHEN s.bowling_style IN ('Legbreak','Legbreak googly') THEN 'Right'
+                ELSE NULL
+            END                                              AS bowling_arm,
+            -- bowling_type: specific-style filter vocabulary (owner-approved).
+            -- NB slow-medium must be tested before medium (substring overlap).
+            CASE
+                WHEN s.bowling_style IS NULL OR trim(s.bowling_style) = '' THEN NULL
+                WHEN s.bowling_style = 'Right-arm offbreak'            THEN 'Off-spin'
+                WHEN s.bowling_style IN ('Legbreak','Legbreak googly') THEN 'Leg-spin'
+                WHEN s.bowling_style = 'Slow left-arm orthodox'  THEN 'Slow left-arm orthodox'
+                WHEN s.bowling_style = 'Left-arm wrist-spin'     THEN 'Left-arm wrist-spin'
+                WHEN lower(s.bowling_style) LIKE '%slow-medium%' THEN 'Slow-medium'
+                WHEN lower(s.bowling_style) LIKE '%medium-fast%' THEN 'Medium-fast'
+                WHEN lower(s.bowling_style) LIKE '%fast-medium%' THEN 'Fast-medium'
+                WHEN lower(s.bowling_style) LIKE '%medium%'      THEN 'Medium'
+                WHEN lower(s.bowling_style) LIKE '%fast%'        THEN 'Fast'
+                ELSE NULL       -- 'Right/Left-arm bowler', bare 'slow' (owner verdicts pending)
+            END                                              AS bowling_type,
             CASE
                 WHEN s.bowling_style IS NULL OR trim(s.bowling_style) = '' THEN NULL
                 WHEN s.bowling_style IN ('Right-arm bowler','Left-arm bowler') THEN NULL

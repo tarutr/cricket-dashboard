@@ -49,7 +49,24 @@ change requires a new owner decision recorded here. Dates are decision dates.
     folder+preview-form link rather than a /scl/fi/ per-file link — works today; D3
     fetch-failure alerting is the guard if Dropbox changes this behavior.
 
+## 2026-07-07 — D2 gate decisions (taxonomy)
+
+13. **Role/bowling taxonomy APPROVED:** role_group = Batter (incl. Wicketkeeper +
+    Wicketkeeper batter), Allrounder, Bowler; Unknown → no group. role_subgroup =
+    Wicketkeeper / Opening / Top-order / Middle-order / Batting allrounder /
+    Bowling allrounder. bowling_group = Pace/Spin (unchanged). bowling_type =
+    Off-spin / Leg-spin (Legbreak + googly) / Slow left-arm orthodox /
+    Left-arm wrist-spin / Medium / Medium-fast / Fast-medium / Fast / Slow-medium.
+14. **bowling_arm:** parsed from style text only, NEVER inferred from batting hand
+    (owner: batting hand ≠ bowling hand). One approved cricket definition: Legbreak /
+    Legbreak googly = Right arm by definition. "Right/Left-arm bowler" players show
+    the arm with no pace/spin group.
+
 ## Pending owner decisions (asked, not yet answered)
+
+- The 10 bare "Right/Left-arm slow" players: owner looking up each individually
+  (list + playercard links provided 2026-07-07); verdicts will set their
+  bowling_group/bowling_type permanently. Until then they carry arm only.
 
 11. **Ingest-failure visibility: GREEN + ALERT EMAIL** (decided 2026-07-07). Runs stay
     green and the site keeps updating when individual files fail; the D3 Gmail alert
