@@ -29,14 +29,31 @@ change requires a new owner decision recorded here. Dates are decision dates.
   create and add to secrets.md as DROPBOX_PROFILES_URL before D2). Folder links are
   not viable (dl=1 zips the entire multi-GB folder).
 
+## 2026-07-07 — second round of decisions
+
+5. **Ambiguous players proceed WITHOUT profiles for now.** D2 builds from automatic
+   matches only; owner resolutions arrive later (a day or two) and are applied
+   additively via `manual_matches.csv` — no rework, profiles appear on the next run.
+6. **Table count: 16 is correct.** The database is the source of truth; the reference
+   doc's "17 tables" header is outdated. D2 sanity check = all 16 tables present.
+7. **"Recent" is ROLLING:** last three years counted back from the most recent
+   match_date in the database — never a hardcoded date.
+8. **Unknown position / unknown bowling style display:** deferred to design-stage
+   decision (hide the section vs show "-"). Decide during D4/D5 design review.
+9. **Player universe = selected in a team XI.** The 13 never-faced-never-bowled
+   players COUNT (they were selected; stats may arrive as careers progress). Principle:
+   presence in `match_players` (an XI) includes a player on the site, deliveries or not.
+   D2 matching universe and unmatched-review counts to be recomputed accordingly.
+10. **DROPBOX_PROFILES_URL saved in secrets.md and VERIFIED** (2026-07-07): with dl=1
+    it downloads the profiles CSV byte-identical to source_data/ (MD5-checked). It is a
+    folder+preview-form link rather than a /scl/fi/ per-file link — works today; D3
+    fetch-failure alerting is the guard if Dropbox changes this behavior.
+
 ## Pending owner decisions (asked, not yet answered)
 
-- Confirm reference-doc "17 tables" → real schema is 16 (correct D2 sanity check to 16).
-- Should a single failed ingest file turn the pipeline run red? (Current v1 behavior:
-  logged only, run stays green, DB stays safe via per-file transactions.)
-- Confirm 2023-01-01 as the "recent" coverage cutoff.
-- The 13 non-striker-only (0-ball) player_ids: currently NOT counted as active.
-- D4 filter display of position "Unknown" (61%) and "Right/Left-arm bowler"
-  (pace/spin unknown, 49 rows).
-- Manual resolutions of `ambiguous_matches.csv` (owner edits, then D2 encodes them
-  into `review/manual_matches.csv` — permanent forever).
+- Ingest-failure visibility: red vs green vs alert-email-but-stay-green (owner asked
+  for implications before deciding — explained 2026-07-07, awaiting choice).
+- Manual resolutions of `ambiguous_matches.csv` (owner edits resolution column, then
+  D2 encodes them into `review/manual_matches.csv` — permanent forever).
+- D0 gate handover clicks: disable old "Update Data" workflow, then set
+  DB_UPLOAD_ENABLED=true, then first full run with DB upload.
