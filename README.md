@@ -8,7 +8,8 @@ Static cricket statistics explorer over the full Cricsheet dataset — DuckDB-WA
 
 `cricket-dashboard` is the primary and only owner of `cricket.duckdb` on Cloudflare
 R2. A single GitHub Actions workflow, `.github/workflows/pipeline.yml` ("Data
-pipeline"), runs the whole chain daily at 03:47 UTC (and on manual dispatch),
+pipeline"), runs the whole chain every 6 hours (03:47/09:47/15:47/21:47 UTC, and
+on manual dispatch),
 sequentially:
 
 1. Download `cricket.duckdb` from R2.
@@ -97,7 +98,7 @@ npx esbuild node_modules/@duckdb/duckdb-wasm/dist/duckdb-browser.mjs \
 
 ## Triggering a data refresh
 
-Data refreshes automatically every day at 03:47 UTC via the "Data pipeline" GitHub
+Data refreshes automatically every 6 hours (03:47/09:47/15:47/21:47 UTC) via the "Data pipeline" GitHub
 Action. To refresh manually: GitHub → Actions → "Data pipeline" → Run workflow.
 See "Data pipeline" above for the full download → ingest → export chain, the
 Parquet export's own validation gates, and the `DB_UPLOAD_ENABLED` latch that
