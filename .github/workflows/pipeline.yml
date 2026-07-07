@@ -30,14 +30,46 @@ jobs:
       - name: Ingest new Cricsheet data
         run: python pipeline/ingest.py
 
+      - name: Check ingest health
+        run: python pipeline/check_ingest.py
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+
       - name: Fetch profiles sheet from Dropbox
-        run: |
-          curl -fL --retry 3 -o data/profiles.csv "${{ secrets.DROPBOX_PROFILES_URL }}"
-          head -1 data/profiles.csv | grep -q '^player_id,' \
-            || { echo "Downloaded profiles.csv does not start with 'player_id,' header"; exit 1; }
+        run: >
+          python pipeline/sheet_fetch.py
+          --name profiles
+          --url-env DROPBOX_PROFILES_URL
+          --out data/profiles.csv
+          --expect-header player_id
+          --seed source_data/cricinfo_player_profiles.csv
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          DROPBOX_PROFILES_URL: ${{ secrets.DROPBOX_PROFILES_URL }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          STALE_DAYS: ${{ vars.STALE_DAYS || '21' }}
 
       - name: Rebuild player_profiles
         run: python pipeline/build_profiles.py --db data/cricket.duckdb --csv data/profiles.csv
+
+      - name: Report new unmatched active players
+        run: python pipeline/report_new_unmatched.py --db data/cricket.duckdb
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
 
       - name: Upload cricket.duckdb to R2
         if: vars.DB_UPLOAD_ENABLED == 'true'
@@ -56,3 +88,11 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+
+      - name: Fail run if profiles fetch fell back
+        run: |
+          if [ -f data/profiles_fetch_failed ]; then
+            echo "::error::Profiles fetch failed — run used last-good copy (site is fine; fix the Dropbox link)"
+            exit 1
+          fi
+          echo "Profiles fetch OK — no fallback marker present."

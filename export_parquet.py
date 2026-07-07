@@ -1172,6 +1172,27 @@ def write_manifest(con, out_dir):
         "SELECT MIN(match_date_1), MAX(match_date_1), COUNT(*) FROM matches"
     ).fetchone()
 
+    # Profiles-fetch provenance (D3): read the local meta written by
+    # pipeline/sheet_fetch.py. Absent on local runs without a fetch — write
+    # nulls, never crash.
+    profiles_meta = {
+        "profiles_updated_at": None,
+        "profiles_content_changed_at": None,
+        "profiles_source": None,
+    }
+    _pmeta_path = os.path.join("data", "profiles_fetch_meta.json")
+    try:
+        if os.path.exists(_pmeta_path):
+            with open(_pmeta_path) as _fh:
+                _pm = json.load(_fh)
+            profiles_meta = {
+                "profiles_updated_at": _pm.get("fetched_at"),
+                "profiles_content_changed_at": _pm.get("content_changed_at"),
+                "profiles_source": _pm.get("source"),
+            }
+    except Exception as _e:  # never let manifest provenance crash the export
+        print(f"WARN: could not read {_pmeta_path}: {_e!r}; writing null profiles fields")
+
     manifest = {
         "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         "data": {
@@ -1179,6 +1200,7 @@ def write_manifest(con, out_dir):
             "max_match_date": dmax.isoformat() if dmax else None,
             "match_count": int(mcount),
         },
+        "profiles": profiles_meta,
         "files": files_meta,
     }
 
