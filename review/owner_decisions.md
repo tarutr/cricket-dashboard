@@ -62,11 +62,13 @@ change requires a new owner decision recorded here. Dates are decision dates.
     Legbreak googly = Right arm by definition. "Right/Left-arm bowler" players show
     the arm with no pace/spin group.
 
+15. **Bare "slow" = SPIN** (owner ruling 2026-07-07: "Slow probably refers to spin in
+    this dataset"). The 10 "Right/Left-arm slow" players get bowling_group=Spin;
+    their specific bowling_type stays blank (off/leg/SLA unknown from the sheet).
+
 ## Pending owner decisions (asked, not yet answered)
 
-- The 10 bare "Right/Left-arm slow" players: owner looking up each individually
-  (list + playercard links provided 2026-07-07); verdicts will set their
-  bowling_group/bowling_type permanently. Until then they carry arm only.
+- (none currently — ambiguous_matches.csv resolutions in progress at owner's pace)
 
 11. **Ingest-failure visibility: GREEN + ALERT EMAIL** (decided 2026-07-07). Runs stay
     green and the site keeps updating when individual files fail; the D3 Gmail alert

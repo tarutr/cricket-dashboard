@@ -553,7 +553,9 @@ def build_profiles_table(con):
                   OR lower(s.bowling_style) LIKE '%googly%'  THEN 'Spin'
                 WHEN lower(s.bowling_style) LIKE '%medium%'
                   OR lower(s.bowling_style) LIKE '%fast%'    THEN 'Pace'
-                ELSE NULL                                    -- bare 'Right/Left-arm slow' (flagged)
+                -- Owner ruling 2026-07-07: bare "slow" in this dataset means spin.
+                WHEN s.bowling_style IN ('Right-arm slow','Left-arm slow') THEN 'Spin'
+                ELSE NULL
             END                                              AS bowling_group,
             s.major_team_names                               AS teams_played_for,
             s.headshot_url,
