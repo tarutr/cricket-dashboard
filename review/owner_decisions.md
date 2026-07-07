@@ -66,23 +66,16 @@ change requires a new owner decision recorded here. Dates are decision dates.
     this dataset"). The 10 "Right/Left-arm slow" players get bowling_group=Spin;
     their specific bowling_type stays blank (off/leg/SLA unknown from the sheet).
 
-## Pending owner decisions (asked, not yet answered)
+## 2026-07-07 — operations decisions
 
-- (none currently — ambiguous_matches.csv resolutions in progress at owner's pace)
-
-11. **Ingest-failure visibility: GREEN + ALERT EMAIL** (decided 2026-07-07). Runs stay
-    green and the site keeps updating when individual files fail; the D3 Gmail alert
-    module emails the owner specifically ("file X failed ingestion for N days").
-    Until D3 exists, current green behavior stands.
+11. **Ingest-failure visibility: GREEN + ALERT EMAIL.** Runs stay green and the site
+    keeps updating when individual files fail; the alert module emails the owner
+    specifically ("file X failing since [date]", daily throttle, auto-prune).
+    Implemented and live in D3 (pipeline/check_ingest.py).
 12. **Old "Update Data" workflow in wt20-guide: DISABLED** — verified via GitHub API
-    2026-07-07 (state=disabled_manually; Deploy to Pages and Feedback Digest left
-    active as agreed).
-- Manual resolutions of `ambiguous_matches.csv` (owner edits resolution column, then
-  D2 encodes them into `review/manual_matches.csv` — permanent forever).
-- ~~D0 gate handover clicks~~ DONE 2026-07-07: old workflow disabled (verified via
-  API), DB_UPLOAD_ENABLED=true set, first full run green — cricket.duckdb on R2
-  written by this repo at 08:27:05 UTC (run 28852362763). This repo now owns the DB.
-  Awaiting owner's real-world spot-check to formally close the D0 gate.
+    (state=disabled_manually; Deploy to Pages and Feedback Digest left active).
+    D0 handover complete: DB_UPLOAD_ENABLED=true, first full run green, owner
+    spot-check confirmed (Sciver-Brunt 75 off 47 vs SA, 2026-07-02). D0 gate CLOSED.
 
 ## 2026-07-07 — D3 acceptance gate PASSED
 
@@ -93,3 +86,12 @@ change requires a new owner decision recorded here. Dates are decision dates.
     self-healed everything with no intervention. Note: the Dropbox folder belongs
     to the third-party data provider — the owner cannot edit the sheet, so
     staleness alerts mean "the provider stopped updating".
+
+## Open items (owner, at leisure)
+
+- Manual resolutions of `ambiguous_matches.csv` (owner edits resolution column;
+  they are then encoded into `review/manual_matches.csv` — permanent forever).
+- D2 gate formality: owner eyeball of the 15 rendered sample profiles.
+- Awaiting owner answer: new-unmatched players surfaced by EMAIL + cloud state
+  (pipeline never edits repo review files) vs the spec's original
+  "append rows to a repo review file". Recommended: email.
