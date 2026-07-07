@@ -87,11 +87,19 @@ change requires a new owner decision recorded here. Dates are decision dates.
     to the third-party data provider — the owner cannot edit the sheet, so
     staleness alerts mean "the provider stopped updating".
 
+## 2026-07-07 — review workflow + gates
+
+17. **D2 gate CLOSED** (owner: "sample profiles look fine for now"; exact design +
+    additional metrics revisited later).
+18. **Two-sheet review workflow APPROVED (owner's design):** the pipeline appends
+    newly-unmatched players to `review/new_players_for_review.csv` (pipeline-owned,
+    owner never edits); the owner fills resolutions and moves completed rows to
+    `review/new_players_reviewed.csv` (owner-owned, pipeline never edits). No edit
+    mismatch possible. Advisory emails continue. Repeatable instructions live in
+    review/PLAYER_REVIEW.md. Resolutions in ambiguous_matches.csv and
+    new_players_reviewed.csv are applied automatically on every rebuild.
+
 ## Open items (owner, at leisure)
 
-- Manual resolutions of `ambiguous_matches.csv` (owner edits resolution column;
-  they are then encoded into `review/manual_matches.csv` — permanent forever).
-- D2 gate formality: owner eyeball of the 15 rendered sample profiles.
-- Awaiting owner answer: new-unmatched players surfaced by EMAIL + cloud state
-  (pipeline never edits repo review files) vs the spec's original
-  "append rows to a repo review file". Recommended: email.
+- Manual resolutions of `ambiguous_matches.csv` (in progress, will take a while;
+  applied automatically once pushed).
