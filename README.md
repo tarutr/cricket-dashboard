@@ -6,6 +6,47 @@ Static cricket statistics explorer over the full Cricsheet dataset — DuckDB-WA
 
 ## Data pipeline
 
+`cricket-dashboard` is the primary and only owner of `cricket.duckdb` on Cloudflare
+R2. A single GitHub Actions workflow, `.github/workflows/pipeline.yml` ("Data
+pipeline"), runs the whole chain daily at 03:47 UTC (and on manual dispatch),
+sequentially:
+
+1. Download `cricket.duckdb` from R2.
+2. Ingest new Cricsheet data (incremental — `pipeline/ingest.py` skips files
+   already ingested, one transaction per file).
+3. *(from Phase D2 onward)* Fetch the Cricinfo player-profiles sheet from Dropbox
+   and rebuild the `player_profiles` table.
+4. Upload `cricket.duckdb` back to R2 — **gated** behind the repository variable
+   `DB_UPLOAD_ENABLED`. See below.
+5. Export the Parquet tables + `manifest.json` from the freshly-ingested local DB
+   and upload them to R2.
+
+The workflow uses a `concurrency` group (`data-pipeline`) so two runs can never
+overlap and clobber each other's DB upload, and every step relies on default
+failure behavior — any step failing fails the whole run, and a run that fails
+never reaches the upload step, so a partially-built DB is never published.
+
+### The `DB_UPLOAD_ENABLED` latch
+
+This repo used to only export Parquet from a DB owned by the old `wt20-guide`
+pipeline. During the migration, `pipeline.yml` downloads and ingests into
+`cricket.duckdb` but the "Upload cricket.duckdb to R2" step only runs
+`if: vars.DB_UPLOAD_ENABLED == 'true'` — an unset repository variable is falsy, so
+uploads are **off by default**. This guarantees the old pipeline keeps owning the
+live database until the owner has verified this repo's ingestion end-to-end and
+explicitly disabled the old workflow. When skipped, the run logs a loud
+`DB upload SKIPPED` message so the gate is never silent. The owner flips it on by
+setting the `DB_UPLOAD_ENABLED` repository variable to `true` in
+Settings → Secrets and variables → Actions → Variables.
+
+### `pipeline/`
+
+`pipeline/ingest.py`, `pipeline/download_db.py`, and `pipeline/upload_db.py` are
+ported from the old wt20-guide project's validated, battle-tested ingestion
+scripts (incremental, per-file transactions). Their logic must never be casually
+edited — only paths/wiring are modernized for this repo. Any change to ingestion
+behavior itself must be flagged to the owner first.
+
 ## R2 setup (CORS)
 
 The `explorer/` prefix of the `cricket-db` bucket must be publicly readable and
@@ -56,11 +97,11 @@ npx esbuild node_modules/@duckdb/duckdb-wasm/dist/duckdb-browser.mjs \
 
 ## Triggering a data refresh
 
-Data refreshes automatically every day at 03:47 UTC via the "Update data" GitHub
-Action. To refresh manually: GitHub → Actions → "Update data" → Run workflow.
-The pipeline downloads the latest `cricket.duckdb` from R2, rebuilds the four
-Parquet exports, runs all validation gates, and uploads to `explorer/` only if
-every gate passes. Requires repo secrets `R2_ACCESS_KEY_ID`,
+Data refreshes automatically every day at 03:47 UTC via the "Data pipeline" GitHub
+Action. To refresh manually: GitHub → Actions → "Data pipeline" → Run workflow.
+See "Data pipeline" above for the full download → ingest → export chain, the
+Parquet export's own validation gates, and the `DB_UPLOAD_ENABLED` latch that
+currently keeps DB writes disabled. Requires repo secrets `R2_ACCESS_KEY_ID`,
 `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT_URL`.
 
 ## Deployment (Vercel)
