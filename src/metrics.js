@@ -231,6 +231,45 @@ const BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: false,
     minSampleComponent: "COUNT(*)",
   },
+  // Faced-ball progression strike rates (D4): how a batter scores across the
+  // first 10 balls faced in an innings, then balls 11–20, then 21+. These are
+  // ball-count buckets (not over-based), so they are format-agnostic and NOT
+  // phase-gated. The NULLIF sample gate excludes innings that never reached the
+  // bucket, and zeroIsData:false means a batter with no balls in a bucket shows
+  // "—" and is dropped from that ranking (§8.1).
+  {
+    key: "sr_first10",
+    label: "Strike Rate (first 10 balls)",
+    shortLabel: "SR 1-10",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(fb1_10_runs) * 100.0 / NULLIF(SUM(fb1_10_balls), 0)",
+    higherIsBetter: true, format: "dec2",
+    isPhaseMetric: null, zeroIsData: false,
+    minSampleComponent: "SUM(fb1_10_balls)",
+  },
+  {
+    key: "sr_11_20",
+    label: "Strike Rate (balls 11–20)",
+    shortLabel: "SR 11-20",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(fb11_20_runs) * 100.0 / NULLIF(SUM(fb11_20_balls), 0)",
+    higherIsBetter: true, format: "dec2",
+    isPhaseMetric: null, zeroIsData: false,
+    minSampleComponent: "SUM(fb11_20_balls)",
+  },
+  {
+    key: "sr_21plus",
+    label: "Strike Rate (21+ balls)",
+    shortLabel: "SR 21+",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(fb21p_runs) * 100.0 / NULLIF(SUM(fb21p_balls), 0)",
+    higherIsBetter: true, format: "dec2",
+    isPhaseMetric: null, zeroIsData: false,
+    minSampleComponent: "SUM(fb21p_balls)",
+  },
   // Phase strike rates — T20 ranges (pp 0–5, mid 6–14, death 15–19).
   {
     key: "pp_strike_rate",
@@ -465,6 +504,75 @@ const BOWLING_METRICS = [
     higherIsBetter: true, format: "str",
     isPhaseMetric: null, zeroIsData: true,
     minSampleComponent: "COUNT(*)",
+  },
+  // Wicket-type breakdown (D4): the bowler-credited wickets split by dismissal
+  // kind. The six sum exactly to `wickets` (verified against raw deliveries).
+  // Counts, so zeroIsData:true — a bowler with no stumpings shows "0", not "—".
+  {
+    key: "wkt_bowled",
+    label: "Bowled",
+    shortLabel: "Bowled",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(wickets_bowled)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "SUM(wickets_bowled)",
+  },
+  {
+    key: "wkt_lbw",
+    label: "LBW",
+    shortLabel: "LBW",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(wickets_lbw)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "SUM(wickets_lbw)",
+  },
+  {
+    key: "wkt_caught",
+    label: "Caught",
+    shortLabel: "Caught",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(wickets_caught)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "SUM(wickets_caught)",
+  },
+  {
+    key: "wkt_caught_and_bowled",
+    label: "Caught & Bowled",
+    shortLabel: "c&b",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(wickets_caught_and_bowled)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "SUM(wickets_caught_and_bowled)",
+  },
+  {
+    key: "wkt_stumped",
+    label: "Stumped",
+    shortLabel: "Stumped",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(wickets_stumped)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "SUM(wickets_stumped)",
+  },
+  {
+    key: "wkt_hit_wicket",
+    label: "Hit Wicket",
+    shortLabel: "Hit Wkt",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(wickets_hit_wicket)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "SUM(wickets_hit_wicket)",
   },
   // Phase economy + wickets — T20 ranges.
   {
