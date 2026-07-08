@@ -1,5 +1,11 @@
 # How to resolve `ambiguous_matches.csv`
 
+> **See also [PLAYER_REVIEW.md](PLAYER_REVIEW.md)** — the permanent routine for
+> reviewing NEW players as they appear (two-sheet workflow), including the exact
+> GitHub download/upload clicks. Resolutions in this file and in
+> `new_players_reviewed.csv` are **applied automatically on every pipeline run** —
+> just upload your edits; there is no separate submission step.
+
 Each row is one **proposed pairing**: a database player (left columns, `db_`) against
 one candidate from the Cricinfo sheet (right columns, `sheet_`). A database player with
 three candidates appears as three rows. Your job is to say, per row, whether the pairing

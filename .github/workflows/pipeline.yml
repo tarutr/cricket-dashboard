@@ -13,6 +13,8 @@ jobs:
   pipeline:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -70,6 +72,39 @@ jobs:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+
+      - name: Queue new players for review
+        run: python pipeline/queue_new_for_review.py --db data/cricket.duckdb --profiles-csv data/profiles.csv
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+
+      - name: Commit queued players for review
+        run: |
+          if git diff --quiet -- review/new_players_for_review.csv; then
+            echo "No new rows in review/new_players_for_review.csv — nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add review/new_players_for_review.csv
+          git commit -m "Queue new unmatched players for review" || { echo "Nothing to commit after add"; exit 0; }
+          push_ok=""
+          for attempt in 1 2; do
+            git pull --rebase origin main || echo "::warning::git pull --rebase failed (attempt $attempt)"
+            if git push origin HEAD:main; then
+              push_ok="yes"
+              break
+            fi
+            echo "::warning::git push rejected (attempt $attempt) — retrying"
+          done
+          if [ -z "$push_ok" ]; then
+            echo "::warning::Could not push review/new_players_for_review.csv after retries — will retry next run"
+          fi
 
       - name: Upload cricket.duckdb to R2
         if: vars.DB_UPLOAD_ENABLED == 'true'

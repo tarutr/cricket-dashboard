@@ -64,6 +64,17 @@ _REPO = os.path.dirname(_HERE)
 REVIEW_DIR = os.path.join(_REPO, "review")
 AMBIGUOUS_CSV = os.path.join(REVIEW_DIR, "ambiguous_matches.csv")
 MANUAL_MATCHES_CSV = os.path.join(REVIEW_DIR, "manual_matches.csv")
+# Owner-owned resolution file (decision 18): the owner moves completed rows here
+# from new_players_for_review.csv. Pipeline READS it, never writes it.
+REVIEWED_CSV = os.path.join(REVIEW_DIR, "new_players_reviewed.csv")
+
+# YES/NO/NONE resolution vocabulary (review/README.md) used by the two
+# resolution-column files (new_players_reviewed.csv, ambiguous_matches.csv).
+#   YES  -> match(player_id <-> that row's sheet_player_id)
+#   NO   -> no_match for that (player_id, sheet_player_id) pair
+#   NONE -> no_profile for that player_id
+#   ''   -> ignored
+VALID_RESOLUTIONS = {"yes", "no", "none"}
 
 # The 16 tables that MUST exist (owner decision 6: 16 is correct, not 17).
 EXPECTED_TABLES = {
@@ -279,6 +290,180 @@ def load_manual():
                         f"{pid} ({matches[pid]} vs {spid})"
                     )
                 matches[pid] = spid
+    return matches, no_match_pairs, no_profile
+
+
+# --------------------------------------------------------------------------- #
+# Resolution-column ingestion (new_players_reviewed.csv, ambiguous_matches.csv) #
+# --------------------------------------------------------------------------- #
+def _clean_cell(v):
+    """Strip BOM/whitespace/wrapping quotes from a raw CSV cell. '' -> ''."""
+    if v is None:
+        return ""
+    v = v.replace("﻿", "").strip()
+    # Excel sometimes double-quotes an already-quoted cell.
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+        v = v[1:-1].strip()
+    return v
+
+
+def _clean_sheet_id(v):
+    """Normalise a sheet_player_id cell.
+
+    Excel/Numbers frequently coerce a numeric-looking id to a float and write
+    it back as "12345.0" / "12345.00". Sheet ids are integer strings, so strip a
+    pure ``.0*`` suffix. Non-numeric ids (rare) are returned as-is."""
+    v = _clean_cell(v)
+    if re.fullmatch(r"\d+\.0+", v):
+        v = v.split(".", 1)[0]
+    return v
+
+
+def load_resolution_file(path, label):
+    """Parse a YES/NO/NONE resolution-column file into override structures.
+
+    Returns dict(matches=pid->spid, no_match=set((pid,spid)), no_profile=set(pid)).
+    A missing file yields empty structures (both review CSVs are committed
+    header-only, but be defensive). Raises SanityError (naming file + line) on:
+      * an unknown resolution value (anything other than yes/no/none/blank),
+      * YES with an empty sheet_player_id,
+      * the same player_id given YES to two DIFFERENT sheet ids in THIS file.
+    """
+    matches, no_match, no_profile = {}, set(), set()
+    if not os.path.exists(path):
+        log(f"Resolution file absent (treated as empty): {label}")
+        return {"matches": matches, "no_match": no_match, "no_profile": no_profile}
+
+    # utf-8-sig transparently swallows a leading BOM on the first header cell.
+    with open(path, newline="", encoding="utf-8-sig") as fh:
+        reader = csv.DictReader(fh)
+        if reader.fieldnames is None:
+            log(f"Resolution file has no header (treated as empty): {label}")
+            return {"matches": matches, "no_match": no_match, "no_profile": no_profile}
+        needed = {"resolution", "player_id", "sheet_player_id"}
+        missing_cols = needed - {(_clean_cell(c) or "") for c in reader.fieldnames}
+        if missing_cols:
+            raise SanityError(
+                f"{label}: missing required column(s) {sorted(missing_cols)}"
+            )
+        for i, row in enumerate(reader, start=2):  # line 2 = first data row
+            pid = _clean_cell(row.get("player_id"))
+            spid = _clean_sheet_id(row.get("sheet_player_id"))
+            res = _clean_cell(row.get("resolution")).lower()
+            # Trailing blank lines / fully-empty rows are ignored.
+            if not pid and not res and not spid:
+                continue
+            if res == "":
+                continue  # undecided — safe default, skip
+            if res not in VALID_RESOLUTIONS:
+                raise SanityError(
+                    f"{label} line {i}: unknown resolution '{res}' "
+                    f"(allowed: YES / NO / NONE / blank, case-insensitive)"
+                )
+            if not pid:
+                raise SanityError(
+                    f"{label} line {i}: resolution '{res}' with empty player_id"
+                )
+            if res == "none":
+                no_profile.add(pid)
+            elif res == "no":
+                if not spid:
+                    # NO needs a pair to forbid; a NO with no sheet id is a
+                    # no-op (nothing to forbid) — skip quietly.
+                    continue
+                no_match.add((pid, spid))
+            elif res == "yes":
+                if not spid:
+                    raise SanityError(
+                        f"{label} line {i}: YES with empty sheet_player_id "
+                        f"(YES must name the matching sheet_player_id)"
+                    )
+                if pid in matches and matches[pid] != spid:
+                    raise SanityError(
+                        f"{label}: player_id {pid} has YES to two different "
+                        f"sheet_player_ids ({matches[pid]} and {spid}) — "
+                        f"exactly one candidate can be the match"
+                    )
+                matches[pid] = spid
+    log(f"Loaded resolutions from {label}: "
+        f"{len(matches)} YES, {len(no_match)} NO, {len(no_profile)} NONE")
+    return {"matches": matches, "no_match": no_match, "no_profile": no_profile}
+
+
+def merge_override_sources(sources):
+    """Merge override sources by precedence into one (matches, no_match, no_profile).
+
+    `sources` is an ordered list of (label, dict) HIGH precedence first. Each
+    dict has keys matches/no_match/no_profile as produced by load_manual (wrapped)
+    or load_resolution_file.
+
+    Precedence rules:
+      * The player-level decision (a positive YES/'match' vs a NONE/'no_profile')
+        is fixed by the FIRST (highest) source that expresses either for that
+        player; lower sources cannot change it (they are logged as shadowed).
+      * A YES/'match' is blocked if the SAME pair is forbidden (NO/'no_match') by
+        a source of equal-or-higher precedence.
+      * NO/'no_match' pairs accumulate across all sources EXCEPT a pair that a
+        higher-precedence source turned into a positive match (that match wins).
+    Every shadowed / blocked directive is logged so the effect is auditable.
+    """
+    matches, no_profile = {}, set()
+    locked = {}                 # pid -> (rank, label) that fixed the decision
+    forbidden = {}              # (pid, spid) -> (rank, label) highest-precedence
+    shadow_log = []
+
+    for rank, (label, src) in enumerate(sources):
+        # 1. Record forbidden pairs first (so same-source NO blocks same-source YES).
+        for (pid, spid) in sorted(src["no_match"]):
+            prev = forbidden.get((pid, spid))
+            if prev is None or rank < prev[0]:
+                forbidden[(pid, spid)] = (rank, label)
+
+        # 2. NONE / no_profile (player-level negative).
+        for pid in sorted(src["no_profile"]):
+            if pid in locked:
+                lr, ll = locked[pid]
+                if ll != label or pid not in no_profile:
+                    shadow_log.append(
+                        f"  {label}: no_profile({pid}) shadowed by higher-precedence "
+                        f"decision from {ll}")
+                continue
+            no_profile.add(pid)
+            locked[pid] = (rank, label)
+
+        # 3. YES / match (player-level positive).
+        for pid, spid in sorted(src["matches"].items()):
+            if pid in locked:
+                lr, ll = locked[pid]
+                shadow_log.append(
+                    f"  {label}: match({pid}->{spid}) shadowed by higher-precedence "
+                    f"decision from {ll}")
+                continue
+            fb = forbidden.get((pid, spid))
+            if fb is not None and fb[0] <= rank:
+                shadow_log.append(
+                    f"  {label}: match({pid}->{spid}) blocked by no_match from "
+                    f"{fb[1]} (equal-or-higher precedence)")
+                continue
+            matches[pid] = spid
+            locked[pid] = (rank, label)
+
+    # 4. A higher-precedence positive match trumps any lower no_match on the same
+    #    pair: drop such forbidden pairs so combine() sees no contradiction.
+    no_match_pairs = set()
+    for (pid, spid), (frank, flabel) in forbidden.items():
+        if matches.get(pid) == spid:
+            shadow_log.append(
+                f"  {flabel}: no_match({pid},{spid}) overridden by higher-precedence "
+                f"match from {locked[pid][1]}")
+            continue
+        no_match_pairs.add((pid, spid))
+
+    if shadow_log:
+        log(f"Override precedence — {len(shadow_log)} directive(s) shadowed/blocked:")
+        for line in shadow_log:
+            log(line)
+
     return matches, no_match_pairs, no_profile
 
 
@@ -665,7 +850,22 @@ def main():
         load_sheet(con, args.csv)
         held_ids = load_held_ids(con)
         ensure_manual_file()
-        matches, no_match_pairs, no_profile = load_manual()
+
+        # Override sources merged by precedence HIGH -> LOW (decision 18):
+        #   1. manual_matches.csv        (direct-entry, highest)
+        #   2. new_players_reviewed.csv  (owner-owned YES/NO/NONE)
+        #   3. ambiguous_matches.csv     (its resolution column, YES/NO/NONE)
+        m_matches, m_no_match, m_no_profile = load_manual()
+        manual_src = {
+            "matches": m_matches, "no_match": m_no_match, "no_profile": m_no_profile,
+        }
+        reviewed_src = load_resolution_file(REVIEWED_CSV, "new_players_reviewed.csv")
+        ambiguous_src = load_resolution_file(AMBIGUOUS_CSV, "ambiguous_matches.csv")
+        matches, no_match_pairs, no_profile = merge_override_sources([
+            ("manual_matches.csv", manual_src),
+            ("new_players_reviewed.csv", reviewed_src),
+            ("ambiguous_matches.csv", ambiguous_src),
+        ])
 
         # 3. Universe + automatic tiers.
         build_universe(con)
