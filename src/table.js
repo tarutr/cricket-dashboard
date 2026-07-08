@@ -91,7 +91,7 @@ export function buildQuery(state, visibleColumns) {
     if (m.sortExpression) selectParts.push(`${m.sortExpression} AS ${m.key}__sort`);
   }
 
-  const whereClauses = buildScopeClauses(state, { includeTeams: true, teamColumn: teamCol });
+  const whereClauses = buildScopeClauses(state, { includeTeams: true, teamColumn: teamCol, idColumn: idCol });
   if (state.search && state.search.trim()) {
     whereClauses.push(`${nameCol} ILIKE '%${esc(state.search.trim())}%'`);
   }
@@ -111,7 +111,7 @@ export function buildQuery(state, visibleColumns) {
   const wantsMatches = visibleColumns.includes("matches");
   let matchesSql = null;
   if (wantsMatches) {
-    const pmWhere = buildScopeClauses(state, { includeTeams: true, teamColumn: "team" }).join(" AND ");
+    const pmWhere = buildScopeClauses(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" }).join(" AND ");
     const pmNameFilter =
       state.search && state.search.trim() ? ` AND player_name ILIKE '%${esc(state.search.trim())}%'` : "";
     matchesSql = [
@@ -192,6 +192,22 @@ export function mountTable(container, store, { getManifestDates } = {}) {
       <div class="table-loading-overlay" aria-live="polite">Running query…</div>
       <div class="table-scroll"><table class="data-table"><tbody></tbody></table></div>
     `;
+  }
+
+  /**
+   * Blank/prompt state (owner: no automated search — the table stays empty until
+   * "Show results" is clicked, and reverts here whenever the filters change so it
+   * never shows numbers for a scope the filters no longer describe, §8.4).
+   */
+  function renderPrompt() {
+    container.innerHTML = `
+      <div class="table-prompt">
+        <p class="table-prompt__text">Choose your filters, then show the results.</p>
+        <button type="button" class="btn btn--primary" data-role="show-results">Show results</button>
+      </div>
+    `;
+    const btn = container.querySelector('[data-role="show-results"]');
+    if (btn) btn.addEventListener("click", () => load());
   }
 
   function renderError(err, retryFn) {
@@ -368,5 +384,5 @@ export function mountTable(container, store, { getManifestDates } = {}) {
     }
   }
 
-  return { load };
+  return { load, showPrompt: renderPrompt };
 }

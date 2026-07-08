@@ -127,7 +127,9 @@ function applyView() {
   if (graph) {
     graphController.onShow();
   } else {
-    tableController.load();
+    // Owner: no automated search — entering the table view shows the blank
+    // prompt; the query runs only when "Show results" is clicked.
+    tableController.showPrompt();
   }
 }
 
@@ -141,10 +143,12 @@ function onFiltersChanged() {
   // current format scope (§8.9 phase-metric gating) whenever formats change.
   if (advancedController) advancedController.render();
   // Only the visible view re-queries; the other refreshes when switched to.
+  // Table view: filter changes revert to the blank prompt (no automated search);
+  // the user clicks "Show results" to run the query for the new scope.
   if (store.get().view === "graph") {
     graphController.onScopeChanged();
   } else {
-    tableController.load();
+    tableController.showPrompt();
   }
 }
 
@@ -238,7 +242,8 @@ function boot() {
       updateScopeSentence();
       updateAdvancedCount();
       updateViewToggle();
-      tableController.load();
+      // Owner: blank on first load — show the prompt, don't auto-run the query.
+      tableController.showPrompt();
     })
     .catch((err) => {
       renderInitError(err, boot);

@@ -15,6 +15,10 @@ const VIEWS = {
   batting: "batting_innings.parquet",
   bowling: "bowling_innings.parquet",
   player_matches: "player_matches.parquet",
+  // D4: one row per matched player_id (profile filters); matchup grains for Pieces 4–5.
+  profiles: "player_profiles.parquet",
+  matchup_batting: "matchup_batting.parquet",
+  matchup_bowling: "matchup_bowling.parquet",
 };
 
 let initPromise = null;

@@ -9,6 +9,10 @@ export const PARQUET_FILES = [
   "batting_innings.parquet",
   "bowling_innings.parquet",
   "player_matches.parquet",
+  // D4: profile-powered filters (used now) + matchup aggregates (wired in Pieces 4–5).
+  "player_profiles.parquet",
+  "matchup_batting.parquet",
+  "matchup_bowling.parquet",
 ];
 
 export const VENDOR_DUCKDB = "/vendor/duckdb-wasm/";

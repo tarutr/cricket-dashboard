@@ -94,7 +94,7 @@ export async function searchPlayers(store, searchText, excludeIds) {
   const nameCol = NAME_COL[discipline];
   const teamCol = TEAM_COL[discipline];
 
-  const whereClauses = buildScopeClauses(state, { includeTeams: true, teamColumn: teamCol });
+  const whereClauses = buildScopeClauses(state, { includeTeams: true, teamColumn: teamCol, idColumn: idCol });
   const term = (searchText || "").trim();
   if (term) whereClauses.push(`${nameCol} ILIKE '%${esc(term)}%'`);
 

@@ -34,6 +34,74 @@ export const FORMAT_BUCKETS = [
   { key: "MDM", label: "MDM", matchTypes: ["MDM"] },
 ];
 
+// ── Profile filters (D4.2) ────────────────────────────────────────────────────
+// The four profile-powered filters live in a single `profile` state block. They
+// filter the Compare Stats table (and everything downstream that shares
+// buildScopeClauses) to players whose player_profiles row matches. Profiles are
+// men-only by design (the sheet is men-only), so these never apply while
+// gender = female — the filter bar greys them out there (owner decision 21).
+
+/** Fresh, all-cleared profile-filter block. */
+export function emptyProfile() {
+  return { roleGroup: null, roleSub: null, battingHand: null, bowlingType: null, teams: [] };
+}
+
+/** True if any profile filter is currently narrowing the set. */
+export function hasActiveProfileFilter(profile) {
+  if (!profile) return false;
+  return Boolean(
+    profile.roleGroup || profile.roleSub || profile.battingHand || profile.bowlingType || (profile.teams && profile.teams.length)
+  );
+}
+
+function escSql(s) {
+  return String(s).replace(/'/g, "''");
+}
+
+/**
+ * SQL semi-join clause restricting `idColumn` (batter_id / bowler_id / player_id)
+ * to the player_ids whose profile matches every active profile filter. Returns
+ * null when no profile filter is active OR gender = female (profiles are
+ * men-only — never silently empty the women's view; the filter bar disables the
+ * controls there per decision 21). Shared by table, graph, and team-option
+ * lookups so the honest scope sentence and every query agree.
+ */
+export function profileSemiJoinSql(state, idColumn) {
+  if (!idColumn) return null;
+  if (state.gender === "female") return null;
+  const p = state.profile;
+  if (!hasActiveProfileFilter(p)) return null;
+
+  const preds = [];
+  if (p.roleGroup) preds.push(`role_group = '${escSql(p.roleGroup)}'`);
+  if (p.roleSub) preds.push(`role_subgroup = '${escSql(p.roleSub)}'`);
+  if (p.battingHand) preds.push(`batting_style = '${escSql(p.battingHand)}'`);
+  if (p.bowlingType) preds.push(`bowling_type = '${escSql(p.bowlingType)}'`);
+  if (p.teams && p.teams.length) {
+    const teamPreds = p.teams
+      .map((t) => `list_contains(string_split(teams_played_for, '|'), '${escSql(t)}')`)
+      .join(" OR ");
+    preds.push(`(${teamPreds})`);
+  }
+  if (preds.length === 0) return null;
+  return `${idColumn} IN (SELECT player_id FROM profiles WHERE ${preds.join(" AND ")})`;
+}
+
+/** Human tokens for describeScope() — only the profile filters actually applied. */
+function profileScopeTokens(state) {
+  if (state.gender === "female") return [];
+  const p = state.profile;
+  const tokens = [];
+  if (p.roleGroup) tokens.push(p.roleGroup);
+  if (p.roleSub) tokens.push(p.roleSub);
+  if (p.battingHand) tokens.push(p.battingHand);
+  if (p.bowlingType) tokens.push(p.bowlingType);
+  if (p.teams && p.teams.length) {
+    tokens.push(p.teams.length <= 2 ? p.teams.join(", ") : `${p.teams.length} teams played for`);
+  }
+  return tokens;
+}
+
 /** Expand the selected format bucket keys into the raw match_type values for SQL IN (...). */
 export function expandFormats(formatKeys) {
   const set = new Set();
@@ -67,13 +135,14 @@ export function createInitialState(maxMonth) {
   return {
     view: "table", // "table" | "graph" (SPEC §6 Graph Builder)
     discipline: "batting",
-    gender: "female",
+    gender: "male", // owner default (overrides SPEC §5.1 "Women"): profile filters live on load
     formats: ["T20"],
     dateFrom,
     dateTo,
     teams: [],
     teamType: "international",
     minInnings: 10,
+    profile: emptyProfile(),
     search: "",
     sort: { key: "runs", dir: "desc" },
     columns: {
@@ -219,6 +288,8 @@ export function createStore(initial) {
     if (s.minInnings && s.minInnings > 1) {
       parts.push(`min ${s.minInnings} innings`);
     }
+
+    for (const token of profileScopeTokens(s)) parts.push(token);
 
     if (s.search && s.search.trim()) {
       parts.push(`matching "${s.search.trim()}"`);
