@@ -61,6 +61,10 @@ EXPORT_FILES = {
     "bowling_innings.parquet": ["match_id", "innings_number", "bowler_id"],
     "player_matches.parquet": ["match_id", "player_id"],
     "player_profiles.parquet": ["player_id"],
+    # D4 matchup files (men-only in practice; unmapped opponents bucketed as
+    # '(unmapped)' so the browser can compute an honest N-of-M denominator).
+    "matchup_batting.parquet": ["match_id", "innings_number", "batter_id", "bowling_type"],
+    "matchup_bowling.parquet": ["match_id", "innings_number", "bowler_id", "batting_hand"],
 }
 
 CONTENT_TYPES = {
@@ -70,6 +74,8 @@ CONTENT_TYPES = {
     "bowling_innings.parquet": "application/vnd.apache.parquet",
     "player_matches.parquet": "application/vnd.apache.parquet",
     "player_profiles.parquet": "application/vnd.apache.parquet",
+    "matchup_batting.parquet": "application/vnd.apache.parquet",
+    "matchup_bowling.parquet": "application/vnd.apache.parquet",
     "manifest.json": "application/json",
 }
 
@@ -444,6 +450,35 @@ def sql_batting():
                ) AS dismissal_kind
         FROM kept_wickets
         GROUP BY match_id, innings_number, player_out_id
+    ),
+    -- Innings-progression buckets (family E). A within-innings FACED-ball
+    -- counter per (match,inn,batter): count only faced balls (wides IS NULL;
+    -- no-balls count as faced), ordered by over/ball. faced_num is the 1-based
+    -- faced-ball ordinal on a faced ball. Wide deliveries carry runs_batter = 0
+    -- in kept (non-super-over) innings (verified), so bucketing runs on faced
+    -- balls only still sums to the batter's total runs.
+    faced_seq AS (
+        SELECT
+            match_id, innings_number, batter_id, runs_batter, wides,
+            SUM(CASE WHEN {FACED_BATTER} THEN 1 ELSE 0 END) OVER (
+                PARTITION BY match_id, innings_number, batter_id
+                ORDER BY over_number, ball_index
+                ROWS UNBOUNDED PRECEDING
+            ) AS faced_num
+        FROM d
+        WHERE batter_id IS NOT NULL
+    ),
+    prog_agg AS (
+        SELECT
+            match_id, innings_number, batter_id,
+            SUM(CASE WHEN wides IS NULL AND faced_num BETWEEN 1 AND 10  THEN runs_batter ELSE 0 END) AS fb1_10_runs,
+            SUM(CASE WHEN wides IS NULL AND faced_num BETWEEN 1 AND 10  THEN 1 ELSE 0 END)           AS fb1_10_balls,
+            SUM(CASE WHEN wides IS NULL AND faced_num BETWEEN 11 AND 20 THEN runs_batter ELSE 0 END) AS fb11_20_runs,
+            SUM(CASE WHEN wides IS NULL AND faced_num BETWEEN 11 AND 20 THEN 1 ELSE 0 END)           AS fb11_20_balls,
+            SUM(CASE WHEN wides IS NULL AND faced_num >= 21             THEN runs_batter ELSE 0 END) AS fb21p_runs,
+            SUM(CASE WHEN wides IS NULL AND faced_num >= 21             THEN 1 ELSE 0 END)           AS fb21p_balls
+        FROM faced_seq
+        GROUP BY match_id, innings_number, batter_id
     )
     SELECT
         cd.match_id,
@@ -483,7 +518,14 @@ def sql_batting():
         CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_mid_runs, 0)   END AS odi_mid_runs,
         CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_mid_balls, 0)  END AS odi_mid_balls,
         CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_death_runs, 0) END AS odi_death_runs,
-        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_death_balls,0) END AS odi_death_balls
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_death_balls,0) END AS odi_death_balls,
+        -- Innings-progression buckets (family E): faced-ball ordinal windows.
+        COALESCE(pg.fb1_10_runs, 0)   AS fb1_10_runs,
+        COALESCE(pg.fb1_10_balls, 0)  AS fb1_10_balls,
+        COALESCE(pg.fb11_20_runs, 0)  AS fb11_20_runs,
+        COALESCE(pg.fb11_20_balls, 0) AS fb11_20_balls,
+        COALESCE(pg.fb21p_runs, 0)    AS fb21p_runs,
+        COALESCE(pg.fb21p_balls, 0)   AS fb21p_balls
     FROM crease_dedup cd
     JOIN kept_innings ki
       ON cd.match_id = ki.match_id AND cd.innings_number = ki.innings_number
@@ -494,6 +536,8 @@ def sql_batting():
       ON cd.match_id = pos.match_id AND cd.innings_number = pos.innings_number AND cd.batter_id = pos.pid
     LEFT JOIN dis
       ON cd.match_id = dis.match_id AND cd.innings_number = dis.innings_number AND cd.batter_id = dis.pid
+    LEFT JOIN prog_agg pg
+      ON cd.match_id = pg.match_id AND cd.innings_number = pg.innings_number AND cd.batter_id = pg.batter_id
     ORDER BY match_date, cd.match_id, cd.innings_number, cd.batter_id
     """
 
@@ -541,6 +585,23 @@ def sql_bowling():
                SUM(CASE WHEN ({odi_phase_wba()}) = 'death' THEN wkts ELSE 0 END) AS odi_death_wickets
         FROM wkt_by_ball
         GROUP BY match_id, innings_number, bowler_id
+    ),
+    -- Bowler-credited wicket breakdown by kind per (match,inn,bowler). Mirrors
+    -- wkt_by_ball's join (kept_wickets is already filtered to credited kinds),
+    -- so the six counts sum exactly to `wickets`.
+    wkt_kind_agg AS (
+        SELECT d.match_id, d.innings_number, d.bowler_id,
+               SUM(CASE WHEN kw.kind = 'bowled'            THEN 1 ELSE 0 END) AS wickets_bowled,
+               SUM(CASE WHEN kw.kind = 'lbw'               THEN 1 ELSE 0 END) AS wickets_lbw,
+               SUM(CASE WHEN kw.kind = 'caught'            THEN 1 ELSE 0 END) AS wickets_caught,
+               SUM(CASE WHEN kw.kind = 'caught and bowled' THEN 1 ELSE 0 END) AS wickets_caught_and_bowled,
+               SUM(CASE WHEN kw.kind = 'stumped'          THEN 1 ELSE 0 END) AS wickets_stumped,
+               SUM(CASE WHEN kw.kind = 'hit wicket'       THEN 1 ELSE 0 END) AS wickets_hit_wicket
+        FROM kept_wickets kw
+        JOIN d
+          ON kw.match_id = d.match_id AND kw.innings_number = d.innings_number
+         AND kw.over_number = d.over_number AND kw.ball_index = d.ball_index
+        GROUP BY d.match_id, d.innings_number, d.bowler_id
     ),
     -- Per-over bowler set: a maiden is a complete over of balls_per_over LEGAL
     -- deliveries by ONE bowler with 0 runs conceded (bat+wides+noballs).
@@ -621,6 +682,12 @@ def sql_bowling():
         COALESCE(mn.maidens, 0) AS maidens,
         b.wides_runs,
         b.noball_runs,
+        COALESCE(wk.wickets_bowled, 0)            AS wickets_bowled,
+        COALESCE(wk.wickets_lbw, 0)               AS wickets_lbw,
+        COALESCE(wk.wickets_caught, 0)            AS wickets_caught,
+        COALESCE(wk.wickets_caught_and_bowled, 0) AS wickets_caught_and_bowled,
+        COALESCE(wk.wickets_stumped, 0)           AS wickets_stumped,
+        COALESCE(wk.wickets_hit_wicket, 0)        AS wickets_hit_wicket,
         b.pp_balls,
         b.pp_runs_conceded,
         COALESCE(w.pp_wickets, 0) AS pp_wickets,
@@ -645,6 +712,8 @@ def sql_bowling():
       ON b.match_id = w.match_id AND b.innings_number = w.innings_number AND b.bowler_id = w.bowler_id
     LEFT JOIN maiden_agg mn
       ON b.match_id = mn.match_id AND b.innings_number = mn.innings_number AND b.bowler_id = mn.bowler_id
+    LEFT JOIN wkt_kind_agg wk
+      ON b.match_id = wk.match_id AND b.innings_number = wk.innings_number AND b.bowler_id = wk.bowler_id
     ORDER BY b.match_date, b.match_id, b.innings_number, b.bowler_id
     """
 
@@ -677,6 +746,159 @@ def odi_phase_wba():
         WHEN wkt_by_ball.over_number BETWEEN 10 AND 39 THEN 'mid'
         WHEN wkt_by_ball.over_number BETWEEN 40 AND 49 THEN 'death'
     END
+    """
+
+
+def sql_matchup_batting():
+    """
+    D4.3 batter x bowling-style. One row per
+    (match_id, innings_number, batter_id, bowling_type): the batter's record
+    against every distinct bowling_type they faced in that innings, keyed by the
+    BOWLER's mapped style from player_profiles.
+
+    bowling_type key = COALESCE(profile.bowling_type, profile.bowling_group,
+    '(unmapped)'): a specific type when known; the pace/spin group when only that
+    is known (the 10 owner-ruled "bare slow" = Spin bowlers surface here as
+    'Spin'); '(unmapped)' when the bowler has no profile/style at all. The
+    '(unmapped)' rows make the honest "N of M balls" denominator computable in the
+    browser without a second file. bowling_group is carried alongside and is
+    functionally determined by the key. Super-over innings excluded (via `d`).
+
+    Dismissal attribution (owner ruling, to confirm at the D4 gate): a dismissal
+    counts against the bowler's style ONLY for bowler-credited kinds
+    ({bowled, lbw, caught, caught and bowled, stumped, hit wicket}); run-outs and
+    other non-credited kinds are NOT "out to pace/spin".
+    """
+    cte = build_delivery_cte(hundred_only=None)
+    return f"""
+    WITH {cte},
+    kept_wickets AS (
+        SELECT w.match_id, w.innings_number, w.over_number, w.ball_index, w.kind
+        FROM wickets w
+        JOIN kept_innings ki
+          ON w.match_id = ki.match_id AND w.innings_number = ki.innings_number
+        WHERE w.kind IN ({_KINDS_IN})
+    ),
+    -- Credited-wicket count per delivery (mirrors the bowling export's join so
+    -- totals reconcile). Credited kinds always dismiss the striker (d.batter_id).
+    cwkt AS (
+        SELECT d.match_id, d.innings_number, d.over_number, d.ball_index,
+               d.batter_id, d.bowler_id, COUNT(*) AS wkts
+        FROM kept_wickets kw
+        JOIN d
+          ON kw.match_id = d.match_id AND kw.innings_number = d.innings_number
+         AND kw.over_number = d.over_number AND kw.ball_index = d.ball_index
+        GROUP BY d.match_id, d.innings_number, d.over_number, d.ball_index,
+                 d.batter_id, d.bowler_id
+    ),
+    mb AS (
+        SELECT
+            d.match_id, d.innings_number, d.batter_id,
+            COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)') AS bowling_type,
+            COALESCE(pp.bowling_group, '(unmapped)')                  AS bowling_group,
+            ANY_VALUE(d.batter) AS batter_name,
+            ANY_VALUE(d.batting_team) AS batting_team,
+            ANY_VALUE(CASE WHEN d.team_1 = d.batting_team THEN d.team_2 ELSE d.team_1 END) AS bowling_team,
+            ANY_VALUE(d.match_type) AS match_type,
+            ANY_VALUE(d.gender) AS gender,
+            ANY_VALUE(d.team_type) AS team_type,
+            ANY_VALUE(d.match_date) AS match_date,
+            ANY_VALUE(d.year) AS year,
+            ANY_VALUE(d.month) AS month,
+            SUM(d.runs_batter) AS runs,
+            SUM(CASE WHEN {FACED_BATTER} THEN 1 ELSE 0 END) AS balls_faced,
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS dots,
+            SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS fours_hit,
+            SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS sixes_hit,
+            SUM(COALESCE(cwkt.wkts, 0)) AS dismissals
+        FROM d
+        LEFT JOIN player_profiles pp ON d.bowler_id = pp.player_id
+        LEFT JOIN cwkt
+          ON d.match_id = cwkt.match_id AND d.innings_number = cwkt.innings_number
+         AND d.over_number = cwkt.over_number AND d.ball_index = cwkt.ball_index
+         AND d.batter_id = cwkt.batter_id AND d.bowler_id = cwkt.bowler_id
+        WHERE d.batter_id IS NOT NULL
+        GROUP BY d.match_id, d.innings_number, d.batter_id,
+                 COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)'),
+                 COALESCE(pp.bowling_group, '(unmapped)')
+    )
+    SELECT
+        match_id, innings_number, batter_id, bowling_type, bowling_group,
+        batter_name, batting_team, bowling_team, match_type, gender, team_type,
+        match_date, year, month,
+        runs, balls_faced, dots, fours_hit, sixes_hit, dismissals
+    FROM mb
+    ORDER BY match_date, match_id, innings_number, batter_id, bowling_type
+    """
+
+
+def sql_matchup_bowling():
+    """
+    D4.3 bowler x batting-hand. One row per
+    (match_id, innings_number, bowler_id, batting_hand): the bowler's record
+    against right- vs left-handed batters, keyed by the BATTER's batting_style
+    from player_profiles ('Right-hand bat' / 'Left-hand bat' / '(unmapped)').
+
+    Components use the standard rules: legal balls (wides & no-balls excluded),
+    runs_conceded = runs_batter + noballs + wides, bowler-credited wickets, dots
+    (legal ball, 0 off bat), boundaries off the bat. Super-over innings excluded.
+    """
+    cte = build_delivery_cte(hundred_only=None)
+    return f"""
+    WITH {cte},
+    kept_wickets AS (
+        SELECT w.match_id, w.innings_number, w.over_number, w.ball_index, w.kind
+        FROM wickets w
+        JOIN kept_innings ki
+          ON w.match_id = ki.match_id AND w.innings_number = ki.innings_number
+        WHERE w.kind IN ({_KINDS_IN})
+    ),
+    cwkt AS (
+        SELECT d.match_id, d.innings_number, d.over_number, d.ball_index,
+               d.batter_id, d.bowler_id, COUNT(*) AS wkts
+        FROM kept_wickets kw
+        JOIN d
+          ON kw.match_id = d.match_id AND kw.innings_number = d.innings_number
+         AND kw.over_number = d.over_number AND kw.ball_index = d.ball_index
+        GROUP BY d.match_id, d.innings_number, d.over_number, d.ball_index,
+                 d.batter_id, d.bowler_id
+    ),
+    mbowl AS (
+        SELECT
+            d.match_id, d.innings_number, d.bowler_id,
+            COALESCE(pp.batting_style, '(unmapped)') AS batting_hand,
+            ANY_VALUE(d.bowler) AS bowler_name,
+            ANY_VALUE(d.batting_team) AS batting_team,
+            ANY_VALUE(CASE WHEN d.team_1 = d.batting_team THEN d.team_2 ELSE d.team_1 END) AS bowling_team,
+            ANY_VALUE(d.match_type) AS match_type,
+            ANY_VALUE(d.gender) AS gender,
+            ANY_VALUE(d.team_type) AS team_type,
+            ANY_VALUE(d.match_date) AS match_date,
+            ANY_VALUE(d.year) AS year,
+            ANY_VALUE(d.month) AS month,
+            SUM(CASE WHEN {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS balls,
+            SUM({BOWLER_RUNS}) AS runs_conceded,
+            SUM(CASE WHEN {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS dots,
+            SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS fours_conceded,
+            SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS sixes_conceded,
+            SUM(COALESCE(cwkt.wkts, 0)) AS wickets
+        FROM d
+        LEFT JOIN player_profiles pp ON d.batter_id = pp.player_id
+        LEFT JOIN cwkt
+          ON d.match_id = cwkt.match_id AND d.innings_number = cwkt.innings_number
+         AND d.over_number = cwkt.over_number AND d.ball_index = cwkt.ball_index
+         AND d.batter_id = cwkt.batter_id AND d.bowler_id = cwkt.bowler_id
+        WHERE d.bowler_id IS NOT NULL
+        GROUP BY d.match_id, d.innings_number, d.bowler_id,
+                 COALESCE(pp.batting_style, '(unmapped)')
+    )
+    SELECT
+        match_id, innings_number, bowler_id, batting_hand,
+        bowler_name, batting_team, bowling_team, match_type, gender, team_type,
+        match_date, year, month,
+        balls, runs_conceded, wickets, dots, fours_conceded, sixes_conceded
+    FROM mbowl
+    ORDER BY match_date, match_id, innings_number, bowler_id, batting_hand
     """
 
 
@@ -990,6 +1212,90 @@ def run_gates(con, out_dir):
     )
     gate(hundred_phase_gap == 0, "hundred phase splits sum to totals",
          f"{hundred_phase_gap} bowling rows with phase gaps")
+
+    # --- Gate: bowler wicket-type breakdown sums to total wickets ---
+    wk_split_bad = q(
+        f"""
+        SELECT COUNT(*) FROM read_parquet('{bowl_p}')
+        WHERE wickets_bowled + wickets_lbw + wickets_caught
+            + wickets_caught_and_bowled + wickets_stumped + wickets_hit_wicket
+            != wickets
+        """
+    )
+    gate(wk_split_bad == 0, "wicket-type split sums to wickets (per row)",
+         f"{wk_split_bad} bowling rows mismatch")
+
+    # --- Gate: innings-progression buckets sum to balls_faced / runs ---
+    prog_bad = q(
+        f"""
+        SELECT COUNT(*) FROM read_parquet('{bat_p}')
+        WHERE fb1_10_balls + fb11_20_balls + fb21p_balls != balls_faced
+           OR fb1_10_runs  + fb11_20_runs  + fb21p_runs  != runs
+        """
+    )
+    gate(prog_bad == 0, "progression buckets sum to balls_faced/runs (per row)",
+         f"{prog_bad} batting rows mismatch")
+
+    # --- Matchup files: totals reconcile to the raw deliveries ---
+    ref_balls_bowled = q(
+        f"{ref_cte} SELECT COUNT(*) FROM d WHERE wides IS NULL AND noballs IS NULL"
+    )
+    mbat_p = paths["matchup_batting.parquet"]
+    mbowl_p = paths["matchup_bowling.parquet"]
+
+    mbat_bf = q(f"SELECT SUM(balls_faced) FROM read_parquet('{mbat_p}')")
+    mbat_runs = q(f"SELECT SUM(runs) FROM read_parquet('{mbat_p}')")
+    mbat_dis = q(f"SELECT SUM(dismissals) FROM read_parquet('{mbat_p}')")
+    gate(mbat_bf == ref_balls_faced, "matchup_batting balls == faced balls",
+         f"{mbat_bf} vs {ref_balls_faced}")
+    gate(mbat_runs == ref_runs, "matchup_batting runs == SUM(runs_batter)",
+         f"{mbat_runs} vs {ref_runs}")
+    gate(mbat_dis == ref_wkts, "matchup_batting dismissals == credited wickets",
+         f"{mbat_dis} vs {ref_wkts}")
+
+    mbowl_balls = q(f"SELECT SUM(balls) FROM read_parquet('{mbowl_p}')")
+    mbowl_conceded = q(f"SELECT SUM(runs_conceded) FROM read_parquet('{mbowl_p}')")
+    mbowl_wkts = q(f"SELECT SUM(wickets) FROM read_parquet('{mbowl_p}')")
+    gate(mbowl_balls == ref_balls_bowled, "matchup_bowling balls == legal balls",
+         f"{mbowl_balls} vs {ref_balls_bowled}")
+    gate(mbowl_conceded == ref_conceded, "matchup_bowling runs_conceded == SUM(bat+nb+wd)",
+         f"{mbowl_conceded} vs {ref_conceded}")
+    gate(mbowl_wkts == ref_wkts, "matchup_bowling wickets == credited wickets",
+         f"{mbowl_wkts} vs {ref_wkts}")
+
+    # --- Coverage scope identity (task-required): a specific slice reconciles ---
+    # Men's T20 (match_type='T20') in 2024: matchup_batting faced balls (all
+    # bowling_type buckets incl. '(unmapped)') must equal batting_innings faced
+    # balls for the same slice. This proves the '(unmapped)' bucket makes the
+    # honest N-of-M denominator exact.
+    scope = "gender='male' AND match_type='T20' AND year=2024"
+    mbat_scope = q(
+        f"SELECT COALESCE(SUM(balls_faced),0) FROM read_parquet('{mbat_p}') WHERE {scope}"
+    )
+    bat_scope = q(
+        f"SELECT COALESCE(SUM(balls_faced),0) FROM read_parquet('{bat_p}') WHERE {scope}"
+    )
+    gate(mbat_scope == bat_scope,
+         "matchup_batting scope balls == batting scope balls (men T20 2024)",
+         f"{mbat_scope} vs {bat_scope}")
+
+    # Coverage is meaningful: for men, mapped (non-'(unmapped)') balls are a large
+    # majority; for women, effectively zero. Assert the men's mapped share is high
+    # and women's is ~0 so a regression in profile joining is caught.
+    male_mapped = q(
+        f"""SELECT COALESCE(SUM(CASE WHEN bowling_type <> '(unmapped)' THEN balls_faced ELSE 0 END),0)
+                 * 100.0 / NULLIF(SUM(balls_faced),0)
+            FROM read_parquet('{mbat_p}') WHERE gender='male'"""
+    )
+    female_mapped = q(
+        f"""SELECT COALESCE(SUM(CASE WHEN bowling_type <> '(unmapped)' THEN balls_faced ELSE 0 END),0)
+                 * 100.0 / NULLIF(SUM(balls_faced),0)
+            FROM read_parquet('{mbat_p}') WHERE gender='female'"""
+    )
+    gate(male_mapped is not None and male_mapped > 70,
+         "matchup_batting men mapped-style share > 70%", f"got {male_mapped}")
+    gate(female_mapped is None or female_mapped < 1,
+         "matchup_batting women mapped-style share < 1%", f"got {female_mapped}")
 
     # --- player_matches gates ---
     pm_p = paths["player_matches.parquet"]
@@ -1314,6 +1620,12 @@ def main():
 
     log("Writing player_profiles.parquet ...")
     write_parquet(con, sql_player_profiles(), os.path.join(args.out, "player_profiles.parquet"))
+
+    log("Writing matchup_batting.parquet ...")
+    write_parquet(con, sql_matchup_batting(), os.path.join(args.out, "matchup_batting.parquet"))
+
+    log("Writing matchup_bowling.parquet ...")
+    write_parquet(con, sql_matchup_bowling(), os.path.join(args.out, "matchup_bowling.parquet"))
 
     # Gates + spot checks (all before any upload).
     try:
