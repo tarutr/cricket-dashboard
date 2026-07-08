@@ -1,5 +1,13 @@
 # SPEC ADDENDUM — Data Expansion & Pipeline Ownership (Phases D0–D5)
 
+> **PROGRESS (2026-07-08).** D0 ✅ (pipeline ownership migrated, this repo owns
+> cricket.duckdb on R2, runs every 6h). D1 ✅ (matching analysis). D2 ✅ (player_profiles
+> built + enriched taxonomy, live). D3 ✅ (Dropbox resilience + alert emails, gate passed).
+> Review workflow ✅ (two-sheet, `review/PLAYER_REVIEW.md`). **D4: data layer ✅ done +
+> deployed + verified; D4 FRONTEND is the current work — see `review/D4_FRONTEND_PLAN.md`
+> for the 5-piece build plan.** D5 (profile pop-ups) and original Phase 4 (polish) remain.
+> All owner rulings are recorded in `review/owner_decisions.md` (authoritative).
+
 Read together with SPEC.md. SPEC.md's rules §8 (non-negotiables), §4.1 (calculation
 rules), and its ask-don't-assume working style apply here unchanged. These phases run
 AFTER Phase 3 (graph builder, done) and BEFORE the original Phase 4 (polish), which
