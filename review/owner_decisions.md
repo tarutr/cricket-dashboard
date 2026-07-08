@@ -117,3 +117,21 @@ change requires a new owner decision recorded here. Dates are decision dates.
 21. **Missing-data display (resolves deferred decision 8): SHOW INERT with "–".**
     Sections/filters with no mapped data (incl. all women's matchups) appear greyed
     with an honest "no style data" note — never hidden, never silently empty.
+
+## 2026-07-08 — D4 data layer built (pending gate confirmations)
+
+22. **D4 data layer complete** (matchup_batting, matchup_bowling parquets; +6
+    wicket-type columns on bowling_innings; +6 progression columns on
+    batting_innings). All new fields reconcile to raw deliveries via export gates
+    AND were independently hand-verified at delivery level. Deployed to R2 as
+    additive data (site JS not yet reading them — frontend is the next step).
+23. **Dismissal attribution in matchups (Fable's ruling, CONFIRM AT GATE):** a
+    batter counts as "dismissed by pace/spin" ONLY for bowler-credited kinds
+    (bowled, lbw, caught, c&b, stumped, hit wicket). Run-outs and other
+    non-credited dismissals are NOT attributed to the bowler's style. Owner to
+    confirm at the D4 comparison-review gate.
+24. **Bare-slow bowlers in the fine matchup view (CONFIRM AT GATE):** the 10
+    owner-ruled bare-"slow"=Spin bowlers have no specific bowling_type, so in the
+    fine-grained "vs Off-spin / Leg-spin / …" view they appear under a 'Spin'
+    (unspecified type) bucket; in the coarse pace-vs-spin view they correctly
+    count as Spin. Faithful to decision 15; owner to confirm the fine-view label.
