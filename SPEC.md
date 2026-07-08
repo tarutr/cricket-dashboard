@@ -25,8 +25,12 @@ No player profile pages, no team pages, no editorial content in v1 of this site.
 - No user accounts, no login.
 - No AI/chatbot query interface.
 - No ESPN data (Cricsheet only; ESPN integration is a separate future project).
-- No player role/type filters (batter/bowler/all-rounder classification does not exist
-  in this dataset yet; the schema must make it easy to add later, but build nothing for it).
+- ~~No player role/type filters~~ **(SUPERSEDED by Phase D4.2, 2026-07-08.)** When v1
+  was written no role/type classification existed in the dataset. Phase D4 added the
+  `player_profiles` table (from the Cricinfo sheet), and D4.2 shipped profile-powered
+  filters — playing-role, batting-hand, bowling-style, teams-played-for — to Compare
+  Stats. See `SPEC_ADDENDUM_DATA.md` (D4) and `review/owner_decisions.md` (decisions
+  13–15, 21, 25). Profiles are men-only, so these filters are inert on the Women view.
 - No WC / "since last WC" style toggles from v1.
 - No server, no backend API, no database hosted for queries. Static site only.
 
@@ -150,7 +154,8 @@ Validation gate in export_parquet.py (build FAILS loudly if violated):
 
 ### 5.1 Filters (the "major filters" bar)
 
-1. **Gender** — Women / Men. Default: Women. Single-select, always active (no "both").
+1. **Gender** — Women / Men. Default: **Men** (owner change 2026-07-08; originally
+   Women — see `review/owner_decisions.md` #25). Single-select, always active (no "both").
 2. **Format** — multi-select over T20, IT20, ODI, ODM, Test, MDM, with two convenience
    groupings surfaced in the UI: "All T20s" (T20+IT20) and "All ODIs" (ODI+ODM).
    Default: All T20s.
@@ -162,7 +167,15 @@ Validation gate in export_parquet.py (build FAILS loudly if violated):
 6. **Minimum innings** — numeric input, applied to the discipline in view.
    Default: 10. This is a first-class filter, not buried in advanced.
 
-Discipline toggle: **Batting / Bowling** (carried over from v1). No role/type filters (§2).
+Discipline toggle: **Batting / Bowling** (carried over from v1).
+
+**Player-profile filter row (added D4.2, 2026-07-08):** a second filter row — playing
+role (broad Batter/Allrounder/Bowler + cascading detailed sub-role), batting hand,
+bowling type (10 types), and teams-played-for (searchable). Each option lists only
+values that have matched players; a profile filter restricts the table (and graph seed)
+via a `player_id` semi-join, and excludes unmatched players *only* while a profile filter
+is active. Profiles are men-only, so the whole row is greyed with an honest note on the
+Women view. See `SPEC_ADDENDUM_DATA.md` D4.2.
 
 ### 5.2 Advanced filters
 
@@ -181,16 +194,25 @@ Batting: innings, runs, balls faced, high score, average (runs/dismissals),
 strike rate (runs/balls*100), balls per dismissal, dot %, boundary % (boundary balls /
 balls), balls per boundary, runs per innings, 4s, 6s, not-out %,
 PP strike rate, middle-overs SR, death SR (phase metrics; T20-only surfacing per §4.1).
+*Added D4.2 (Piece 2):* faced-ball progression strike rates — first-10-ball SR, balls
+11–20 SR, 21+ SR (ball-count buckets, all formats, NOT phase-gated).
 
 Bowling: innings, wickets, balls, runs conceded, average (runs/wkts), economy
 (runs/balls*6), strike rate (balls/wkts), dot %, boundary % conceded, maidens,
 wickets per innings, PP economy, death economy, PP wickets, death wickets.
+*Added D4.2 (Piece 2):* wicket-type breakdown counts — bowled, lbw, caught,
+caught-&-bowled, stumped, hit-wicket (the six sum to `wickets`).
 
 Division-by-zero rule: any ratio with a zero denominator is NULL, never Infinity,
 never 0. NULL sorts last regardless of direction.
 
 ### 5.4 Table behavior
 
+- **No automated search (owner change 2026-07-08, `review/owner_decisions.md` #25):** the
+  results table is **blank on first load** and shows a **"Show results"** button; runs the query
+  only on click and reverts to the blank prompt on any filter change, so it never shows
+  numbers for a scope the filters no longer describe. Applies to the table only; the Graph
+  Builder still auto-updates.
 - Columns = selected metrics (user can add/remove/reorder; sensible defaults per discipline).
 - Sortable by any column, direction-aware (economy ascending = best).
 - Player search box (substring, case-insensitive, surname-friendly).

@@ -135,3 +135,36 @@ change requires a new owner decision recorded here. Dates are decision dates.
     fine-grained "vs Off-spin / Leg-spin / …" view they appear under a 'Spin'
     (unspecified type) bucket; in the coarse pace-vs-spin view they correctly
     count as Spin. Faithful to decision 15; owner to confirm the fine-view label.
+    (Matchup views are Pieces 4–5 — still to be built, so this is not yet
+    gate-confirmed against a live UI.)
+
+## 2026-07-08 — D4 frontend build (Pieces 1–2)
+
+25. **Piece 1 (profile filters) — GATE APPROVED** ("This all looks good"), reviewed
+    on localhost. Owner design rulings realized in the build:
+    - **Playing-role filter = BOTH levels:** a broad Batter / Allrounder / Bowler
+      picker plus a cascading detailed sub-role (Opening / Top-order / Middle-order /
+      Wicketkeeper for Batter; Batting/Bowling allrounder for Allrounder).
+    - **Bowling filter = the 10 specific types** (Off-spin, Leg-spin, Slow left-arm
+      orthodox, Left-arm wrist-spin, Slow-medium, Medium, Medium-fast, Fast-medium,
+      Fast) — matches the decision-13 taxonomy. Not the coarse Pace/Spin.
+    - **Women view:** the profile-filter row greys out with the exact note
+      **"We don't have profile data on Women yet."** (profiles are men-only; 0% of
+      women players have one). Switching gender clears any profile filter.
+    - **Men is now the DEFAULT gender** (overrides SPEC §5.1 "Women"), so profile
+      filters are live on first load.
+    - **No automated search:** the Compare Stats results table is **blank on first
+      load** and shows a **"Show results"** button; it reverts to that prompt on any
+      filter change (so numbers are never shown for a scope the filters no longer
+      describe). Table only — the Graph Builder still auto-updates. Owner: fine for
+      now, "a million small design changes" get batched at the end.
+26. **Piece 2 (new table metrics) — BUILT + VERIFIED, not yet gate-reviewed.**
+    Bowler wicket-type breakdown = **counts** (six kinds; sum to `wickets`); a
+    percentage/"dismissal fingerprint" split was NOT built — deferred to end-polish
+    unless owner asks. Batting progression = first-10-ball / 11–20 / 21+ **faced-ball**
+    strike rates, available in **all formats** (not phase-gated). Numbers cross-checked
+    exact vs raw R2.
+27. **CORS / preview:** R2 bucket CORS allows `localhost:8000` but not Vercel preview
+    domains, so branch previews error. Owner declined to change R2 CORS / README now
+    ("just show me the localhost"); reviews happen on localhost until owner chooses to
+    widen CORS. Deferred, non-blocking.
