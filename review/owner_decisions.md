@@ -125,12 +125,12 @@ change requires a new owner decision recorded here. Dates are decision dates.
     batting_innings). All new fields reconcile to raw deliveries via export gates
     AND were independently hand-verified at delivery level. Deployed to R2 as
     additive data (site JS not yet reading them — frontend is the next step).
-23. **Dismissal attribution in matchups (Fable's ruling, CONFIRM AT GATE):** a
+23. **Dismissal attribution in matchups — CONFIRMED 2026-07-08:** a
     batter counts as "dismissed by pace/spin" ONLY for bowler-credited kinds
     (bowled, lbw, caught, c&b, stumped, hit wicket). Run-outs and other
     non-credited dismissals are NOT attributed to the bowler's style. Owner to
     confirm at the D4 comparison-review gate.
-24. **Bare-slow bowlers in the fine matchup view (CONFIRM AT GATE):** the 10
+24. **Bare-slow bowlers in the fine matchup view — CONFIRMED 2026-07-08:** the 10
     owner-ruled bare-"slow"=Spin bowlers have no specific bowling_type, so in the
     fine-grained "vs Off-spin / Leg-spin / …" view they appear under a 'Spin'
     (unspecified type) bucket; in the coarse pace-vs-spin view they correctly
