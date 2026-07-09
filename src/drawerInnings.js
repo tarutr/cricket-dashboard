@@ -58,6 +58,7 @@ export function mountDrawerInnings(container, store, onChange) {
           ${POSITIONS.map((p) => `<button type="button" class="chip chip--sm" data-value="${p}">${p}</button>`).join("")}
         </div>
         <span class="profile-note" data-role="positions-note" hidden>Batting view only</span>
+        <span class="profile-note" data-role="positions-hint" hidden>Filters the position of the batters faced</span>
       </div>
 
       <div class="filter-group filter-group--opposition" data-role="opposition-group">
@@ -83,6 +84,7 @@ export function mountDrawerInnings(container, store, onChange) {
     positionsGroup: container.querySelector('[data-role="positions-group"]'),
     positions: container.querySelector('[data-role="positions"]'),
     positionsNote: container.querySelector('[data-role="positions-note"]'),
+    positionsHint: container.querySelector('[data-role="positions-hint"]'),
     oppositionGroup: container.querySelector('[data-role="opposition-group"]'),
     oppToggle: container.querySelector('[data-role="opp-toggle"]'),
     oppPanel: container.querySelector('[data-role="opp-panel"]'),
@@ -102,21 +104,28 @@ export function mountDrawerInnings(container, store, onChange) {
   // ── Batting position ────────────────────────────────────────────────────
   function syncPositions() {
     const state = store.get();
-    // Matchup views (matchup_batting/matchup_bowling) have no batting_position
-    // column, so the position filter greys out while a matchup "Vs" selection
-    // is active too — distinct note from the bowling-discipline case so the
-    // owner sees why (R3, decision 33).
+    // D4-R4: both matchup views now carry batting_position (batting side: the
+    // batter's own position; bowling side: the position of the striker
+    // faced), so the filter is enabled whenever batting is in play — plain
+    // batting, matchup batting, AND bowling WITH an active Vs selection.
+    // Plain bowling (no Vs) is the only case left with no position concept.
     const matchupOn = matchupVsActive(state);
-    const disabled = state.discipline !== "batting" || matchupOn;
+    const enabled = state.discipline === "batting" || (state.discipline === "bowling" && matchupOn);
+    const disabled = !enabled;
     els.positionsGroup.classList.toggle("is-disabled", disabled);
     els.positionsNote.hidden = !disabled;
-    els.positionsNote.textContent =
-      state.discipline === "batting" && matchupOn ? "Not available in matchup mode" : "Batting view only";
+    els.positionsNote.textContent = "Batting view only — or use Vs in the bowling view";
     const selected = new Set(state.positions);
     els.positions.querySelectorAll(".chip").forEach((btn) => {
       btn.disabled = disabled;
       btn.classList.toggle("is-active", selected.has(Number(btn.dataset.value)));
     });
+
+    // Bowling-matchup hint: this filter narrows the BATTERS faced, not the
+    // bowler's own (nonexistent) position — say so plainly so it doesn't read
+    // as "position bowled from".
+    const bowlingMatchupHint = state.discipline === "bowling" && matchupOn;
+    els.positionsHint.hidden = !bowlingMatchupHint;
   }
 
   els.positions.addEventListener("click", (e) => {

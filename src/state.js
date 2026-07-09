@@ -159,18 +159,21 @@ export function activeSplit(state) {
   return splitAllowed(state, state.splitBy) ? SPLIT_DIMENSIONS[state.splitBy] : null;
 }
 
-/** True if the batting-position filter is currently narrowing the innings set. */
+/** True if the batting-position filter is currently narrowing the innings/matchup
+ * set. Both matchup views now carry a batting_position column (D4-R4): in
+ * matchup_batting it is the batter's OWN position; in matchup_bowling it is the
+ * position of the STRIKER the bowler faced. So the filter applies in the
+ * batting discipline always (plain batting innings and matchup_batting both
+ * have the column), and in the bowling discipline ONLY while a matchup "Vs"
+ * selection is active (plain bowling innings have no such column — a bowler's
+ * own "position" isn't a batting concept). One gate that keeps the query
+ * (buildScopeClauses), the drawer's position chips, the pill, and the honest
+ * scope sentence all agreeing automatically. */
 export function positionsFilterActive(state) {
-  // Matchup views (matchup_batting/matchup_bowling) have no batting_position
-  // column, so an active matchup "Vs" selection disables this here — one gate
-  // that keeps the query (buildScopeClauses), the drawer's position pill, and
-  // the honest scope sentence all agreeing automatically, with no separate
-  // matchup-aware checks needed at each call site.
   return (
-    state.discipline === "batting" &&
     Array.isArray(state.positions) &&
     state.positions.length > 0 &&
-    !matchupVsActive(state)
+    (state.discipline === "batting" || (state.discipline === "bowling" && matchupVsActive(state)))
   );
 }
 
@@ -193,6 +196,17 @@ export function matchupVsActive(state) {
   if (dim === "hand") return state.discipline === "bowling";
   if (dim === "group" || dim === "type") return state.discipline === "batting";
   return false;
+}
+
+/** Effective metrics namespace for the current state: matchup_batting/
+ * matchup_bowling while a "Vs" selection is active and applicable, otherwise
+ * the plain discipline. Every lookup that needs to agree on which vocabulary
+ * is "live" right now — column rendering/sorting (table.js's
+ * effectiveDiscipline delegates here), the advanced-filter metric picker
+ * (advanced.js) — must go through this single mapping. */
+export function effectiveNamespace(state) {
+  if (!matchupVsActive(state)) return state.discipline;
+  return state.discipline === "batting" ? "matchup_batting" : "matchup_bowling";
 }
 
 /** True if the opposition filter is currently narrowing the innings set. */
@@ -410,11 +424,27 @@ export function pruneIneligibleState(store) {
     }
   }
 
+  // Advanced-condition pruning uses a WIDER allow-set than columns: the union
+  // of eligible keys across both plain namespaces AND both matchup namespaces
+  // (D4 R3/R4). A condition authored in matchup mode (e.g. "dis_caught >= 2")
+  // must survive leaving matchup mode — and vice versa — so switching
+  // discipline/Vs never silently deletes a condition written in the OTHER
+  // vocabulary. table.js's conditionToHaving() already re-resolves each
+  // condition's metric against the CURRENT effective namespace and skips it
+  // (returns null) when the key doesn't exist there — that's the mechanism
+  // that keeps a condition from a different namespace inert rather than wrong.
+  const advancedAllowed = new Set([
+    ...eligibleMetrics("batting", s.formats).map((m) => m.key),
+    ...eligibleMetrics("matchup_batting", s.formats).map((m) => m.key),
+    ...eligibleMetrics("bowling", s.formats).map((m) => m.key),
+    ...eligibleMetrics("matchup_bowling", s.formats).map((m) => m.key),
+  ]);
+
   const groups = (s.advanced.groups || [])
     .map((g) => ({
       ...g,
       // keep incomplete conditions (blank metric) — they're inert edit rows
-      conds: g.conds.filter((c) => !c.metricKey || allowed.has(c.metricKey)),
+      conds: g.conds.filter((c) => !c.metricKey || advancedAllowed.has(c.metricKey)),
     }))
     .filter((g) => g.conds.length > 0);
   const condsChanged = JSON.stringify(groups) !== JSON.stringify(s.advanced.groups || []);
@@ -501,7 +531,10 @@ export function createStore(initial) {
     }
     if (positionsFilterActive(s)) {
       const sorted = [...s.positions].sort((a, b) => a - b);
-      parts.push(`batting at ${sorted.join(", ")}`);
+      // Bowling-matchup mode: the position filter narrows the BATTERS faced,
+      // not the bowler's own (nonexistent) batting position — say so plainly.
+      const bowlingMatchup = s.discipline === "bowling" && matchupVsActive(s);
+      parts.push(bowlingMatchup ? `to batters at ${sorted.join(", ")}` : `batting at ${sorted.join(", ")}`);
     }
 
     // Matchup mode (R3, decision 33) — table only, right after the

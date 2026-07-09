@@ -22,6 +22,7 @@ import {
   SPLIT_DIMENSIONS,
   splitAllowed,
   matchupVsActive,
+  effectiveNamespace,
 } from "./state.js";
 
 export { eligibleMetrics };
@@ -64,9 +65,11 @@ const MATCHUP_NS = { batting: "matchup_batting", bowling: "matchup_bowling" };
  * selection is active and applicable, otherwise the plain discipline. Every
  * render/sort lookup must go through this so matchup columns format/sort
  * correctly (matchup keys don't always match the normal namespace, e.g.
- * "balls" vs "balls_faced"). */
+ * "balls" vs "balls_faced"). Delegates to state.js's effectiveNamespace, the
+ * single source of truth for this mapping (also used by advanced.js's metric
+ * picker so both agree on which vocabulary is "live"). */
 function effectiveDiscipline(state) {
-  return matchupVsActive(state) ? MATCHUP_NS[state.discipline] : state.discipline;
+  return effectiveNamespace(state);
 }
 
 /** Preferred display order for the fine "Bowling type" optgroup: named styles
@@ -125,7 +128,11 @@ function buildMatchupQuery(state, discipline) {
     teamColumn: teamCol,
     idColumn: idCol,
     oppositionColumn: oppCol,
-    includePositions: true, // positions self-disable via matchupVsActive's gate on positionsFilterActive
+    // D4-R4: both matchup views now carry batting_position, so the position
+    // filter genuinely applies here (batting side: the batter's own position;
+    // bowling side: the position of the striker faced) — positionsFilterActive
+    // gates it on, not off, while a Vs selection is active.
+    includePositions: true,
   };
 
   const mv = state.matchupVs;
@@ -138,7 +145,14 @@ function buildMatchupQuery(state, discipline) {
   whereClauses.push(bucketClause);
   if (searchClause) whereClauses.push(searchClause);
 
-  const havingParts = [`COUNT(*) >= ${Math.max(1, Number(state.minInnings) || 1)}`];
+  // Min-innings gate: use the namespace's OWN "innings" metric expression, not
+  // a bare COUNT(*) — matchup_bowling's grain (D4-R4) now spans multiple rows
+  // per (match, innings) once batting_position is in the primary key, so
+  // COUNT(*) would overcount innings by the number of position buckets faced.
+  const inningsMetric = getMetric("innings", ns);
+  const havingParts = [`(${inningsMetric.sqlExpression}) >= ${Math.max(1, Number(state.minInnings) || 1)}`];
+  const advHaving = advancedToHaving(state.advanced, ns);
+  if (advHaving) havingParts.push(advHaving);
 
   const sql = [
     `SELECT ${selectParts.join(", ")}`,
@@ -190,6 +204,29 @@ function conditionToHaving(cond, discipline) {
     default:
       return null;
   }
+}
+
+/**
+ * Honest applicability count for the active stat conditions against a given
+ * namespace (§8.4): total = every active (complete) condition, regardless of
+ * which vocabulary it was authored in; applied = the subset whose metricKey
+ * resolves in `ns`. The rest are silently skipped by conditionToHaving /
+ * advancedToHaving (a condition authored in the OTHER mode, e.g. a
+ * matchup-only "dis_caught" condition while viewing the plain table, or a
+ * plain-only condition while in matchup mode) — so the toolbar must say so
+ * out loud rather than let the mismatch pass silently.
+ */
+function conditionApplicability(advanced, ns) {
+  const groups = activeGroups(advanced);
+  let total = 0;
+  let applied = 0;
+  for (const g of groups) {
+    for (const c of g.conds) {
+      total += 1;
+      if (getMetric(c.metricKey, ns)) applied += 1;
+    }
+  }
+  return { total, applied };
 }
 
 function advancedToHaving(advanced, discipline) {
@@ -544,11 +581,18 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
     // row-grouping there — a muted toolbar note replaces them instead. The
     // column SET is still pickable via "Customise…" (restricted picker, D4 R3
     // follow-up: the matchup vocabulary, not the fixed set it used to be).
+    // Position filters DO apply in both modes now (D4-R4) — only the honest
+    // stat-condition applicability note remains conditional.
+    const { total: condTotal, applied: condApplied } = conditionApplicability(state.advanced, ns);
+    const conditionNoteText =
+      condTotal > 0 && condApplied < condTotal ? `${condApplied} of ${condTotal} stat conditions apply here` : "";
+
     let presetsOrNoteHTML = "";
     let groupRowsHTML = "";
     let columnsBtnHTML = "";
     if (matchupOn) {
-      presetsOrNoteHTML = `<div class="table-toolbar__matchup-note">Matchup mode — position and stat-condition filters don't apply</div>`;
+      const matchupNote = conditionNoteText ? `Matchup mode, ${conditionNoteText}` : "Matchup mode";
+      presetsOrNoteHTML = `<div class="table-toolbar__matchup-note">${matchupNote}</div>`;
       columnsBtnHTML = `<button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Customise…</button>`;
     } else {
       // Column presets (R1): one-click sets; the active chip is the preset whose
@@ -561,7 +605,10 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
             data-preset="${def.key}" ${available ? "" : `disabled title="Pick a single phase family (T20, or ODI/ODM) to use phase columns"`}>${def.label}</button>`;
         })
         .join("");
-      presetsOrNoteHTML = `<div class="table-toolbar__presets" role="group" aria-label="Column presets">${presetChipsHTML}</div>`;
+      const normalConditionNoteHTML = conditionNoteText
+        ? `<div class="table-toolbar__matchup-note">${conditionNoteText}</div>`
+        : "";
+      presetsOrNoteHTML = `<div class="table-toolbar__presets" role="group" aria-label="Column presets">${presetChipsHTML}</div>${normalConditionNoteHTML}`;
 
       // "Group rows" (decision 29: row-splitting kept, tucked in the toolbar).
       // A presentation control like the column picker, so changes reload directly

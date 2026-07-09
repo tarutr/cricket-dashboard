@@ -9,7 +9,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, oppositionFilterActive, hasActiveProfileFilter } from "./state.js";
+import { positionsFilterActive, oppositionFilterActive, hasActiveProfileFilter, matchupVsActive } from "./state.js";
 import { activeConditionCount } from "./advanced.js";
 
 function esc(s) {
@@ -58,7 +58,11 @@ export function mountPills(container, store, onChange) {
 
     if (positionsFilterActive(s)) {
       const sorted = [...s.positions].sort((a, b) => a - b);
-      pills.push({ label: `Batting at ${sorted.join(", ")}`, remove: () => store.set({ positions: [] }) });
+      // Bowling-matchup mode (D4-R4): the filter narrows the batters faced,
+      // not the bowler's own (nonexistent) batting position.
+      const bowlingMatchup = s.discipline === "bowling" && matchupVsActive(s);
+      const label = bowlingMatchup ? `To batters at ${sorted.join(", ")}` : `Batting at ${sorted.join(", ")}`;
+      pills.push({ label, remove: () => store.set({ positions: [] }) });
     }
 
     if (oppositionFilterActive(s)) {

@@ -733,6 +733,10 @@ const MATCHUP_BATTING_METRICS = [
     shortLabel: "Inns",
     discipline: "matchup_batting",
     source: "matchup",
+    // matchup_batting's grain is (match_id, innings_number, batter_id,
+    // bowling_type) — UNCHANGED by D4-R4 (batting_position was added as a
+    // plain column there, not a grain column), so one row already equals one
+    // (match, innings, bucket) and COUNT(*) is still correct.
     sqlExpression: "COUNT(*)",
     higherIsBetter: null, format: "int",
     isPhaseMetric: null, zeroIsData: true,
@@ -1020,10 +1024,16 @@ const MATCHUP_BOWLING_METRICS = [
     shortLabel: "Inns",
     discipline: "matchup_bowling",
     source: "matchup",
-    sqlExpression: "COUNT(*)",
+    // D4-R4 GRAIN CHANGE: matchup_bowling's primary key gained a 5th column,
+    // batting_position (the striker's position at each delivery), so a single
+    // match-innings-bowler-hand combination now spans MULTIPLE rows (one per
+    // position bucket faced). COUNT(*) would overcount innings by the number
+    // of distinct positions faced, so we count distinct (match, innings)
+    // pairs instead — exactly what "innings" means regardless of grain.
+    sqlExpression: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
     higherIsBetter: null, format: "int",
     isPhaseMetric: null, zeroIsData: true,
-    minSampleComponent: "COUNT(*)",
+    minSampleComponent: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
   },
   {
     key: "balls",
@@ -1142,10 +1152,14 @@ const MATCHUP_BOWLING_METRICS = [
     shortLabel: "WPI",
     discipline: "matchup_bowling",
     source: "matchup",
-    sqlExpression: "SUM(wickets) * 1.0 / NULLIF(COUNT(*), 0)",
+    // Same D4-R4 grain-change reasoning as the "innings" metric above: the
+    // denominator must count distinct (match, innings) pairs, not rows, since
+    // rows are now split across striker-position buckets.
+    sqlExpression:
+      "SUM(wickets) * 1.0 / NULLIF(COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR)), 0)",
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
-    minSampleComponent: "COUNT(*)",
+    minSampleComponent: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
   },
   // Wicket-kind breakdown (D4 R3 follow-up): bowler-credited wicket kinds
   // against this batting-hand bucket. Counts, so zeroIsData:true. NOTE: the

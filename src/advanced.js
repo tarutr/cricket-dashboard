@@ -13,8 +13,8 @@
 // coalesced anywhere — it never is, but a raw `0` numerator on a data row must
 // also be excluded, matching the client-side hasMetricData contract).
 
-import { metricsFor } from "./metrics.js";
-import { eligibleMetrics } from "./state.js";
+import { metricsFor, getMetric } from "./metrics.js";
+import { eligibleMetrics, effectiveNamespace } from "./state.js";
 
 const OPERATORS = [
   { key: "gte", label: "at least (≥)" },
@@ -92,9 +92,13 @@ export function mountAdvanced(container, store, onChange) {
     ensureAdvanced(store);
     const state = store.get();
     const advanced = state.advanced;
-    // Only offer metrics eligible under the current format scope (SPEC §8.9) —
-    // e.g. T20-phase metrics only when formats is exactly the T20 bucket.
-    const metrics = eligibleMetrics(state.discipline, state.formats);
+    // Metrics eligible under the current format scope (SPEC §8.9) — e.g.
+    // T20-phase metrics only when formats is exactly the T20 bucket — AND in
+    // the ACTIVE mode's vocabulary: matchup_batting/matchup_bowling while a
+    // "Vs" selection is active, so conditions are authored in the same
+    // namespace the query will resolve them against (D4 R3/R4).
+    const ns = effectiveNamespace(state);
+    const metrics = eligibleMetrics(ns, state.formats);
 
     const groupHTML = (group, gi) => `
       <div class="advanced-group" data-gi="${gi}">
@@ -135,10 +139,25 @@ export function mountAdvanced(container, store, onChange) {
   }
 
   function conditionHTML(cond, ci, metrics) {
+    // A condition authored in a DIFFERENT namespace (e.g. a matchup-only
+    // metric while now viewing the plain table) won't be in `metrics` — render
+    // its saved key as a disabled placeholder option instead of silently
+    // losing the selection or crashing (state.js's pruneIneligibleState keeps
+    // it around precisely so it survives a mode switch and can come back).
+    const knownHere = cond.metricKey && metrics.some((m) => m.key === cond.metricKey);
+    const unknownOptionHTML =
+      cond.metricKey && !knownHere
+        ? (() => {
+            const m = getMetric(cond.metricKey);
+            const label = m ? m.label : cond.metricKey;
+            return `<option value="${cond.metricKey}" selected>${label} (not available in this view)</option>`;
+          })()
+        : "";
     return `
       <div class="advanced-cond" data-ci="${ci}">
         <select class="select" data-role="metric">
           <option value="">Metric…</option>
+          ${unknownOptionHTML}
           ${metrics.map((m) => `<option value="${m.key}" ${cond.metricKey === m.key ? "selected" : ""}>${m.label}</option>`).join("")}
         </select>
         <select class="select" data-role="operator">

@@ -256,6 +256,13 @@ function boot() {
         updateScopeSentence();
         if (pillsController) pillsController.render();
         updateDrawerBadge();
+        // The drawer too: toolbar presentation controls (Vs, Group rows,
+        // presets) bypass onFiltersChanged, but since D4-R4 the drawer's
+        // position-chip enablement and the condition builder's metric
+        // vocabulary DEPEND on the Vs selection. drawer.sync() is cheap and
+        // scope-key-cached internally, so calling it on every state change is
+        // safe (its option-list refetches no-op unless the scope moved).
+        if (drawerController) drawerController.sync();
       });
 
       playerSearchInputEl.addEventListener("input", () => {
