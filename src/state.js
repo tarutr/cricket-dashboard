@@ -215,6 +215,14 @@ const DEFAULT_COLUMNS = {
   bowling: ["matches", "innings", "wickets", "average", "economy", "strike_rate", "best"],
 };
 
+// Matchup-mode default column sets (D4 R3 follow-up, restricted picker): equal
+// to the fixed sets matchup mode has always shown. Kept here (not in table.js)
+// so state.js owns every column default, matchup namespaces included.
+const DEFAULT_MATCHUP_COLUMNS = {
+  matchup_batting: ["innings", "balls", "runs", "strike_rate", "average", "dismissals", "dot_pct", "boundary_pct"],
+  matchup_bowling: ["innings", "balls", "wickets", "runs_conceded", "economy", "average", "strike_rate", "dot_pct"],
+};
+
 function monthsAgo(yyyymm, months) {
   const [y, m] = yyyymm.split("-").map(Number);
   const d = new Date(Date.UTC(y, m - 1, 1));
@@ -250,6 +258,8 @@ export function createInitialState(maxMonth) {
     columns: {
       batting: [...DEFAULT_COLUMNS.batting],
       bowling: [...DEFAULT_COLUMNS.bowling],
+      matchup_batting: [...DEFAULT_MATCHUP_COLUMNS.matchup_batting],
+      matchup_bowling: [...DEFAULT_MATCHUP_COLUMNS.matchup_bowling],
     },
     advanced: { op: "AND", groups: [] },
   };
@@ -382,6 +392,24 @@ export function pruneIneligibleState(store) {
   const prunedCols = cols.filter((k) => allowed.has(k));
   const colsChanged = prunedCols.length !== cols.length;
 
+  // Matchup namespaces (D4 R3 follow-up, restricted picker): the same phase
+  // gating (§8.9) applies there — a picked pp_/mid_/death_/odi_* column must
+  // drop out the moment the format selection no longer permits it, exactly
+  // like the plain batting/bowling picker. Prune both namespaces regardless
+  // of which discipline is currently active, so a stale pick never resurfaces
+  // silently when the user flips back into matchup mode.
+  const newMatchupColumns = { ...s.columns };
+  let matchupChanged = false;
+  for (const ns of ["matchup_batting", "matchup_bowling"]) {
+    const nsAllowed = new Set(eligibleMetrics(ns, s.formats).map((m) => m.key));
+    const nsCols = s.columns[ns] || [];
+    const nsPruned = nsCols.filter((k) => nsAllowed.has(k));
+    if (nsPruned.length !== nsCols.length) {
+      newMatchupColumns[ns] = nsPruned;
+      matchupChanged = true;
+    }
+  }
+
   const groups = (s.advanced.groups || [])
     .map((g) => ({
       ...g,
@@ -391,9 +419,10 @@ export function pruneIneligibleState(store) {
     .filter((g) => g.conds.length > 0);
   const condsChanged = JSON.stringify(groups) !== JSON.stringify(s.advanced.groups || []);
 
-  if (!colsChanged && !condsChanged) return false;
+  if (!colsChanged && !matchupChanged && !condsChanged) return false;
+  if (colsChanged) newMatchupColumns[s.discipline] = prunedCols;
   store.set({
-    columns: colsChanged ? { ...s.columns, [s.discipline]: prunedCols } : s.columns,
+    columns: colsChanged || matchupChanged ? newMatchupColumns : s.columns,
     advanced: condsChanged ? { ...s.advanced, groups } : s.advanced,
   });
   return true;

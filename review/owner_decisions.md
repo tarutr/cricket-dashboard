@@ -303,3 +303,15 @@ change requires a new owner decision recorded here. Dates are decision dates.
     his bowler-credited dismissal identity (52 = 53 minus the one run-out)
     reconfirms decision 23. Decisions 23 + 24 are due for owner confirmation
     at THIS gate against the live UI. Branch `d4-r3-matchups`.
+
+35. **Decisions 23 + 24 CONFIRMED AT THE R3 GATE (owner, 2026-07-09):**
+    dismissal attribution (bowler-credited kinds only) and the
+    "Spin (unspecified)" bare-slow label are both approved against the live UI.
+    Owner also flagged: the search box needing "Show results" reads as
+    confusing — batched to the design/polish pass. Follow-up owner request:
+    matchup mode gets a RESTRICTED column picker (choose among matchup-view
+    metrics only; Coverage column always present), plus the free extra
+    vs-style stats computable from existing matchup columns. Dismissal-KIND
+    and PHASE breakdowns per style are acknowledged as possible but require a
+    pipeline/data-layer extension (new columns in the matchup parquets) —
+    offered to the owner as an optional future gated piece, not yet scheduled.

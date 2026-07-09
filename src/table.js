@@ -58,10 +58,6 @@ const MATCHUP_BALLS_COL = { batting: "balls_faced", bowling: "balls" };
 // known at all, regardless of whether the current Vs dim is coarse or fine),
 // batting_hand for bowling.
 const MATCHUP_GROUP_COL = { batting: "bowling_group", bowling: "batting_hand" };
-const MATCHUP_COLUMNS = {
-  batting: ["innings", "balls", "runs", "strike_rate", "average", "dismissals", "dot_pct", "boundary_pct"],
-  bowling: ["innings", "balls", "wickets", "runs_conceded", "economy", "average", "strike_rate", "dot_pct"],
-};
 const MATCHUP_NS = { batting: "matchup_batting", bowling: "matchup_bowling" };
 
 /** Effective metrics namespace for getMetric() lookups — matchup_* while a Vs
@@ -100,11 +96,12 @@ function orderBowlingTypes(values) {
 }
 
 /**
- * Build the matchup-mode query pair: the main grouped stat query (fixed
- * columns, HAVING only the min-innings gate) and a coverage query — same
- * scope minus the bucket predicate (search stays) — grouped by id, giving
- * {total, mapped} balls per player. No coverage figure, no stat
- * (SPEC_ADDENDUM D4.3): src/table.js's renderer must show both together.
+ * Build the matchup-mode query pair: the main grouped stat query (columns
+ * picked from the restricted matchup picker, `state.columns[ns]`; HAVING only
+ * the min-innings gate) and a coverage query — same scope minus the bucket
+ * predicate (search stays) — grouped by id, giving {total, mapped} balls per
+ * player. No coverage figure, no stat (SPEC_ADDENDUM D4.3): src/table.js's
+ * renderer must show both together.
  */
 function buildMatchupQuery(state, discipline) {
   const view = MATCHUP_VIEW[discipline];
@@ -116,7 +113,7 @@ function buildMatchupQuery(state, discipline) {
   const ballsCol = MATCHUP_BALLS_COL[discipline];
   const groupCol = MATCHUP_GROUP_COL[discipline];
 
-  const metrics = MATCHUP_COLUMNS[discipline].map((key) => getMetric(key, ns)).filter(Boolean);
+  const metrics = (state.columns[ns] || []).map((key) => getMetric(key, ns)).filter(Boolean);
   const selectParts = [`${idCol} AS id`, `${nameCol} AS name`];
   for (const m of metrics) {
     selectParts.push(`${m.sqlExpression} AS ${m.key}`);
@@ -373,15 +370,20 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
     return state.columns[state.discipline];
   }
 
-  /** Drop any visible phase column that's no longer valid for the current scope (silent). */
+  /** Drop any visible phase column that's no longer valid for the current scope
+   * (silent). Operates on the CURRENT effective namespace — the matchup_batting/
+   * matchup_bowling column list while a "Vs" selection is active, so a phase
+   * column picked under one format selection is dropped the moment formats
+   * change to something that doesn't permit it, in matchup mode same as plain. */
   function pruneInvalidColumns() {
     const state = store.get();
+    const ns = effectiveDiscipline(state);
     const formats = state.formats;
-    const cols = state.columns[state.discipline];
-    const allowedKeys = new Set(eligibleMetrics(state.discipline, formats).map((m) => m.key));
+    const cols = state.columns[ns];
+    const allowedKeys = new Set(eligibleMetrics(ns, formats).map((m) => m.key));
     const pruned = cols.filter((k) => allowedKeys.has(k));
     if (pruned.length !== cols.length) {
-      store.set({ columns: { ...state.columns, [state.discipline]: pruned } });
+      store.set({ columns: { ...state.columns, [ns]: pruned } });
     }
   }
 
@@ -493,7 +495,7 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
     const matchupOn = matchupVsActive(state);
     const ns = effectiveDiscipline(state);
     const splitDim = matchupOn ? null : lastSplitDim;
-    const colKeys = matchupOn ? MATCHUP_COLUMNS[state.discipline] : visibleColumns();
+    const colKeys = state.columns[ns];
     const cols = colKeys.map((key) => getMetric(key, ns)).filter(Boolean);
 
     const splitSorted = state.sort.key === "__split";
@@ -538,13 +540,16 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
       ? `${rows.length} row${rows.length === 1 ? "" : "s"} (${splitDim.label.toLowerCase()} split)`
       : `${rows.length} player${rows.length === 1 ? "" : "s"} match`;
 
-    // Column presets (R1) and "Group rows" don't apply in matchup mode — fixed
-    // columns, no row-grouping — a muted toolbar note replaces them instead.
+    // Column presets (R1) and "Group rows" don't apply in matchup mode — no
+    // row-grouping there — a muted toolbar note replaces them instead. The
+    // column SET is still pickable via "Customise…" (restricted picker, D4 R3
+    // follow-up: the matchup vocabulary, not the fixed set it used to be).
     let presetsOrNoteHTML = "";
     let groupRowsHTML = "";
     let columnsBtnHTML = "";
     if (matchupOn) {
-      presetsOrNoteHTML = `<div class="table-toolbar__matchup-note">Matchup mode — fixed columns; position and stat-condition filters don't apply</div>`;
+      presetsOrNoteHTML = `<div class="table-toolbar__matchup-note">Matchup mode — position and stat-condition filters don't apply</div>`;
+      columnsBtnHTML = `<button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Customise…</button>`;
     } else {
       // Column presets (R1): one-click sets; the active chip is the preset whose
       // columns exactly match the current selection (none = "Customise" territory).
@@ -674,14 +679,24 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
     }
   }
 
+  /**
+   * The column picker (§ restricted picker, D4 R3 follow-up): lists every
+   * eligible metric in the CURRENT effective namespace — the plain
+   * batting/bowling vocabulary normally, or the matchup_batting/matchup_bowling
+   * vocabulary while a "Vs" selection is active — in the same three sections
+   * (Basic / Dismissals / Phase) either way. Mutates state.columns[ns], so a
+   * pick made in matchup mode never leaks into the plain picker's list or
+   * vice versa (they're different namespaces/keys).
+   */
   function openColumnsPopover(anchor) {
     document.querySelectorAll(".columns-popover").forEach((el) => el.remove());
     const state = store.get();
-    const all = eligibleMetrics(state.discipline, state.formats);
+    const ns = effectiveDiscipline(state);
+    const all = eligibleMetrics(ns, state.formats);
     const basic = all.filter((m) => !m.isPhaseMetric && m.section !== "dismissal");
     const dismissal = all.filter((m) => m.section === "dismissal");
     const phase = all.filter((m) => m.isPhaseMetric);
-    const visible = new Set(visibleColumns());
+    const visible = new Set(state.columns[ns]);
 
     const popover = document.createElement("div");
     popover.className = "columns-popover";
@@ -705,14 +720,15 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
     popover.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
       cb.addEventListener("change", () => {
         const s = store.get();
-        const cols = s.columns[s.discipline].slice();
+        const curNs = effectiveDiscipline(s);
+        const cols = s.columns[curNs].slice();
         if (cb.checked) {
           if (!cols.includes(cb.dataset.key)) cols.push(cb.dataset.key);
         } else {
           const idx = cols.indexOf(cb.dataset.key);
           if (idx >= 0) cols.splice(idx, 1);
         }
-        store.set({ columns: { ...s.columns, [s.discipline]: cols } });
+        store.set({ columns: { ...s.columns, [curNs]: cols } });
         load();
       });
     });
@@ -744,10 +760,13 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
       store.set({ sort: { key: preState.discipline === "batting" ? "runs" : "wickets", dir: "desc" } });
     }
 
-    const matchupOn = matchupVsActive(store.get());
-    if (!matchupOn) pruneInvalidColumns();
+    // Restricted picker (D4 R3 follow-up): the matchup namespaces get the same
+    // phase-eligibility prune as the plain picker, so this runs unconditionally
+    // regardless of mode.
+    pruneInvalidColumns();
     const state = store.get();
-    const cols = matchupOn ? MATCHUP_COLUMNS[state.discipline] : visibleColumns();
+    const ns = effectiveDiscipline(state);
+    const cols = state.columns[ns];
     const { sql, matchesSql, splitDim, coverageSql } = buildQuery(state, cols, { split: true });
     const token = ++loadToken;
     renderLoading();
