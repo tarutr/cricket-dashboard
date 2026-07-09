@@ -1,5 +1,15 @@
-duckdb
-boto3
-requests
-tqdm
-numpy
+# Pinned to the exact versions installed locally when this pipeline safety-net
+# batch was validated (2026-07-09) -- see the pipeline-safety branch report for
+# how each was verified against actual imports:
+#   duckdb    -- export_parquet.py, pipeline/build_profiles.py, pipeline/ingest.py
+#   boto3     -- pipeline/download_db.py, pipeline/upload_db.py, export_parquet.py (_r2_client)
+#   botocore  -- pipeline/state_store.py (direct `import botocore` for exception types)
+#   requests  -- pipeline/sheet_fetch.py, pipeline/ingest.py
+#   tqdm      -- pipeline/ingest.py
+# numpy was removed: grepped the whole repo and it is not imported by any
+# pipeline file or export_parquet.py.
+duckdb==1.5.3
+boto3==1.43.27
+botocore==1.43.27
+requests==2.34.2
+tqdm==4.68.2
