@@ -36,9 +36,15 @@ const CHART_TYPES = [
   { key: "radar", label: "Radar" },
 ];
 
-/** Metrics eligible for the donut chart: additive totals only (format int, zeroIsData true). */
+/** Metrics eligible for the donut chart: additive totals only (Batch 3 fix 4 —
+ * an explicit `additive: true` flag on the metric itself, set once in
+ * metrics.js on genuinely summable counts/totals. Previously this inferred
+ * additivity from format==="int" && zeroIsData===true, which let High Score
+ * (MAX(runs), not a sum) slip in as a donut metric even though summing
+ * several players' high scores is meaningless. Discipline/phase gating is
+ * still applied via eligibleMetrics(). */
 function donutEligibleMetrics(discipline, formats) {
-  return eligibleMetrics(discipline, formats).filter((m) => m.format === "int" && m.zeroIsData === true);
+  return eligibleMetrics(discipline, formats).filter((m) => m.additive === true);
 }
 
 export function mountGraph(container, store, { onRequery } = {}) {
@@ -352,10 +358,35 @@ export function mountGraph(container, store, { onRequery } = {}) {
 
   // ── Seeding ───────────────────────────────────────────────────────────────
 
+  /**
+   * Every state field the seed query actually reads, so a scope change that
+   * changes the underlying filtered SET always reseeds the roster (Batch 3
+   * fix 5). Traced through players.js's seedFromFilteredSet -> table.js's
+   * buildQuery/buildMatchupQuery -> filters.js's buildScopeClauses:
+   *   discipline, gender, formats, dateFrom/dateTo, teams, teamType — the
+   *     base scope clauses.
+   *   positions, opposition — the innings-level filters (buildScopeClauses'
+   *     includePositions/oppositionColumn options, both passed true/set by
+   *     buildQuery); positionsFilterActive/oppositionFilterActive also read
+   *     discipline/teamType/matchupVs/gender, all already covered.
+   *   profile — profileSemiJoinSql's semi-join (reads gender + the profile
+   *     fields as one block).
+   *   minInnings, advanced — the HAVING gate + stat conditions.
+   *   search — the name ILIKE clause (buildQuery/buildMatchupQuery apply it
+   *     unconditionally, not just while the table view is showing it).
+   *   sort — ranking, so the top-N slice itself changes.
+   *   matchupVs — buildMatchupQuery's bucket predicate AND the
+   *     discipline/matchupVs pair together decide whether buildQuery even
+   *     takes the matchup path at all (state.js's matchupVsActive).
+   * Previously omitted positions/opposition/profile/matchupVs/search, so e.g.
+   * narrowing to openers-only (a position filter) left a stale middle-order
+   * roster seeded from before the filter was applied.
+   */
   function scopeSeedKey(state) {
     return JSON.stringify([
       state.discipline, state.gender, state.formats, state.dateFrom, state.dateTo,
       state.teams, state.teamType, state.minInnings, state.advanced, state.sort,
+      state.search, state.positions, state.opposition, state.profile, state.matchupVs,
     ]);
   }
 
