@@ -8,7 +8,7 @@
 // advanced-filter conditions on rate/ratio metrics and to render "—" for
 // no-data cells (NULL already renders "—"; this module never coalesces ratios).
 
-import { getMetric, hasMetricData } from "./metrics.js";
+import { getMetric, hasMetricData, matchupBucketLabel } from "./metrics.js";
 import { query } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
 import { activeGroups } from "./advanced.js";
@@ -21,12 +21,17 @@ import {
   activePresetKey,
   SPLIT_DIMENSIONS,
   splitAllowed,
+  matchupVsActive,
 } from "./state.js";
 
 export { eligibleMetrics };
 
 function esc(s) {
   return String(s).replace(/'/g, "''");
+}
+
+function escAttr(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
 const VIEW_FOR_DISCIPLINE = { batting: "batting", bowling: "bowling" };
@@ -36,6 +41,130 @@ const TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
 // The opposition column in each innings view (D4 Piece 3): who the player
 // batted against / bowled to.
 const OPP_COL = { batting: "bowling_team", bowling: "batting_team" };
+
+// ── Matchup mode (D4 R3, decision 33) ───────────────────────────────────────
+// "Vs" leaderboard comparison: every row recomputes against one bowling-style
+// bucket (batting view) or batting-hand bucket (bowling view), over the
+// matchup_batting/matchup_bowling views. Fixed column sets — the normal
+// column picker/presets don't apply here.
+const MATCHUP_VIEW = { batting: "matchup_batting", bowling: "matchup_bowling" };
+const MATCHUP_ID_COL = { batting: "batter_id", bowling: "bowler_id" };
+const MATCHUP_NAME_COL = { batting: "batter_name", bowling: "bowler_name" };
+const MATCHUP_TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
+const MATCHUP_OPP_COL = { batting: "bowling_team", bowling: "batting_team" };
+const MATCHUP_BALLS_COL = { batting: "balls_faced", bowling: "balls" };
+// The column whose '(unmapped)' value drives the coverage denominator split —
+// bowling_group for batting (mapped iff the opponent's pace/spin group is
+// known at all, regardless of whether the current Vs dim is coarse or fine),
+// batting_hand for bowling.
+const MATCHUP_GROUP_COL = { batting: "bowling_group", bowling: "batting_hand" };
+const MATCHUP_COLUMNS = {
+  batting: ["innings", "balls", "runs", "strike_rate", "average", "dismissals", "dot_pct", "boundary_pct"],
+  bowling: ["innings", "balls", "wickets", "runs_conceded", "economy", "average", "strike_rate", "dot_pct"],
+};
+const MATCHUP_NS = { batting: "matchup_batting", bowling: "matchup_bowling" };
+
+/** Effective metrics namespace for getMetric() lookups — matchup_* while a Vs
+ * selection is active and applicable, otherwise the plain discipline. Every
+ * render/sort lookup must go through this so matchup columns format/sort
+ * correctly (matchup keys don't always match the normal namespace, e.g.
+ * "balls" vs "balls_faced"). */
+function effectiveDiscipline(state) {
+  return matchupVsActive(state) ? MATCHUP_NS[state.discipline] : state.discipline;
+}
+
+/** Preferred display order for the fine "Bowling type" optgroup: named styles
+ * in cricket-sensible order, then any unlisted style alphabetically, then the
+ * bare pace/spin buckets last (decision 24 — bare-slow bowlers surface here
+ * as the group name, labelled "…(unspecified)" via matchupBucketLabel). */
+const BOWLING_TYPE_PREFERENCE = [
+  "Off-spin",
+  "Leg-spin",
+  "Slow left-arm orthodox",
+  "Left-arm wrist-spin",
+  "Slow-medium",
+  "Medium",
+  "Medium-fast",
+  "Fast-medium",
+  "Fast",
+];
+
+function orderBowlingTypes(values) {
+  const set = new Set(values);
+  const known = BOWLING_TYPE_PREFERENCE.filter((v) => set.has(v));
+  const knownSet = new Set(known);
+  const buckets = ["Pace", "Spin"].filter((v) => set.has(v));
+  const bucketSet = new Set(buckets);
+  const rest = values.filter((v) => !knownSet.has(v) && !bucketSet.has(v)).sort();
+  return [...known, ...rest, ...buckets];
+}
+
+/**
+ * Build the matchup-mode query pair: the main grouped stat query (fixed
+ * columns, HAVING only the min-innings gate) and a coverage query — same
+ * scope minus the bucket predicate (search stays) — grouped by id, giving
+ * {total, mapped} balls per player. No coverage figure, no stat
+ * (SPEC_ADDENDUM D4.3): src/table.js's renderer must show both together.
+ */
+function buildMatchupQuery(state, discipline) {
+  const view = MATCHUP_VIEW[discipline];
+  const ns = MATCHUP_NS[discipline];
+  const idCol = MATCHUP_ID_COL[discipline];
+  const nameCol = MATCHUP_NAME_COL[discipline];
+  const teamCol = MATCHUP_TEAM_COL[discipline];
+  const oppCol = MATCHUP_OPP_COL[discipline];
+  const ballsCol = MATCHUP_BALLS_COL[discipline];
+  const groupCol = MATCHUP_GROUP_COL[discipline];
+
+  const metrics = MATCHUP_COLUMNS[discipline].map((key) => getMetric(key, ns)).filter(Boolean);
+  const selectParts = [`${idCol} AS id`, `${nameCol} AS name`];
+  for (const m of metrics) {
+    selectParts.push(`${m.sqlExpression} AS ${m.key}`);
+    if (m.sortExpression) selectParts.push(`${m.sortExpression} AS ${m.key}__sort`);
+  }
+
+  const scopeOpts = {
+    includeTeams: true,
+    teamColumn: teamCol,
+    idColumn: idCol,
+    oppositionColumn: oppCol,
+    includePositions: true, // positions self-disable via matchupVsActive's gate on positionsFilterActive
+  };
+
+  const mv = state.matchupVs;
+  const bucketCol = mv.dim === "hand" ? "batting_hand" : mv.dim === "type" ? "bowling_type" : "bowling_group";
+  const bucketClause = `${bucketCol} = '${esc(mv.value)}'`;
+  const searchClause =
+    state.search && state.search.trim() ? `${nameCol} ILIKE '%${esc(state.search.trim())}%'` : null;
+
+  const whereClauses = buildScopeClauses(state, scopeOpts);
+  whereClauses.push(bucketClause);
+  if (searchClause) whereClauses.push(searchClause);
+
+  const havingParts = [`COUNT(*) >= ${Math.max(1, Number(state.minInnings) || 1)}`];
+
+  const sql = [
+    `SELECT ${selectParts.join(", ")}`,
+    `FROM ${view}`,
+    `WHERE ${whereClauses.join(" AND ")}`,
+    `GROUP BY ${idCol}, ${nameCol}`,
+    `HAVING ${havingParts.join(" AND ")}`,
+  ].join("\n");
+
+  // Coverage: identical scope minus ONLY the bucket predicate (search kept).
+  const coverageWhere = buildScopeClauses(state, scopeOpts);
+  if (searchClause) coverageWhere.push(searchClause);
+  const coverageSql = [
+    `SELECT ${idCol} AS id,`,
+    `       SUM(${ballsCol}) AS total,`,
+    `       SUM(CASE WHEN ${groupCol} <> '(unmapped)' THEN ${ballsCol} ELSE 0 END) AS mapped`,
+    `FROM ${view}`,
+    `WHERE ${coverageWhere.join(" AND ")}`,
+    `GROUP BY ${idCol}`,
+  ].join("\n");
+
+  return { sql, matchesSql: null, splitDim: null, coverageSql };
+}
 
 /** Build a HAVING predicate for one advanced condition, honoring §8.1 no-data semantics. */
 function conditionToHaving(cond, discipline) {
@@ -100,6 +229,11 @@ function advancedToHaving(advanced, discipline) {
  */
 export function buildQuery(state, visibleColumns, { split = false } = {}) {
   const discipline = state.discipline;
+
+  if (matchupVsActive(state)) {
+    return buildMatchupQuery(state, discipline);
+  }
+
   const view = VIEW_FOR_DISCIPLINE[discipline];
   const idCol = ID_COL[discipline];
   const nameCol = NAME_COL[discipline];
@@ -164,7 +298,7 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
     ].join("\n");
   }
 
-  return { sql, matchesSql, splitDim };
+  return { sql, matchesSql, splitDim, coverageSql: null };
 }
 
 /** Shared display formatter for metric values ("—" for no-data per §8.1). Also used by the player page. */
@@ -228,6 +362,11 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
   // split). Rendering and split-column sorting must use this, not live state —
   // the state may have moved on while the table still shows the old result.
   let lastSplitDim = null;
+  // The distinct bowling_type values (matchup mode's fine "Bowling type"
+  // optgroup), fetched once from ./db.js and cached — small, format-agnostic
+  // lookup that never changes at runtime.
+  let bowlingTypesCache = null;
+  let lastBowlingTypes = [];
 
   function visibleColumns() {
     const state = store.get();
@@ -244,6 +383,19 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
     if (pruned.length !== cols.length) {
       store.set({ columns: { ...state.columns, [state.discipline]: pruned } });
     }
+  }
+
+  async function ensureBowlingTypes() {
+    if (bowlingTypesCache) return bowlingTypesCache;
+    try {
+      const { rows } = await query(
+        `SELECT DISTINCT bowling_type AS v FROM matchup_batting WHERE bowling_type <> '(unmapped)'`
+      );
+      bowlingTypesCache = orderBowlingTypes(rows.map((r) => r.v));
+    } catch (e) {
+      bowlingTypesCache = [];
+    }
+    return bowlingTypesCache;
   }
 
   function renderLoading() {
@@ -297,15 +449,52 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
     if (s.sort.key === "__split" && lastSplitDim) {
       return rows.slice().sort((a, b) => compareSplitRows(a, b, lastSplitDim, s.sort.dir));
     }
-    const metric = getMetric(s.sort.key, s.discipline);
+    const metric = getMetric(s.sort.key, effectiveDiscipline(s));
     return metric ? rows.slice().sort((a, b) => compareRows(a, b, metric, s.sort.dir)) : rows;
   }
 
-  function renderTable(rows, state) {
-    const splitDim = lastSplitDim;
-    const cols = visibleColumns()
-      .map((key) => getMetric(key, state.discipline))
-      .filter(Boolean);
+  /** Coverage cell text: "N of M (P%)" — one decimal on P, thousands separators on N/M.
+   * No coverage figure, no stat (SPEC_ADDENDUM D4.3) — every matchup row carries this. */
+  function coverageLabel(coverage) {
+    if (!coverage || !coverage.total) return "—";
+    const pct = (coverage.mapped / coverage.total) * 100;
+    return `${coverage.mapped.toLocaleString()} of ${coverage.total.toLocaleString()} (${pct.toLocaleString(undefined, {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
+    })}%)`;
+  }
+
+  /** The "Vs" select's <option> markup for the current discipline. Value encodes
+   * "dim:value" (e.g. "type:Off-spin"); "" means Everyone (no matchup filter). */
+  function matchupVsOptionsHTML(state, bowlingTypes) {
+    const current = matchupVsActive(state) ? `${state.matchupVs.dim}:${state.matchupVs.value}` : "";
+    const opt = (value, label) =>
+      `<option value="${escAttr(value)}" ${value === current ? "selected" : ""}>${escHtml(label)}</option>`;
+
+    if (state.discipline === "batting") {
+      const typeOpts = bowlingTypes.map((t) => opt(`type:${t}`, matchupBucketLabel(t))).join("");
+      return `
+        ${opt("", "Everyone")}
+        <optgroup label="Pace / spin">
+          ${opt("group:Pace", "Pace")}
+          ${opt("group:Spin", "Spin")}
+        </optgroup>
+        <optgroup label="Bowling type">${typeOpts}</optgroup>
+      `;
+    }
+    return `
+      ${opt("", "Everyone")}
+      ${opt("hand:Right-hand bat", "Right-handers")}
+      ${opt("hand:Left-hand bat", "Left-handers")}
+    `;
+  }
+
+  function renderTable(rows, state, bowlingTypes = lastBowlingTypes) {
+    const matchupOn = matchupVsActive(state);
+    const ns = effectiveDiscipline(state);
+    const splitDim = matchupOn ? null : lastSplitDim;
+    const colKeys = matchupOn ? MATCHUP_COLUMNS[state.discipline] : visibleColumns();
+    const cols = colKeys.map((key) => getMetric(key, ns)).filter(Boolean);
 
     const splitSorted = state.sort.key === "__split";
     const splitTh = splitDim
@@ -313,16 +502,23 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
           <button type="button" class="data-table__sort-btn">${escHtml(splitDim.columnLabel)}${splitSorted ? (state.sort.dir === "asc" ? " ▲" : " ▼") : ""}</button>
         </th>`
       : "";
+    const coverageTh = matchupOn
+      ? `<th class="data-table__th data-table__th--coverage" scope="col">Coverage</th>`
+      : "";
 
     const theadHTML = `
       <tr>
         <th class="data-table__th data-table__th--sticky" scope="col">Player</th>
+        ${coverageTh}
         ${splitTh}
         ${cols.map((m) => headerCellHTML(m, state)).join("")}
       </tr>`;
 
     const tbodyHTML = rows
       .map((row) => {
+        const coverageTd = matchupOn
+          ? `<td class="data-table__td data-table__td--coverage">${coverageLabel(row.coverage)}</td>`
+          : "";
         const splitTd = splitDim
           ? `<td class="data-table__td data-table__td--split">${row.split_value == null ? "—" : escHtml(row.split_value)}</td>`
           : "";
@@ -333,7 +529,7 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
         const nameCell = onPlayerClick
           ? `<button type="button" class="player-link" data-player-id="${escHtml(row.id ?? "")}">${escHtml(row.name ?? "")}</button>`
           : escHtml(row.name ?? "");
-        return `<tr><td class="data-table__td data-table__td--sticky">${nameCell}</td>${splitTd}${cells}</tr>`;
+        return `<tr><td class="data-table__td data-table__td--sticky">${nameCell}</td>${coverageTd}${splitTd}${cells}</tr>`;
       })
       .join("");
 
@@ -342,38 +538,60 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
       ? `${rows.length} row${rows.length === 1 ? "" : "s"} (${splitDim.label.toLowerCase()} split)`
       : `${rows.length} player${rows.length === 1 ? "" : "s"} match`;
 
-    // Column presets (R1): one-click sets; the active chip is the preset whose
-    // columns exactly match the current selection (none = "Customise" territory).
-    const currentPreset = activePresetKey(state.discipline, state.formats, visibleColumns());
-    const presetChipsHTML = COLUMN_PRESET_DEFS[state.discipline]
-      .map((def) => {
-        const available = def.columns(state.formats) !== null;
-        return `<button type="button" class="chip chip--preset ${def.key === currentPreset ? "is-active" : ""}"
-          data-preset="${def.key}" ${available ? "" : `disabled title="Pick a single phase family (T20, or ODI/ODM) to use phase columns"`}>${def.label}</button>`;
-      })
-      .join("");
+    // Column presets (R1) and "Group rows" don't apply in matchup mode — fixed
+    // columns, no row-grouping — a muted toolbar note replaces them instead.
+    let presetsOrNoteHTML = "";
+    let groupRowsHTML = "";
+    let columnsBtnHTML = "";
+    if (matchupOn) {
+      presetsOrNoteHTML = `<div class="table-toolbar__matchup-note">Matchup mode — fixed columns; position and stat-condition filters don't apply</div>`;
+    } else {
+      // Column presets (R1): one-click sets; the active chip is the preset whose
+      // columns exactly match the current selection (none = "Customise" territory).
+      const currentPreset = activePresetKey(state.discipline, state.formats, visibleColumns());
+      const presetChipsHTML = COLUMN_PRESET_DEFS[state.discipline]
+        .map((def) => {
+          const available = def.columns(state.formats) !== null;
+          return `<button type="button" class="chip chip--preset ${def.key === currentPreset ? "is-active" : ""}"
+            data-preset="${def.key}" ${available ? "" : `disabled title="Pick a single phase family (T20, or ODI/ODM) to use phase columns"`}>${def.label}</button>`;
+        })
+        .join("");
+      presetsOrNoteHTML = `<div class="table-toolbar__presets" role="group" aria-label="Column presets">${presetChipsHTML}</div>`;
 
-    // "Group rows" (decision 29: row-splitting kept, tucked in the toolbar).
-    // A presentation control like the column picker, so changes reload directly
-    // (no Show-results round trip — the scope hasn't changed, only its layout).
-    const groupOptionsHTML = ["", ...Object.keys(SPLIT_DIMENSIONS)]
-      .map((key) => {
-        if (key === "") return `<option value="">No grouping</option>`;
-        const dim = SPLIT_DIMENSIONS[key];
-        const allowed = splitAllowed(state, key);
-        return `<option value="${key}" ${allowed ? "" : "disabled"} ${state.splitBy === key ? "selected" : ""}>${dim.label}</option>`;
-      })
-      .join("");
+      // "Group rows" (decision 29: row-splitting kept, tucked in the toolbar).
+      // A presentation control like the column picker, so changes reload directly
+      // (no Show-results round trip — the scope hasn't changed, only its layout).
+      const groupOptionsHTML = ["", ...Object.keys(SPLIT_DIMENSIONS)]
+        .map((key) => {
+          if (key === "") return `<option value="">No grouping</option>`;
+          const dim = SPLIT_DIMENSIONS[key];
+          const allowed = splitAllowed(state, key);
+          return `<option value="${key}" ${allowed ? "" : "disabled"} ${state.splitBy === key ? "selected" : ""}>${dim.label}</option>`;
+        })
+        .join("");
+      groupRowsHTML = `<label class="table-toolbar__group-label">Group rows
+        <select class="select select--compact" data-role="group-rows" aria-label="Group rows">${groupOptionsHTML}</select>
+      </label>`;
+      columnsBtnHTML = `<button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Customise…</button>`;
+    }
+
+    // "Vs" matchup select (D4 R3, decision 33): ALWAYS rendered, both modes —
+    // greyed for women (no style data yet, decision 21), presentation-mode
+    // control like Group rows (changes reload directly).
+    const vsDisabled = state.gender === "female";
+    const vsTitle = vsDisabled ? ` title="No style data for women's cricket yet"` : "";
+    const vsSelectHTML = `<label class="table-toolbar__group-label">Vs
+      <select class="select select--compact" data-role="matchup-vs" aria-label="Matchup opponent" ${vsDisabled ? "disabled" : ""}${vsTitle}>${matchupVsOptionsHTML(state, bowlingTypes)}</select>
+    </label>`;
 
     container.innerHTML = `
       <div class="table-toolbar">
         <div class="table-toolbar__row-count">${countLabel}</div>
-        <div class="table-toolbar__presets" role="group" aria-label="Column presets">${presetChipsHTML}</div>
+        ${presetsOrNoteHTML}
         <div class="table-toolbar__actions">
-          <label class="table-toolbar__group-label">Group rows
-            <select class="select select--compact" data-role="group-rows" aria-label="Group rows">${groupOptionsHTML}</select>
-          </label>
-          <button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Customise…</button>
+          ${vsSelectHTML}
+          ${groupRowsHTML}
+          ${columnsBtnHTML}
         </div>
       </div>
       <div class="table-scroll">
@@ -403,6 +621,20 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
       });
     }
 
+    const vsSelect = container.querySelector('[data-role="matchup-vs"]');
+    if (vsSelect) {
+      vsSelect.addEventListener("change", () => {
+        const raw = vsSelect.value;
+        if (!raw) {
+          store.set({ matchupVs: null });
+        } else {
+          const idx = raw.indexOf(":");
+          store.set({ matchupVs: { dim: raw.slice(0, idx), value: raw.slice(idx + 1) } });
+        }
+        load();
+      });
+    }
+
     // Sorting: click header to sort/flip. Re-sorts the cached rows client-side
     // (no requery needed — the result set is unchanged, only its order).
     container.querySelectorAll(".data-table__th[data-key]").forEach((th) => {
@@ -415,13 +647,13 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
           // Position/opposition/dismissal read most naturally ascending.
           store.set({ sort: { key, dir: "asc" } });
         } else {
-          const metric = getMetric(key, state.discipline);
+          const metric = getMetric(key, effectiveDiscipline(s));
           const defaultDir = metric.higherIsBetter === false ? "asc" : "desc";
           store.set({ sort: { key, dir: defaultDir } });
         }
         const next = store.get();
         lastRows = applySort(lastRows, next);
-        renderTable(lastRows, next);
+        renderTable(lastRows, next, bowlingTypes);
       });
     });
 
@@ -501,24 +733,43 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
   }
 
   async function load() {
-    pruneInvalidColumns();
+    // Sort-key fallback across mode/namespace transitions (batting/bowling <->
+    // matchup_batting/matchup_bowling): the column sets differ (e.g.
+    // "balls_faced" vs "balls"; "dismissals" is matchup-only), so a sort key
+    // that no longer resolves in the *effective* namespace must not silently
+    // sort nothing. Falls back to runs/wickets desc, same defaults main.js
+    // uses on a plain discipline switch.
+    const preState = store.get();
+    if (!getMetric(preState.sort.key, effectiveDiscipline(preState))) {
+      store.set({ sort: { key: preState.discipline === "batting" ? "runs" : "wickets", dir: "desc" } });
+    }
+
+    const matchupOn = matchupVsActive(store.get());
+    if (!matchupOn) pruneInvalidColumns();
     const state = store.get();
-    const cols = visibleColumns();
-    const { sql, matchesSql, splitDim } = buildQuery(state, cols, { split: true });
+    const cols = matchupOn ? MATCHUP_COLUMNS[state.discipline] : visibleColumns();
+    const { sql, matchesSql, splitDim, coverageSql } = buildQuery(state, cols, { split: true });
     const token = ++loadToken;
     renderLoading();
     try {
-      const [{ rows }, matchesResult] = await Promise.all([
+      const [{ rows }, matchesResult, coverageResult, bowlingTypes] = await Promise.all([
         query(sql),
         matchesSql ? query(matchesSql) : Promise.resolve({ rows: [] }),
+        coverageSql ? query(coverageSql) : Promise.resolve({ rows: [] }),
+        bowlingTypesCache ? Promise.resolve(bowlingTypesCache) : ensureBowlingTypes(),
       ]);
       if (token !== loadToken) return; // a newer load superseded this one
       lastSplitDim = splitDim ?? null;
+      lastBowlingTypes = bowlingTypes;
 
       let merged = rows;
       if (matchesSql) {
         const byId = new Map(matchesResult.rows.map((r) => [r.id, r.matches]));
         merged = rows.map((r) => ({ ...r, matches: byId.get(r.id) ?? null }));
+      }
+      if (coverageSql) {
+        const covById = new Map(coverageResult.rows.map((r) => [r.id, { mapped: r.mapped ?? 0, total: r.total ?? 0 }]));
+        merged = merged.map((r) => ({ ...r, coverage: covById.get(r.id) ?? { mapped: 0, total: 0 } }));
       }
 
       // A stale "__split" sort (split since turned off) falls back to unsorted;
@@ -526,7 +777,7 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
       const sorted = applySort(merged, state);
 
       lastRows = sorted;
-      renderTable(sorted, state);
+      renderTable(sorted, state, bowlingTypes);
     } catch (err) {
       if (token !== loadToken) return;
       renderError(err, load);

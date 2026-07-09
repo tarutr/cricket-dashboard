@@ -717,7 +717,215 @@ const BOWLING_METRICS = [
   },
 ];
 
-export const METRICS = [...BATTING_METRICS, ...BOWLING_METRICS];
+// ── Matchups (D4 R3) ─────────────────────────────────────────────────────────
+// Batter-vs-bowling-style and bowler-vs-batting-hand splits. Base tables are
+// the `matchup_batting` / `matchup_bowling` views (grain: one row per
+// match-innings-player-bucket), themselves built from `deliveries` in the
+// pipeline with every SPEC §4.1 rule already baked in — same posture as the
+// batting/bowling innings views (see file header). `source: "matchup"` marks
+// these as a third query family (src/playerData.js's matchup fetchers own the
+// coverage N-of-M line and the '(unmapped)' bucket exclusion; these entries
+// are plain aggregate expressions over the already-filtered/grouped rows).
+const MATCHUP_BATTING_METRICS = [
+  {
+    key: "innings",
+    label: "Innings",
+    shortLabel: "Inns",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "COUNT(*)",
+    higherIsBetter: null, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "COUNT(*)",
+  },
+  {
+    key: "balls",
+    label: "Balls Faced",
+    shortLabel: "BF",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "SUM(balls_faced)",
+    higherIsBetter: null, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "SUM(balls_faced)",
+  },
+  {
+    key: "runs",
+    label: "Runs",
+    shortLabel: "Runs",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "SUM(runs)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "SUM(runs)",
+  },
+  {
+    key: "strike_rate",
+    label: "Strike Rate",
+    shortLabel: "SR",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "SUM(runs) * 100.0 / NULLIF(SUM(balls_faced), 0)",
+    higherIsBetter: true, format: "dec2",
+    isPhaseMetric: null, zeroIsData: false,
+    minSampleComponent: "SUM(balls_faced)",
+  },
+  {
+    key: "average",
+    label: "Average (vs style)",
+    shortLabel: "Avg",
+    discipline: "matchup_batting",
+    source: "matchup",
+    // Denominator is bowler-credited dismissals only (decision 23) — the
+    // view's `dismissals` column already excludes run-outs etc.
+    sqlExpression: "SUM(runs) * 1.0 / NULLIF(SUM(dismissals), 0)",
+    higherIsBetter: true, format: "dec2",
+    isPhaseMetric: null, zeroIsData: false,
+    minSampleComponent: "SUM(dismissals)",
+  },
+  {
+    key: "dismissals",
+    label: "Dismissals",
+    shortLabel: "Dis",
+    discipline: "matchup_batting",
+    source: "matchup",
+    // Bowler-credited kinds only (decision 23); fewer dismissals against a
+    // given style is better for the batter.
+    sqlExpression: "SUM(dismissals)",
+    higherIsBetter: false, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "SUM(dismissals)",
+  },
+  {
+    key: "dot_pct",
+    label: "Dot Ball %",
+    shortLabel: "Dot%",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "SUM(dots) * 100.0 / NULLIF(SUM(balls_faced), 0)",
+    higherIsBetter: false, // batting: fewer dots is better
+    format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    minSampleComponent: "SUM(balls_faced)",
+  },
+  {
+    key: "boundary_pct",
+    label: "Boundary %",
+    shortLabel: "Bdry%",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "(SUM(fours_hit) + SUM(sixes_hit)) * 100.0 / NULLIF(SUM(balls_faced), 0)",
+    higherIsBetter: true, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    minSampleComponent: "SUM(balls_faced)",
+  },
+];
+
+const MATCHUP_BOWLING_METRICS = [
+  {
+    key: "innings",
+    label: "Innings",
+    shortLabel: "Inns",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "COUNT(*)",
+    higherIsBetter: null, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "COUNT(*)",
+  },
+  {
+    key: "balls",
+    label: "Balls Bowled",
+    shortLabel: "Balls",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "SUM(balls)",
+    higherIsBetter: null, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "SUM(balls)",
+  },
+  {
+    key: "runs_conceded",
+    label: "Runs Conceded",
+    shortLabel: "Runs",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "SUM(runs_conceded)",
+    higherIsBetter: null, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "SUM(runs_conceded)",
+  },
+  {
+    key: "wickets",
+    label: "Wickets",
+    shortLabel: "Wkts",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "SUM(wickets)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "SUM(wickets)",
+  },
+  {
+    key: "economy",
+    label: "Economy Rate",
+    shortLabel: "Econ",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "SUM(runs_conceded) * 6.0 / NULLIF(SUM(balls), 0)",
+    higherIsBetter: false, format: "dec2",
+    isPhaseMetric: null, zeroIsData: false,
+    minSampleComponent: "SUM(balls)",
+  },
+  {
+    key: "average",
+    label: "Average (vs hand)",
+    shortLabel: "Avg",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "SUM(runs_conceded) * 1.0 / NULLIF(SUM(wickets), 0)",
+    higherIsBetter: false, format: "dec2",
+    isPhaseMetric: null, zeroIsData: false,
+    minSampleComponent: "SUM(wickets)",
+  },
+  {
+    key: "strike_rate",
+    label: "Bowling Strike Rate",
+    shortLabel: "SR",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "SUM(balls) * 1.0 / NULLIF(SUM(wickets), 0)",
+    higherIsBetter: false, format: "dec2",
+    isPhaseMetric: null, zeroIsData: false,
+    minSampleComponent: "SUM(wickets)",
+  },
+  {
+    key: "dot_pct",
+    label: "Dot Ball %",
+    shortLabel: "Dot%",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "SUM(dots) * 100.0 / NULLIF(SUM(balls), 0)",
+    higherIsBetter: true, // bowling: MORE dots is better
+    format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    minSampleComponent: "SUM(balls)",
+  },
+  {
+    key: "boundary_pct_conceded",
+    label: "Boundary % Conceded",
+    shortLabel: "Bdry%",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "(SUM(fours_conceded) + SUM(sixes_conceded)) * 100.0 / NULLIF(SUM(balls), 0)",
+    higherIsBetter: false, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    minSampleComponent: "SUM(balls)",
+  },
+];
+
+export const METRICS = [...BATTING_METRICS, ...BOWLING_METRICS, ...MATCHUP_BATTING_METRICS, ...MATCHUP_BOWLING_METRICS];
 
 // key is unique only within a discipline (batting & bowling share e.g. "average",
 // "strike_rate", "dot_pct", "innings", "matches"). Index by discipline+key.
@@ -753,4 +961,19 @@ export function hasMetricData(metric, value) {
   if (Number.isNaN(n)) return false;
   if (metric.zeroIsData) return true;
   return n !== 0;
+}
+
+/**
+ * Display label for a matchup bucket value (bowling_type / bowling_group /
+ * batting_hand from matchup_batting / matchup_bowling). Callers must exclude
+ * '(unmapped)' rows themselves (decision 21) — this function should never see
+ * that value. Decision 24: bare-slow bowlers surface as the bare group name
+ * 'Spin'/'Pace' in the fine (bowling_type) view, and read as "…(unspecified)"
+ * there; every other value (specific styles, batting_hand) passes through
+ * verbatim.
+ */
+export function matchupBucketLabel(bucket) {
+  if (bucket === "Spin") return "Spin (unspecified)";
+  if (bucket === "Pace") return "Pace (unspecified)";
+  return bucket;
 }

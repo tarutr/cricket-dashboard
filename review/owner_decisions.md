@@ -277,3 +277,29 @@ change requires a new owner decision recorded here. Dates are decision dates.
     proceeds. Also confirmed: the owner's main model is Fable 5 High acting as
     orchestrator/planner/reviewer only; building is delegated to right-sized
     sub-agents; token efficiency is a standing requirement.
+
+34. **R3 (matchups, both homes) — BUILT + VERIFIED, awaiting gate review.**
+    (a) **Profile pop-up sections:** Batting gains "Vs pace and spin" (coarse) +
+    "Vs bowling type" (fine, bare-slow bucket labelled "Spin (unspecified)" per
+    decision 24); Bowling gains "Vs left- and right-handers". Every section
+    leads with its coverage line ("Style data covers N of M balls faced (X%)")
+    and renders an honest greyed note instead of tables when coverage is zero
+    (all women, unmapped men — decision 21). (b) **Leaderboard matchup mode
+    (decision 33):** a "Vs" selector in the table toolbar (batting: Pace/Spin +
+    the fine types; bowling: right/left-handers). Active mode switches the
+    table to the matchup views with fixed columns and a per-player Coverage
+    column ("N of M (X%)"); position filters, stat conditions, row grouping,
+    and column presets are inert with an explicit toolbar note; pills/badge
+    update instantly; the scope sentence reads "vs Spin" (coarse) vs
+    "vs Spin (unspecified)" (fine bucket) vs "vs left-handers"; the Vs select
+    is disabled for Women with "No style data for women's cricket yet".
+    Dismissals shown are bowler-credited only (decision 23, as baked into the
+    data). **Data notes:** the dataset has NO bare-'Pace' bucket (only the 10
+    bare-slow='Spin' bowlers, decision 15), so "Pace (unspecified)" never
+    appears — correct, data-driven. **Verified exact vs raw R2:** SA Yadav vs
+    Spin (59 inns, 322 balls, 454 runs, SR 140.99, avg 64.86, 7 out, coverage
+    913 of 1,027 = 88.9%) in both homes; JJ Bumrah vs left-handers (25 inns,
+    185 balls, 13 wkts, econ 6.75, coverage 649 of 707 = 91.8%) in both homes;
+    his bowler-credited dismissal identity (52 = 53 minus the one run-out)
+    reconfirms decision 23. Decisions 23 + 24 are due for owner confirmation
+    at THIS gate against the live UI. Branch `d4-r3-matchups`.

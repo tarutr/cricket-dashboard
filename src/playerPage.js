@@ -17,11 +17,13 @@ import {
   fetchBattingOpposition,
   fetchBattingDismissals,
   fetchBattingProgression,
+  fetchBattingMatchups,
   fetchBowlingSummary,
   fetchBowlingWicketTypes,
   fetchBowlingOpposition,
+  fetchBowlingMatchups,
 } from "./playerData.js";
-import { getMetric, DISMISSAL_KINDS } from "./metrics.js";
+import { getMetric, DISMISSAL_KINDS, matchupBucketLabel } from "./metrics.js";
 import { formatValue } from "./table.js";
 
 function escHtml(s) {
@@ -175,6 +177,70 @@ function oppositionSectionHTML(state, discipline, rows) {
   return miniTableHTML(headers, body);
 }
 
+/** A mini-table with its own small label above it, for grouping two tables under one section. */
+function subTableHTML(title, headers, bodyRows) {
+  return `<div class="matchup__subtable">
+    <p class="matchup__subtable-title">${escHtml(title)}</p>
+    ${miniTableHTML(headers, bodyRows)}
+  </div>`;
+}
+
+/**
+ * Coverage-or-nothing gate (SPEC_ADDENDUM D4.3, decision 21): matchup data is
+ * missing for every women's player and some men, so we never show a bucket
+ * table without first stating what fraction of balls carry style/hand data —
+ * and if that fraction is zero, we show a greyed note and NO tables at all.
+ */
+function matchupCoverageLine(label, noun, coverage) {
+  const total = Number(coverage?.total) || 0;
+  const mapped = Number(coverage?.mapped) || 0;
+  if (total === 0 || mapped === 0) return null;
+  const pct = ((mapped / total) * 100).toFixed(1);
+  return `<p class="matchup__coverage">${escHtml(label)} covers ${mapped.toLocaleString()} of ${total.toLocaleString()} balls ${escHtml(noun)} (${pct}%).</p>`;
+}
+
+const BATTING_MATCHUP_KEYS = ["innings", "balls", "runs", "strike_rate", "average", "dismissals"];
+const BATTING_MATCHUP_HEADERS = ["Bucket", "Inns", "Balls", "Runs", "SR", "Avg", "Out"];
+// Coarse buckets always read Pace before Spin, regardless of which has more balls.
+const COARSE_ORDER = { Pace: 0, Spin: 1 };
+
+function battingMatchupsHTML(matchups) {
+  const coverageHTML = matchupCoverageLine("Style data", "faced", matchups.coverage);
+  if (!coverageHTML) {
+    return sectionHTML("Matchups", `<p class="player-page__note player-page__note--muted">No bowling-style data in this scope.</p>`);
+  }
+  const metrics = BATTING_MATCHUP_KEYS.map((k) => getMetric(k, "matchup_batting"));
+  const rowFor = (label, r) => [escHtml(label), ...metrics.map((m) => escHtml(formatValue(m, r[m.key])))];
+
+  const coarse = [...matchups.coarse].sort((a, b) => (COARSE_ORDER[a.bucket] ?? 2) - (COARSE_ORDER[b.bucket] ?? 2));
+  const coarseRows = coarse.map((r) => rowFor(r.bucket, r));
+  const fineRows = matchups.fine.map((r) => rowFor(matchupBucketLabel(r.bucket), r));
+
+  const tablesHTML = `${subTableHTML("Vs pace and spin", BATTING_MATCHUP_HEADERS, coarseRows)}${subTableHTML(
+    "Vs bowling type",
+    BATTING_MATCHUP_HEADERS,
+    fineRows
+  )}`;
+  return sectionHTML("Matchups", `${coverageHTML}${tablesHTML}`);
+}
+
+const BOWLING_MATCHUP_KEYS = ["innings", "balls", "runs_conceded", "wickets", "economy", "average", "strike_rate"];
+const BOWLING_MATCHUP_HEADERS = ["Bucket", "Inns", "Balls", "Runs", "Wkts", "Econ", "Avg", "SR"];
+const HAND_LABELS = { "Right-hand bat": "Right-handers", "Left-hand bat": "Left-handers" };
+
+function bowlingMatchupsHTML(matchups) {
+  const coverageHTML = matchupCoverageLine("Batting-hand data", "bowled", matchups.coverage);
+  if (!coverageHTML) {
+    return sectionHTML("Vs left- and right-handers", `<p class="player-page__note player-page__note--muted">No batting-hand data in this scope.</p>`);
+  }
+  const metrics = BOWLING_MATCHUP_KEYS.map((k) => getMetric(k, "matchup_bowling"));
+  const rows = matchups.hands.map((r) => [
+    escHtml(HAND_LABELS[r.bucket] ?? r.bucket),
+    ...metrics.map((m) => escHtml(formatValue(m, r[m.key]))),
+  ]);
+  return sectionHTML("Vs left- and right-handers", `${coverageHTML}${miniTableHTML(BOWLING_MATCHUP_HEADERS, rows)}`);
+}
+
 function battingBlockHTML(state, summary, extra) {
   if (!summary || Number(summary.innings) === 0) {
     return blockWrapperHTML("Batting", `<p class="player-page__note">No batting in this scope.</p>`);
@@ -206,7 +272,9 @@ function battingBlockHTML(state, summary, extra) {
     ])
   );
 
-  return blockWrapperHTML("Batting", `${cardsHTML}${splitHTML}${howOut}${progression}`);
+  const matchups = battingMatchupsHTML(extra.matchups);
+
+  return blockWrapperHTML("Batting", `${cardsHTML}${splitHTML}${howOut}${progression}${matchups}`);
 }
 
 function bowlingBlockHTML(state, summary, extra) {
@@ -224,8 +292,9 @@ function bowlingBlockHTML(state, summary, extra) {
 
   const wicketTypes = sectionHTML("Wicket types", wicketTypesHTML(extra.wicketTypes));
   const opposition = sectionHTML("Vs opposition", oppositionSectionHTML(state, "bowling", extra.opposition));
+  const matchups = bowlingMatchupsHTML(extra.matchups);
 
-  return blockWrapperHTML("Bowling", `${cardsHTML}${wicketTypes}${opposition}`);
+  return blockWrapperHTML("Bowling", `${cardsHTML}${wicketTypes}${opposition}${matchups}`);
 }
 
 /** Header: initials avatar + name + profile line, or the honest "no profile" note. */
@@ -382,24 +451,26 @@ export function mountPlayerPage(container, store) {
 
       let battingExtra = null;
       if (Number(battingSummary?.innings) > 0) {
-        const [positions, dismissals, progression, opposition] = await Promise.all([
+        const [positions, dismissals, progression, opposition, matchups] = await Promise.all([
           fetchBattingPositions(playerRef.id, state),
           fetchBattingDismissals(playerRef.id, state),
           fetchBattingProgression(playerRef.id, state),
           state.teamType === "international" ? fetchBattingOpposition(playerRef.id, state) : Promise.resolve(null),
+          fetchBattingMatchups(playerRef.id, state),
         ]);
         if (token !== loadToken || current !== playerRef) return;
-        battingExtra = { positions, dismissals, progression, opposition };
+        battingExtra = { positions, dismissals, progression, opposition, matchups };
       }
 
       let bowlingExtra = null;
       if (Number(bowlingSummary?.innings) > 0) {
-        const [wicketTypes, opposition] = await Promise.all([
+        const [wicketTypes, opposition, matchups] = await Promise.all([
           fetchBowlingWicketTypes(playerRef.id, state),
           state.teamType === "international" ? fetchBowlingOpposition(playerRef.id, state) : Promise.resolve(null),
+          fetchBowlingMatchups(playerRef.id, state),
         ]);
         if (token !== loadToken || current !== playerRef) return;
-        bowlingExtra = { wicketTypes, opposition };
+        bowlingExtra = { wicketTypes, opposition, matchups };
       }
 
       container.innerHTML = pageHTML({ state, current: playerRef, profile, battingSummary, battingExtra, bowlingSummary, bowlingExtra });

@@ -18,6 +18,7 @@
 
 import { query } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
+import { matchupVsActive } from "./state.js";
 
 const POSITIONS = Array.from({ length: 12 }, (_, i) => i + 1);
 
@@ -101,9 +102,16 @@ export function mountDrawerInnings(container, store, onChange) {
   // ── Batting position ────────────────────────────────────────────────────
   function syncPositions() {
     const state = store.get();
-    const disabled = state.discipline !== "batting";
+    // Matchup views (matchup_batting/matchup_bowling) have no batting_position
+    // column, so the position filter greys out while a matchup "Vs" selection
+    // is active too — distinct note from the bowling-discipline case so the
+    // owner sees why (R3, decision 33).
+    const matchupOn = matchupVsActive(state);
+    const disabled = state.discipline !== "batting" || matchupOn;
     els.positionsGroup.classList.toggle("is-disabled", disabled);
     els.positionsNote.hidden = !disabled;
+    els.positionsNote.textContent =
+      state.discipline === "batting" && matchupOn ? "Not available in matchup mode" : "Batting view only";
     const selected = new Set(state.positions);
     els.positions.querySelectorAll(".chip").forEach((btn) => {
       btn.disabled = disabled;

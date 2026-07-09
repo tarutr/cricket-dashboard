@@ -11,7 +11,7 @@
 
 import { query } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
-import { getMetric, DISMISSAL_KINDS } from "./metrics.js";
+import { getMetric, DISMISSAL_KINDS, metricsFor } from "./metrics.js";
 
 function esc(s) {
   return String(s).replace(/'/g, "''");
@@ -157,4 +157,84 @@ export async function fetchBowlingOpposition(playerId, state) {
   ].join("\n");
   const { rows } = await query(sql);
   return rows;
+}
+
+// ── Matchups (D4 R3) ─────────────────────────────────────────────────────────
+// matchup_batting / matchup_bowling have the same scope columns as the plain
+// innings views (they're built from `deliveries` with the same match-level
+// filters), so pageScopeClauses(state) + an id-column filter applies as-is.
+// The '(unmapped)' bucket exists on purpose for coverage (SPEC_ADDENDUM D4.3,
+// decision 21): every stat must ship with "based on N of M balls" alongside
+// it, so callers get `coverage` back and MUST render it next to the buckets —
+// never show a matchup number without its coverage line.
+const MATCHUP_BATTING_KEYS = metricsFor("matchup_batting").map((m) => m.key);
+const MATCHUP_BOWLING_KEYS = metricsFor("matchup_bowling").map((m) => m.key);
+
+/**
+ * Batter vs bowling-style matchups. `coverage` = {mapped: N, total: M} balls
+ * faced (M = all buckets, N = buckets with a mapped style — bowling_group <>
+ * '(unmapped)'). `coarse` groups by bowling_group ('Pace'/'Spin' only, the
+ * '(unmapped)' rows dropped); `fine` groups by the specific bowling_type
+ * (also dropping '(unmapped)'; bare-slow bowlers surface as the group name
+ * 'Pace'/'Spin' there per decision 24 — label via matchupBucketLabel()).
+ */
+export async function fetchBattingMatchups(playerId, state) {
+  const where = whereFor(state, "batter_id", playerId);
+  const metricSelects = selectList("matchup_batting", MATCHUP_BATTING_KEYS);
+
+  const coverageSql = [
+    `SELECT SUM(balls_faced) AS total,`,
+    `       SUM(balls_faced) FILTER (bowling_group <> '(unmapped)') AS mapped`,
+    `FROM matchup_batting WHERE ${where}`,
+  ].join("\n");
+  const coarseSql = [
+    `SELECT bowling_group AS bucket, ${metricSelects}`,
+    `FROM matchup_batting WHERE ${where} AND bowling_group <> '(unmapped)'`,
+    `GROUP BY bowling_group ORDER BY balls DESC`,
+  ].join("\n");
+  const fineSql = [
+    `SELECT bowling_type AS bucket, ${metricSelects}`,
+    `FROM matchup_batting WHERE ${where} AND bowling_type <> '(unmapped)'`,
+    `GROUP BY bowling_type ORDER BY balls DESC`,
+  ].join("\n");
+
+  const [coverageRes, coarseRes, fineRes] = await Promise.all([
+    query(coverageSql),
+    query(coarseSql),
+    query(fineSql),
+  ]);
+  const covRow = coverageRes.rows[0] ?? { mapped: 0, total: 0 };
+  return {
+    coverage: { mapped: covRow.mapped ?? 0, total: covRow.total ?? 0 },
+    coarse: coarseRes.rows,
+    fine: fineRes.rows,
+  };
+}
+
+/**
+ * Bowler vs batting-hand matchups. `coverage` = {mapped: N, total: M} balls
+ * bowled (M = all buckets, N = buckets with a mapped hand — batting_hand <>
+ * '(unmapped)'). `hands` groups by batting_hand, '(unmapped)' dropped.
+ */
+export async function fetchBowlingMatchups(playerId, state) {
+  const where = whereFor(state, "bowler_id", playerId);
+  const metricSelects = selectList("matchup_bowling", MATCHUP_BOWLING_KEYS);
+
+  const coverageSql = [
+    `SELECT SUM(balls) AS total,`,
+    `       SUM(balls) FILTER (batting_hand <> '(unmapped)') AS mapped`,
+    `FROM matchup_bowling WHERE ${where}`,
+  ].join("\n");
+  const handsSql = [
+    `SELECT batting_hand AS bucket, ${metricSelects}`,
+    `FROM matchup_bowling WHERE ${where} AND batting_hand <> '(unmapped)'`,
+    `GROUP BY batting_hand ORDER BY balls DESC`,
+  ].join("\n");
+
+  const [coverageRes, handsRes] = await Promise.all([query(coverageSql), query(handsSql)]);
+  const covRow = coverageRes.rows[0] ?? { mapped: 0, total: 0 };
+  return {
+    coverage: { mapped: covRow.mapped ?? 0, total: covRow.total ?? 0 },
+    hands: handsRes.rows,
+  };
 }

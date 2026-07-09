@@ -23,7 +23,7 @@
 // match_type values — "T20" here means the T20-bucket (T20 + IT20), matching the
 // Phase 2 brief's owner decision that Cricsheet mislabels internationals.
 
-import { metricsFor } from "./metrics.js";
+import { metricsFor, matchupBucketLabel } from "./metrics.js";
 
 /** The five format buckets surfaced in the UI, and the match_type values each expands to. */
 export const FORMAT_BUCKETS = [
@@ -149,6 +149,7 @@ export function splitAllowed(state, key) {
   if (!dim) return false;
   if (!dim.disciplines.includes(state.discipline)) return false;
   if (dim.internationalOnly && state.teamType !== "international") return false;
+  if (matchupVsActive(state)) return false; // no row-grouping in matchup mode (R3)
   return true;
 }
 
@@ -160,7 +161,38 @@ export function activeSplit(state) {
 
 /** True if the batting-position filter is currently narrowing the innings set. */
 export function positionsFilterActive(state) {
-  return state.discipline === "batting" && Array.isArray(state.positions) && state.positions.length > 0;
+  // Matchup views (matchup_batting/matchup_bowling) have no batting_position
+  // column, so an active matchup "Vs" selection disables this here — one gate
+  // that keeps the query (buildScopeClauses), the drawer's position pill, and
+  // the honest scope sentence all agreeing automatically, with no separate
+  // matchup-aware checks needed at each call site.
+  return (
+    state.discipline === "batting" &&
+    Array.isArray(state.positions) &&
+    state.positions.length > 0 &&
+    !matchupVsActive(state)
+  );
+}
+
+// ── Matchups (D4 R3, decision 33) ───────────────────────────────────────────
+// The leaderboard's "Vs" comparison mode: pick a bowling style (batting view)
+// or a batting hand (bowling view) and every stat recomputes against that
+// bucket, with a coverage figure attached. Men-only in practice — matchup
+// coverage for women is ~0% (decision 21).
+
+/**
+ * True iff a matchup "Vs" selection is currently active AND applicable to the
+ * current discipline. A stale value in the OTHER discipline (e.g. dim "hand"
+ * picked while bowling, then the user switches to batting) stays in
+ * state.matchupVs but is INERT here — same keep-but-inert precedent as the
+ * positions filter — so switching back and forth never loses the pick.
+ */
+export function matchupVsActive(state) {
+  if (!state.matchupVs || state.gender !== "male") return false;
+  const { dim } = state.matchupVs;
+  if (dim === "hand") return state.discipline === "bowling";
+  if (dim === "group" || dim === "type") return state.discipline === "batting";
+  return false;
 }
 
 /** True if the opposition filter is currently narrowing the innings set. */
@@ -212,6 +244,7 @@ export function createInitialState(maxMonth) {
     positions: [], // batting positions (ints); [] = no predicate. Applies in batting only.
     opposition: [], // opposition team names; [] = no predicate. International only (decision 20).
     splitBy: null, // null | "position" | "opposition" | "dismissal" — table-only breakdown
+    matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)
     search: "",
     sort: { key: "runs", dir: "desc" },
     columns: {
@@ -440,6 +473,21 @@ export function createStore(initial) {
     if (positionsFilterActive(s)) {
       const sorted = [...s.positions].sort((a, b) => a - b);
       parts.push(`batting at ${sorted.join(", ")}`);
+    }
+
+    // Matchup mode (R3, decision 33) — table only, right after the
+    // opposition/positions tokens. The "(unspecified)" relabel (decision 24)
+    // applies ONLY to the fine bowling_type buckets — coarse "vs Spin" means
+    // ALL spin and must read plainly. The hand dim reads as plain English.
+    if (s.view === "table" && matchupVsActive(s)) {
+      const mv = s.matchupVs;
+      if (mv.dim === "hand") {
+        parts.push(mv.value === "Left-hand bat" ? "vs left-handers" : "vs right-handers");
+      } else if (mv.dim === "type") {
+        parts.push(`vs ${matchupBucketLabel(mv.value)}`);
+      } else {
+        parts.push(`vs ${mv.value}`);
+      }
     }
 
     if (s.minInnings && s.minInnings > 1) {

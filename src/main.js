@@ -247,10 +247,16 @@ function boot() {
       const openDrawerBtn = filterBarEl.querySelector('[data-role="open-drawer"]');
       if (openDrawerBtn) openDrawerBtn.addEventListener("click", () => drawerController.open());
 
-      // Presentation controls in the table toolbar (presets, Group rows) set
-      // state and reload directly without onFiltersChanged — keep the honest
-      // scope sentence in step with EVERY state change.
-      store.subscribe(() => updateScopeSentence());
+      // Presentation controls in the table toolbar (presets, Group rows, Vs)
+      // set state and reload directly without onFiltersChanged — keep the
+      // honest scope sentence, pills, and badge in step with EVERY state
+      // change (e.g. entering matchup mode makes the position filter inert,
+      // so its pill and badge count must drop immediately).
+      store.subscribe(() => {
+        updateScopeSentence();
+        if (pillsController) pillsController.render();
+        updateDrawerBadge();
+      });
 
       playerSearchInputEl.addEventListener("input", () => {
         store.set({ search: playerSearchInputEl.value });

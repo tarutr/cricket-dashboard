@@ -1742,6 +1742,30 @@ a { color: var(--color-accent); }
   font-variant-numeric: tabular-nums;
 }
 
+/* Matchups (D4 R3): coverage line + grouped sub-tables (vs pace/spin, vs bowling type) */
+
+.matchup__coverage {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.matchup__subtable {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.matchup__subtable-title {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
 @media (max-width: 620px) {
   .player-page__two-col {
     grid-template-columns: 1fr;
@@ -1764,5 +1788,58 @@ a { color: var(--color-accent); }
   .fingerprint__row {
     grid-template-columns: 5.5rem 1fr 5.5rem;
     gap: var(--space-2);
+  }
+}
+
+/* ── Leaderboard matchup mode (D4 R3, decision 33) ──────────────────────────
+   "Vs" comparison: a fixed-column table where every row also carries a
+   coverage figure. Reuses .select/.table-toolbar primitives; adds the
+   coverage cell, the toolbar note that replaces presets/Customise, and a
+   little breathing room for the Vs/Group-rows/Customise cluster now that it
+   can hold three controls. */
+
+.table-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.table-toolbar__group-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+/* Bowling-type optgroup can carry long style names ("Slow left-arm
+   orthodox") — cap the closed-select width so the toolbar doesn't stretch,
+   the dropdown panel itself still renders at full label width. */
+.table-toolbar__group-label .select--compact {
+  max-width: 11rem;
+}
+
+.table-toolbar__matchup-note {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  font-style: italic;
+}
+
+.data-table__th--coverage {
+  color: var(--color-muted);
+}
+
+.data-table__td--coverage {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 480px) {
+  .table-toolbar__group-label .select--compact {
+    max-width: 9rem;
   }
 }
