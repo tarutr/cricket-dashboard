@@ -50,10 +50,12 @@ function esc(s) {
  *     views only; positions are a batting concept, inert in bowling). */
 export function buildScopeClauses(
   state,
-  { includeTeams = true, teamColumn, idColumn, oppositionColumn, includePositions = false } = {}
+  { includeTeams = true, teamColumn, idColumn, oppositionColumn, includePositions = false, includeGender = true } = {}
 ) {
   const clauses = [];
-  clauses.push(`gender = '${esc(state.gender)}'`);
+  // Player-page queries (R2) filter by a specific player_id, so gender is
+  // redundant there — every other caller keeps the gender clause.
+  if (includeGender) clauses.push(`gender = '${esc(state.gender)}'`);
 
   const matchTypes = expandFormats(state.formats);
   if (matchTypes.length === 0) {

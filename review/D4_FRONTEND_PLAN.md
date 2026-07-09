@@ -17,11 +17,12 @@ each fits one working session and ends at a screenshot-verifiable state (SPEC §
 > single-player features: splits, dismissal fingerprint, progression, matchups;
 > supersedes SPEC §2 "no player pages" and absorbs D5's pop-ups), and **Graph
 > Builder** (unchanged). Remaining work is re-sequenced as gates **R1** (leaderboard
-> slim-down) → **R2** (player pages) → **R3** (matchups = old Pieces 4–5, built
+> slim-down, ✅ owner-approved, decision 30) → **R2** (player pages, ✅ built +
+> verified, decision 31, awaiting gate) → **R3** (matchups = old Pieces 4–5, built
 > directly into the player page; decisions 23/24 confirmed there) → polish. The
 > Piece 4–5 specs below still define matchup content/coverage rules; only their
-> HOME changed. Branch chain continues: `d4-r1-leaderboard` stacked on
-> `d4-piece3-free-splits`. Owner reviews on **localhost:8000**
+> HOME changed. Branch chain: `d4-r1-leaderboard` → `d4-r2-player-pages`, stacked
+> on `d4-piece3-free-splits`. Owner reviews on **localhost:8000**
 (`python3 -m http.server 8000`) — the R2 CORS policy allows localhost but NOT Vercel
 preview domains, so branch previews on Vercel currently error until CORS is widened
 (deferred, owner's call).

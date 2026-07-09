@@ -236,3 +236,24 @@ change requires a new owner decision recorded here. Dates are decision dates.
     localhost — "this is largely good. There are design fixes, but we can do
     that later." Remaining visual tweaks are BATCHED into the final polish pass
     (consistent with decision 25's batching rule). R2 (player pages) proceeds.
+
+31. **R2 (player pages) — BUILT + VERIFIED, awaiting gate review.** New Players
+    destination: search-first; page shows a profile header (or the honest "No
+    profile data for this player." — all women, unmatched men), an honest scope
+    line (Format + Date + Team type only; the fixed caveat "leaderboard-only
+    filters don't apply here"), then Batting (overview cards with the Test/MDM
+    BPD swap, by-position table, vs-opposition table [international-only,
+    greyed note elsewhere], "How out" fingerprint bars with counts + % of
+    dismissals + not-out line, faced-balls progression cards) and Bowling
+    (cards incl. BBI, wicket-type bars, vs-opposition). Blocks with no innings
+    in scope show honest notes; player names in the leaderboard click through.
+    Notable calls: (a) **player search matches EVERY name a player has appeared
+    under and displays the most recent** — players.parquet keeps only the
+    oldest registry name (e.g. NR Sciver), so the search reads name history
+    from player_matches (covers decision-9 never-bat-never-bowl players too);
+    (b) verbatim playing_role "Unknown" is suppressed in header lines.
+    Verified exact vs raw R2: SA Yadav full page (incl. progression
+    133.19/148.79/178.55 and his 1-innings 2-5 bowling card), JJ Bumrah
+    bowling block (32 inns, 48 wkts, kinds 24/19/3/2 summing to 48, Pakistan &
+    South Africa 9 wkts each), NR Sciver-Brunt (women: 30 inns, 954 runs,
+    41.48, 137.07, HS 77). Branch `d4-r2-player-pages`.

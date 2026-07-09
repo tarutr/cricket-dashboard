@@ -347,7 +347,9 @@ const BATTING_METRICS = [
 // counts partition SUM(dismissed) and the % columns share that denominator.
 // Retired hurt / retired not out are NOT dismissals (dismissed = 0) and are
 // excluded. `section: "dismissal"` groups these in the column picker.
-const DISMISSAL_KINDS = [
+// Exported for the player page's dismissal fingerprint (R2) — the UI derives
+// its bar labels/keys from this table so the kind list stays defined once.
+export const DISMISSAL_KINDS = [
   { kind: "caught", key: "out_caught", label: "Out Caught", short: "Ct" },
   { kind: "bowled", key: "out_bowled", label: "Out Bowled", short: "Bwd" },
   { kind: "lbw", key: "out_lbw", label: "Out LBW", short: "LBW" },

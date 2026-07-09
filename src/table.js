@@ -167,7 +167,8 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
   return { sql, matchesSql, splitDim };
 }
 
-function formatValue(metric, value) {
+/** Shared display formatter for metric values ("—" for no-data per §8.1). Also used by the player page. */
+export function formatValue(metric, value) {
   if (!hasMetricData(metric, value)) return "—"; // em dash
   if (metric.format === "str") return String(value);
   const n = Number(value);
@@ -220,7 +221,7 @@ function escHtml(s) {
 
 // ── Table controller ─────────────────────────────────────────────────────────
 
-export function mountTable(container, store, { getManifestDates } = {}) {
+export function mountTable(container, store, { onPlayerClick } = {}) {
   let lastRows = [];
   let loadToken = 0;
   // The split dimension the CURRENT lastRows were queried with (null = no
@@ -328,7 +329,11 @@ export function mountTable(container, store, { getManifestDates } = {}) {
         const cells = cols
           .map((m) => `<td class="data-table__td">${formatValue(m, row[m.key])}</td>`)
           .join("");
-        return `<tr><td class="data-table__td data-table__td--sticky">${row.name ?? ""}</td>${splitTd}${cells}</tr>`;
+        // Player names link to the player page (R2, decision 29).
+        const nameCell = onPlayerClick
+          ? `<button type="button" class="player-link" data-player-id="${escHtml(row.id ?? "")}">${escHtml(row.name ?? "")}</button>`
+          : escHtml(row.name ?? "");
+        return `<tr><td class="data-table__td data-table__td--sticky">${nameCell}</td>${splitTd}${cells}</tr>`;
       })
       .join("");
 
@@ -419,6 +424,14 @@ export function mountTable(container, store, { getManifestDates } = {}) {
         renderTable(lastRows, next);
       });
     });
+
+    if (onPlayerClick) {
+      container.querySelectorAll(".player-link").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          onPlayerClick(btn.dataset.playerId, btn.textContent);
+        });
+      });
+    }
 
     const columnsBtn = container.querySelector('[data-role="columns-btn"]');
     if (columnsBtn) {

@@ -10,6 +10,7 @@ import { mountFilters } from "./filters.js";
 import { mountFilterDrawer } from "./drawer.js";
 import { mountPills } from "./pills.js";
 import { mountTable } from "./table.js";
+import { mountPlayerPage } from "./playerPage.js";
 import { getMetric } from "./metrics.js";
 import { mountGraph } from "./graph/graph.js";
 
@@ -27,6 +28,7 @@ const drawerHostEl = document.getElementById("filter-drawer-host");
 const playerSearchSectionEl = document.getElementById("player-search-section");
 const playerSearchInputEl = document.getElementById("player-search-input");
 const tableAreaEl = document.getElementById("table-area");
+const playerPageAreaEl = document.getElementById("player-page-area");
 const graphAreaEl = document.getElementById("graph-area");
 
 function describeProgress(progress) {
@@ -68,6 +70,7 @@ let filterController;
 let graphController;
 let drawerController;
 let pillsController;
+let playerPageController;
 
 // Tracks the columns array we last auto-applied as a "default preset" per
 // discipline, so we can tell whether the user has since customized columns
@@ -119,16 +122,23 @@ function updateViewToggle() {
   });
 }
 
-/** Show/hide the table vs graph panels for the current state.view (§6: same page, no iframe). */
+/** Show/hide the leaderboard / player page / graph panels for state.view (§6: same page, no iframe). */
 function applyView() {
   const state = store.get();
-  const graph = state.view === "graph";
-  tableAreaEl.hidden = graph;
-  playerSearchSectionEl.hidden = graph;
-  graphAreaEl.hidden = !graph;
+  const view = state.view;
+  tableAreaEl.hidden = view !== "table";
+  playerSearchSectionEl.hidden = view !== "table";
+  playerPageAreaEl.hidden = view !== "players";
+  graphAreaEl.hidden = view !== "graph";
+  // Players view uses a REDUCED scope strip: Format + Date + Team type only.
+  // Gender, the drawer filters, and pills don't apply to a player page (its
+  // queries key on the player's id) — hiding them keeps the page honest.
+  document.querySelector(".app").classList.toggle("app--players", view === "players");
   updateViewToggle();
-  if (graph) {
+  if (view === "graph") {
     graphController.onShow();
+  } else if (view === "players") {
+    playerPageController.onShow();
   } else {
     // Owner: no automated search — entering the table view shows the blank
     // prompt; the query runs only when "Show results" is clicked.
@@ -151,11 +161,14 @@ function onFiltersChanged() {
   if (pillsController) pillsController.render();
   updateScopeSentence();
   updateDrawerBadge();
-  // Only the visible view re-queries; the other refreshes when switched to.
+  // Only the visible view re-queries; the others refresh when switched to.
   // Table view: filter changes revert to the blank prompt (no automated search);
   // the query runs on "Show results" / the drawer's "Apply and show results".
-  if (store.get().view === "graph") {
+  const view = store.get().view;
+  if (view === "graph") {
     graphController.onScopeChanged();
+  } else if (view === "players") {
+    playerPageController.onScopeChanged();
   } else {
     tableController.showPrompt();
   }
@@ -251,7 +264,14 @@ function boot() {
         onFiltersChanged();
       });
 
-      tableController = mountTable(tableAreaEl, store);
+      tableController = mountTable(tableAreaEl, store, {
+        onPlayerClick: (id, name) => {
+          playerPageController.showPlayer(id, name);
+          store.set({ view: "players" });
+          applyView();
+        },
+      });
+      playerPageController = mountPlayerPage(playerPageAreaEl, store);
       graphController = mountGraph(graphAreaEl, store);
 
       viewToggleEl.addEventListener("click", (e) => {
