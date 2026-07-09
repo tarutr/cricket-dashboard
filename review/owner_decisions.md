@@ -428,3 +428,48 @@ change requires a new owner decision recorded here. Dates are decision dates.
     downloaded DB or overwriting the R2 copy. Built as a gated batch on top
     of this merge. Ingestion *logic* (incremental, per-file transactions)
     remains untouched.
+
+42. **POLISH-PHASE DESIGN REVIEW APPROVED (2026-07-10):** the full browser-driven
+    review (desktop + 375px) plus static CSS audit stands as the work list —
+    fix batches A–F kept "on board as changes to make". Owner then ruled on the
+    fundamental questions: **Leaderboard tab renamed "Stats", Graph Builder
+    renamed "Graphs"**; discipline (Batting/Bowling) moves into the scope strip
+    with the view switcher alone in the header; **"Customise…" renamed
+    "Columns"** in every mode and it must not move or vanish when matchup mode
+    reshuffles the toolbar; **Dismissal grouping is CUT** from Group rows (this
+    also removes the silent no-op on the Bowling view; grouping options become
+    discipline-aware); **batting position becomes a plain multi-select dropdown**
+    in the drawer — owner explicitly rejected the hero 1–12 circles and the
+    proposed band shortcut chips; **one hero "Team" filter** — "Against
+    (opposition)" and "Has ever played for (career)" are renamed exactly so and
+    demoted to the advanced area with Stat conditions; dismissal columns in the
+    picker prune to the six real kinds + one "show as %" toggle + rare types
+    collapsed; search becomes player-first omnisearch (type a name → open the
+    popup regardless of leaderboard filters, with a "show in table" secondary
+    action); empty results must state their reason. Interaction-model fixes
+    approved: toolbar stays mounted during re-query; stat-condition validation
+    (no silent drop), pills named for their condition ("Runs ≥ 300"), subtitle
+    honestly includes stat conditions; single Apply in the drawer.
+
+43. **GRAPHS OVERHAUL APPROVED (2026-07-10):** graph catalog approved as
+    specced — Bar top-N (fixed: leader on top, all labels, no clipping, Bars⇄Dots
+    lollipop toggle, 2–15 players), Donut share-of-total (2–10), Scatter
+    two-metric map (+median quadrant guides, 5–60), **Radar kept but overlays
+    removed → small multiples** (one mini-radar per player, shared scale, 1–6),
+    NEW grouped phase bars (one rate family, 2–8), NEW dumbbell two-scope
+    compare (e.g. SR vs pace ↔ vs spin, 2–12), NEW slope/arrow then-vs-now with
+    **explicit date pickers for both windows (owner ruling — not an automatic
+    range split)**, NEW line chart progression by year from the innings parquets
+    (number-producing SQL → data-engineer + independent anchor verification;
+    year granularity v1; sub-threshold points greyed). Metric-type taxonomy:
+    add `kind: total|rate|percent|peak` metadata to metrics.js (no SQL change;
+    anchors re-run regardless). "Turn into graph" bridge from Stats tab
+    (honest titles generated from actual seed state — also the fix for the
+    title-honesty bug), "Graph this player" in the popup, caps restore dropped
+    players when switching back, visible ✎ on editable title/subtitle,
+    copy-PNG-to-clipboard. **Footer "debug console" link removed from
+    production (owner ruling).** Build order: B1 mechanical UI → B2 interaction
+    model (wireframes gate BEFORE build) → B3 graph fixes+bridge → B4 new
+    charts → B5 CSS consolidation → B6 hygiene. Each batch reviewed on
+    localhost:8000; batches touching query plumbing re-verify the standing
+    anchors independently (decision 39 rule).
