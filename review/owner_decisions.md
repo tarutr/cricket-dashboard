@@ -370,3 +370,61 @@ change requires a new owner decision recorded here. Dates are decision dates.
     list + feedback form (Supabase, RLS) + performance audit + README, then
     optional deferred items (team/venue pop-ups, headshots, preview-domain
     CORS, name normalization).
+
+## 2026-07-10 — Pre-polish code review: fixes approved + MERGED
+
+39. **NUMBER CORRECTION (found by the full-repo code review, owner-approved,
+    merged):** coarse matchup batting **innings** were double-counted. The
+    metric used COUNT(*) over rows whose grain is per bowling *type*, so an
+    innings facing e.g. both off-spin and leg-spin counted twice when grouped
+    to Pace/Spin. SA Yadav vs Spin 59→**38**, vs Pace 99→**56** (career total
+    60 makes 99 impossible). Decision 34's recorded "59 inns" had been
+    verified against a check query sharing the same counting flaw — the site
+    and the check agreed while both were wrong. Fixed to
+    COUNT(DISTINCT match:innings) (the decision-37 pattern already used on
+    the bowling side); the fine per-type view and all other stats
+    (runs/balls/SR/avg/coverage) are unchanged, re-verified exact vs raw R2
+    in both homes (leaderboard Vs mode + profile pop-up). **Standing
+    verification rule going forward: anchor checks must derive counts
+    independently (COUNT DISTINCT from raw), never by reusing the app's own
+    aggregation shape.** Also noted: decision 37's spot-check "caught vs
+    spin ≥ 2, min 10 innings = 576 players" reads 478 on today's data — the
+    rolling 3-year window moved; old and new code agree at 478 (data drift,
+    not regression).
+
+40. **Code-review fix batches — BUILT, VERIFIED, owner-reviewed on localhost,
+    MERGED TO MAIN (2026-07-10).** Frontend (`review-fixes`): one shared
+    HTML-escaping module (XSS hardening; team/player names were unescaped in
+    several spots); transient failures no longer permanently disable the Vs
+    type list / PNG export / drawer options (they retry); stat-condition
+    edits are honest on drawer close (Escape/backdrop without Apply reverts
+    the table to the prompt; the graph updates once per committed change) and
+    typing keeps focus; the column picker survives ticking any number of
+    boxes (owner's known complaint — popover re-hosted outside the table);
+    donut charts restricted to genuinely additive metrics via an explicit
+    `additive` flag (High Score removed); the Graph Builder roster reseeds on
+    position/opposition/profile changes and ranks correctly in matchup mode
+    regardless of picked columns; matchup mode now runs ONE query instead of
+    two full scans (result sets verified byte-identical vs raw R2 across 4
+    scopes); player pop-up 14→11 queries (text byte-identical); graph seeding
+    is a bounded top-N query (cap ties now break deterministically by id —
+    previously arbitrary); fewer boot queries; Chart.js deferred. Pipeline
+    (`pipeline-safety`): 21 new ADDITIVE validation gates (matchup↔innings
+    rollup cross-checks, batting_position cross-check, T20/ODI phase sums on
+    the foundational files, dots/fours/sixes/maidens/wides/noballs
+    reconciliation vs deliveries, vocabulary tripwires), all green against
+    the real DB; R2 upload retries with manifest-last and loud hard failure;
+    both-gender tripwire (any NEW both-gender player_id is auto-held from
+    matching + emailed, protecting decision 2 forever); unmatched-player
+    alert-throttle fix; requirements pinned (+botocore, −numpy); pipeline
+    failure now emails the owner; pip cached in CI.
+
+41. **B6 APPROVED (the frozen legacy scripts):** owner signed off on three
+    defensive fixes to the ported wt20-guide scripts — (a) ingest.py: a
+    squad name missing from its own file's Cricsheet registry must not drop
+    the whole match (load the match, skip the link, plain-English alert);
+    (b) a timeout on the Cricsheet download, routed through the alert
+    emails; (c) integrity checks in download_db/upload_db before trusting a
+    downloaded DB or overwriting the R2 copy. Built as a gated batch on top
+    of this merge. Ingestion *logic* (incremental, per-file transactions)
+    remains untouched.
