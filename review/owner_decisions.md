@@ -269,3 +269,11 @@ change requires a new owner decision recorded here. Dates are decision dates.
     pop-up interaction model; other design changes remain batched for the
     final polish pass (decisions 25/30). Content/numbers unchanged from
     decision 31's verification.
+
+33. **R2 pop-up gate PASSED + R3 scope addition (owner, 2026-07-09):** "Looks
+    good." Matchup stats must be available in BOTH homes: the profile pop-up
+    AND "searchable via the regular dashboard" — i.e. the original Piece-4
+    leaderboard comparison mode returns alongside the pop-up sections. R3
+    proceeds. Also confirmed: the owner's main model is Fable 5 High acting as
+    orchestrator/planner/reviewer only; building is delegated to right-sized
+    sub-agents; token efficiency is a standing requirement.
