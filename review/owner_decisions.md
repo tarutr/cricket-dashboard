@@ -202,3 +202,32 @@ change requires a new owner decision recorded here. Dates are decision dates.
       because Afghanistan does not exist in Cricsheet — SPEC §4.1, honest result);
       global 12-kind partition = 22,517 = SUM(dismissed) in the default scope.
     Branch `d4-piece3-free-splits`, stacked on Piece 2.
+
+## 2026-07-09 — Site restructure (owner-directed, supersedes the one-page layout)
+
+29. **Owner verdict on the current dashboard: too overloaded, unintuitive** — too
+    many filters in too many places, too many column options, new features
+    undiscoverable. Owner reviewed wireframes and chose a **FULL RESTRUCTURE**
+    around three destinations:
+    - **Leaderboard** (the compare table, slimmed): only Gender / Format / Date /
+      Team type stay visible; Team, Min innings, the profile filters, position,
+      opposition, and the advanced condition builder all collapse into ONE
+      "All filters" drawer with a single "Apply and show results" button (the
+      no-automated-search rule survives, decision 25). Applied filters render as
+      removable pills. The 45 column checkboxes become one-click **presets**
+      (Core / Boundaries / Dismissals / Phases / Progression + Customise).
+    - **Player pages** (new destination): everything single-player moves here and
+      just appears — position/opposition splits, dismissal fingerprint (counts +
+      % in one visual), progression SRs, and the upcoming matchups. Reached by
+      clicking any player name or via search. This **supersedes SPEC §2's "no
+      player pages" non-goal and absorbs/expands the D5 pop-up plan.**
+    - **Graph Builder**: unchanged.
+    - **Sequencing: RESTRUCTURE FIRST** — matchups (old Pieces 4–5) are built
+      once, directly into the player page, after the new structure lands.
+    - **Leaderboard row-splitting: KEEP, TUCKED AWAY** — a small "Group rows"
+      control in the table toolbar (off by default, out of the filter area);
+      full splits live on player pages.
+    New gates: **R1** leaderboard slim-down (scope strip + drawer + pills +
+    presets + toolbar group-rows) → **R2** player pages → **R3** matchups on the
+    player page (decisions 23/24 confirmed there) → final polish. All existing
+    verified queries/metrics are re-homed, not rebuilt; numbers stay identical.

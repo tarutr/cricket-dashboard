@@ -7,8 +7,8 @@
 import { initDB, getManifest } from "./db.js";
 import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, splitAllowed } from "./state.js";
 import { mountFilters } from "./filters.js";
-import { mountSplitControls } from "./splitControls.js";
-import { mountAdvanced, activeConditionCount } from "./advanced.js";
+import { mountFilterDrawer } from "./drawer.js";
+import { mountPills } from "./pills.js";
 import { mountTable } from "./table.js";
 import { getMetric } from "./metrics.js";
 import { mountGraph } from "./graph/graph.js";
@@ -22,10 +22,8 @@ const footerDataDateEl = document.getElementById("footer-data-date");
 const disciplineToggleEl = document.querySelector('[data-role="discipline"]');
 const viewToggleEl = document.querySelector('[data-role="view"]');
 const filterBarEl = document.getElementById("filter-bar");
-const splitsBarEl = document.getElementById("splits-bar");
-const advancedToggleEl = document.getElementById("advanced-toggle");
-const advancedCountEl = document.getElementById("advanced-count");
-const advancedPanelEl = document.getElementById("advanced-panel");
+const pillsBarEl = document.getElementById("pills-bar");
+const drawerHostEl = document.getElementById("filter-drawer-host");
 const playerSearchSectionEl = document.getElementById("player-search-section");
 const playerSearchInputEl = document.getElementById("player-search-input");
 const tableAreaEl = document.getElementById("table-area");
@@ -66,10 +64,10 @@ function renderInitError(err, retryFn) {
 
 let store;
 let tableController;
-let advancedController;
 let filterController;
 let graphController;
-let splitControlsController;
+let drawerController;
+let pillsController;
 
 // Tracks the columns array we last auto-applied as a "default preset" per
 // discipline, so we can tell whether the user has since customized columns
@@ -105,11 +103,13 @@ function updateDisciplineToggle() {
   });
 }
 
-function updateAdvancedCount() {
-  const state = store.get();
-  const n = activeConditionCount(state.advanced);
-  advancedCountEl.hidden = n === 0;
-  advancedCountEl.textContent = String(n);
+/** Count badge on the "All filters" button — how many drawer filters are active. */
+function updateDrawerBadge() {
+  const countEl = filterBarEl.querySelector('[data-role="open-drawer-count"]');
+  if (!countEl || !drawerController) return;
+  const n = drawerController.activeCount();
+  countEl.hidden = n === 0;
+  countEl.textContent = String(n);
 }
 
 function updateViewToggle() {
@@ -138,24 +138,22 @@ function applyView() {
 
 function onFiltersChanged() {
   // Drop columns/conditions orphaned by the new scope BEFORE anything renders,
-  // so the advanced panel, count badge, and query all agree (§8.4 honesty).
+  // so the drawer, badge, pills, and query all agree (§8.4 honesty).
   pruneIneligibleState(store);
-  // A split that the new scope disallows (position/dismissal splits in the
-  // bowling view; opposition split outside international) resets to None —
+  // A row grouping the new scope disallows (position/dismissal grouping in the
+  // bowling view; opposition grouping outside international) resets to None —
   // never a ghost mode the controls can't show honestly.
   const s = store.get();
   if (s.splitBy && !splitAllowed(s, s.splitBy)) {
     store.set({ splitBy: null });
   }
-  if (splitControlsController) splitControlsController.sync();
+  if (drawerController) drawerController.sync();
+  if (pillsController) pillsController.render();
   updateScopeSentence();
-  updateAdvancedCount();
-  // Re-render the advanced panel too: its metric dropdown must reflect the
-  // current format scope (§8.9 phase-metric gating) whenever formats change.
-  if (advancedController) advancedController.render();
+  updateDrawerBadge();
   // Only the visible view re-queries; the other refreshes when switched to.
   // Table view: filter changes revert to the blank prompt (no automated search);
-  // the user clicks "Show results" to run the query for the new scope.
+  // the query runs on "Show results" / the drawer's "Apply and show results".
   if (store.get().view === "graph") {
     graphController.onScopeChanged();
   } else {
@@ -221,21 +219,32 @@ function boot() {
         }
       );
       filterController.setDateBounds(minMonth, maxMonth);
-      filterController.refreshTeamOptions();
 
-      splitControlsController = mountSplitControls(splitsBarEl, store, () => {
+      drawerController = mountFilterDrawer(drawerHostEl, store, {
+        onChange: () => {
+          onFiltersChanged();
+        },
+        onApply: () => {
+          drawerController.close();
+          // Apply = the one query trigger (no automated search, decision 25).
+          // The graph already follows scope changes live via onFiltersChanged.
+          if (store.get().view === "table") tableController.load();
+        },
+      });
+      drawerController.sync();
+
+      pillsController = mountPills(pillsBarEl, store, () => {
         onFiltersChanged();
       });
+      pillsController.render();
 
-      advancedController = mountAdvanced(advancedPanelEl, store, () => {
-        onFiltersChanged();
-      });
+      const openDrawerBtn = filterBarEl.querySelector('[data-role="open-drawer"]');
+      if (openDrawerBtn) openDrawerBtn.addEventListener("click", () => drawerController.open());
 
-      advancedToggleEl.addEventListener("click", () => {
-        const isOpen = !advancedPanelEl.hidden;
-        advancedPanelEl.hidden = isOpen;
-        advancedToggleEl.setAttribute("aria-expanded", String(!isOpen));
-      });
+      // Presentation controls in the table toolbar (presets, Group rows) set
+      // state and reload directly without onFiltersChanged — keep the honest
+      // scope sentence in step with EVERY state change.
+      store.subscribe(() => updateScopeSentence());
 
       playerSearchInputEl.addEventListener("input", () => {
         store.set({ search: playerSearchInputEl.value });
@@ -255,7 +264,7 @@ function boot() {
       });
 
       updateScopeSentence();
-      updateAdvancedCount();
+      updateDrawerBadge();
       updateViewToggle();
       // Owner: blank on first load — show the prompt, don't auto-run the query.
       tableController.showPrompt();

@@ -12,7 +12,16 @@ import { getMetric, hasMetricData } from "./metrics.js";
 import { query } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
 import { activeGroups } from "./advanced.js";
-import { eligibleMetrics, activeSplit, positionsFilterActive, oppositionFilterActive } from "./state.js";
+import {
+  eligibleMetrics,
+  activeSplit,
+  positionsFilterActive,
+  oppositionFilterActive,
+  COLUMN_PRESET_DEFS,
+  activePresetKey,
+  SPLIT_DIMENSIONS,
+  splitAllowed,
+} from "./state.js";
 
 export { eligibleMetrics };
 
@@ -328,11 +337,38 @@ export function mountTable(container, store, { getManifestDates } = {}) {
       ? `${rows.length} row${rows.length === 1 ? "" : "s"} (${splitDim.label.toLowerCase()} split)`
       : `${rows.length} player${rows.length === 1 ? "" : "s"} match`;
 
+    // Column presets (R1): one-click sets; the active chip is the preset whose
+    // columns exactly match the current selection (none = "Customise" territory).
+    const currentPreset = activePresetKey(state.discipline, state.formats, visibleColumns());
+    const presetChipsHTML = COLUMN_PRESET_DEFS[state.discipline]
+      .map((def) => {
+        const available = def.columns(state.formats) !== null;
+        return `<button type="button" class="chip chip--preset ${def.key === currentPreset ? "is-active" : ""}"
+          data-preset="${def.key}" ${available ? "" : `disabled title="Pick a single phase family (T20, or ODI/ODM) to use phase columns"`}>${def.label}</button>`;
+      })
+      .join("");
+
+    // "Group rows" (decision 29: row-splitting kept, tucked in the toolbar).
+    // A presentation control like the column picker, so changes reload directly
+    // (no Show-results round trip — the scope hasn't changed, only its layout).
+    const groupOptionsHTML = ["", ...Object.keys(SPLIT_DIMENSIONS)]
+      .map((key) => {
+        if (key === "") return `<option value="">No grouping</option>`;
+        const dim = SPLIT_DIMENSIONS[key];
+        const allowed = splitAllowed(state, key);
+        return `<option value="${key}" ${allowed ? "" : "disabled"} ${state.splitBy === key ? "selected" : ""}>${dim.label}</option>`;
+      })
+      .join("");
+
     container.innerHTML = `
       <div class="table-toolbar">
         <div class="table-toolbar__row-count">${countLabel}</div>
+        <div class="table-toolbar__presets" role="group" aria-label="Column presets">${presetChipsHTML}</div>
         <div class="table-toolbar__actions">
-          <button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>
+          <label class="table-toolbar__group-label">Group rows
+            <select class="select select--compact" data-role="group-rows" aria-label="Group rows">${groupOptionsHTML}</select>
+          </label>
+          <button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Customise…</button>
         </div>
       </div>
       <div class="table-scroll">
@@ -342,6 +378,25 @@ export function mountTable(container, store, { getManifestDates } = {}) {
         </table>
       </div>
     `;
+
+    container.querySelectorAll(".chip--preset").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const def = COLUMN_PRESET_DEFS[state.discipline].find((d) => d.key === btn.dataset.preset);
+        const cols = def ? def.columns(store.get().formats) : null;
+        if (!cols) return;
+        const s = store.get();
+        store.set({ columns: { ...s.columns, [s.discipline]: cols } });
+        load();
+      });
+    });
+
+    const groupSelect = container.querySelector('[data-role="group-rows"]');
+    if (groupSelect) {
+      groupSelect.addEventListener("change", () => {
+        store.set({ splitBy: groupSelect.value || null });
+        load();
+      });
+    }
 
     // Sorting: click header to sort/flip. Re-sorts the cached rows client-side
     // (no requery needed — the result set is unchanged, only its order).

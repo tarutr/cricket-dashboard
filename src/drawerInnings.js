@@ -1,19 +1,21 @@
-// src/splitControls.js
+// src/drawerInnings.js
 //
-// Free-splits filter row (D4 Piece 3): batting-position filter, opposition
-// filter, and the table-only "Split by" breakdown selector. Mirrors the
-// chip-group / checkbox-dropdown patterns from src/filters.js so the two
-// filter rows look and behave identically. Selections that are currently
-// inert (position filter while bowling; opposition filter/split outside
-// international) are kept in state and their controls greyed out — the query
-// layer (src/table.js / buildScopeClauses) already ignores them, so nothing
-// here needs to clear them; that avoids surprising the user when they switch
-// back (decision-21 treatment, same as the profile filters).
+// The "Innings" section of the All-filters drawer (owner decision 29):
+// batting-position filter + opposition filter. Extracted out of drawer.js to
+// keep that module under the ~600-line ceiling — drawer.js already absorbs
+// the Team/Min-innings and Player-profile blocks from the old filters.js.
+//
+// This is the position/opposition half of the old src/splitControls.js,
+// moved verbatim; the "Split by" select from that module is NOT here — it
+// has been relocated to the table toolbar (src/table.js owns it now).
+// Selections that are currently inert (position filter while bowling;
+// opposition filter outside international) are kept in state and their
+// controls greyed out — the query layer (buildScopeClauses) already ignores
+// them (decision-21 treatment, same as the profile filters).
 //
 // This module renders/wires the DOM and calls store.set(...); it queries the
 // database only to populate the opposition option list.
 
-import { SPLIT_DIMENSIONS, splitAllowed } from "./state.js";
 import { query } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
 
@@ -26,7 +28,7 @@ function escAttr(s) {
 /**
  * Distinct opposition team names under the current scope. The opposition
  * filter never narrows its own option list (buildScopeClauses is called
- * without oppositionColumn here), mirroring fetchTeamOptions in filters.js.
+ * without oppositionColumn here), mirroring fetchTeamOptions in drawer.js.
  */
 async function fetchOppositionOptions(state) {
   const view = state.discipline === "batting" ? "batting" : "bowling";
@@ -41,12 +43,12 @@ async function fetchOppositionOptions(state) {
 }
 
 /**
- * Mount the splits filter row into `container`. Calls `onChange()` after any
- * state mutation so the caller (main.js) can re-render the table. Returns
- * `{ sync }` so main.js can re-sync enabled/greyed states and option lists
+ * Mount the Innings controls into `container` (a section body inside the
+ * drawer). Calls `onChange()` after any state mutation. Returns `{ sync }` so
+ * drawer.js can re-sync enabled/greyed states and the opposition option list
  * after every filter change elsewhere in the app.
  */
-export function mountSplitControls(container, store, onChange) {
+export function mountDrawerInnings(container, store, onChange) {
   container.innerHTML = `
     <div class="filter-bar filter-bar--splits">
       <div class="filter-group filter-group--positions" data-role="positions-group">
@@ -73,11 +75,6 @@ export function mountSplitControls(container, store, onChange) {
         </div>
         <span class="profile-note" data-role="opposition-note" hidden>International cricket only for now</span>
       </div>
-
-      <div class="filter-group filter-group--splitby">
-        <label class="filter-label" for="split-by-select">Split by</label>
-        <select class="select" id="split-by-select" data-role="split-by"></select>
-      </div>
     </div>
   `;
 
@@ -92,7 +89,6 @@ export function mountSplitControls(container, store, onChange) {
     oppList: container.querySelector('[data-role="opp-list"]'),
     oppClear: container.querySelector('[data-role="opp-clear"]'),
     oppositionNote: container.querySelector('[data-role="opposition-note"]'),
-    splitBy: container.querySelector('[data-role="split-by"]'),
   };
 
   let oppOptionsCache = [];
@@ -226,29 +222,10 @@ export function mountSplitControls(container, store, onChange) {
     onChange();
   });
 
-  // ── Split by ─────────────────────────────────────────────────────────────
-  function syncSplitBySelect() {
-    const state = store.get();
-    const opts = [`<option value="">None</option>`];
-    for (const key of Object.keys(SPLIT_DIMENSIONS)) {
-      const dim = SPLIT_DIMENSIONS[key];
-      const disabled = !splitAllowed(state, key);
-      opts.push(`<option value="${escAttr(key)}" ${disabled ? "disabled" : ""}>${escAttr(dim.label)}</option>`);
-    }
-    els.splitBy.innerHTML = opts.join("");
-    els.splitBy.value = state.splitBy ?? "";
-  }
-
-  els.splitBy.addEventListener("change", () => {
-    store.set({ splitBy: els.splitBy.value || null });
-    onChange();
-  });
-
   function sync() {
     syncPositions();
     syncOpposition();
     refreshOppOptions();
-    syncSplitBySelect();
   }
 
   sync();

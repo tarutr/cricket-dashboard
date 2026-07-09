@@ -8,7 +8,20 @@ each fits one working session and ends at a screenshot-verifiable state (SPEC §
 **Progress: Piece 1 ✅ owner-approved · Piece 2 ✅ built + verified (not yet gate-reviewed)
 · Piece 3 ✅ built + verified (not yet gate-reviewed; owner design answers = decision 28)
 · Pieces 4–5 remain.** Branches: `d4-piece1-profile-filters`, `d4-piece2-metrics`,
-`d4-piece3-free-splits` (each stacked on the previous, not yet merged to `main`). Owner reviews on **localhost:8000**
+`d4-piece3-free-splits` (each stacked on the previous, not yet merged to `main`).
+
+> **RESTRUCTURE (2026-07-09, decision 29) — READ FIRST.** After Piece 3 the owner
+> ruled the one-page layout overloaded and approved a full restructure around three
+> destinations: **Leaderboard** (slim scope strip + ONE "All filters" drawer + filter
+> pills + column presets + toolbar "Group rows"), **Player pages** (new home for all
+> single-player features: splits, dismissal fingerprint, progression, matchups;
+> supersedes SPEC §2 "no player pages" and absorbs D5's pop-ups), and **Graph
+> Builder** (unchanged). Remaining work is re-sequenced as gates **R1** (leaderboard
+> slim-down) → **R2** (player pages) → **R3** (matchups = old Pieces 4–5, built
+> directly into the player page; decisions 23/24 confirmed there) → polish. The
+> Piece 4–5 specs below still define matchup content/coverage rules; only their
+> HOME changed. Branch chain continues: `d4-r1-leaderboard` stacked on
+> `d4-piece3-free-splits`. Owner reviews on **localhost:8000**
 (`python3 -m http.server 8000`) — the R2 CORS policy allows localhost but NOT Vercel
 preview domains, so branch previews on Vercel currently error until CORS is widened
 (deferred, owner's call).

@@ -881,6 +881,199 @@ a { color: var(--color-accent); }
 .app-footer a { color: inherit; }
 .app-footer a:hover { color: var(--color-accent); }
 
+/* ── "All filters" open button + count badge (owner decision 29) ──────────── */
+
+.filter-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  align-self: center;
+}
+
+.filter-open-btn__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4rem;
+  height: 1.4rem;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+/* ── Applied-filter pills (owner decision 29) ──────────────────────────────── */
+
+.pills-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.8rem;
+  line-height: 1.2;
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-raised);
+  color: var(--color-fg);
+}
+
+.pill__x {
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-muted);
+  padding: var(--space-1);
+  min-width: 22px;
+  min-height: 22px;
+  border-radius: var(--radius-pill);
+}
+
+.pill__x:hover { color: var(--color-bad); background: var(--color-bad-bg); }
+
+/* ── "All filters" drawer (owner decision 29) ──────────────────────────────── */
+
+.filter-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
+.filter-drawer__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(27, 36, 48, 0.45);
+}
+
+[data-theme="dark"] .filter-drawer__backdrop { background: rgba(0, 0, 0, 0.6); }
+
+.filter-drawer__panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 100vw);
+  background: var(--color-bg);
+  box-shadow: var(--shadow-popover);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.filter-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--color-line);
+  position: sticky;
+  top: 0;
+  background: var(--color-bg);
+  z-index: 1;
+}
+
+.filter-drawer__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.3rem;
+}
+
+.drawer__close {
+  font: inherit;
+  font-size: 1.4rem;
+  line-height: 1;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-muted);
+  padding: var(--space-1);
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: var(--radius-sm);
+}
+
+.drawer__close:hover { color: var(--color-bad); background: var(--color-bad-bg); }
+
+.filter-drawer__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: var(--space-5);
+  gap: var(--space-5);
+}
+
+.filter-drawer__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--color-line);
+}
+
+.filter-drawer__section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.filter-drawer__section-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.filter-drawer__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--color-line);
+  background: var(--color-bg);
+  position: sticky;
+  bottom: 0;
+}
+
+@media (max-width: 480px) {
+  .filter-drawer__panel { width: 100vw; }
+
+  .filter-drawer__footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .filter-drawer__footer .btn { width: 100%; }
+}
+
+/* ── Table toolbar preset chips (owner decision 29) ────────────────────────── */
+
+.table-toolbar__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.chip--preset {
+  padding: var(--space-1) var(--space-3);
+  font-size: 0.8rem;
+  min-height: 32px;
+}
+
 /* ── Mobile (~380px) ───────────────────────────────────────────────────────── */
 
 @media (max-width: 480px) {

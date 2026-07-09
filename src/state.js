@@ -231,6 +231,84 @@ export function defaultColumnsFor(discipline, formats) {
   return [...DEFAULT_COLUMNS[discipline]];
 }
 
+// ── Column presets (R1, decision 29) ─────────────────────────────────────────
+// One-click column sets replacing the 45-checkbox picker as the primary way to
+// choose columns ("Customise…" still opens the full picker). A preset is a
+// FUNCTION of the current formats: Core respects the owner's Test/MDM swap and
+// Phases resolves to the T20 or ODI phase family — or null when the current
+// formats don't allow phase metrics at all (chip renders disabled).
+
+export const COLUMN_PRESET_DEFS = {
+  batting: [
+    { key: "core", label: "Core", columns: (formats) => defaultColumnsFor("batting", formats) },
+    {
+      key: "boundaries",
+      label: "Boundaries",
+      columns: () => ["innings", "runs", "fours", "sixes", "boundary_pct", "balls_per_boundary", "dot_pct"],
+    },
+    {
+      key: "dismissals",
+      label: "Dismissals",
+      columns: () => [
+        "innings", "runs", "average",
+        "out_caught_pct", "out_bowled_pct", "out_lbw_pct", "out_run_out_pct",
+        "out_stumped_pct", "out_caught_and_bowled_pct", "out_hit_wicket_pct",
+      ],
+    },
+    {
+      key: "phases",
+      label: "Phases",
+      columns: (formats) => {
+        if (formats.length === 1 && formats[0] === "T20")
+          return ["innings", "runs", "strike_rate", "pp_strike_rate", "mid_strike_rate", "death_strike_rate"];
+        if (formats.length > 0 && formats.every((f) => f === "ODI" || f === "ODM"))
+          return ["innings", "runs", "strike_rate", "odi_pp_strike_rate", "odi_mid_strike_rate", "odi_death_strike_rate"];
+        return null;
+      },
+    },
+    {
+      key: "progression",
+      label: "Progression",
+      columns: () => ["innings", "runs", "strike_rate", "sr_first10", "sr_11_20", "sr_21plus"],
+    },
+  ],
+  bowling: [
+    { key: "core", label: "Core", columns: (formats) => defaultColumnsFor("bowling", formats) },
+    {
+      key: "control",
+      label: "Control",
+      columns: () => ["innings", "wickets", "economy", "dot_pct", "boundary_pct_conceded", "maidens"],
+    },
+    {
+      key: "wicket_types",
+      label: "Wicket types",
+      columns: () => ["innings", "wickets", "wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket"],
+    },
+    {
+      key: "phases",
+      label: "Phases",
+      columns: (formats) => {
+        if (formats.length === 1 && formats[0] === "T20")
+          return ["innings", "wickets", "pp_economy", "death_economy", "pp_wickets", "death_wickets"];
+        if (formats.length > 0 && formats.every((f) => f === "ODI" || f === "ODM"))
+          return ["innings", "wickets", "odi_pp_economy", "odi_death_economy", "odi_pp_wickets", "odi_death_wickets"];
+        return null;
+      },
+    },
+  ],
+};
+
+/** The preset key whose column set equals `columns` exactly (order-sensitive), or null ("custom"). */
+export function activePresetKey(discipline, formats, columns) {
+  for (const def of COLUMN_PRESET_DEFS[discipline]) {
+    const preset = def.columns(formats);
+    if (preset && preset.length === columns.length && preset.every((k, i) => k === columns[i])) {
+      return def.key;
+    }
+  }
+  return null;
+}
+
 /**
  * True if a phase metric is currently eligible to be shown/offered (SPEC §8.9):
  * T20-range phase metrics only when formats is exactly ["T20"] (the T20+IT20
@@ -374,12 +452,12 @@ export function createStore(initial) {
       parts.push(`matching "${s.search.trim()}"`);
     }
 
-    // The Split-by breakdown shapes the TABLE only (the graph ignores it), so
-    // the token appears only while the table view is active — the graph card's
+    // Row grouping shapes the TABLE only (the graph ignores it), so the token
+    // appears only while the table view is active — the graph card's
     // subtitle/footer read describeScope() and must stay honest (§8.4).
     const split = activeSplit(s);
     if (s.view === "table" && split) {
-      parts.push(`split by ${split.label.toLowerCase()}`);
+      parts.push(`grouped by ${split.label.toLowerCase()}`);
     }
 
     return parts.filter(Boolean).join(", ");
