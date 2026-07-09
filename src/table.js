@@ -391,6 +391,10 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
   // lookup that never changes at runtime.
   let bowlingTypesCache = null;
   let lastBowlingTypes = [];
+  // The currently-open "Customise…" columns popover, if any (Batch 3 fix 3).
+  // Tracked here (not just a local DOM query) so load() can find and refresh
+  // it after every reload — see openColumnsPopover()'s doc comment.
+  let openColumnsPopoverState = null;
 
   function visibleColumns() {
     const state = store.get();
@@ -431,6 +435,12 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
   }
 
   function renderLoading() {
+    // Deliberately does NOT close an open columns popover: this is the
+    // in-flight state of a reload the popover's OWN checkbox change just
+    // triggered (Batch 3 fix 3) — closing here would undo the fix (the
+    // popover would vanish on every tick again). It briefly points at a
+    // detached anchor until renderTable() finishes and
+    // refreshOpenColumnsPopover() re-homes it to the new button.
     container.innerHTML = `
       <div class="table-toolbar">
         <div class="table-toolbar__row-count">Loading…</div>
@@ -446,6 +456,7 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
    * never shows numbers for a scope the filters no longer describe, §8.4).
    */
   function renderPrompt() {
+    closeColumnsPopover(); // no columns-btn here either — same reasoning.
     container.innerHTML = `
       <div class="table-prompt">
         <p class="table-prompt__text">Choose your filters, then show the results.</p>
@@ -727,9 +738,68 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
    * (Basic / Dismissals / Phase) either way. Mutates state.columns[ns], so a
    * pick made in matchup mode never leaks into the plain picker's list or
    * vice versa (they're different namespaces/keys).
+   *
+   * Batch 3 fix 3: hosted on document.body, NOT inside `container`. Every
+   * checkbox change calls load(), which reassigns container.innerHTML
+   * wholesale (renderLoading() then renderTable()) — a popover living inside
+   * that subtree was destroyed the instant the first checkbox fired, so only
+   * one column could be ticked per open (the owner's known complaint).
+   * Living on body lets it survive reloads for free; positionColumnsPopover()
+   * places it from the anchor button's getBoundingClientRect(), and
+   * refreshOpenColumnsPopover() (called from load(), see below) re-finds the
+   * anchor and re-syncs checked state + position after every reload while
+   * it's open.
    */
+  function positionColumnsPopover(popover, anchor) {
+    const rect = anchor.getBoundingClientRect();
+    const margin = 8;
+    popover.style.position = "fixed";
+    popover.style.top = `${Math.round(rect.bottom + 6)}px`;
+    // Right-align to the anchor (matches the old right:0-in-parent look),
+    // clamped so it never runs off either edge on a narrow (~380px) viewport.
+    const width = popover.offsetWidth || 240;
+    let left = rect.right - width;
+    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+    popover.style.left = `${Math.round(left)}px`;
+    popover.style.right = "auto";
+  }
+
+  function closeColumnsPopover() {
+    if (!openColumnsPopoverState) return;
+    const { el, onDocClick, onKeydown, onScroll, onResize } = openColumnsPopoverState;
+    el.remove();
+    document.removeEventListener("click", onDocClick, true);
+    document.removeEventListener("keydown", onKeydown, true);
+    window.removeEventListener("scroll", onScroll, true);
+    window.removeEventListener("resize", onResize);
+    openColumnsPopoverState = null;
+  }
+
+  /** Called from load() after every reload while the popover is open:
+   * re-finds the (possibly recreated) anchor button, repositions, and
+   * re-syncs checkbox checked state from the store — pruneInvalidColumns()
+   * may have silently dropped a phase column out from under it, and the
+   * checkboxes must stay honest about what's actually visible. Closes if the
+   * anchor no longer exists (e.g. the toolbar mode changed under it). */
+  function refreshOpenColumnsPopover() {
+    if (!openColumnsPopoverState) return;
+    const anchor = container.querySelector('[data-role="columns-btn"]');
+    if (!anchor) {
+      closeColumnsPopover();
+      return;
+    }
+    openColumnsPopoverState.anchor = anchor;
+    const state = store.get();
+    const ns = effectiveDiscipline(state);
+    const visible = new Set(state.columns[ns]);
+    openColumnsPopoverState.el.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.checked = visible.has(cb.dataset.key);
+    });
+    positionColumnsPopover(openColumnsPopoverState.el, anchor);
+  }
+
   function openColumnsPopover(anchor) {
-    document.querySelectorAll(".columns-popover").forEach((el) => el.remove());
+    closeColumnsPopover();
     const state = store.get();
     const ns = effectiveDiscipline(state);
     const all = eligibleMetrics(ns, state.formats);
@@ -755,7 +825,8 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
            </div>`
         : "";
     popover.innerHTML = section("Basic", basic) + section("Dismissals", dismissal) + section("Phase", phase);
-    anchor.parentElement.appendChild(popover);
+    document.body.appendChild(popover);
+    positionColumnsPopover(popover, anchor);
 
     popover.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
       cb.addEventListener("change", () => {
@@ -769,23 +840,43 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
           if (idx >= 0) cols.splice(idx, 1);
         }
         store.set({ columns: { ...s.columns, [curNs]: cols } });
+        // Reloads the table; refreshOpenColumnsPopover() (called at the end
+        // of load(), once the new container DOM exists) keeps THIS popover
+        // alive, repositioned, and re-synced instead of it vanishing with
+        // the old container.innerHTML.
         load();
       });
     });
 
-    setTimeout(() => {
-      document.addEventListener(
-        "click",
-        function handler(e) {
-          if (e.target.closest(".columns-popover") || e.target === anchor) {
-            document.addEventListener("click", handler, { once: true });
-            return;
-          }
-          popover.remove();
-        },
-        { once: true }
-      );
-    }, 0);
+    const onDocClick = (e) => {
+      if (popover.contains(e.target) || e.target === anchor || anchor.contains?.(e.target)) return;
+      closeColumnsPopover();
+    };
+    const onKeydown = (e) => {
+      if (e.key === "Escape") closeColumnsPopover();
+    };
+    const onScroll = () => {
+      if (!openColumnsPopoverState) return;
+      const a = openColumnsPopoverState.anchor;
+      if (!document.body.contains(a)) {
+        closeColumnsPopover();
+        return;
+      }
+      positionColumnsPopover(openColumnsPopoverState.el, a);
+    };
+    const onResize = () => closeColumnsPopover();
+
+    // Deferred so the very click that opened the popover doesn't immediately
+    // close it again via onDocClick.
+    setTimeout(() => document.addEventListener("click", onDocClick, true), 0);
+    document.addEventListener("keydown", onKeydown, true);
+    // Capture:true — scroll doesn't bubble, but a capturing listener on
+    // window still sees scrolls on nested scrollable ancestors (e.g.
+    // .table-scroll's horizontal scrollbar).
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+
+    openColumnsPopoverState = { el: popover, anchor, onDocClick, onKeydown, onScroll, onResize };
   }
 
   async function load() {
@@ -837,9 +928,16 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
 
       lastRows = sorted;
       renderTable(sorted, state, bowlingTypes);
+      // The columns popover (if open) lives outside `container` precisely so
+      // this reload never destroys it (Batch 3 fix 3) — re-find its anchor in
+      // the freshly-rendered toolbar, reposition, and re-sync checked state.
+      refreshOpenColumnsPopover();
     } catch (err) {
       if (token !== loadToken) return;
       renderError(err, load);
+      // No columns-btn in the error state — close honestly rather than leave
+      // a popover floating over an error box with no anchor.
+      refreshOpenColumnsPopover();
     }
   }
 
