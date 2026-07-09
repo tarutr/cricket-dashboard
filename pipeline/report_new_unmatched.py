@@ -12,6 +12,16 @@ pipeline-state/known_unmatched.json, logs any NEW ones in the step output,
 uploads the refreshed set, and — only when new ones appear — includes them in a
 weekly-throttled advisory email. Never fails the run.
 
+Throttle-fix note (pipeline safety net, 2026-07-09): a player id is only
+folded into the "seen" baseline (state["alerted_ids"]) once it has actually
+been named in a SENT alert. Previously the code overwrote
+state["unmatched_ids"] with the full current set on EVERY run, regardless of
+whether the weekly throttle suppressed the email — so an id that appeared
+during a suppressed week silently became "known" and could never trigger a
+future alert. Now ids that show up while throttled stay in `new_ids` (and
+keep being logged) until an alert actually fires for them. See
+_load_alerted_ids() for the one-time migration of pre-fix state.
+
 Adaptation note (see report_back): SPEC_ADDENDUM D3.5 said "append to a review
 file in the repo." CI cannot safely commit, so this uses R2 + step log + email
 instead; the orchestrator will surface this for owner sign-off.
@@ -64,6 +74,26 @@ def _current_unmatched(db_path):
     return {pid: name for pid, name in rows}
 
 
+def _migrate_alerted_ids(state):
+    """
+    Return the pre-fix "seen" baseline to treat as `alerted_ids` on the first
+    run after this fix deploys.
+
+    Old state only ever had `unmatched_ids` (the raw current-set snapshot,
+    overwritten every run regardless of whether an alert was sent — the bug
+    this migration is undoing). We have no way to tell, after the fact, which
+    of those ids were actually named in a past sent email vs. silently folded
+    in behind a throttled week. Treating the whole old snapshot as
+    already-alerted is the safe, non-flooding choice: it costs at most one
+    extra throttle cycle for any id that was genuinely stuck behind the bug
+    (it will surface again the next time it goes on to be dropped from
+    current_ids and reappear later — see the reset in main()), but avoids
+    re-alerting the owner about the entire historical backlog the run after
+    this fix ships.
+    """
+    return set(state.get("unmatched_ids", []))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default="data/cricket.duckdb")
@@ -81,21 +111,36 @@ def main():
     state = state_store.get_json(STATE_KEY, default={}) or {}
     current_ids = set(current)
 
-    # First-ever run: no baseline exists — record the current set quietly and
-    # never treat the historical backlog as "new" (it would email thousands).
-    if "unmatched_ids" not in state:
+    # First-ever run: no baseline exists at all — record the current set
+    # quietly and never treat the historical backlog as "new" (it would email
+    # thousands). Both keys are seeded identically: nothing has been alerted,
+    # but nothing should be reported as new either.
+    if "unmatched_ids" not in state and "alerted_ids" not in state:
         print(
             f"report_new_unmatched: first run — baselining "
             f"{len(current_ids)} existing unmatched players (no alert)"
         )
         state["unmatched_ids"] = sorted(current_ids)
+        state["alerted_ids"] = sorted(current_ids)
         state["updated_at"] = now.isoformat()
         state_store.put_json(STATE_KEY, state)
         return 0
 
-    known = set(state.get("unmatched_ids", []))
-    new_ids = sorted(current_ids - known)
-    recovered = sorted(known - current_ids)
+    # Migrate pre-fix state (has unmatched_ids but no alerted_ids yet) once.
+    if "alerted_ids" not in state:
+        state["alerted_ids"] = sorted(_migrate_alerted_ids(state))
+        print("report_new_unmatched: migrating pre-fix state — seeding "
+              f"alerted_ids from {len(state['alerted_ids'])} previously-known id(s)")
+
+    # `alerted_ids` is the "seen via a SENT alert" baseline. Drop ids that are
+    # no longer unmatched (resolved) so that if they regress later they are
+    # correctly treated as new again rather than staying silently suppressed.
+    alerted = set(state["alerted_ids"]) & current_ids
+
+    new_ids = sorted(current_ids - alerted)
+    # `recovered` is purely informational: ids present in the last snapshot
+    # (alerted or not) that are no longer unmatched.
+    recovered = sorted(set(state.get("unmatched_ids", [])) - current_ids)
 
     print(f"report_new_unmatched: {len(current_ids)} unmatched active players total")
     if recovered:
@@ -105,9 +150,9 @@ def main():
         shown = new_ids[:25]
         listing = ", ".join(f"{pid} ({current[pid]})" for pid in shown)
         extra = f" … and {len(new_ids) - len(shown)} more" if len(new_ids) > len(shown) else ""
-        print(f"NEW unmatched active players since last run: {listing}{extra}")
+        print(f"NEW unmatched active players (not yet in a sent alert): {listing}{extra}")
     else:
-        print("NEW unmatched active players since last run: (none)")
+        print("NEW unmatched active players (not yet in a sent alert): (none)")
 
     # Weekly-throttled advisory, only when new unmatched players appear.
     last_alert_at = state.get("last_alert_at")
@@ -134,10 +179,15 @@ def main():
             f"appear on the next run. This is an advisory; the run is green.\n",
         )
         state["last_alert_at"] = now.isoformat()
+        # Only NOW fold these ids into the seen baseline — they have actually
+        # been named in a sent alert.
+        alerted |= set(new_ids)
     elif new_ids:
-        print("  new unmatched present but weekly advisory already sent — no email")
+        print("  new unmatched present but weekly advisory already sent — no "
+              "email (they remain eligible for the next alert)")
 
-    state["unmatched_ids"] = sorted(current_ids)
+    state["alerted_ids"] = sorted(alerted)
+    state["unmatched_ids"] = sorted(current_ids)  # observability / back-compat snapshot only
     state["updated_at"] = now.isoformat()
     state_store.put_json(STATE_KEY, state)
     return 0
