@@ -53,6 +53,23 @@ BOWLER_WICKET_KINDS = (
 # Dismissal kinds that DO NOT count as a batter dismissal.
 NON_DISMISSAL_KINDS = ("retired hurt", "retired not out")
 
+# Owner-approved vocabulary (decision 13, review/owner_decisions.md) for the
+# matchup_batting.bowling_type column. The COALESCE key
+# (COALESCE(profile.bowling_type, profile.bowling_group, '(unmapped)')) can
+# legitimately surface either a specific type OR a bare group name when only
+# the group is known, so 'Pace'/'Spin' are valid alongside the specific types.
+# Verified 2026-07-09 against the real DB: 11 of these 12 values are actually
+# populated ('Pace' does not currently occur -- see run_gates for detail); the
+# 12th is kept in the allow-list because it is a legitimate COALESCE fallback
+# the owner already approved, not a hypothetical.
+BOWLING_TYPE_VOCAB = (
+    "Off-spin", "Leg-spin", "Slow left-arm orthodox", "Left-arm wrist-spin",
+    "Medium", "Medium-fast", "Fast-medium", "Fast", "Slow-medium",
+    "Pace", "Spin", "(unmapped)",
+)
+BATTING_HAND_VOCAB = ("Right-hand bat", "Left-hand bat", "(unmapped)")
+BOWLING_GROUP_VOCAB = ("Pace", "Spin", "(unmapped)")
+
 # The export files and their primary keys (for the duplicate-PK gate).
 EXPORT_FILES = {
     "players.parquet": ["player_id"],
@@ -1711,6 +1728,263 @@ def run_gates(con, out_dir):
     )
     log(f"  WARN  XI sanity: {xi_anomalies} of {total_team_groups} (match,team) "
         f"groups have != 11 players (not a failure; XII/substitutes/data quirks)")
+
+    # =========================================================================
+    # Pipeline safety net (owner-approved batch, 2026-07-09) — additive gates.
+    # None of these change any export SQL; they only add cross-checks.
+    # =========================================================================
+
+    # --- (a) Cross-file rollup gates: matchup files rolled up to the
+    # foundational grain must equal the foundational file row-for-row.
+    #
+    # Hypothesis verified against the real DB before writing this gate (both
+    # directions, 0 mismatches either way):
+    #   matchup_bowling summed over (batting_hand, batting_position) ==
+    #     bowling_innings on balls/runs_conceded/wickets/dots/fours_conceded/
+    #     sixes_conceded. Both use the same universe (`d WHERE bowler_id IS
+    #     NOT NULL`), so the rollup is exact -- no carve-out needed.
+    #   matchup_batting summed over (bowling_type) == batting_innings on
+    #     runs/balls_faced/dots/fours_hit/sixes_hit. matchup_batting has NO
+    #     row at all for a batting_innings row that never faced a ball as
+    #     striker (e.g. run out at the non-striker's end, 0 runs/0 balls) --
+    #     but such rows are legitimately all-zero, so COALESCE(rollup,0)
+    #     still matches exactly; verified 4,450 such rows in the real DB, all
+    #     reconciling to 0. Dismissals are DELIBERATELY NOT gated here
+    #     (matchup dismissals are bowler-credited only, a subset of the
+    #     dismissed flag — SPEC.md §4.1 / decision 23).
+    mbowl_rollup = q(
+        f"""
+        WITH rollup AS (
+            SELECT match_id, innings_number, bowler_id,
+                   SUM(balls) AS balls, SUM(runs_conceded) AS runs_conceded,
+                   SUM(wickets) AS wickets, SUM(dots) AS dots,
+                   SUM(fours_conceded) AS fours_conceded, SUM(sixes_conceded) AS sixes_conceded
+            FROM read_parquet('{mbowl_p}')
+            GROUP BY match_id, innings_number, bowler_id
+        )
+        SELECT COUNT(*) FROM read_parquet('{bowl_p}') bi
+        LEFT JOIN rollup r
+          ON bi.match_id = r.match_id AND bi.innings_number = r.innings_number
+         AND bi.bowler_id = r.bowler_id
+        WHERE COALESCE(r.balls, 0) <> bi.balls
+           OR COALESCE(r.runs_conceded, 0) <> bi.runs_conceded
+           OR COALESCE(r.wickets, 0) <> bi.wickets
+           OR COALESCE(r.dots, 0) <> bi.dots
+           OR COALESCE(r.fours_conceded, 0) <> bi.fours_conceded
+           OR COALESCE(r.sixes_conceded, 0) <> bi.sixes_conceded
+        """
+    )
+    gate(mbowl_rollup == 0,
+         "matchup_bowling rolled up to (match,inn,bowler) == bowling_innings "
+         "(balls/runs_conceded/wickets/dots/fours_conceded/sixes_conceded)",
+         f"{mbowl_rollup} mismatched bowling_innings rows")
+
+    mbowl_orphan = q(
+        f"""
+        SELECT COUNT(*) FROM (
+            SELECT DISTINCT match_id, innings_number, bowler_id FROM read_parquet('{mbowl_p}')
+        ) r
+        LEFT JOIN read_parquet('{bowl_p}') bi
+          ON r.match_id = bi.match_id AND r.innings_number = bi.innings_number
+         AND r.bowler_id = bi.bowler_id
+        WHERE bi.bowler_id IS NULL
+        """
+    )
+    gate(mbowl_orphan == 0,
+         "matchup_bowling has no (match,inn,bowler) absent from bowling_innings",
+         f"{mbowl_orphan} orphan groups")
+
+    mbat_rollup = q(
+        f"""
+        WITH rollup AS (
+            SELECT match_id, innings_number, batter_id,
+                   SUM(runs) AS runs, SUM(balls_faced) AS balls_faced,
+                   SUM(dots) AS dots, SUM(fours_hit) AS fours_hit, SUM(sixes_hit) AS sixes_hit
+            FROM read_parquet('{mbat_p}')
+            GROUP BY match_id, innings_number, batter_id
+        )
+        SELECT COUNT(*) FROM read_parquet('{bat_p}') bi
+        LEFT JOIN rollup r
+          ON bi.match_id = r.match_id AND bi.innings_number = r.innings_number
+         AND bi.batter_id = r.batter_id
+        WHERE COALESCE(r.runs, 0) <> bi.runs
+           OR COALESCE(r.balls_faced, 0) <> bi.balls_faced
+           OR COALESCE(r.dots, 0) <> bi.dots
+           OR COALESCE(r.fours_hit, 0) <> bi.fours_hit
+           OR COALESCE(r.sixes_hit, 0) <> bi.sixes_hit
+        """
+    )
+    gate(mbat_rollup == 0,
+         "matchup_batting rolled up to (match,inn,batter) == batting_innings "
+         "(runs/balls_faced/dots/fours_hit/sixes_hit; dismissals deliberately excluded)",
+         f"{mbat_rollup} mismatched batting_innings rows")
+
+    mbat_orphan = q(
+        f"""
+        SELECT COUNT(*) FROM (
+            SELECT DISTINCT match_id, innings_number, batter_id FROM read_parquet('{mbat_p}')
+        ) r
+        LEFT JOIN read_parquet('{bat_p}') bi
+          ON r.match_id = bi.match_id AND r.innings_number = bi.innings_number
+         AND r.batter_id = bi.batter_id
+        WHERE bi.batter_id IS NULL
+        """
+    )
+    gate(mbat_orphan == 0,
+         "matchup_batting has no (match,inn,batter) absent from batting_innings",
+         f"{mbat_orphan} orphan groups")
+
+    # --- (b) Position cross-check: matchup_batting's own batting_position must
+    # agree with batting_innings.batting_position for every (match,inn,batter).
+    mbat_pos_mismatch = q(
+        f"""
+        SELECT COUNT(*) FROM read_parquet('{mbat_p}') mb
+        JOIN read_parquet('{bat_p}') bi
+          ON mb.match_id = bi.match_id AND mb.innings_number = bi.innings_number
+         AND mb.batter_id = bi.batter_id
+        WHERE mb.batting_position <> bi.batting_position
+        """
+    )
+    gate(mbat_pos_mismatch == 0,
+         "matchup_batting.batting_position == batting_innings.batting_position (per row)",
+         f"{mbat_pos_mismatch} mismatched rows")
+
+    # --- (c) Phase-sum gates on the foundational files, mirroring the
+    # existing matchup phase-gate pattern (match_type IN (...) includes the
+    # Hundred, since The Hundred is stored with match_type='T20'; its rows
+    # already reconcile because t20_phase_expr() branches to the Hundred's
+    # legal-ball-ordinal windows -- verified 0 mismatches against the real DB).
+    bat_t20_bad = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{bat_p}')
+            WHERE match_type IN ('T20','IT20')
+              AND (pp_runs + mid_runs + death_runs != runs
+                   OR pp_balls + mid_balls + death_balls != balls_faced)"""
+    )
+    gate(bat_t20_bad == 0,
+         "batting_innings T20/IT20 phase splits sum to runs/balls_faced",
+         f"{bat_t20_bad} mismatched rows")
+
+    bat_odi_bad = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{bat_p}')
+            WHERE match_type IN ('ODI','ODM')
+              AND (odi_pp_runs + odi_mid_runs + odi_death_runs != runs
+                   OR odi_pp_balls + odi_mid_balls + odi_death_balls != balls_faced)"""
+    )
+    gate(bat_odi_bad == 0,
+         "batting_innings ODI/ODM phase splits sum to runs/balls_faced",
+         f"{bat_odi_bad} mismatched rows")
+
+    bowl_t20_bad = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{bowl_p}')
+            WHERE match_type IN ('T20','IT20')
+              AND (pp_balls + mid_balls + death_balls != balls
+                   OR pp_runs_conceded + mid_runs_conceded + death_runs_conceded != runs_conceded
+                   OR pp_wickets + mid_wickets + death_wickets != wickets)"""
+    )
+    gate(bowl_t20_bad == 0,
+         "bowling_innings T20/IT20 phase splits sum to balls/runs_conceded/wickets",
+         f"{bowl_t20_bad} mismatched rows")
+
+    bowl_odi_bad = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{bowl_p}')
+            WHERE match_type IN ('ODI','ODM')
+              AND (odi_pp_balls + odi_mid_balls + odi_death_balls != balls
+                   OR odi_pp_runs_conceded + odi_mid_runs_conceded + odi_death_runs_conceded != runs_conceded
+                   OR odi_pp_wickets + odi_mid_wickets + odi_death_wickets != wickets)"""
+    )
+    gate(bowl_odi_bad == 0,
+         "bowling_innings ODI/ODM phase splits sum to balls/runs_conceded/wickets",
+         f"{bowl_odi_bad} mismatched rows")
+
+    # --- (d) Global reconciliation gates vs deliveries for previously-ungated
+    # columns. `ref_dots`/`ref_fours`/`ref_sixes` (bowler-side dots + shared
+    # boundary counts) are already computed above for the D4-R4 matchup gates;
+    # reuse them here. Batting-side dots uses FACED_BATTER (wides IS NULL
+    # only), a different legality predicate from bowling-side dots
+    # (LEGAL_BOWLER), so it needs its own reference.
+    ref_dots_bat = q(f"{ref_cte} SELECT COUNT(*) FROM d WHERE {FACED_BATTER} AND d.runs_batter = 0")
+    ref_wides_runs = q(f"{ref_cte} SELECT SUM(COALESCE(d.wides, 0)) FROM d")
+    ref_noball_runs = q(f"{ref_cte} SELECT SUM(COALESCE(d.noballs, 0)) FROM d")
+    # Independent maiden reference: a complete over (balls_per_over legal
+    # balls, one bowler) conceding 0 runs (bat+wides+noballs) -- same
+    # definition as sql_bowling()'s over_sets/maiden_agg, re-derived from
+    # scratch here (not imported) so the gate is a genuine cross-check.
+    ref_maidens = q(
+        f"""
+        WITH kept_innings AS (
+            SELECT match_id, innings_number FROM innings WHERE super_over IS NOT TRUE
+        ),
+        d AS (
+            SELECT dv.*, m.balls_per_over FROM deliveries dv
+            JOIN kept_innings ki
+              ON dv.match_id = ki.match_id AND dv.innings_number = ki.innings_number
+            JOIN matches m ON dv.match_id = m.match_id
+        ),
+        over_sets AS (
+            SELECT match_id, innings_number, over_number, bowler_id,
+                   ANY_VALUE(balls_per_over) AS bpo,
+                   SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+                   SUM(runs_batter + COALESCE(noballs,0) + COALESCE(wides,0)) AS conceded
+            FROM d
+            GROUP BY match_id, innings_number, over_number, bowler_id
+        )
+        SELECT COUNT(*) FROM over_sets WHERE legal_balls = bpo AND conceded = 0
+        """
+    )
+
+    sum_dots_bat = q(f"SELECT SUM(dots) FROM read_parquet('{bat_p}')")
+    sum_fours_hit = q(f"SELECT SUM(fours_hit) FROM read_parquet('{bat_p}')")
+    sum_sixes_hit = q(f"SELECT SUM(sixes_hit) FROM read_parquet('{bat_p}')")
+    sum_dots_bowl = q(f"SELECT SUM(dots) FROM read_parquet('{bowl_p}')")
+    sum_fours_conceded = q(f"SELECT SUM(fours_conceded) FROM read_parquet('{bowl_p}')")
+    sum_sixes_conceded = q(f"SELECT SUM(sixes_conceded) FROM read_parquet('{bowl_p}')")
+    sum_maidens = q(f"SELECT SUM(maidens) FROM read_parquet('{bowl_p}')")
+    sum_wides_runs = q(f"SELECT SUM(wides_runs) FROM read_parquet('{bowl_p}')")
+    sum_noball_runs = q(f"SELECT SUM(noball_runs) FROM read_parquet('{bowl_p}')")
+
+    gate(sum_dots_bat == ref_dots_bat, "batting_innings dots == faced 0-run balls (global)",
+         f"{sum_dots_bat} vs {ref_dots_bat}")
+    gate(sum_fours_hit == ref_fours, "batting_innings fours_hit == boundary 4s (global)",
+         f"{sum_fours_hit} vs {ref_fours}")
+    gate(sum_sixes_hit == ref_sixes, "batting_innings sixes_hit == boundary 6s (global)",
+         f"{sum_sixes_hit} vs {ref_sixes}")
+    gate(sum_dots_bowl == ref_dots, "bowling_innings dots == legal 0-run balls (global)",
+         f"{sum_dots_bowl} vs {ref_dots}")
+    gate(sum_fours_conceded == ref_fours, "bowling_innings fours_conceded == boundary 4s (global)",
+         f"{sum_fours_conceded} vs {ref_fours}")
+    gate(sum_sixes_conceded == ref_sixes, "bowling_innings sixes_conceded == boundary 6s (global)",
+         f"{sum_sixes_conceded} vs {ref_sixes}")
+    gate(sum_maidens == ref_maidens, "bowling_innings maidens == independent maiden-over count (global)",
+         f"{sum_maidens} vs {ref_maidens}")
+    gate(sum_wides_runs == ref_wides_runs, "bowling_innings wides_runs == SUM(wides) (global)",
+         f"{sum_wides_runs} vs {ref_wides_runs}")
+    gate(sum_noball_runs == ref_noball_runs, "bowling_innings noball_runs == SUM(noballs) (global)",
+         f"{sum_noball_runs} vs {ref_noball_runs}")
+
+    # --- (e) Vocabulary gates. Allow-lists verified against the real DB
+    # 2026-07-09 (see BOWLING_TYPE_VOCAB / BATTING_HAND_VOCAB / BOWLING_GROUP_VOCAB
+    # comments for exactly which values are populated today).
+    hand_in = ", ".join(f"'{v}'" for v in BATTING_HAND_VOCAB)
+    group_in = ", ".join(f"'{v}'" for v in BOWLING_GROUP_VOCAB)
+    type_in = ", ".join(f"'{v}'" for v in BOWLING_TYPE_VOCAB)
+
+    bad_hand = q(
+        f"SELECT COUNT(*) FROM read_parquet('{mbowl_p}') WHERE batting_hand NOT IN ({hand_in})"
+    )
+    gate(bad_hand == 0, "matchup_bowling.batting_hand within owner vocabulary",
+         f"{bad_hand} rows outside {BATTING_HAND_VOCAB}")
+
+    bad_group = q(
+        f"SELECT COUNT(*) FROM read_parquet('{mbat_p}') WHERE bowling_group NOT IN ({group_in})"
+    )
+    gate(bad_group == 0, "matchup_batting.bowling_group within owner vocabulary",
+         f"{bad_group} rows outside {BOWLING_GROUP_VOCAB}")
+
+    bad_type = q(
+        f"SELECT COUNT(*) FROM read_parquet('{mbat_p}') WHERE bowling_type NOT IN ({type_in})"
+    )
+    gate(bad_type == 0, "matchup_batting.bowling_type within decision-13 taxonomy",
+         f"{bad_type} rows outside {BOWLING_TYPE_VOCAB}")
 
     log("All structural / cross-check gates passed.")
 
