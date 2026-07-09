@@ -17,6 +17,8 @@ from pathlib import Path
 
 import duckdb
 
+import alerts
+
 try:
     from tqdm import tqdm
 except ImportError:
@@ -50,7 +52,7 @@ log = logging.getLogger(__name__)
 def download_cricsheet():
     url = "https://cricsheet.org/downloads/all_json.zip"
     log.info(f"Downloading Cricsheet data from {url}...")
-    response = requests.get(url, stream=True)
+    response = requests.get(url, stream=True, timeout=(30, 300))
     response.raise_for_status()
     JSON_DIR.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(io.BytesIO(response.content)) as z:
@@ -714,7 +716,7 @@ def build_bowlers(con, match_id, innings_meta):
 
 # ── Per-file ingestion ─────────────────────────────────────────────────────
 
-def ingest_file(con, filepath):
+def ingest_file(con, filepath, registry_misses):
     filename = filepath.name
     stem     = filepath.stem  # full stem — handles wi_ prefix correctly
 
@@ -798,9 +800,15 @@ def ingest_file(con, filepath):
             )
 
     # ── match_players ─────────────────────────────────────────────────────────
+    # A squad name missing from this file's own registry must not drop the
+    # whole match (owner decision 41 / B6 fix a) — skip just this link, don't
+    # invent an id, and surface it loudly after the ingest loop.
     for team, players in info.get("players", {}).items():
         for pname in players:
             pid = lookup(registry, pname)
+            if pid is None:
+                registry_misses.append((filename, stem, pname, "squad"))
+                continue
             con.execute(
                 "INSERT INTO match_players VALUES (?, ?, ?, ?)",
                 [stem, team, pname, pid]
@@ -809,6 +817,9 @@ def ingest_file(con, filepath):
     # ── match_player_of_match ─────────────────────────────────────────────────
     for pname in info.get("player_of_match", []):
         pid = lookup(registry, pname)
+        if pid is None:
+            registry_misses.append((filename, stem, pname, "player_of_match"))
+            continue
         con.execute(
             "INSERT OR IGNORE INTO match_player_of_match VALUES (?, ?, ?)",
             [stem, pname, pid]
@@ -965,15 +976,25 @@ def main():
     log.info(f"JSON dir: {JSON_DIR}")
 
     # ── Download from Cricsheet ───────────────────────────────────────────────
-    download_cricsheet()
+    try:
+        download_cricsheet()
 
-    # ── Connect and create schema ─────────────────────────────────────────────
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect(str(DB_PATH))
+        # ── Connect and create schema ─────────────────────────────────────────
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        con = duckdb.connect(str(DB_PATH))
 
-    for stmt in SCHEMA_STATEMENTS:
-        con.execute(stmt)
-    log.info("Schema created (all tables)")
+        for stmt in SCHEMA_STATEMENTS:
+            con.execute(stmt)
+        log.info("Schema created (all tables)")
+    except Exception as e:
+        log.error(f"FATAL: could not download/prepare Cricsheet data: {e}")
+        alerts.send_alert(
+            "Pipeline could not download/prepare Cricsheet data — run failed before ingest",
+            f"ingest.py failed before the per-file ingestion loop started, while "
+            f"downloading Cricsheet data or preparing the schema:\n\n{e}\n\n"
+            f"No files were ingested this run. The run has failed red.\n",
+        )
+        raise
 
     # ── Build file list ───────────────────────────────────────────────────────
     all_files = sorted(JSON_DIR.glob("*.json"))
@@ -991,15 +1012,18 @@ def main():
     log.info(f"Processing {len(to_process)} files")
 
     # ── Ingest ────────────────────────────────────────────────────────────────
-    errors     = []
-    processed  = 0
+    errors          = []
+    processed       = 0
+    registry_misses = []
 
     for filepath in tqdm(to_process, desc="Ingesting", unit="file"):
+        file_misses = []
         try:
             con.begin()
-            ingest_file(con, filepath)
+            ingest_file(con, filepath, file_misses)
             con.commit()
             processed += 1
+            registry_misses.extend(file_misses)  # only report misses for files that actually committed
         except Exception as e:
             con.rollback()
             errors.append((filepath.name, str(e)))
@@ -1015,6 +1039,31 @@ def main():
         log.info("  Error detail:")
         for fn, err in errors:
             log.info(f"    {fn}: {err}")
+
+    log.info(f"  Registry misses : {len(registry_misses)}")
+    if registry_misses:
+        log.warning(
+            f"  {len(registry_misses)} squad/player-of-match name(s) were missing "
+            f"from their own file's registry — each match STILL ingested in full "
+            f"(deliveries, wickets, innings all present); only that one link was "
+            f"skipped:"
+        )
+        for fn, mid, pname, ctx in registry_misses:
+            log.warning(f"    {fn}  match_id={mid}  player_name={pname!r}  ({ctx})")
+
+        misses_body = "\n".join(
+            f"  - {fn}  match_id={mid}  player_name={pname!r}  ({ctx})"
+            for fn, mid, pname, ctx in registry_misses
+        )
+        alerts.send_alert(
+            "Cricsheet file inconsistency: player missing from registry",
+            f"{len(registry_misses)} squad/player-of-match name(s) referenced in a "
+            f"Cricsheet file were not found in that same file's info.registry.people "
+            f"map. Each affected match WAS ingested in full (deliveries, wickets, "
+            f"and innings are all present) — only that one player's squad or "
+            f"player-of-match link was skipped, since inventing a player_id would "
+            f"be worse than a missing row.\n\n{misses_body}\n",
+        )
 
 
     con.close()
