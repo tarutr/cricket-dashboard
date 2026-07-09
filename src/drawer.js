@@ -500,9 +500,20 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   });
 
   // ── Open / close ─────────────────────────────────────────────────────────────
+  // Batch 3 fix 1 safety net: a snapshot of state.advanced taken at open() time.
+  // Stat-condition selects/value-changes already call onChange() themselves on
+  // every committed edit (advanced.js), but a value mid-typed (store updated on
+  // "input", no "change" yet because the field never blurred) would otherwise
+  // reach a drawer-close (Escape/backdrop/×) without ever telling main.js — the
+  // table/graph would silently keep showing the PRE-edit scope while the pill
+  // already reads the new value. Comparing at close() and firing onChange()
+  // once if it moved closes that gap regardless of which close route was used.
+  let advancedSnapshotAtOpen = null;
+
   function open() {
     els.drawer.hidden = false;
     els.panel.focus();
+    advancedSnapshotAtOpen = JSON.stringify(store.get().advanced);
     // Retry any option-fetches that previously failed — matches the inline
     // error copy's "reopen the drawer to retry" (Batch 2 review). sync() and
     // loadProfileOptions() no-op cheaply when nothing needs refetching.
@@ -512,6 +523,11 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
 
   function close() {
     els.drawer.hidden = true;
+    if (advancedSnapshotAtOpen !== null) {
+      const changed = JSON.stringify(store.get().advanced) !== advancedSnapshotAtOpen;
+      advancedSnapshotAtOpen = null;
+      if (changed) onChange();
+    }
   }
 
   els.closeBtn.addEventListener("click", close);
@@ -569,5 +585,12 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   loadProfileOptions();
   renderControls();
 
-  return { open, close, sync, activeCount };
+  // isOpen(): so callers (main.js) can gate sync() to only run while the
+  // drawer is actually visible (Batch 3 fix 2) — the drawer must always be
+  // fully current whenever VISIBLE (open() calls sync() directly; the
+  // store.subscribe hook calls it too, but only while open), never while
+  // hidden, where it would just be wasted rebuild work (and, before this
+  // fix, the reason typing in the advanced panel or the main search box lost
+  // focus/cursor on every keystroke).
+  return { open, close, sync, activeCount, isOpen: () => !els.drawer.hidden };
 }

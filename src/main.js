@@ -151,7 +151,13 @@ function onFiltersChanged() {
   if (s.splitBy && !splitAllowed(s, s.splitBy)) {
     store.set({ splitBy: null });
   }
-  if (drawerController) drawerController.sync();
+  // Only sync the drawer while it's actually visible (Batch 3 fix 2) — syncing
+  // a hidden drawer is wasted work, and (before this fix) was the path by
+  // which typing in the advanced panel's value inputs or the main search box
+  // triggered a full advanced-panel innerHTML rebuild on every keystroke via
+  // the store.subscribe hook below, killing focus/cursor. open() still calls
+  // sync() directly, so the drawer is always current the moment it's shown.
+  if (drawerController && drawerController.isOpen()) drawerController.sync();
   if (pillsController) pillsController.render();
   updateScopeSentence();
   updateDrawerBadge();
@@ -261,8 +267,17 @@ function boot() {
         // position-chip enablement and the condition builder's metric
         // vocabulary DEPEND on the Vs selection. drawer.sync() is cheap and
         // scope-key-cached internally, so calling it on every state change is
-        // safe (its option-list refetches no-op unless the scope moved).
-        if (drawerController) drawerController.sync();
+        // safe (its option-list refetches no-op unless the scope moved) — but
+        // ONLY while the drawer is actually visible (Batch 3 fix 2): every
+        // store.set() fires this subscriber, including every keystroke in the
+        // main player-search box (unrelated to the drawer) and every keystroke
+        // in the advanced panel's own value inputs, so syncing a HIDDEN drawer
+        // here was pure wasted work — and syncing while the drawer IS open
+        // used to rebuild the advanced panel's innerHTML on every keystroke,
+        // destroying the input the user was typing into. open() calls sync()
+        // directly, so the drawer is still always current the moment it's
+        // shown.
+        if (drawerController && drawerController.isOpen()) drawerController.sync();
       });
 
       playerSearchInputEl.addEventListener("input", () => {

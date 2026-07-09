@@ -88,6 +88,28 @@ export function describeAdvanced(state) {
  * `hidden` attribute of the surrounding <details>/toggle). Renders into `container`.
  */
 export function mountAdvanced(container, store, onChange) {
+  // Batch 3 fix 2: a structural fingerprint of "everything render() needs to
+  // rebuild the DOM for" — group/condition shape (count, metric, operator)
+  // plus the eligible-metrics vocabulary (mode/phase gating) — deliberately
+  // EXCLUDING each condition's raw v1/v2 text. store.set() fires on every
+  // keystroke in a value input (so the pill/badge stay live, per fix 1), and
+  // previously render() unconditionally rebuilt the whole panel's innerHTML
+  // on every one of those calls, destroying and recreating the very input
+  // the user was typing into — killing focus and the caret mid-word. Typing a
+  // value never changes this key, so render() below can skip the rebuild
+  // whenever it's unchanged; anything that DOES change the key (add/remove a
+  // condition, pick a metric/operator, switch discipline/format/Vs) still
+  // rebuilds normally, focus or not.
+  let lastRenderKey = null;
+
+  function structuralKey(state, metrics) {
+    const advanced = state.advanced;
+    const groupsShape = (advanced.groups || [])
+      .map((g) => `${g.op}:${g.conds.map((c) => `${c.metricKey}|${c.operator}`).join(",")}`)
+      .join(";");
+    return JSON.stringify({ top: advanced.op, groups: groupsShape, vocab: metrics.map((m) => m.key) });
+  }
+
   function render() {
     ensureAdvanced(store);
     const state = store.get();
@@ -99,6 +121,18 @@ export function mountAdvanced(container, store, onChange) {
     // namespace the query will resolve them against (D4 R3/R4).
     const ns = effectiveNamespace(state);
     const metrics = eligibleMetrics(ns, state.formats);
+
+    const key = structuralKey(state, metrics);
+    if (key === lastRenderKey) {
+      // Nothing structural changed since the last rebuild (e.g. this call was
+      // triggered by a value-input keystroke elsewhere in the store, or by an
+      // unrelated drawer control's sync() while this panel wasn't touched at
+      // all) — skip the rebuild. In particular this means we never rebuild
+      // while focus is inside this panel unless the key actually changed, so
+      // focus/caret survive typing into a condition's value input.
+      return;
+    }
+    lastRenderKey = key;
 
     const groupHTML = (group, gi) => `
       <div class="advanced-group" data-gi="${gi}">
@@ -232,10 +266,21 @@ export function mountAdvanced(container, store, onChange) {
         const cond = group.conds[ci];
         if (!cond) return;
 
+        // Batch 3 fix 1: metric/operator selects and value inputs must reach
+        // onChange() like every other drawer control — otherwise closing the
+        // drawer without hitting its own "Apply" leaves the table/graph
+        // showing a scope the pills no longer describe (§8.4 honesty). Selects
+        // fire onChange on "change" (a committed pick, one event per edit — no
+        // per-keystroke requery risk since there's no keystroke). Value inputs
+        // still update the store on every "input" keystroke (so the pill/badge
+        // stay live and typing is never lost, see fix 2 below) but only fire
+        // onChange on "change" (blur/Enter — the committed value), so a
+        // half-typed number never triggers a graph re-query mid-keystroke.
         const metricSel = condEl.querySelector('[data-role="metric"]');
         metricSel.addEventListener("change", () => {
           cond.metricKey = metricSel.value;
           store.set({ advanced: { ...advanced } });
+          onChange();
         });
 
         const opSel = condEl.querySelector('[data-role="operator"]');
@@ -244,12 +289,16 @@ export function mountAdvanced(container, store, onChange) {
           cond.operator = opSel.value;
           store.set({ advanced: { ...advanced } });
           if (wasBetween !== (cond.operator === "between")) render();
+          onChange();
         });
 
         condEl.querySelectorAll('[data-role="v1"],[data-role="v2"]').forEach((input) => {
           input.addEventListener("input", () => {
             cond[input.dataset.role] = input.value;
             store.set({ advanced: { ...advanced } });
+          });
+          input.addEventListener("change", () => {
+            onChange();
           });
         });
 
