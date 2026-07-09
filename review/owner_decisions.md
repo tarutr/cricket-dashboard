@@ -336,3 +336,26 @@ change requires a new owner decision recorded here. Dates are decision dates.
     caught 4 + stumped 3 = 7 dismissals, death SR 200.00, PP SR 143.64;
     JJ Bumrah vs right-handers — caught 13, bowled 13, PP econ 6.18, PP
     wkts 8. Branch `d4-r3-matchups` (frontend) + main (pipeline).
+
+37. **Matchup positions + stat conditions — BUILT, DEPLOYED, VERIFIED
+    (2026-07-09, owner: "same problem with bowlers — why aren't we allowed to
+    do matchups by positions and stat-conditions?").** Pipeline (test-first
+    again, 39/39 harness checks, then main + green run): matchup_batting
+    gains `batting_position` (the batter's own, verbatim sql_batting
+    definition); matchup_bowling REGRAINED to (match, innings, bowler,
+    batting_hand, striker's batting_position) — 1.35M rows — with rollup to
+    the old grain reproducing every row/column exactly and permanent gates
+    added. Frontend: the position filter now applies in matchup mode — on the
+    bowling side it filters the position of the batters faced ("Bumrah vs
+    openers"), with the scope token/pill reading "to batters at 1, 2" and a
+    drawer hint; bowling-matchup innings counts are DISTINCT innings (not
+    position buckets). Stat conditions are namespace-aware: authored in the
+    active mode's vocabulary, applied by key-overlap, with honest
+    "N of M stat conditions apply here" notes in both modes and cross-mode
+    condition survival. A stale-sync wiring bug (drawer controls not
+    refreshing on Vs changes) was caught in verification and fixed
+    (drawer.sync on every store change). Verified exact vs raw R2: Bumrah vs
+    right-handers at 1–2 = 27 distinct innings, 177 balls, 9 wickets;
+    Karanbir Singh vs Spin at 1–2 = 33 inns, 488 runs @ 190.63, out 11;
+    "caught vs spin ≥ 2, min 10 innings" = 576 players. Branch
+    `d4-r3-matchups` + main (pipeline).
