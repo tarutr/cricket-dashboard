@@ -93,14 +93,117 @@ function orderBowlingTypes(values) {
 }
 
 /**
- * Build the matchup-mode query pair: the main grouped stat query (columns
- * picked from the restricted matchup picker, `state.columns[ns]`; HAVING only
- * the min-innings gate) and a coverage query — same scope minus the bucket
- * predicate (search stays) — grouped by id, giving {total, mapped} balls per
- * player. No coverage figure, no stat (SPEC_ADDENDUM D4.3): src/table.js's
- * renderer must show both together.
+ * Append ` FILTER (WHERE <filterSql>)` after EVERY top-level aggregate call
+ * in a metrics.js sqlExpression/sortExpression string (C1 single-scan merge).
+ * Walks the string char-by-char; whenever it sees a known aggregate head
+ * ("SUM(" or "COUNT(" — the only two heads used anywhere in the matchup_*
+ * metric catalogue, verified by inspection of MATCHUP_BATTING_METRICS /
+ * MATCHUP_BOWLING_METRICS in metrics.js), it paren-balances forward from the
+ * matching "(" to find the TRUE matching ")" (so nested parens, e.g.
+ * `NULLIF(SUM(balls_faced), 0)` or `COUNT(DISTINCT match_id || ':' ||
+ * CAST(innings_number AS VARCHAR))`, are never mistaken for the aggregate's
+ * own close-paren) and inserts the FILTER clause right after it. A bare
+ * regex substitution would either truncate at the first inner ")" or need a
+ * hand-rolled balanced-paren regex anyway — this is that logic, explicit.
+ * Throws if parens are unbalanced (a metrics.js authoring bug, not a runtime
+ * data issue) rather than silently emitting broken SQL.
  */
-function buildMatchupQuery(state, discipline) {
+function appendFilterToAggregates(expr, filterSql) {
+  const heads = ["SUM(", "COUNT("];
+  let out = "";
+  let i = 0;
+  while (i < expr.length) {
+    const head = heads.find((h) => expr.startsWith(h, i));
+    if (head) {
+      let depth = 1;
+      let j = i + head.length;
+      while (j < expr.length && depth > 0) {
+        if (expr[j] === "(") depth++;
+        else if (expr[j] === ")") depth--;
+        j++;
+      }
+      if (depth !== 0) {
+        throw new Error(`appendFilterToAggregates: unbalanced parens in "${expr}"`);
+      }
+      out += `${expr.slice(i, j)} FILTER (WHERE ${filterSql})`;
+      i = j;
+    } else {
+      out += expr[i];
+      i += 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Build the matchup-mode query: ONE scan of matchup_batting/matchup_bowling
+ * (C1 efficiency fix) that computes both the in-bucket stat columns AND the
+ * coverage {total, mapped} balls per player, instead of the former two full
+ * scans (main grouped query + a near-identical standalone coverageSql).
+ *
+ * Mechanics: the bucket predicate (e.g. `bowling_group = 'Spin'`) is dropped
+ * from WHERE and instead appended as a `FILTER (WHERE ...)` to every
+ * aggregate call in every metric expression (via appendFilterToAggregates).
+ * That alone would be enough for the stat columns and the min-innings gate,
+ * but coverage needs care: it must total balls across EVERY bucket for a
+ * player, grouped by id ALONE — while the stat columns (unchanged from
+ * before) are grouped by (id, name), and a handful of real ids carry more
+ * than one name spelling (verified on live data: batter_id 922e3dcc appears
+ * as both "Kamran Khan" and "Kamran Khan (2)"). So this is built as THREE
+ * layered SELECTs, all operating on ONE underlying scan of `view`:
+ *
+ *   1. `agg` — GROUP BY (id, name), WHERE scope only (bucket predicate
+ *      excluded, no HAVING at all): every FILTER'd stat/condition/innings-gate
+ *      column, PLUS unfiltered per-(id,name) coverage PARTIAL sums. Keeping
+ *      every (id, name) sub-group here — even ones that will later fail the
+ *      min-innings gate — is the crux of the fix below.
+ *   2. `windowed` — SUM(...) OVER (PARTITION BY id) turns each row's coverage
+ *      partial into the full cross-name-variant total for that id (SUM is
+ *      additive, so re-summing the partials reconstructs exactly what the
+ *      old id-only GROUP BY coverageSql produced).
+ *   3. final SELECT — filters `windowed` by the min-innings gate and any
+ *      stat conditions, using the aliases already computed in step 1.
+ *
+ * Window functions run AFTER WHERE/GROUP BY/HAVING in standard SQL, so the
+ * min-innings/condition filter MUST live in step 3, strictly outside the
+ * window computed in step 2 — putting it any earlier (e.g. as a HAVING on
+ * `agg` itself) would silently drop a filtered-out name-variant's rows
+ * before the window could sum them, undercounting coverage for exactly the
+ * ids this fix targets (verified against R2: without this staging, coverage
+ * for 922e3dcc came out 67 instead of the correct 80). Everything past step
+ * 1 operates on `agg`'s small in-memory result, not the base table, so this
+ * is still ONE physical scan of `view`.
+ *
+ * Row-membership argument (this MUST reproduce today's exact row set): the
+ * min-innings filter in step 3 is unconditional (always present, regardless
+ * of min-innings UI state) and its threshold floors at
+ * `Math.max(1, minInnings) >= 1`. The `__innings_gate` column it tests —
+ * `COUNT(DISTINCT match_id || ':' || innings_number)` FILTERed on the bucket
+ * predicate — is >= 1 if and only if at least one pre-grouping row satisfied
+ * the bucket predicate for that (id, name) group. That is exactly the
+ * row-existence test the old query got for free from
+ * `WHERE ... AND bucketClause` before GROUP BY. So dropping the bucket
+ * predicate from WHERE and relying on this always-on, floor-1 filter
+ * reproduces the identical row set as before — no separate "bucket-filtered
+ * balls > 0" predicate is needed (and using balls specifically would in fact
+ * be WRONG: a row can satisfy the bucket predicate with balls_faced = 0, e.g.
+ * a batter's only delivery in that bucket was a wide off which they were
+ * stumped — that row exists and counted before, and must still count now).
+ *
+ * `visibleColumns` contract: the restricted picker's own selection
+ * (`state.columns[ns]`) is always the base column list. Anything in the
+ * `visibleColumns` argument is layered on top but only takes effect for keys
+ * that resolve via getMetric(key, ns) — this matters because
+ * graph/players.js's seedFromFilteredSet builds ITS column list from
+ * state.columns[state.discipline] (the PLAIN batting/bowling vocabulary,
+ * wrong namespace here), so most of what it passes is silently ignored
+ * rather than corrupting the matchup SELECT. Regardless of either list, the
+ * ACTIVE SORT metric (state.sort.key) is always force-included — every
+ * caller ranks rows by it (the table's own click-to-sort AND the graph's
+ * "top N by sort" auto-seed), and a metric missing from SELECT sorts as NULL
+ * for every row, which was the graph auto-seed roster bug this also fixes.
+ */
+function buildMatchupQuery(state, discipline, visibleColumns) {
   const view = MATCHUP_VIEW[discipline];
   const ns = MATCHUP_NS[discipline];
   const idCol = MATCHUP_ID_COL[discipline];
@@ -110,12 +213,73 @@ function buildMatchupQuery(state, discipline) {
   const ballsCol = MATCHUP_BALLS_COL[discipline];
   const groupCol = MATCHUP_GROUP_COL[discipline];
 
-  const metrics = (state.columns[ns] || []).map((key) => getMetric(key, ns)).filter(Boolean);
-  const selectParts = [`${idCol} AS id`, `${nameCol} AS name`];
-  for (const m of metrics) {
-    selectParts.push(`${m.sqlExpression} AS ${m.key}`);
-    if (m.sortExpression) selectParts.push(`${m.sortExpression} AS ${m.key}__sort`);
+  const ownCols = state.columns[ns] || [];
+  const seenKeys = new Set();
+  const keyOrder = [];
+  for (const k of [...ownCols, ...(visibleColumns || []), state.sort.key]) {
+    if (k && !seenKeys.has(k)) {
+      seenKeys.add(k);
+      keyOrder.push(k);
+    }
   }
+  const metrics = keyOrder.map((key) => getMetric(key, ns)).filter(Boolean);
+
+  const mv = state.matchupVs;
+  const bucketCol = mv.dim === "hand" ? "batting_hand" : mv.dim === "type" ? "bowling_type" : "bowling_group";
+  const bucketClause = `${bucketCol} = '${esc(mv.value)}'`;
+
+  // Column alias registry for step 1 (`agg`): every ticked/extra metric key
+  // gets its own alias (m.key). The min-innings gate and any active stat
+  // condition reuse an existing metric's alias when their key is already
+  // present, otherwise get one dedicated extra column (__innings_gate,
+  // __cond_N) — computed ONCE in step 1 and simply referenced by name in
+  // step 3, rather than recomputed against the base table.
+  const aliasByKey = new Map(metrics.map((m) => [m.key, m.key]));
+  const extraAggColumns = []; // [{ metric, alias }] beyond the visible `metrics`
+
+  const inningsMetric = getMetric("innings", ns);
+  let inningsGateAlias = aliasByKey.get(inningsMetric.key);
+  if (!inningsGateAlias) {
+    inningsGateAlias = "__innings_gate";
+    aliasByKey.set(inningsMetric.key, inningsGateAlias);
+    extraAggColumns.push({ metric: inningsMetric, alias: inningsGateAlias });
+  }
+
+  const condAliasMap = new Map(); // cond object -> alias (step 3 references this)
+  let condIdx = 0;
+  for (const g of activeGroups(state.advanced)) {
+    for (const c of g.conds) {
+      const m = getMetric(c.metricKey, ns);
+      if (!m) continue; // not applicable in this namespace — conditionApplicability() already notes this
+      let alias = aliasByKey.get(m.key);
+      if (!alias) {
+        alias = `__cond_${condIdx++}`;
+        aliasByKey.set(m.key, alias);
+        extraAggColumns.push({ metric: m, alias });
+      }
+      condAliasMap.set(c, alias);
+    }
+  }
+
+  // Step 1 (`agg`): FILTER'd stat columns, FILTER'd extra columns (innings
+  // gate / condition-only metrics), and unfiltered per-(id,name) coverage
+  // partials — one GROUP BY (id, name), no HAVING.
+  const aggSelectParts = [`${idCol} AS id`, `${nameCol} AS name`];
+  for (const m of metrics) {
+    aggSelectParts.push(`${appendFilterToAggregates(m.sqlExpression, bucketClause)} AS ${m.key}`);
+    if (m.sortExpression) {
+      aggSelectParts.push(`${appendFilterToAggregates(m.sortExpression, bucketClause)} AS ${m.key}__sort`);
+    }
+  }
+  for (const { metric, alias } of extraAggColumns) {
+    aggSelectParts.push(`${appendFilterToAggregates(metric.sqlExpression, bucketClause)} AS ${alias}`);
+  }
+  // Coverage (SPEC_ADDENDUM D4.3): unfiltered partial sums at THIS query's own
+  // (id, name) grain — summed across name variants by the window in step 2.
+  aggSelectParts.push(`SUM(${ballsCol}) AS __coverage_total_partial`);
+  aggSelectParts.push(
+    `SUM(CASE WHEN ${groupCol} <> '(unmapped)' THEN ${ballsCol} ELSE 0 END) AS __coverage_mapped_partial`
+  );
 
   const scopeOpts = {
     includeTeams: true,
@@ -129,53 +293,84 @@ function buildMatchupQuery(state, discipline) {
     includePositions: true,
   };
 
-  const mv = state.matchupVs;
-  const bucketCol = mv.dim === "hand" ? "batting_hand" : mv.dim === "type" ? "bowling_type" : "bowling_group";
-  const bucketClause = `${bucketCol} = '${esc(mv.value)}'`;
   const searchClause =
     state.search && state.search.trim() ? `${nameCol} ILIKE '%${esc(state.search.trim())}%'` : null;
 
+  // C1: WHERE no longer includes the bucket predicate — scope + search only,
+  // identical to the old standalone coverageSql's WHERE. The bucket predicate
+  // now lives exclusively in the per-column FILTER clauses above.
   const whereClauses = buildScopeClauses(state, scopeOpts);
-  whereClauses.push(bucketClause);
   if (searchClause) whereClauses.push(searchClause);
 
-  // Min-innings gate: use the namespace's OWN "innings" metric expression, not
-  // a bare COUNT(*) — matchup_bowling's grain (D4-R4) now spans multiple rows
-  // per (match, innings) once batting_position is in the primary key, so
-  // COUNT(*) would overcount innings by the number of position buckets faced.
-  const inningsMetric = getMetric("innings", ns);
-  const havingParts = [`(${inningsMetric.sqlExpression}) >= ${Math.max(1, Number(state.minInnings) || 1)}`];
-  const advHaving = advancedToHaving(state.advanced, ns);
-  if (advHaving) havingParts.push(advHaving);
-
-  const sql = [
-    `SELECT ${selectParts.join(", ")}`,
+  const aggSql = [
+    `SELECT ${aggSelectParts.join(", ")}`,
     `FROM ${view}`,
     `WHERE ${whereClauses.join(" AND ")}`,
     `GROUP BY ${idCol}, ${nameCol}`,
-    `HAVING ${havingParts.join(" AND ")}`,
   ].join("\n");
 
-  // Coverage: identical scope minus ONLY the bucket predicate (search kept).
-  const coverageWhere = buildScopeClauses(state, scopeOpts);
-  if (searchClause) coverageWhere.push(searchClause);
-  const coverageSql = [
-    `SELECT ${idCol} AS id,`,
-    `       SUM(${ballsCol}) AS total,`,
-    `       SUM(CASE WHEN ${groupCol} <> '(unmapped)' THEN ${ballsCol} ELSE 0 END) AS mapped`,
-    `FROM ${view}`,
-    `WHERE ${coverageWhere.join(" AND ")}`,
-    `GROUP BY ${idCol}`,
+  // Step 2 (`windowed`): pass every agg column through unchanged, plus the
+  // cross-name-variant coverage totals.
+  const passThroughCols = ["id", "name"];
+  for (const m of metrics) {
+    passThroughCols.push(m.key);
+    if (m.sortExpression) passThroughCols.push(`${m.key}__sort`);
+  }
+  for (const { alias } of extraAggColumns) passThroughCols.push(alias);
+  const windowedSql = [
+    `SELECT ${passThroughCols.join(", ")},`,
+    `       SUM(__coverage_total_partial) OVER (PARTITION BY id) AS __coverage_total,`,
+    `       SUM(__coverage_mapped_partial) OVER (PARTITION BY id) AS __coverage_mapped`,
+    `FROM agg`,
   ].join("\n");
 
-  return { sql, matchesSql: null, splitDim: null, coverageSql };
+  // Step 3 (final): the min-innings gate + stat conditions, evaluated against
+  // the already-FILTER'd alias columns from step 1 (no base-table access, no
+  // window interference — see the row-membership argument in this function's
+  // doc comment).
+  const finalSelectParts = [
+    "id",
+    "name",
+    ...metrics.flatMap((m) => (m.sortExpression ? [m.key, `${m.key}__sort`] : [m.key])),
+    "__coverage_total",
+    "__coverage_mapped",
+  ];
+  const finalWhereParts = [`${inningsGateAlias} >= ${Math.max(1, Number(state.minInnings) || 1)}`];
+  const advWhere = advancedToHaving(state.advanced, ns, (cond) => condAliasMap.get(cond));
+  if (advWhere) finalWhereParts.push(advWhere);
+
+  const sql = [
+    `WITH agg AS (`,
+    aggSql,
+    `),`,
+    `windowed AS (`,
+    windowedSql,
+    `)`,
+    `SELECT ${finalSelectParts.join(", ")}`,
+    `FROM windowed`,
+    `WHERE ${finalWhereParts.join(" AND ")}`,
+  ].join("\n");
+
+  return { sql, matchesSql: null, splitDim: null, coverageSql: null };
 }
 
-/** Build a HAVING predicate for one advanced condition, honoring §8.1 no-data semantics. */
-function conditionToHaving(cond, discipline) {
+/** Build a HAVING/WHERE predicate for one advanced condition, honoring §8.1
+ * no-data semantics. `exprFn(cond, metric)`, when given, returns the exact
+ * SQL to compare instead of `metric.sqlExpression` — matchup mode's
+ * buildMatchupQuery passes a lookup into its per-condition alias map
+ * (`__cond_N` / an already-selected metric's own alias), since by the time
+ * this runs (its step 3) the FILTER'd aggregate is already computed and
+ * named in an earlier step — recomputing it here (or re-running FILTER
+ * against the base table) would be both redundant and, if done via a plain
+ * HAVING/GROUP BY at the wrong stage, wrong (see that function's doc
+ * comment on window-vs-filter ordering). The plain (non-matchup) buildQuery
+ * path omits exprFn and keeps today's behavior: evaluate metric.sqlExpression
+ * directly in HAVING. */
+function conditionToHaving(cond, discipline, exprFn) {
   const metric = getMetric(cond.metricKey, discipline);
   if (!metric) return null;
-  const expr = metric.sqlExpression;
+  const expr = exprFn ? exprFn(cond, metric) : metric.sqlExpression;
+  if (!expr) return null;
   // §8.1: rate/ratio metrics (zeroIsData:false) treat 0 as "no data" too, so a
   // condition on them must also exclude value = 0 even though the numeric
   // comparison might otherwise pass (e.g. "average <= 5" should not match a
@@ -223,12 +418,12 @@ function conditionApplicability(advanced, ns) {
   return { total, applied };
 }
 
-function advancedToHaving(advanced, discipline) {
+function advancedToHaving(advanced, discipline, exprFn) {
   const groups = activeGroups(advanced);
   if (groups.length === 0) return null;
   const parts = groups
     .map((g) => {
-      const condSql = g.conds.map((c) => conditionToHaving(c, discipline)).filter(Boolean);
+      const condSql = g.conds.map((c) => conditionToHaving(c, discipline, exprFn)).filter(Boolean);
       if (condSql.length === 0) return null;
       const joiner = g.op === "OR" ? " OR " : " AND ";
       return condSql.length > 1 ? `(${condSql.join(joiner)})` : condSql[0];
@@ -242,7 +437,13 @@ function advancedToHaving(advanced, discipline) {
 /**
  * Build the main grouped SQL query for the current state + visible columns.
  * Returns { sql, matchesSql, splitDim } — matchesSql is null unless "matches"
- * is visible AND still answerable from player_matches (see below).
+ * is visible AND still answerable from player_matches (see below). While a
+ * matchup "Vs" selection is active, delegates to buildMatchupQuery (C1: one
+ * merged scan carrying both the stat columns and the coverage N-of-M
+ * denominator — see that function's doc comment); its `sql` result also
+ * carries `__coverage_total`/`__coverage_mapped` columns that mountTable's
+ * load() turns into each row's `coverage` object, in place of the second
+ * query this used to require.
  *
  * `split: true` (the table) additionally groups by the active split dimension,
  * adding a `split_value` column — one row per (player, split value). Callers
@@ -259,7 +460,7 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
   const discipline = state.discipline;
 
   if (matchupVsActive(state)) {
-    return buildMatchupQuery(state, discipline);
+    return buildMatchupQuery(state, discipline, visibleColumns);
   }
 
   const view = VIEW_FOR_DISCIPLINE[discipline];
@@ -326,7 +527,7 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
     ].join("\n");
   }
 
-  return { sql, matchesSql, splitDim, coverageSql: null };
+  return { sql, matchesSql, splitDim };
 }
 
 /** Shared display formatter for metric values ("—" for no-data per §8.1). Also used by the player page. */
@@ -898,14 +1099,13 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
     const state = store.get();
     const ns = effectiveDiscipline(state);
     const cols = state.columns[ns];
-    const { sql, matchesSql, splitDim, coverageSql } = buildQuery(state, cols, { split: true });
+    const { sql, matchesSql, splitDim } = buildQuery(state, cols, { split: true });
     const token = ++loadToken;
     renderLoading();
     try {
-      const [{ rows }, matchesResult, coverageResult, bowlingTypes] = await Promise.all([
+      const [{ rows }, matchesResult, bowlingTypes] = await Promise.all([
         query(sql),
         matchesSql ? query(matchesSql) : Promise.resolve({ rows: [] }),
-        coverageSql ? query(coverageSql) : Promise.resolve({ rows: [] }),
         bowlingTypesCache ? Promise.resolve(bowlingTypesCache) : ensureBowlingTypes(),
       ]);
       if (token !== loadToken) return; // a newer load superseded this one
@@ -917,9 +1117,14 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
         const byId = new Map(matchesResult.rows.map((r) => [r.id, r.matches]));
         merged = rows.map((r) => ({ ...r, matches: byId.get(r.id) ?? null }));
       }
-      if (coverageSql) {
-        const covById = new Map(coverageResult.rows.map((r) => [r.id, { mapped: r.mapped ?? 0, total: r.total ?? 0 }]));
-        merged = merged.map((r) => ({ ...r, coverage: covById.get(r.id) ?? { mapped: 0, total: 0 } }));
+      // C1: coverage is now carried inline on every row by buildMatchupQuery
+      // (__coverage_total / __coverage_mapped, one merged scan) instead of a
+      // second standalone query — read straight off the row.
+      if (matchupVsActive(state)) {
+        merged = merged.map((r) => ({
+          ...r,
+          coverage: { mapped: r.__coverage_mapped ?? 0, total: r.__coverage_total ?? 0 },
+        }));
       }
 
       // A stale "__split" sort (split since turned off) falls back to unsorted;
