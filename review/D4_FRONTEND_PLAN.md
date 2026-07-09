@@ -6,8 +6,9 @@ remaining D4 **frontend** work, split into 5 small, independently-reviewable pie
 each fits one working session and ends at a screenshot-verifiable state (SPEC §8.6).
 
 **Progress: Piece 1 ✅ owner-approved · Piece 2 ✅ built + verified (not yet gate-reviewed)
-· Pieces 3–5 remain.** Branches: `d4-piece1-profile-filters`, `d4-piece2-metrics`
-(stacked on Piece 1, not yet merged to `main`). Owner reviews on **localhost:8000**
+· Piece 3 ✅ built + verified (not yet gate-reviewed; owner design answers = decision 28)
+· Pieces 4–5 remain.** Branches: `d4-piece1-profile-filters`, `d4-piece2-metrics`,
+`d4-piece3-free-splits` (each stacked on the previous, not yet merged to `main`). Owner reviews on **localhost:8000**
 (`python3 -m http.server 8000`) — the R2 CORS policy allows localhost but NOT Vercel
 preview domains, so branch previews on Vercel currently error until CORS is widened
 (deferred, owner's call).
@@ -98,9 +99,14 @@ phase-gated) and bowling `wkt_bowled` / `wkt_lbw` / `wkt_caught` / `wkt_caught_a
 / `wkt_stumped` / `wkt_hit_wicket` (counts, the six sum to `wickets`). Verified exact vs raw
 R2 (Karanbir Singh 140.48/155.23/213.97; Ali Dawood 54/13/43 = 113).
 
-**Piece 3 — Free splits.** Batting-position, opposition (international only), and
-dismissal-type breakdowns — no new data, UI only. *Review:* splits read correctly for a
-known player.
+**Piece 3 — Free splits. ✅ DONE + verified (awaiting gate review).** Owner chose BOTH
+split styles (decision 28): batting-position (individual 1–12 chips) and opposition
+(international only) as *filters*, PLUS a table-only "Split by" breakdown (one row per
+player × position / opposition / dismissal kind), and 24 dismissal-breakdown batting
+columns (every kind, counts + % of dismissals, "Dismissals" picker section). Matches
+column switches to slice-honest match counts under any innings-level filter/split.
+Graph honors the filters, ignores Split-by. All numbers cross-checked exact vs raw R2.
+*Review:* splits read correctly for a known player.
 
 **Piece 4 — Matchup mode: batting (D4.3a).** New comparison mode: batter × bowling-style
 (coarse pace/spin + fine type), every stat with its N-of-M coverage line, inert for

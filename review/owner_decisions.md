@@ -168,3 +168,37 @@ change requires a new owner decision recorded here. Dates are decision dates.
     domains, so branch previews error. Owner declined to change R2 CORS / README now
     ("just show me the localhost"); reviews happen on localhost until owner chooses to
     widen CORS. Deferred, non-blocking.
+
+## 2026-07-09 — D4 Piece 3 (free splits) owner design answers + build
+
+28. **Piece 3 design answers (owner, 2026-07-09) — BUILT + VERIFIED, awaiting gate review:**
+    - **Split style = BOTH.** Position and opposition ship as *filters* (every stat
+      recomputes over the slice, composes across many players) AND a table-only
+      **"Split by"** selector (one row per player × batting position / opposition /
+      dismissal kind). The Graph Builder ignores Split-by and its honest scope line
+      never claims it; the graph DOES honor the position/opposition filters.
+    - **Position filter = individual positions 1–12** (12 = rare concussion-sub
+      innings), multi-select chips, no grouping taxonomy baked in. Batting view only:
+      greyed with "Batting view only" in bowling; selections kept inert.
+    - **Dismissal breakdown = every kind separately, counts + % of dismissals.**
+      24 new batting columns (12 kinds × count and % of dismissals) in a
+      "Dismissals" section of the column picker. The 12 kinds are exactly the
+      dismissal_kind values that carry dismissed = 1; retired hurt / retired not out
+      are NOT dismissals and are excluded (in the dismissal split they read
+      "not out"). Verified: the 12 kinds partition total dismissals exactly.
+    - **Opposition = international only** (per decision 20): the filter, and the
+      opposition split, grey out with "International cricket only for now" unless
+      Team type = International.
+    - **"Matches" honesty rule:** while a position/opposition filter or any split is
+      active, the Matches column counts matches in which the player actually
+      batted/bowled within the slice (the match-list data has no opponent or
+      position columns, so this is the only honest count). Min innings applies
+      within the slice too ("min 10 innings vs Australia").
+    - **Verified exact vs raw R2** (browser = duckdb to the decimal): SA Yadav vs
+      Australia (10 inns, 259 runs, 28.78 avg, 167.10 SR); Karanbir Singh at 1–2
+      (51 inns, 2454 runs, 175.29 SR); SA Yadav dismissal columns (Ct 43 = 81.1%,
+      Bwd 1, LBW 4, RO 1, St 3, C&B 1) and all position/dismissal split rows;
+      Rashid Khan bowling × opposition split (the famous Rashid Khan is absent
+      because Afghanistan does not exist in Cricsheet — SPEC §4.1, honest result);
+      global 12-kind partition = 22,517 = SUM(dismissed) in the default scope.
+    Branch `d4-piece3-free-splits`, stacked on Piece 2.

@@ -12,7 +12,7 @@ import { getMetric, hasMetricData } from "./metrics.js";
 import { query } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
 import { activeGroups } from "./advanced.js";
-import { eligibleMetrics } from "./state.js";
+import { eligibleMetrics, activeSplit, positionsFilterActive, oppositionFilterActive } from "./state.js";
 
 export { eligibleMetrics };
 
@@ -24,6 +24,9 @@ const VIEW_FOR_DISCIPLINE = { batting: "batting", bowling: "bowling" };
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
 const NAME_COL = { batting: "batter_name", bowling: "bowler_name" };
 const TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
+// The opposition column in each innings view (D4 Piece 3): who the player
+// batted against / bowled to.
+const OPP_COL = { batting: "bowling_team", bowling: "batting_team" };
 
 /** Build a HAVING predicate for one advanced condition, honoring §8.1 no-data semantics. */
 function conditionToHaving(cond, discipline) {
@@ -72,26 +75,48 @@ function advancedToHaving(advanced, discipline) {
 
 /**
  * Build the main grouped SQL query for the current state + visible columns.
- * Returns { sql, matchesSql } — matchesSql is null unless "matches" is visible.
+ * Returns { sql, matchesSql, splitDim } — matchesSql is null unless "matches"
+ * is visible AND still answerable from player_matches (see below).
+ *
+ * `split: true` (the table) additionally groups by the active split dimension,
+ * adding a `split_value` column — one row per (player, split value). Callers
+ * that need per-player totals (the graph seed) leave it off.
+ *
+ * "Matches" honesty (D4 Piece 3): player_matches has no opposition or
+ * batting-position columns, so whenever an innings-level filter or a split is
+ * active, "matches" switches to COUNT(DISTINCT match_id) over the filtered
+ * innings rows — matches in which the player actually batted/bowled within
+ * the slice. Otherwise the player_matches source is kept (it also counts
+ * matches where the player didn't bat/bowl).
  */
-export function buildQuery(state, visibleColumns) {
+export function buildQuery(state, visibleColumns, { split = false } = {}) {
   const discipline = state.discipline;
   const view = VIEW_FOR_DISCIPLINE[discipline];
   const idCol = ID_COL[discipline];
   const nameCol = NAME_COL[discipline];
   const teamCol = TEAM_COL[discipline];
 
+  const splitDim = split ? activeSplit(state) : null;
+  const splitExpr = splitDim ? splitDim.sqlExpr(discipline) : null;
+
   const inningsMetrics = visibleColumns
     .map((key) => getMetric(key, discipline))
     .filter((m) => m && m.source !== "player_matches");
 
   const selectParts = [`${idCol} AS id`, `${nameCol} AS name`];
+  if (splitExpr) selectParts.push(`${splitExpr} AS split_value`);
   for (const m of inningsMetrics) {
     selectParts.push(`${m.sqlExpression} AS ${m.key}`);
     if (m.sortExpression) selectParts.push(`${m.sortExpression} AS ${m.key}__sort`);
   }
 
-  const whereClauses = buildScopeClauses(state, { includeTeams: true, teamColumn: teamCol, idColumn: idCol });
+  const whereClauses = buildScopeClauses(state, {
+    includeTeams: true,
+    teamColumn: teamCol,
+    idColumn: idCol,
+    oppositionColumn: OPP_COL[discipline],
+    includePositions: true,
+  });
   if (state.search && state.search.trim()) {
     whereClauses.push(`${nameCol} ILIKE '%${esc(state.search.trim())}%'`);
   }
@@ -100,17 +125,25 @@ export function buildQuery(state, visibleColumns) {
   const advHaving = advancedToHaving(state.advanced, discipline);
   if (advHaving) havingParts.push(advHaving);
 
+  const wantsMatches = visibleColumns.includes("matches");
+  const inningsLevel = positionsFilterActive(state) || oppositionFilterActive(state) || Boolean(splitDim);
+  if (wantsMatches && inningsLevel) {
+    selectParts.push(`COUNT(DISTINCT match_id) AS matches`);
+  }
+
+  const groupBy = [idCol, nameCol];
+  if (splitExpr) groupBy.push(splitExpr);
+
   const sql = [
     `SELECT ${selectParts.join(", ")}`,
     `FROM ${view}`,
     `WHERE ${whereClauses.join(" AND ")}`,
-    `GROUP BY ${idCol}, ${nameCol}`,
+    `GROUP BY ${groupBy.join(", ")}`,
     `HAVING ${havingParts.join(" AND ")}`,
   ].join("\n");
 
-  const wantsMatches = visibleColumns.includes("matches");
   let matchesSql = null;
-  if (wantsMatches) {
+  if (wantsMatches && !inningsLevel) {
     const pmWhere = buildScopeClauses(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" }).join(" AND ");
     const pmNameFilter =
       state.search && state.search.trim() ? ` AND player_name ILIKE '%${esc(state.search.trim())}%'` : "";
@@ -122,7 +155,7 @@ export function buildQuery(state, visibleColumns) {
     ].join("\n");
   }
 
-  return { sql, matchesSql };
+  return { sql, matchesSql, splitDim };
 }
 
 function formatValue(metric, value) {
@@ -161,11 +194,30 @@ function compareRows(a, b, metric, dir) {
   return dir === "asc" ? va - vb : vb - va;
 }
 
+/** Sort comparator for the split_value column (numeric for position, string otherwise). NULLS LAST. */
+function compareSplitRows(a, b, splitDim, dir) {
+  const va = a.split_value;
+  const vb = b.split_value;
+  if (va == null && vb == null) return 0;
+  if (va == null) return 1;
+  if (vb == null) return -1;
+  const d = splitDim.numeric ? Number(va) - Number(vb) : String(va).localeCompare(String(vb));
+  return dir === "asc" ? d : -d;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 // ── Table controller ─────────────────────────────────────────────────────────
 
 export function mountTable(container, store, { getManifestDates } = {}) {
   let lastRows = [];
   let loadToken = 0;
+  // The split dimension the CURRENT lastRows were queried with (null = no
+  // split). Rendering and split-column sorting must use this, not live state —
+  // the state may have moved on while the table still shows the old result.
+  let lastSplitDim = null;
 
   function visibleColumns() {
     const state = store.get();
@@ -230,29 +282,55 @@ export function mountTable(container, store, { getManifestDates } = {}) {
     </th>`;
   }
 
+  /** Sort `rows` by the store's current sort (metric or the "__split" column). */
+  function applySort(rows, s) {
+    if (s.sort.key === "__split" && lastSplitDim) {
+      return rows.slice().sort((a, b) => compareSplitRows(a, b, lastSplitDim, s.sort.dir));
+    }
+    const metric = getMetric(s.sort.key, s.discipline);
+    return metric ? rows.slice().sort((a, b) => compareRows(a, b, metric, s.sort.dir)) : rows;
+  }
+
   function renderTable(rows, state) {
+    const splitDim = lastSplitDim;
     const cols = visibleColumns()
       .map((key) => getMetric(key, state.discipline))
       .filter(Boolean);
 
+    const splitSorted = state.sort.key === "__split";
+    const splitTh = splitDim
+      ? `<th data-key="__split" class="data-table__th data-table__th--split ${splitSorted ? "is-sorted" : ""}" scope="col">
+          <button type="button" class="data-table__sort-btn">${escHtml(splitDim.columnLabel)}${splitSorted ? (state.sort.dir === "asc" ? " ▲" : " ▼") : ""}</button>
+        </th>`
+      : "";
+
     const theadHTML = `
       <tr>
         <th class="data-table__th data-table__th--sticky" scope="col">Player</th>
+        ${splitTh}
         ${cols.map((m) => headerCellHTML(m, state)).join("")}
       </tr>`;
 
     const tbodyHTML = rows
       .map((row) => {
+        const splitTd = splitDim
+          ? `<td class="data-table__td data-table__td--split">${row.split_value == null ? "—" : escHtml(row.split_value)}</td>`
+          : "";
         const cells = cols
           .map((m) => `<td class="data-table__td">${formatValue(m, row[m.key])}</td>`)
           .join("");
-        return `<tr><td class="data-table__td data-table__td--sticky">${row.name ?? ""}</td>${cells}</tr>`;
+        return `<tr><td class="data-table__td data-table__td--sticky">${row.name ?? ""}</td>${splitTd}${cells}</tr>`;
       })
       .join("");
 
+    // Split rows are (player × split value), so "players" would be dishonest.
+    const countLabel = splitDim
+      ? `${rows.length} row${rows.length === 1 ? "" : "s"} (${splitDim.label.toLowerCase()} split)`
+      : `${rows.length} player${rows.length === 1 ? "" : "s"} match`;
+
     container.innerHTML = `
       <div class="table-toolbar">
-        <div class="table-toolbar__row-count">${rows.length} player${rows.length === 1 ? "" : "s"} match</div>
+        <div class="table-toolbar__row-count">${countLabel}</div>
         <div class="table-toolbar__actions">
           <button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>
         </div>
@@ -270,19 +348,19 @@ export function mountTable(container, store, { getManifestDates } = {}) {
     container.querySelectorAll(".data-table__th[data-key]").forEach((th) => {
       th.addEventListener("click", () => {
         const key = th.dataset.key;
-        const metric = getMetric(key, state.discipline);
         const s = store.get();
         if (s.sort.key === key) {
           store.set({ sort: { key, dir: s.sort.dir === "asc" ? "desc" : "asc" } });
+        } else if (key === "__split") {
+          // Position/opposition/dismissal read most naturally ascending.
+          store.set({ sort: { key, dir: "asc" } });
         } else {
+          const metric = getMetric(key, state.discipline);
           const defaultDir = metric.higherIsBetter === false ? "asc" : "desc";
           store.set({ sort: { key, dir: defaultDir } });
         }
         const next = store.get();
-        const sortMetric = getMetric(next.sort.key, next.discipline);
-        if (sortMetric) {
-          lastRows = lastRows.slice().sort((a, b) => compareRows(a, b, sortMetric, next.sort.dir));
-        }
+        lastRows = applySort(lastRows, next);
         renderTable(lastRows, next);
       });
     });
@@ -300,7 +378,8 @@ export function mountTable(container, store, { getManifestDates } = {}) {
     document.querySelectorAll(".columns-popover").forEach((el) => el.remove());
     const state = store.get();
     const all = eligibleMetrics(state.discipline, state.formats);
-    const basic = all.filter((m) => !m.isPhaseMetric);
+    const basic = all.filter((m) => !m.isPhaseMetric && m.section !== "dismissal");
+    const dismissal = all.filter((m) => m.section === "dismissal");
     const phase = all.filter((m) => m.isPhaseMetric);
     const visible = new Set(visibleColumns());
 
@@ -320,7 +399,7 @@ export function mountTable(container, store, { getManifestDates } = {}) {
                .join("")}
            </div>`
         : "";
-    popover.innerHTML = section("Basic", basic) + section("Phase", phase);
+    popover.innerHTML = section("Basic", basic) + section("Dismissals", dismissal) + section("Phase", phase);
     anchor.parentElement.appendChild(popover);
 
     popover.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
@@ -357,7 +436,7 @@ export function mountTable(container, store, { getManifestDates } = {}) {
     pruneInvalidColumns();
     const state = store.get();
     const cols = visibleColumns();
-    const { sql, matchesSql } = buildQuery(state, cols);
+    const { sql, matchesSql, splitDim } = buildQuery(state, cols, { split: true });
     const token = ++loadToken;
     renderLoading();
     try {
@@ -366,6 +445,7 @@ export function mountTable(container, store, { getManifestDates } = {}) {
         matchesSql ? query(matchesSql) : Promise.resolve({ rows: [] }),
       ]);
       if (token !== loadToken) return; // a newer load superseded this one
+      lastSplitDim = splitDim ?? null;
 
       let merged = rows;
       if (matchesSql) {
@@ -373,8 +453,9 @@ export function mountTable(container, store, { getManifestDates } = {}) {
         merged = rows.map((r) => ({ ...r, matches: byId.get(r.id) ?? null }));
       }
 
-      const metric = getMetric(state.sort.key, state.discipline);
-      const sorted = metric ? merged.slice().sort((a, b) => compareRows(a, b, metric, state.sort.dir)) : merged;
+      // A stale "__split" sort (split since turned off) falls back to unsorted;
+      // applySort handles both metric and split-column sorts.
+      const sorted = applySort(merged, state);
 
       lastRows = sorted;
       renderTable(sorted, state);

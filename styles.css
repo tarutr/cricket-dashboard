@@ -461,6 +461,28 @@ a { color: var(--color-accent); }
   color: var(--color-muted);
 }
 
+/* ── Free splits (D4 Piece 3) — position / opposition / split-by row ────────── */
+
+.filter-bar--splits { margin-top: var(--space-5); }
+
+/* Individual group greying (position and opposition can be disabled
+   independently of each other, unlike the single profile row). */
+.filter-group.is-disabled { opacity: 0.55; }
+
+.chip-group--positions { max-width: 22rem; }
+
+.chip--sm {
+  padding: var(--space-2) var(--space-3);
+  min-width: 2.5rem;
+  text-align: center;
+}
+
+.chip:disabled,
+.chip--sm:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
 /* ── Buttons / links ───────────────────────────────────────────────────────── */
 
 .btn {
@@ -726,6 +748,20 @@ a { color: var(--color-accent); }
 }
 
 .data-table thead th.data-table__th--sticky { z-index: 3; }
+
+/* Split-value column (D4 Piece 3) — subtle tint so the breakdown row reads as
+   distinct from the player's regular metric columns. */
+.data-table__th--split { color: var(--color-accent-strong); }
+
+.data-table__td--split {
+  font-style: italic;
+  color: var(--color-muted);
+  background: var(--color-accent-tint);
+}
+
+.data-table tbody tr:nth-child(even) .data-table__td--split {
+  background: var(--color-accent-tint);
+}
 
 .data-table__td:first-child {
   font-weight: 600;

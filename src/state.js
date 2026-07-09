@@ -102,6 +102,72 @@ function profileScopeTokens(state) {
   return tokens;
 }
 
+// ── Free splits (D4 Piece 3) ─────────────────────────────────────────────────
+// Two innings-level filters (batting position, opposition) plus a table-only
+// "Split by" breakdown. Opposition is INTERNATIONAL cricket only (decision 20 —
+// club team names are unnormalized), so both the filter and the opposition
+// split apply ONLY while teamType === "international"; the controls grey out
+// elsewhere (decision-21 treatment: inert, never silently wrong). Positions
+// are a batting concept and apply only in the batting discipline.
+
+/** The three split dimensions. sqlExpr must be valid in both the SELECT and GROUP BY of the innings views. */
+export const SPLIT_DIMENSIONS = {
+  position: {
+    key: "position",
+    label: "Batting position",
+    columnLabel: "Pos",
+    disciplines: ["batting"],
+    internationalOnly: false,
+    numeric: true,
+    sqlExpr: () => "batting_position",
+  },
+  opposition: {
+    key: "opposition",
+    label: "Opposition",
+    columnLabel: "Opposition",
+    disciplines: ["batting", "bowling"],
+    internationalOnly: true,
+    numeric: false,
+    sqlExpr: (discipline) => (discipline === "batting" ? "bowling_team" : "batting_team"),
+  },
+  dismissal: {
+    key: "dismissal",
+    label: "Dismissal",
+    columnLabel: "Dismissal",
+    disciplines: ["batting"],
+    internationalOnly: false,
+    numeric: false,
+    // Retired hurt / retired not out are not dismissals — they read "not out",
+    // matching the dismissed flag (and the batting-average denominator).
+    sqlExpr: () => "CASE WHEN dismissed = 1 THEN dismissal_kind ELSE 'not out' END",
+  },
+};
+
+/** True if this split dimension may apply under the current discipline + team type. */
+export function splitAllowed(state, key) {
+  const dim = SPLIT_DIMENSIONS[key];
+  if (!dim) return false;
+  if (!dim.disciplines.includes(state.discipline)) return false;
+  if (dim.internationalOnly && state.teamType !== "international") return false;
+  return true;
+}
+
+/** The active split dimension object, or null if none is set / it isn't allowed right now. */
+export function activeSplit(state) {
+  if (!state.splitBy) return null;
+  return splitAllowed(state, state.splitBy) ? SPLIT_DIMENSIONS[state.splitBy] : null;
+}
+
+/** True if the batting-position filter is currently narrowing the innings set. */
+export function positionsFilterActive(state) {
+  return state.discipline === "batting" && Array.isArray(state.positions) && state.positions.length > 0;
+}
+
+/** True if the opposition filter is currently narrowing the innings set. */
+export function oppositionFilterActive(state) {
+  return state.teamType === "international" && Array.isArray(state.opposition) && state.opposition.length > 0;
+}
+
 /** Expand the selected format bucket keys into the raw match_type values for SQL IN (...). */
 export function expandFormats(formatKeys) {
   const set = new Set();
@@ -143,6 +209,9 @@ export function createInitialState(maxMonth) {
     teamType: "international",
     minInnings: 10,
     profile: emptyProfile(),
+    positions: [], // batting positions (ints); [] = no predicate. Applies in batting only.
+    opposition: [], // opposition team names; [] = no predicate. International only (decision 20).
+    splitBy: null, // null | "position" | "opposition" | "dismissal" — table-only breakdown
     search: "",
     sort: { key: "runs", dir: "desc" },
     columns: {
@@ -285,6 +354,16 @@ export function createStore(initial) {
       parts.push(s.teams.length <= 3 ? s.teams.join(", ") : `${s.teams.length} teams`);
     }
 
+    // Free splits (D4 Piece 3) — only tokens for filters actually applied:
+    // positions apply in batting only, opposition in international only.
+    if (oppositionFilterActive(s)) {
+      parts.push(s.opposition.length <= 3 ? `vs ${s.opposition.join(", ")}` : `vs ${s.opposition.length} opponents`);
+    }
+    if (positionsFilterActive(s)) {
+      const sorted = [...s.positions].sort((a, b) => a - b);
+      parts.push(`batting at ${sorted.join(", ")}`);
+    }
+
     if (s.minInnings && s.minInnings > 1) {
       parts.push(`min ${s.minInnings} innings`);
     }
@@ -293,6 +372,14 @@ export function createStore(initial) {
 
     if (s.search && s.search.trim()) {
       parts.push(`matching "${s.search.trim()}"`);
+    }
+
+    // The Split-by breakdown shapes the TABLE only (the graph ignores it), so
+    // the token appears only while the table view is active — the graph card's
+    // subtitle/footer read describeScope() and must stay honest (§8.4).
+    const split = activeSplit(s);
+    if (s.view === "table" && split) {
+      parts.push(`split by ${split.label.toLowerCase()}`);
     }
 
     return parts.filter(Boolean).join(", ");

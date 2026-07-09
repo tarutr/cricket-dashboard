@@ -340,6 +340,55 @@ const BATTING_METRICS = [
   },
 ];
 
+// Dismissal-kind breakdown (D4 Piece 3): how a batter's dismissals split by
+// kind — one count column and one "% of dismissals" column per kind (owner
+// choice: every kind separately, counts + %). The 12 kinds below are exactly
+// the dismissal_kind values that carry dismissed = 1 in the data, so the
+// counts partition SUM(dismissed) and the % columns share that denominator.
+// Retired hurt / retired not out are NOT dismissals (dismissed = 0) and are
+// excluded. `section: "dismissal"` groups these in the column picker.
+const DISMISSAL_KINDS = [
+  { kind: "caught", key: "out_caught", label: "Out Caught", short: "Ct" },
+  { kind: "bowled", key: "out_bowled", label: "Out Bowled", short: "Bwd" },
+  { kind: "lbw", key: "out_lbw", label: "Out LBW", short: "LBW" },
+  { kind: "run out", key: "out_run_out", label: "Run Out", short: "RO" },
+  { kind: "stumped", key: "out_stumped", label: "Out Stumped", short: "St" },
+  { kind: "caught and bowled", key: "out_caught_and_bowled", label: "Out Caught & Bowled", short: "C&B" },
+  { kind: "hit wicket", key: "out_hit_wicket", label: "Out Hit Wicket", short: "HW" },
+  { kind: "retired out", key: "out_retired_out", label: "Retired Out", short: "Ret Out" },
+  { kind: "obstructing the field", key: "out_obstructing_the_field", label: "Out Obstructing the Field", short: "Obs" },
+  { kind: "handled the ball", key: "out_handled_the_ball", label: "Out Handled the Ball", short: "HB" },
+  { kind: "timed out", key: "out_timed_out", label: "Timed Out", short: "TO" },
+  { kind: "hit the ball twice", key: "out_hit_the_ball_twice", label: "Out Hit the Ball Twice", short: "2x" },
+];
+for (const d of DISMISSAL_KINDS) {
+  const countExpr = `SUM(CASE WHEN dismissal_kind = '${d.kind}' THEN 1 ELSE 0 END)`;
+  BATTING_METRICS.push({
+    key: d.key,
+    label: d.label,
+    shortLabel: d.short,
+    discipline: "batting",
+    source: "innings",
+    section: "dismissal",
+    sqlExpression: countExpr,
+    higherIsBetter: null, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    minSampleComponent: "SUM(dismissed)",
+  });
+  BATTING_METRICS.push({
+    key: `${d.key}_pct`,
+    label: `${d.label} %`,
+    shortLabel: `${d.short} %`,
+    discipline: "batting",
+    source: "innings",
+    section: "dismissal",
+    sqlExpression: `${countExpr} * 100.0 / NULLIF(SUM(dismissed), 0)`,
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    minSampleComponent: "SUM(dismissed)",
+  });
+}
+
 // ── Bowling ───────────────────────────────────────────────────────────────────
 const BOWLING_METRICS = [
   {

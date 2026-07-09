@@ -5,8 +5,9 @@
 // and do the initial render.
 
 import { initDB, getManifest } from "./db.js";
-import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState } from "./state.js";
+import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, splitAllowed } from "./state.js";
 import { mountFilters } from "./filters.js";
+import { mountSplitControls } from "./splitControls.js";
 import { mountAdvanced, activeConditionCount } from "./advanced.js";
 import { mountTable } from "./table.js";
 import { getMetric } from "./metrics.js";
@@ -21,6 +22,7 @@ const footerDataDateEl = document.getElementById("footer-data-date");
 const disciplineToggleEl = document.querySelector('[data-role="discipline"]');
 const viewToggleEl = document.querySelector('[data-role="view"]');
 const filterBarEl = document.getElementById("filter-bar");
+const splitsBarEl = document.getElementById("splits-bar");
 const advancedToggleEl = document.getElementById("advanced-toggle");
 const advancedCountEl = document.getElementById("advanced-count");
 const advancedPanelEl = document.getElementById("advanced-panel");
@@ -67,6 +69,7 @@ let tableController;
 let advancedController;
 let filterController;
 let graphController;
+let splitControlsController;
 
 // Tracks the columns array we last auto-applied as a "default preset" per
 // discipline, so we can tell whether the user has since customized columns
@@ -137,6 +140,14 @@ function onFiltersChanged() {
   // Drop columns/conditions orphaned by the new scope BEFORE anything renders,
   // so the advanced panel, count badge, and query all agree (§8.4 honesty).
   pruneIneligibleState(store);
+  // A split that the new scope disallows (position/dismissal splits in the
+  // bowling view; opposition split outside international) resets to None —
+  // never a ghost mode the controls can't show honestly.
+  const s = store.get();
+  if (s.splitBy && !splitAllowed(s, s.splitBy)) {
+    store.set({ splitBy: null });
+  }
+  if (splitControlsController) splitControlsController.sync();
   updateScopeSentence();
   updateAdvancedCount();
   // Re-render the advanced panel too: its metric dropdown must reflect the
@@ -211,6 +222,10 @@ function boot() {
       );
       filterController.setDateBounds(minMonth, maxMonth);
       filterController.refreshTeamOptions();
+
+      splitControlsController = mountSplitControls(splitsBarEl, store, () => {
+        onFiltersChanged();
+      });
 
       advancedController = mountAdvanced(advancedPanelEl, store, () => {
         onFiltersChanged();

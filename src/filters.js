@@ -8,7 +8,15 @@
 // This module only renders/wires the DOM and calls store.set(...); it never
 // queries the database directly — src/table.js owns re-querying on state change.
 
-import { FORMAT_BUCKETS, expandFormats, emptyProfile, hasActiveProfileFilter, profileSemiJoinSql } from "./state.js";
+import {
+  FORMAT_BUCKETS,
+  expandFormats,
+  emptyProfile,
+  hasActiveProfileFilter,
+  profileSemiJoinSql,
+  oppositionFilterActive,
+  positionsFilterActive,
+} from "./state.js";
 import { query } from "./db.js";
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -75,8 +83,20 @@ async function fetchTeamOptions(state) {
 
 /** Shared WHERE-clause builder for gender/format/date/team_type/(team) — used by
  * both the team-options lookup and src/table.js's main query. Exported so
- * table.js builds an identical scope. */
-export function buildScopeClauses(state, { includeTeams = true, teamColumn, idColumn } = {}) {
+ * table.js builds an identical scope.
+ *
+ * D4 Piece 3 opt-ins (both default OFF because some callers query views that
+ * lack the columns, e.g. player_matches):
+ *   oppositionColumn — the view's opposition column (bowling_team for batting,
+ *     batting_team for bowling). The opposition filter applies ONLY while
+ *     teamType === "international" (decision 20; the controls grey out
+ *     elsewhere, so an inert selection must never filter silently).
+ *   includePositions — apply the batting-position filter (batting innings
+ *     views only; positions are a batting concept, inert in bowling). */
+export function buildScopeClauses(
+  state,
+  { includeTeams = true, teamColumn, idColumn, oppositionColumn, includePositions = false } = {}
+) {
   const clauses = [];
   clauses.push(`gender = '${esc(state.gender)}'`);
 
@@ -102,6 +122,17 @@ export function buildScopeClauses(state, { includeTeams = true, teamColumn, idCo
 
   if (includeTeams && state.teams && state.teams.length > 0 && teamColumn) {
     clauses.push(`${teamColumn} IN (${state.teams.map((t) => `'${esc(t)}'`).join(", ")})`);
+  }
+
+  if (oppositionColumn && oppositionFilterActive(state)) {
+    clauses.push(`${oppositionColumn} IN (${state.opposition.map((t) => `'${esc(t)}'`).join(", ")})`);
+  }
+
+  if (includePositions && positionsFilterActive(state)) {
+    // Positions are user-picked ints; coerce + drop anything non-integral so
+    // nothing unsanitized reaches the SQL.
+    const nums = state.positions.map(Number).filter(Number.isInteger);
+    if (nums.length > 0) clauses.push(`batting_position IN (${nums.join(", ")})`);
   }
 
   // Profile-powered filters (D4.2): semi-join to matched player_ids. Only added

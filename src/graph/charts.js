@@ -49,7 +49,14 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
     if (m.sortExpression) selectParts.push(`${m.sortExpression} AS ${m.key}__sort`);
   }
 
-  const whereClauses = buildScopeClauses(state, { includeTeams: true, teamColumn: teamCol });
+  // Opposition + batting-position filters (D4 Piece 3) apply here too — the
+  // card's scope line describes them, so the charted numbers must honor them.
+  const whereClauses = buildScopeClauses(state, {
+    includeTeams: true,
+    teamColumn: teamCol,
+    oppositionColumn: discipline === "batting" ? "bowling_team" : "batting_team",
+    includePositions: true,
+  });
   whereClauses.push(`${idCol} IN (${playerIds.map((id) => `'${esc(id)}'`).join(", ")})`);
 
   const sql = [
