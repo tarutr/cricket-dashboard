@@ -52,7 +52,7 @@ log = logging.getLogger(__name__)
 def download_cricsheet():
     url = "https://cricsheet.org/downloads/all_json.zip"
     log.info(f"Downloading Cricsheet data from {url}...")
-    response = requests.get(url, stream=True)
+    response = requests.get(url, stream=True, timeout=(30, 300))
     response.raise_for_status()
     JSON_DIR.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(io.BytesIO(response.content)) as z:
@@ -976,15 +976,25 @@ def main():
     log.info(f"JSON dir: {JSON_DIR}")
 
     # ── Download from Cricsheet ───────────────────────────────────────────────
-    download_cricsheet()
+    try:
+        download_cricsheet()
 
-    # ── Connect and create schema ─────────────────────────────────────────────
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect(str(DB_PATH))
+        # ── Connect and create schema ─────────────────────────────────────────
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        con = duckdb.connect(str(DB_PATH))
 
-    for stmt in SCHEMA_STATEMENTS:
-        con.execute(stmt)
-    log.info("Schema created (all tables)")
+        for stmt in SCHEMA_STATEMENTS:
+            con.execute(stmt)
+        log.info("Schema created (all tables)")
+    except Exception as e:
+        log.error(f"FATAL: could not download/prepare Cricsheet data: {e}")
+        alerts.send_alert(
+            "Pipeline could not download/prepare Cricsheet data — run failed before ingest",
+            f"ingest.py failed before the per-file ingestion loop started, while "
+            f"downloading Cricsheet data or preparing the schema:\n\n{e}\n\n"
+            f"No files were ingested this run. The run has failed red.\n",
+        )
+        raise
 
     # ── Build file list ───────────────────────────────────────────────────────
     all_files = sorted(JSON_DIR.glob("*.json"))
