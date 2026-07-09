@@ -17,6 +17,7 @@ import { query } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
 import { mountAdvanced, activeConditionCount } from "./advanced.js";
 import { mountDrawerInnings } from "./drawerInnings.js";
+import { escHtml, escAttr } from "./html.js";
 
 // Display order for the profile-filter option lists. Options are always
 // intersected with the values actually present in player_profiles (so no dead
@@ -35,10 +36,6 @@ function orderBy(present, order) {
   const ranked = order.filter((v) => set.has(v));
   const rest = present.filter((v) => !order.includes(v)).sort();
   return [...ranked, ...rest];
-}
-
-function escAttr(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
 /**
@@ -107,6 +104,7 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
             <div class="filter-bar filter-bar--profile" data-role="profile-bar">
               <div class="filter-group filter-group--profile-head">
                 <span class="profile-note" data-role="profile-note" hidden>We don't have profile data on Women yet.</span>
+                <span class="profile-note" data-role="profile-load-error" hidden>Couldn't load profile filter options — reopen the drawer to retry.</span>
               </div>
 
               <div class="filter-group filter-group--role">
@@ -181,6 +179,7 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
 
     profileBar: hostEl.querySelector('[data-role="profile-bar"]'),
     profileNote: hostEl.querySelector('[data-role="profile-note"]'),
+    profileLoadError: hostEl.querySelector('[data-role="profile-load-error"]'),
     roleGroup: hostEl.querySelector('[data-role="prof-roleGroup"]'),
     roleSub: hostEl.querySelector('[data-role="prof-roleSub"]'),
     battingHand: hostEl.querySelector('[data-role="prof-battingHand"]'),
@@ -198,20 +197,26 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   // ── Team dropdown + Min innings ─────────────────────────────────────────────
   let teamOptionsCache = []; // all available team names for the current scope
   let lastTeamScopeKey = null;
+  let teamOptionsLoadToken = 0;
+  let teamOptionsErrored = false;
 
   function teamScopeKeyFor(state) {
     return JSON.stringify([state.discipline, state.gender, state.formats, state.dateFrom, state.dateTo, state.teamType]);
   }
 
   function renderTeamList(filterText) {
+    if (teamOptionsErrored) {
+      els.teamList.innerHTML = `<p class="team-dropdown__empty">Couldn't load teams — reopen the drawer to retry.</p>`;
+      return;
+    }
     const q = (filterText || "").trim().toLowerCase();
     const selected = new Set(store.get().teams);
     const filtered = teamOptionsCache.filter((t) => t.toLowerCase().includes(q));
     els.teamList.innerHTML = filtered
       .map(
         (t) => `<label class="team-dropdown__item">
-          <input type="checkbox" data-team="${t.replace(/"/g, "&quot;")}" ${selected.has(t) ? "checked" : ""} />
-          <span>${t}</span>
+          <input type="checkbox" data-team="${escAttr(t)}" ${selected.has(t) ? "checked" : ""} />
+          <span>${escHtml(t)}</span>
         </label>`
       )
       .join("") || `<p class="team-dropdown__empty">No teams match.</p>`;
@@ -237,11 +242,22 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     const state = store.get();
     const key = teamScopeKeyFor(state);
     if (key === lastTeamScopeKey) return;
-    lastTeamScopeKey = key;
+    const token = ++teamOptionsLoadToken;
     try {
-      teamOptionsCache = await fetchTeamOptions(state);
+      const fetched = await fetchTeamOptions(state);
+      if (token !== teamOptionsLoadToken) return; // a newer request superseded this one
+      teamOptionsCache = fetched;
+      teamOptionsErrored = false;
+      lastTeamScopeKey = key;
     } catch (e) {
-      teamOptionsCache = [];
+      if (token !== teamOptionsLoadToken) return;
+      // Don't set lastTeamScopeKey on failure — it stays stale so the next
+      // sync() (drawer reopen, or any other filter change) retries instead of
+      // silently sticking with a dishonest "No teams match." empty state.
+      teamOptionsErrored = true;
+      renderTeamList(els.teamSearch.value);
+      updateTeamToggleLabel();
+      return;
     }
     const validSet = new Set(teamOptionsCache);
     const stillValid = state.teams.filter((t) => validSet.has(t));
@@ -293,6 +309,8 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   // players — so no dead options). Loaded once; the semi-join lives in
   // buildScopeClauses via profileSemiJoinSql.
   let profileOptions = { roleGroups: [], subByGroup: {}, bowlingTypes: [], battingHands: [], teams: [] };
+  let profileOptionsLoadToken = 0;
+  let profileOptionsErrored = false;
 
   function optionsHTML(values, selected, anyLabel) {
     const opts = [`<option value="">${anyLabel}</option>`];
@@ -337,7 +355,7 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
         .map(
           (t) => `<label class="team-dropdown__item">
           <input type="checkbox" data-team="${escAttr(t)}" ${selected.has(t) ? "checked" : ""} />
-          <span>${t}</span>
+          <span>${escHtml(t)}</span>
         </label>`
         )
         .join("") || `<p class="team-dropdown__empty">No teams match.</p>`;
@@ -373,15 +391,27 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   }
 
   async function loadProfileOptions() {
+    const token = ++profileOptionsLoadToken;
     try {
-      const [roleRows, bowlRows, handRows, teamRows] = await Promise.all([
+      // Batch 5b C4: bowling_type / batting_style / teams_played_for used to
+      // be three separate DISTINCT scans over `profiles`; they're now three
+      // parallel scalar-subquery aggregates in ONE query (one round trip).
+      // Each subquery keeps the EXACT same FROM/WHERE as its old standalone
+      // query — only DISTINCT-as-multiple-rows became list(DISTINCT …)-as-
+      // one-array — so the option sets are provably unchanged. role_group/
+      // role_subgroup was already a single combined query; left as-is.
+      const [roleRows, optionRows] = await Promise.all([
         query(`SELECT DISTINCT role_group, role_subgroup FROM profiles WHERE role_group IS NOT NULL`),
-        query(`SELECT DISTINCT bowling_type FROM profiles WHERE bowling_type IS NOT NULL`),
-        query(`SELECT DISTINCT batting_style FROM profiles WHERE batting_style IS NOT NULL`),
         query(
-          `SELECT DISTINCT team FROM (SELECT UNNEST(string_split(teams_played_for, '|')) AS team FROM profiles WHERE teams_played_for IS NOT NULL) WHERE team <> '' ORDER BY team`
+          [
+            `SELECT`,
+            `  (SELECT list(DISTINCT bowling_type) FROM profiles WHERE bowling_type IS NOT NULL) AS bowling_types,`,
+            `  (SELECT list(DISTINCT batting_style) FROM profiles WHERE batting_style IS NOT NULL) AS batting_styles,`,
+            `  (SELECT list(DISTINCT team) FROM (SELECT UNNEST(string_split(teams_played_for, '|')) AS team FROM profiles WHERE teams_played_for IS NOT NULL) WHERE team <> '') AS teams`,
+          ].join("\n")
         ),
       ]);
+      if (token !== profileOptionsLoadToken) return; // a newer request superseded this one
       const groups = new Set();
       const subByGroup = {};
       for (const r of roleRows.rows) {
@@ -389,21 +419,29 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
         if (r.role_subgroup) (subByGroup[r.role_group] ||= []).push(r.role_subgroup);
       }
       for (const g of Object.keys(subByGroup)) subByGroup[g] = orderBy(subByGroup[g], ROLE_SUB_ORDER);
+      const optRow = optionRows.rows[0] ?? {};
+      const teams = (optRow.teams ?? []).slice().sort();
       profileOptions = {
         roleGroups: orderBy([...groups], ROLE_GROUP_ORDER),
         subByGroup,
-        bowlingTypes: orderBy(bowlRows.rows.map((r) => r.bowling_type), BOWLING_TYPE_ORDER),
-        battingHands: orderBy(handRows.rows.map((r) => r.batting_style), BATTING_HAND_ORDER),
-        teams: teamRows.rows.map((r) => r.team),
+        bowlingTypes: orderBy(optRow.bowling_types ?? [], BOWLING_TYPE_ORDER),
+        battingHands: orderBy(optRow.batting_styles ?? [], BATTING_HAND_ORDER),
+        teams,
       };
+      profileOptionsErrored = false;
     } catch (e) {
-      profileOptions = { roleGroups: [], subByGroup: {}, bowlingTypes: [], battingHands: [], teams: [] };
+      if (token !== profileOptionsLoadToken) return;
+      // Don't reset profileOptions to empty here — a prior successful load (or
+      // the initial all-empty defaults) is left as-is, and the error note below
+      // makes the failure honest instead of silently reading as "no options".
+      profileOptionsErrored = true;
     }
     renderRoleSelects();
     renderProfSelects();
     renderProfTeamList("");
     updateProfTeamLabel();
     syncProfileEnabled();
+    els.profileLoadError.hidden = !profileOptionsErrored;
   }
 
   els.roleGroup.addEventListener("change", () => {
@@ -474,13 +512,34 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   });
 
   // ── Open / close ─────────────────────────────────────────────────────────────
+  // Batch 3 fix 1 safety net: a snapshot of state.advanced taken at open() time.
+  // Stat-condition selects/value-changes already call onChange() themselves on
+  // every committed edit (advanced.js), but a value mid-typed (store updated on
+  // "input", no "change" yet because the field never blurred) would otherwise
+  // reach a drawer-close (Escape/backdrop/×) without ever telling main.js — the
+  // table/graph would silently keep showing the PRE-edit scope while the pill
+  // already reads the new value. Comparing at close() and firing onChange()
+  // once if it moved closes that gap regardless of which close route was used.
+  let advancedSnapshotAtOpen = null;
+
   function open() {
     els.drawer.hidden = false;
     els.panel.focus();
+    advancedSnapshotAtOpen = JSON.stringify(store.get().advanced);
+    // Retry any option-fetches that previously failed — matches the inline
+    // error copy's "reopen the drawer to retry" (Batch 2 review). sync() and
+    // loadProfileOptions() no-op cheaply when nothing needs refetching.
+    sync();
+    if (profileOptionsErrored) loadProfileOptions();
   }
 
   function close() {
     els.drawer.hidden = true;
+    if (advancedSnapshotAtOpen !== null) {
+      const changed = JSON.stringify(store.get().advanced) !== advancedSnapshotAtOpen;
+      advancedSnapshotAtOpen = null;
+      if (changed) onChange();
+    }
   }
 
   els.closeBtn.addEventListener("click", close);
@@ -538,5 +597,12 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   loadProfileOptions();
   renderControls();
 
-  return { open, close, sync, activeCount };
+  // isOpen(): so callers (main.js) can gate sync() to only run while the
+  // drawer is actually visible (Batch 3 fix 2) — the drawer must always be
+  // fully current whenever VISIBLE (open() calls sync() directly; the
+  // store.subscribe hook calls it too, but only while open), never while
+  // hidden, where it would just be wasted rebuild work (and, before this
+  // fix, the reason typing in the advanced panel or the main search box lost
+  // focus/cursor on every keystroke).
+  return { open, close, sync, activeCount, isOpen: () => !els.drawer.hidden };
 }

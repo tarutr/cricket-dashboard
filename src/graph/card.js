@@ -26,10 +26,19 @@ function loadHtml2Canvas() {
       const script = document.createElement("script");
       script.src = "/vendor/html2canvas/html2canvas.min.js";
       script.onload = () => {
-        if (window.html2canvas) resolve(window.html2canvas);
-        else reject(new Error("html2canvas loaded but window.html2canvas is undefined"));
+        if (window.html2canvas) {
+          resolve(window.html2canvas);
+        } else {
+          // Don't memoize a broken load — reset so the next export click retries.
+          html2canvasPromise = null;
+          reject(new Error("html2canvas loaded but window.html2canvas is undefined"));
+        }
       };
-      script.onerror = () => reject(new Error("Failed to load /vendor/html2canvas/html2canvas.min.js"));
+      script.onerror = () => {
+        // Don't memoize a failed load — reset so the next export click retries.
+        html2canvasPromise = null;
+        reject(new Error("Failed to load /vendor/html2canvas/html2canvas.min.js"));
+      };
       document.head.appendChild(script);
     });
   }

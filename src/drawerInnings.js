@@ -19,12 +19,9 @@
 import { query } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
 import { matchupVsActive } from "./state.js";
+import { escHtml, escAttr } from "./html.js";
 
 const POSITIONS = Array.from({ length: 12 }, (_, i) => i + 1);
-
-function escAttr(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-}
 
 /**
  * Distinct opposition team names under the current scope. The opposition
@@ -96,6 +93,8 @@ export function mountDrawerInnings(container, store, onChange) {
 
   let oppOptionsCache = [];
   let lastScopeKey = null;
+  let oppOptionsLoadToken = 0;
+  let oppOptionsErrored = false;
 
   function scopeKeyFor(state) {
     return JSON.stringify([state.discipline, state.gender, state.formats, state.dateFrom, state.dateTo, state.teamType, state.teams]);
@@ -147,6 +146,10 @@ export function mountDrawerInnings(container, store, onChange) {
   }
 
   function renderOppList(filterText) {
+    if (oppOptionsErrored) {
+      els.oppList.innerHTML = `<p class="team-dropdown__empty">Couldn't load teams — reopen the drawer to retry.</p>`;
+      return;
+    }
     const q = (filterText || "").trim().toLowerCase();
     const selected = new Set(store.get().opposition);
     const filtered = oppOptionsCache.filter((t) => t.toLowerCase().includes(q));
@@ -155,7 +158,7 @@ export function mountDrawerInnings(container, store, onChange) {
         .map(
           (t) => `<label class="team-dropdown__item">
           <input type="checkbox" data-team="${escAttr(t)}" ${selected.has(t) ? "checked" : ""} />
-          <span>${t}</span>
+          <span>${escHtml(t)}</span>
         </label>`
         )
         .join("") || `<p class="team-dropdown__empty">No teams match.</p>`;
@@ -179,11 +182,22 @@ export function mountDrawerInnings(container, store, onChange) {
     if (state.teamType !== "international") return;
     const key = scopeKeyFor(state);
     if (key === lastScopeKey) return;
-    lastScopeKey = key;
+    const token = ++oppOptionsLoadToken;
     try {
-      oppOptionsCache = await fetchOppositionOptions(state);
+      const fetched = await fetchOppositionOptions(state);
+      if (token !== oppOptionsLoadToken) return; // a newer request superseded this one
+      oppOptionsCache = fetched;
+      oppOptionsErrored = false;
+      lastScopeKey = key;
     } catch (e) {
-      oppOptionsCache = [];
+      if (token !== oppOptionsLoadToken) return;
+      // Don't set lastScopeKey on failure — it stays stale so the next sync()
+      // (drawer reopen / filter change) retries instead of silently sticking
+      // with a dishonest "No teams match." empty state.
+      oppOptionsErrored = true;
+      renderOppList(els.oppSearch.value);
+      updateOppToggleLabel();
+      return;
     }
     const validSet = new Set(oppOptionsCache);
     const stillValid = state.opposition.filter((t) => validSet.has(t));

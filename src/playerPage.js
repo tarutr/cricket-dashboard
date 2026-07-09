@@ -12,30 +12,17 @@
 import {
   searchPlayers,
   fetchProfile,
-  fetchBattingSummary,
+  fetchBattingCore,
   fetchBattingPositions,
   fetchBattingOpposition,
-  fetchBattingDismissals,
-  fetchBattingProgression,
   fetchBattingMatchups,
-  fetchBowlingSummary,
-  fetchBowlingWicketTypes,
+  fetchBowlingCore,
   fetchBowlingOpposition,
   fetchBowlingMatchups,
 } from "./playerData.js";
 import { getMetric, DISMISSAL_KINDS, matchupBucketLabel } from "./metrics.js";
 import { formatValue } from "./table.js";
-
-function escHtml(s) {
-  return String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-function escAttr(s) {
-  return escHtml(s).replace(/"/g, "&quot;");
-}
+import { escHtml, escAttr } from "./html.js";
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function monthLabel(yyyymm) {
@@ -442,35 +429,39 @@ export function mountPlayerPage(container, store) {
     bindShell(loadAndRenderPlayer);
 
     try {
-      const [profile, battingSummary, bowlingSummary] = await Promise.all([
+      // battingCore/bowlingCore each merge what used to be 2-3 separate
+      // same-FROM/WHERE queries into one row (Batch 5b C2, see playerData.js)
+      // — the row carries every field the summary cards, dismissal
+      // fingerprint, and progression cards (batting) / wicket-type bars
+      // (bowling) need, so it's passed through unchanged as all three shapes.
+      const [profile, battingCore, bowlingCore] = await Promise.all([
         fetchProfile(playerRef.id),
-        fetchBattingSummary(playerRef.id, state),
-        fetchBowlingSummary(playerRef.id, state),
+        fetchBattingCore(playerRef.id, state),
+        fetchBowlingCore(playerRef.id, state),
       ]);
       if (token !== loadToken || current !== playerRef) return;
+      const battingSummary = battingCore;
+      const bowlingSummary = bowlingCore;
 
       let battingExtra = null;
       if (Number(battingSummary?.innings) > 0) {
-        const [positions, dismissals, progression, opposition, matchups] = await Promise.all([
+        const [positions, opposition, matchups] = await Promise.all([
           fetchBattingPositions(playerRef.id, state),
-          fetchBattingDismissals(playerRef.id, state),
-          fetchBattingProgression(playerRef.id, state),
           state.teamType === "international" ? fetchBattingOpposition(playerRef.id, state) : Promise.resolve(null),
           fetchBattingMatchups(playerRef.id, state),
         ]);
         if (token !== loadToken || current !== playerRef) return;
-        battingExtra = { positions, dismissals, progression, opposition, matchups };
+        battingExtra = { positions, dismissals: battingCore, progression: battingCore, opposition, matchups };
       }
 
       let bowlingExtra = null;
       if (Number(bowlingSummary?.innings) > 0) {
-        const [wicketTypes, opposition, matchups] = await Promise.all([
-          fetchBowlingWicketTypes(playerRef.id, state),
+        const [opposition, matchups] = await Promise.all([
           state.teamType === "international" ? fetchBowlingOpposition(playerRef.id, state) : Promise.resolve(null),
           fetchBowlingMatchups(playerRef.id, state),
         ]);
         if (token !== loadToken || current !== playerRef) return;
-        bowlingExtra = { wicketTypes, opposition, matchups };
+        bowlingExtra = { wicketTypes: bowlingCore, opposition, matchups };
       }
 
       container.innerHTML = pageHTML({ state, current: playerRef, profile, battingSummary, battingExtra, bowlingSummary, bowlingExtra });

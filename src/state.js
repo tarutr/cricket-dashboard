@@ -54,7 +54,9 @@ export function hasActiveProfileFilter(profile) {
   );
 }
 
-function escSql(s) {
+// SQL single-quote escaper (Batch 2 review: the ONE export — every module
+// that builds a SQL string literal imports this rather than redefining it).
+export function escSql(s) {
   return String(s).replace(/'/g, "''");
 }
 
