@@ -64,7 +64,9 @@ EXPORT_FILES = {
     # D4 matchup files (men-only in practice; unmapped opponents bucketed as
     # '(unmapped)' so the browser can compute an honest N-of-M denominator).
     "matchup_batting.parquet": ["match_id", "innings_number", "batter_id", "bowling_type"],
-    "matchup_bowling.parquet": ["match_id", "innings_number", "bowler_id", "batting_hand"],
+    # D4-R4: matchup_bowling grain gained batting_position (STRIKER's own
+    # batting position at each delivery) as a 5th PK column.
+    "matchup_bowling.parquet": ["match_id", "innings_number", "bowler_id", "batting_hand", "batting_position"],
 }
 
 CONTENT_TYPES = {
@@ -749,6 +751,65 @@ def odi_phase_wba():
     """
 
 
+def build_positions_cte():
+    """
+    Returns SQL for a `positions` CTE: one row per (match_id, innings_number,
+    pid) giving `pid`'s batting_position -- the rank of first appearance at the
+    crease (batter/non-striker order of first delivery, wicket-row arrivals
+    ranked via wicket_index) -- EXACTLY MIRRORING sql_batting()'s own
+    `appearances` / `first_app` / `positions` CTEs (see the comment there for
+    the full rationale, incl. the owner ruling on wickets-only arrivals). The
+    logic is duplicated verbatim rather than shared by import, because
+    sql_batting()'s inline CTE feeds the already-deployed batting_innings.parquet
+    and must not be touched by this (matchup-only) extension; the two are kept
+    textually identical on purpose, and the dev test harness cross-checks this
+    CTE's output against the real batting_innings.parquet-equivalent query.
+
+    Requires `d` (the delivery CTE from build_delivery_cte) and `kept_innings`
+    to already be in scope. Introduces CTE names prefixed `pos_` (pos_wickets,
+    pos_appearances, pos_first_app) plus `positions`, chosen not to collide with
+    the KINDS_IN-filtered `kept_wickets` CTE the matchup builders already define
+    for dismissal-kind bucketing (that CTE serves a different, narrower purpose
+    -- only bowler-credited kinds -- whereas position-of-arrival must consider
+    ALL wickets rows, matching sql_batting()'s unfiltered kept_wickets).
+    """
+    return """
+    pos_wickets AS (
+        SELECT w.*
+        FROM wickets w
+        JOIN kept_innings ki
+          ON w.match_id = ki.match_id AND w.innings_number = ki.innings_number
+    ),
+    pos_appearances AS (
+        SELECT match_id, innings_number, batter_id AS pid,
+               over_number, ball_index, 0 AS role_rank  -- striker before non-striker
+        FROM d
+        UNION ALL
+        SELECT match_id, innings_number, non_striker_id AS pid,
+               over_number, ball_index, 1 AS role_rank
+        FROM d
+        UNION ALL
+        SELECT match_id, innings_number, player_out_id AS pid,
+               over_number, ball_index, 2 + wicket_index AS role_rank
+        FROM pos_wickets
+    ),
+    pos_first_app AS (
+        SELECT match_id, innings_number, pid,
+               MIN(ROW(over_number, ball_index, role_rank)) AS first_key
+        FROM pos_appearances
+        GROUP BY match_id, innings_number, pid
+    ),
+    positions AS (
+        SELECT match_id, innings_number, pid,
+               ROW_NUMBER() OVER (
+                   PARTITION BY match_id, innings_number
+                   ORDER BY first_key
+               ) AS batting_position
+        FROM pos_first_app
+    )
+    """
+
+
 def sql_matchup_batting():
     """
     D4.3 batter x bowling-style. One row per
@@ -778,10 +839,21 @@ def sql_matchup_batting():
     convention as batting_innings.parquet). Verified (dev harness, all formats,
     real DB): dis_* sums to dismissals row-for-row; phase trios sum to
     runs/balls_faced row-for-row for T20/IT20 and ODI/ODM rows respectively.
+
+    D4-R4 extension: `batting_position` -- the batter's OWN position in that
+    innings (order of first crease appearance, §4.2), EXACTLY the definition
+    sql_batting() uses (see build_positions_cte()). Denormalized onto every
+    bowling_type row of that innings; primary key UNCHANGED (a batter has one
+    position per innings, regardless of how many bowling_type rows they split
+    across). Verified (dev harness, real DB): 0 mismatching rows vs a direct
+    join to the batting_innings-equivalent query; NOT NULL and within 1..12
+    everywhere.
     """
     cte = build_delivery_cte(hundred_only=None)
+    pos_cte = build_positions_cte()
     return f"""
     WITH {cte},
+    {pos_cte},
     kept_wickets AS (
         SELECT w.match_id, w.innings_number, w.over_number, w.ball_index, w.kind
         FROM wickets w
@@ -881,11 +953,15 @@ def sql_matchup_batting():
         CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_mid_runs   END AS odi_mid_runs,
         CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_mid_balls  END AS odi_mid_balls,
         CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_runs END AS odi_death_runs,
-        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_balls END AS odi_death_balls
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_balls END AS odi_death_balls,
+        pos.batting_position AS batting_position
     FROM mb
     LEFT JOIN dis_kind dk
       ON mb.match_id = dk.match_id AND mb.innings_number = dk.innings_number
      AND mb.batter_id = dk.batter_id AND mb.bowling_type = dk.bowling_type
+    LEFT JOIN positions pos
+      ON mb.match_id = pos.match_id AND mb.innings_number = pos.innings_number
+     AND mb.batter_id = pos.pid
     ORDER BY mb.match_date, mb.match_id, mb.innings_number, mb.batter_id, mb.bowling_type
     """
 
@@ -910,10 +986,22 @@ def sql_matchup_bowling():
     (dev harness, all formats, real DB): wkt_* sums to wickets row-for-row;
     phase trios sum to balls/runs_conceded/wickets row-for-row for T20/IT20 and
     ODI/ODM rows respectively.
+
+    D4-R4 GRAIN CHANGE: the primary key gained a 5th column, `batting_position`
+    -- the STRIKER's batting_position (§4.2, EXACTLY sql_batting()'s definition
+    via build_positions_cte()) for each delivery. Every numeric column keeps
+    its existing per-delivery attribution; it now simply splits across
+    position buckets within a (match, innings, bowler, batting_hand) group
+    instead of being summed into one row. Rolling the new grain back up to the
+    OLD grain (GROUP BY match, innings, bowler, batting_hand) reproduces the
+    pre-D4-R4 output exactly on every numeric column (verified in the dev
+    harness against the real DB, 0 rows differing either direction).
     """
     cte = build_delivery_cte(hundred_only=None)
+    pos_cte = build_positions_cte()
     return f"""
     WITH {cte},
+    {pos_cte},
     kept_wickets AS (
         SELECT w.match_id, w.innings_number, w.over_number, w.ball_index, w.kind
         FROM wickets w
@@ -934,10 +1022,13 @@ def sql_matchup_bowling():
     -- Named wkt_by_ball (matching sql_bowling's CTE) so t20_phase_expr_wba() /
     -- odi_phase_wba() -- which hard-code the "wkt_by_ball." prefix -- apply
     -- unmodified. Extra dims here: batting_hand (dismissed batter's mapped
-    -- style) and kind, so the kind- and phase-wise splits share one CTE.
+    -- style), batting_position (dismissed batter's own position, i.e. the
+    -- STRIKER's position at that delivery) and kind, so the kind- and
+    -- phase-wise splits share one CTE.
     wkt_by_ball AS (
         SELECT d.match_id, d.innings_number, d.bowler_id,
                COALESCE(pp.batting_style, '(unmapped)') AS batting_hand,
+               pos.batting_position,
                d.over_number, d.balls_per_over, d.legal_ordinal,
                kw.kind,
                COUNT(*) AS wkts
@@ -946,12 +1037,16 @@ def sql_matchup_bowling():
           ON kw.match_id = d.match_id AND kw.innings_number = d.innings_number
          AND kw.over_number = d.over_number AND kw.ball_index = d.ball_index
         LEFT JOIN player_profiles pp ON d.batter_id = pp.player_id
+        LEFT JOIN positions pos
+          ON d.match_id = pos.match_id AND d.innings_number = pos.innings_number
+         AND d.batter_id = pos.pid
         GROUP BY d.match_id, d.innings_number, d.bowler_id,
                  COALESCE(pp.batting_style, '(unmapped)'),
+                 pos.batting_position,
                  d.over_number, d.balls_per_over, d.legal_ordinal, kw.kind
     ),
     wkt_agg AS (
-        SELECT match_id, innings_number, bowler_id, batting_hand,
+        SELECT match_id, innings_number, bowler_id, batting_hand, batting_position,
                SUM(wkts) AS wickets,
                SUM(CASE WHEN kind = 'bowled'            THEN wkts ELSE 0 END) AS wkt_bowled,
                SUM(CASE WHEN kind = 'lbw'               THEN wkts ELSE 0 END) AS wkt_lbw,
@@ -966,12 +1061,13 @@ def sql_matchup_bowling():
                SUM(CASE WHEN ({odi_phase_wba()}) = 'mid'   THEN wkts ELSE 0 END) AS odi_mid_wickets,
                SUM(CASE WHEN ({odi_phase_wba()}) = 'death' THEN wkts ELSE 0 END) AS odi_death_wickets
         FROM wkt_by_ball
-        GROUP BY match_id, innings_number, bowler_id, batting_hand
+        GROUP BY match_id, innings_number, bowler_id, batting_hand, batting_position
     ),
     mbowl AS (
         SELECT
             d.match_id, d.innings_number, d.bowler_id,
             COALESCE(pp.batting_style, '(unmapped)') AS batting_hand,
+            pos.batting_position,
             ANY_VALUE(d.bowler) AS bowler_name,
             ANY_VALUE(d.batting_team) AS batting_team,
             ANY_VALUE(CASE WHEN d.team_1 = d.batting_team THEN d.team_2 ELSE d.team_1 END) AS bowling_team,
@@ -1002,16 +1098,21 @@ def sql_matchup_bowling():
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' THEN {BOWLER_RUNS} ELSE 0 END) AS odi_death_runs_conceded
         FROM d
         LEFT JOIN player_profiles pp ON d.batter_id = pp.player_id
+        LEFT JOIN positions pos
+          ON d.match_id = pos.match_id AND d.innings_number = pos.innings_number
+         AND d.batter_id = pos.pid
         LEFT JOIN cwkt
           ON d.match_id = cwkt.match_id AND d.innings_number = cwkt.innings_number
          AND d.over_number = cwkt.over_number AND d.ball_index = cwkt.ball_index
          AND d.batter_id = cwkt.batter_id AND d.bowler_id = cwkt.bowler_id
         WHERE d.bowler_id IS NOT NULL
         GROUP BY d.match_id, d.innings_number, d.bowler_id,
-                 COALESCE(pp.batting_style, '(unmapped)')
+                 COALESCE(pp.batting_style, '(unmapped)'),
+                 pos.batting_position
     )
     SELECT
         mbowl.match_id, mbowl.innings_number, mbowl.bowler_id, mbowl.batting_hand,
+        mbowl.batting_position,
         mbowl.bowler_name, mbowl.batting_team, mbowl.bowling_team, mbowl.match_type, mbowl.gender, mbowl.team_type,
         mbowl.match_date, mbowl.year, mbowl.month,
         mbowl.balls, mbowl.runs_conceded, mbowl.wickets, mbowl.dots, mbowl.fours_conceded, mbowl.sixes_conceded,
@@ -1037,7 +1138,9 @@ def sql_matchup_bowling():
     LEFT JOIN wkt_agg wk
       ON mbowl.match_id = wk.match_id AND mbowl.innings_number = wk.innings_number
      AND mbowl.bowler_id = wk.bowler_id AND mbowl.batting_hand = wk.batting_hand
-    ORDER BY mbowl.match_date, mbowl.match_id, mbowl.innings_number, mbowl.bowler_id, mbowl.batting_hand
+     AND mbowl.batting_position = wk.batting_position
+    ORDER BY mbowl.match_date, mbowl.match_id, mbowl.innings_number, mbowl.bowler_id,
+             mbowl.batting_hand, mbowl.batting_position
     """
 
 
@@ -1462,6 +1565,57 @@ def run_gates(con, out_dir):
     gate(mbowl_odi_bad == 0,
          "matchup_bowling ODI/ODM phase splits sum to balls/runs_conceded/wickets",
          f"{mbowl_odi_bad} mismatched rows")
+
+    # --- D4-R4: batting_position validity (matchup_batting + matchup_bowling) ---
+    # batting_position is the batter's/striker's rank of first crease
+    # appearance (§4.2); every crease appearance gets one (owner ruling, same
+    # as batting_innings.parquet's own gate), so it must never be NULL and
+    # must fall within a plausible XI+substitutes range.
+    mbat_pos_null = q(
+        f"SELECT COUNT(*) FROM read_parquet('{mbat_p}') WHERE batting_position IS NULL"
+    )
+    gate(mbat_pos_null == 0, "matchup_batting batting_position never NULL",
+         f"{mbat_pos_null} NULL positions")
+
+    mbat_pos_range = q(
+        f"SELECT COUNT(*) FROM read_parquet('{mbat_p}') WHERE batting_position NOT BETWEEN 1 AND 12"
+    )
+    gate(mbat_pos_range == 0, "matchup_batting batting_position within 1..12",
+         f"{mbat_pos_range} out-of-range rows")
+
+    mbowl_pos_null = q(
+        f"SELECT COUNT(*) FROM read_parquet('{mbowl_p}') WHERE batting_position IS NULL"
+    )
+    gate(mbowl_pos_null == 0, "matchup_bowling batting_position never NULL",
+         f"{mbowl_pos_null} NULL positions")
+
+    mbowl_pos_range = q(
+        f"SELECT COUNT(*) FROM read_parquet('{mbowl_p}') WHERE batting_position NOT BETWEEN 1 AND 12"
+    )
+    gate(mbowl_pos_range == 0, "matchup_bowling batting_position within 1..12",
+         f"{mbowl_pos_range} out-of-range rows")
+
+    # --- D4-R4: matchup_bowling rollup-preservation (global SUMs of every
+    # numeric column vs the deliveries-derived reference totals). balls /
+    # runs_conceded / wickets are already gated above (unaffected by the grain
+    # change: a global SUM is grain-agnostic). Extend to the remaining
+    # per-delivery numeric columns not previously globally gated here.
+    ref_dots = q(f"{ref_cte} SELECT COUNT(*) FROM d WHERE {LEGAL_BOWLER} AND d.runs_batter = 0")
+    ref_fours = q(f"{ref_cte} SELECT COUNT(*) FROM d WHERE {HIT_BOUNDARY_4}")
+    ref_sixes = q(f"{ref_cte} SELECT COUNT(*) FROM d WHERE {HIT_BOUNDARY_6}")
+
+    mbowl_dots = q(f"SELECT SUM(dots) FROM read_parquet('{mbowl_p}')")
+    mbowl_fours = q(f"SELECT SUM(fours_conceded) FROM read_parquet('{mbowl_p}')")
+    mbowl_sixes = q(f"SELECT SUM(sixes_conceded) FROM read_parquet('{mbowl_p}')")
+    gate(mbowl_dots == ref_dots,
+         "matchup_bowling dots == legal 0-run balls (rollup-preservation, global)",
+         f"{mbowl_dots} vs {ref_dots}")
+    gate(mbowl_fours == ref_fours,
+         "matchup_bowling fours_conceded == boundary 4s (rollup-preservation, global)",
+         f"{mbowl_fours} vs {ref_fours}")
+    gate(mbowl_sixes == ref_sixes,
+         "matchup_bowling sixes_conceded == boundary 6s (rollup-preservation, global)",
+         f"{mbowl_sixes} vs {ref_sixes}")
 
     # --- Coverage scope identity (task-required): a specific slice reconciles ---
     # Men's T20 (match_type='T20') in 2024: matchup_batting faced balls (all
