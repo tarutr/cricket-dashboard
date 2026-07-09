@@ -231,3 +231,8 @@ change requires a new owner decision recorded here. Dates are decision dates.
     presets + toolbar group-rows) → **R2** player pages → **R3** matchups on the
     player page (decisions 23/24 confirmed there) → final polish. All existing
     verified queries/metrics are re-homed, not rebuilt; numbers stay identical.
+
+30. **R1 gate PASSED (2026-07-09):** owner reviewed the slimmed leaderboard on
+    localhost — "this is largely good. There are design fixes, but we can do
+    that later." Remaining visual tweaks are BATCHED into the final polish pass
+    (consistent with decision 25's batching rule). R2 (player pages) proceeds.
