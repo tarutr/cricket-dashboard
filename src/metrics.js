@@ -734,13 +734,20 @@ const MATCHUP_BATTING_METRICS = [
     discipline: "matchup_batting",
     source: "matchup",
     // matchup_batting's grain is (match_id, innings_number, batter_id,
-    // bowling_type) — UNCHANGED by D4-R4 (batting_position was added as a
-    // plain column there, not a grain column), so one row already equals one
-    // (match, innings, bucket) and COUNT(*) is still correct.
-    sqlExpression: "COUNT(*)",
+    // bowling_type) — one row per (match, innings, bucket) at the FINE
+    // (bowling_type) view, so COUNT(*) alone would be correct there. But
+    // coarse views (GROUP BY bowling_group, e.g. Pace/Spin — including the
+    // leaderboard Vs mode) collapse multiple bowling_type rows into one
+    // group, and a single match-innings can span several bowling_type
+    // buckets (e.g. faced both off-spin and leg-spin in the same innings).
+    // COUNT(*) there would double/triple-count innings. Count distinct
+    // (match, innings) pairs instead — exactly what "innings" means
+    // regardless of grouping grain, matching matchup_bowling's innings
+    // metric (D4-R4 hardening) below.
+    sqlExpression: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
     higherIsBetter: null, format: "int",
     isPhaseMetric: null, zeroIsData: true,
-    minSampleComponent: "COUNT(*)",
+    minSampleComponent: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
   },
   {
     key: "balls",
