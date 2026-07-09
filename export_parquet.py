@@ -768,6 +768,16 @@ def sql_matchup_batting():
     counts against the bowler's style ONLY for bowler-credited kinds
     ({bowled, lbw, caught, caught and bowled, stumped, hit wicket}); run-outs and
     other non-credited kinds are NOT "out to pace/spin".
+
+    D4-R3 extension: dis_bowled/dis_lbw/dis_caught/dis_caught_and_bowled/
+    dis_stumped/dis_hit_wicket are the six-way split of `dismissals` by kind
+    (sum exactly to `dismissals`, per SPEC.md §4.1 / decision 23). pp_/mid_/
+    death_ are T20-range phase runs+balls (over_number 0-5/6-14/15-19, via the
+    shared t20_phase_expr() -- Hundred-aware); odi_pp_/odi_mid_/odi_death_ are
+    the ODI-range equivalents (0-9/10-39/40-49), NULLed for the Hundred (same
+    convention as batting_innings.parquet). Verified (dev harness, all formats,
+    real DB): dis_* sums to dismissals row-for-row; phase trios sum to
+    runs/balls_faced row-for-row for T20/IT20 and ODI/ODM rows respectively.
     """
     cte = build_delivery_cte(hundred_only=None)
     return f"""
@@ -791,6 +801,25 @@ def sql_matchup_batting():
         GROUP BY d.match_id, d.innings_number, d.over_number, d.ball_index,
                  d.batter_id, d.bowler_id
     ),
+    -- Dismissal-kind split, keyed identically to mb's bowling_type (same
+    -- COALESCE expression, same pp alias/join) so the join back is exact.
+    dis_kind AS (
+        SELECT d.match_id, d.innings_number, d.batter_id,
+               COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)') AS bowling_type,
+               SUM(CASE WHEN kw.kind = 'bowled'            THEN 1 ELSE 0 END) AS dis_bowled,
+               SUM(CASE WHEN kw.kind = 'lbw'               THEN 1 ELSE 0 END) AS dis_lbw,
+               SUM(CASE WHEN kw.kind = 'caught'            THEN 1 ELSE 0 END) AS dis_caught,
+               SUM(CASE WHEN kw.kind = 'caught and bowled' THEN 1 ELSE 0 END) AS dis_caught_and_bowled,
+               SUM(CASE WHEN kw.kind = 'stumped'           THEN 1 ELSE 0 END) AS dis_stumped,
+               SUM(CASE WHEN kw.kind = 'hit wicket'        THEN 1 ELSE 0 END) AS dis_hit_wicket
+        FROM kept_wickets kw
+        JOIN d
+          ON kw.match_id = d.match_id AND kw.innings_number = d.innings_number
+         AND kw.over_number = d.over_number AND kw.ball_index = d.ball_index
+        LEFT JOIN player_profiles pp ON d.bowler_id = pp.player_id
+        GROUP BY d.match_id, d.innings_number, d.batter_id,
+                 COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)')
+    ),
     mb AS (
         SELECT
             d.match_id, d.innings_number, d.batter_id,
@@ -810,7 +839,20 @@ def sql_matchup_batting():
             SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS dots,
             SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS fours_hit,
             SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS sixes_hit,
-            SUM(COALESCE(cwkt.wkts, 0)) AS dismissals
+            SUM(COALESCE(cwkt.wkts, 0)) AS dismissals,
+            MAX(CASE WHEN d.balls_per_over = 5 THEN 1 ELSE 0 END) AS is_hundred,
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    THEN d.runs_batter ELSE 0 END) AS pp_runs,
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {FACED_BATTER} THEN 1 ELSE 0 END) AS pp_balls,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   THEN d.runs_batter ELSE 0 END) AS mid_runs,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {FACED_BATTER} THEN 1 ELSE 0 END) AS mid_balls,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' THEN d.runs_batter ELSE 0 END) AS death_runs,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {FACED_BATTER} THEN 1 ELSE 0 END) AS death_balls,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    THEN d.runs_batter ELSE 0 END) AS odi_pp_runs,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {FACED_BATTER} THEN 1 ELSE 0 END) AS odi_pp_balls,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   THEN d.runs_batter ELSE 0 END) AS odi_mid_runs,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {FACED_BATTER} THEN 1 ELSE 0 END) AS odi_mid_balls,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' THEN d.runs_batter ELSE 0 END) AS odi_death_runs,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {FACED_BATTER} THEN 1 ELSE 0 END) AS odi_death_balls
         FROM d
         LEFT JOIN player_profiles pp ON d.bowler_id = pp.player_id
         LEFT JOIN cwkt
@@ -823,12 +865,28 @@ def sql_matchup_batting():
                  COALESCE(pp.bowling_group, '(unmapped)')
     )
     SELECT
-        match_id, innings_number, batter_id, bowling_type, bowling_group,
-        batter_name, batting_team, bowling_team, match_type, gender, team_type,
-        match_date, year, month,
-        runs, balls_faced, dots, fours_hit, sixes_hit, dismissals
+        mb.match_id, mb.innings_number, mb.batter_id, mb.bowling_type, mb.bowling_group,
+        mb.batter_name, mb.batting_team, mb.bowling_team, mb.match_type, mb.gender, mb.team_type,
+        mb.match_date, mb.year, mb.month,
+        mb.runs, mb.balls_faced, mb.dots, mb.fours_hit, mb.sixes_hit, mb.dismissals,
+        COALESCE(dk.dis_bowled, 0)            AS dis_bowled,
+        COALESCE(dk.dis_lbw, 0)               AS dis_lbw,
+        COALESCE(dk.dis_caught, 0)            AS dis_caught,
+        COALESCE(dk.dis_caught_and_bowled, 0) AS dis_caught_and_bowled,
+        COALESCE(dk.dis_stumped, 0)           AS dis_stumped,
+        COALESCE(dk.dis_hit_wicket, 0)        AS dis_hit_wicket,
+        mb.pp_runs, mb.pp_balls, mb.mid_runs, mb.mid_balls, mb.death_runs, mb.death_balls,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_pp_runs    END AS odi_pp_runs,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_pp_balls   END AS odi_pp_balls,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_mid_runs   END AS odi_mid_runs,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_mid_balls  END AS odi_mid_balls,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_runs END AS odi_death_runs,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_balls END AS odi_death_balls
     FROM mb
-    ORDER BY match_date, match_id, innings_number, batter_id, bowling_type
+    LEFT JOIN dis_kind dk
+      ON mb.match_id = dk.match_id AND mb.innings_number = dk.innings_number
+     AND mb.batter_id = dk.batter_id AND mb.bowling_type = dk.bowling_type
+    ORDER BY mb.match_date, mb.match_id, mb.innings_number, mb.batter_id, mb.bowling_type
     """
 
 
@@ -842,6 +900,16 @@ def sql_matchup_bowling():
     Components use the standard rules: legal balls (wides & no-balls excluded),
     runs_conceded = runs_batter + noballs + wides, bowler-credited wickets, dots
     (legal ball, 0 off bat), boundaries off the bat. Super-over innings excluded.
+
+    D4-R3 extension: wkt_bowled/wkt_lbw/wkt_caught/wkt_caught_and_bowled/
+    wkt_stumped/wkt_hit_wicket are the six-way split of `wickets` by kind (sum
+    exactly to `wickets`). pp_/mid_/death_ are T20-range phase balls/
+    runs_conceded/wickets trios (via the shared t20_phase_expr_wba() -- same
+    Hundred-aware ordinal logic as bowling_innings.parquet); odi_pp_/odi_mid_/
+    odi_death_ are the ODI-range equivalents, NULLed for the Hundred. Verified
+    (dev harness, all formats, real DB): wkt_* sums to wickets row-for-row;
+    phase trios sum to balls/runs_conceded/wickets row-for-row for T20/IT20 and
+    ODI/ODM rows respectively.
     """
     cte = build_delivery_cte(hundred_only=None)
     return f"""
@@ -863,6 +931,43 @@ def sql_matchup_bowling():
         GROUP BY d.match_id, d.innings_number, d.over_number, d.ball_index,
                  d.batter_id, d.bowler_id
     ),
+    -- Named wkt_by_ball (matching sql_bowling's CTE) so t20_phase_expr_wba() /
+    -- odi_phase_wba() -- which hard-code the "wkt_by_ball." prefix -- apply
+    -- unmodified. Extra dims here: batting_hand (dismissed batter's mapped
+    -- style) and kind, so the kind- and phase-wise splits share one CTE.
+    wkt_by_ball AS (
+        SELECT d.match_id, d.innings_number, d.bowler_id,
+               COALESCE(pp.batting_style, '(unmapped)') AS batting_hand,
+               d.over_number, d.balls_per_over, d.legal_ordinal,
+               kw.kind,
+               COUNT(*) AS wkts
+        FROM kept_wickets kw
+        JOIN d
+          ON kw.match_id = d.match_id AND kw.innings_number = d.innings_number
+         AND kw.over_number = d.over_number AND kw.ball_index = d.ball_index
+        LEFT JOIN player_profiles pp ON d.batter_id = pp.player_id
+        GROUP BY d.match_id, d.innings_number, d.bowler_id,
+                 COALESCE(pp.batting_style, '(unmapped)'),
+                 d.over_number, d.balls_per_over, d.legal_ordinal, kw.kind
+    ),
+    wkt_agg AS (
+        SELECT match_id, innings_number, bowler_id, batting_hand,
+               SUM(wkts) AS wickets,
+               SUM(CASE WHEN kind = 'bowled'            THEN wkts ELSE 0 END) AS wkt_bowled,
+               SUM(CASE WHEN kind = 'lbw'               THEN wkts ELSE 0 END) AS wkt_lbw,
+               SUM(CASE WHEN kind = 'caught'            THEN wkts ELSE 0 END) AS wkt_caught,
+               SUM(CASE WHEN kind = 'caught and bowled' THEN wkts ELSE 0 END) AS wkt_caught_and_bowled,
+               SUM(CASE WHEN kind = 'stumped'           THEN wkts ELSE 0 END) AS wkt_stumped,
+               SUM(CASE WHEN kind = 'hit wicket'        THEN wkts ELSE 0 END) AS wkt_hit_wicket,
+               SUM(CASE WHEN ({t20_phase_expr_wba()}) = 'pp'    THEN wkts ELSE 0 END) AS pp_wickets,
+               SUM(CASE WHEN ({t20_phase_expr_wba()}) = 'mid'   THEN wkts ELSE 0 END) AS mid_wickets,
+               SUM(CASE WHEN ({t20_phase_expr_wba()}) = 'death' THEN wkts ELSE 0 END) AS death_wickets,
+               SUM(CASE WHEN ({odi_phase_wba()}) = 'pp'    THEN wkts ELSE 0 END) AS odi_pp_wickets,
+               SUM(CASE WHEN ({odi_phase_wba()}) = 'mid'   THEN wkts ELSE 0 END) AS odi_mid_wickets,
+               SUM(CASE WHEN ({odi_phase_wba()}) = 'death' THEN wkts ELSE 0 END) AS odi_death_wickets
+        FROM wkt_by_ball
+        GROUP BY match_id, innings_number, bowler_id, batting_hand
+    ),
     mbowl AS (
         SELECT
             d.match_id, d.innings_number, d.bowler_id,
@@ -876,12 +981,25 @@ def sql_matchup_bowling():
             ANY_VALUE(d.match_date) AS match_date,
             ANY_VALUE(d.year) AS year,
             ANY_VALUE(d.month) AS month,
+            MAX(CASE WHEN d.balls_per_over = 5 THEN 1 ELSE 0 END) AS is_hundred,
             SUM(CASE WHEN {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS balls,
             SUM({BOWLER_RUNS}) AS runs_conceded,
             SUM(CASE WHEN {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS dots,
             SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS fours_conceded,
             SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS sixes_conceded,
-            SUM(COALESCE(cwkt.wkts, 0)) AS wickets
+            SUM(COALESCE(cwkt.wkts, 0)) AS wickets,
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS pp_balls,
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    THEN {BOWLER_RUNS} ELSE 0 END) AS pp_runs_conceded,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS mid_balls,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   THEN {BOWLER_RUNS} ELSE 0 END) AS mid_runs_conceded,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS death_balls,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' THEN {BOWLER_RUNS} ELSE 0 END) AS death_runs_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS odi_pp_balls,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    THEN {BOWLER_RUNS} ELSE 0 END) AS odi_pp_runs_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS odi_mid_balls,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   THEN {BOWLER_RUNS} ELSE 0 END) AS odi_mid_runs_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS odi_death_balls,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' THEN {BOWLER_RUNS} ELSE 0 END) AS odi_death_runs_conceded
         FROM d
         LEFT JOIN player_profiles pp ON d.batter_id = pp.player_id
         LEFT JOIN cwkt
@@ -893,12 +1011,33 @@ def sql_matchup_bowling():
                  COALESCE(pp.batting_style, '(unmapped)')
     )
     SELECT
-        match_id, innings_number, bowler_id, batting_hand,
-        bowler_name, batting_team, bowling_team, match_type, gender, team_type,
-        match_date, year, month,
-        balls, runs_conceded, wickets, dots, fours_conceded, sixes_conceded
+        mbowl.match_id, mbowl.innings_number, mbowl.bowler_id, mbowl.batting_hand,
+        mbowl.bowler_name, mbowl.batting_team, mbowl.bowling_team, mbowl.match_type, mbowl.gender, mbowl.team_type,
+        mbowl.match_date, mbowl.year, mbowl.month,
+        mbowl.balls, mbowl.runs_conceded, mbowl.wickets, mbowl.dots, mbowl.fours_conceded, mbowl.sixes_conceded,
+        COALESCE(wk.wkt_bowled, 0)            AS wkt_bowled,
+        COALESCE(wk.wkt_lbw, 0)               AS wkt_lbw,
+        COALESCE(wk.wkt_caught, 0)            AS wkt_caught,
+        COALESCE(wk.wkt_caught_and_bowled, 0) AS wkt_caught_and_bowled,
+        COALESCE(wk.wkt_stumped, 0)           AS wkt_stumped,
+        COALESCE(wk.wkt_hit_wicket, 0)        AS wkt_hit_wicket,
+        mbowl.pp_balls, mbowl.pp_runs_conceded, COALESCE(wk.pp_wickets,0) AS pp_wickets,
+        mbowl.mid_balls, mbowl.mid_runs_conceded, COALESCE(wk.mid_wickets,0) AS mid_wickets,
+        mbowl.death_balls, mbowl.death_runs_conceded, COALESCE(wk.death_wickets,0) AS death_wickets,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_pp_balls END AS odi_pp_balls,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_pp_runs_conceded END AS odi_pp_runs_conceded,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE COALESCE(wk.odi_pp_wickets,0) END AS odi_pp_wickets,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_mid_balls END AS odi_mid_balls,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_mid_runs_conceded END AS odi_mid_runs_conceded,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE COALESCE(wk.odi_mid_wickets,0) END AS odi_mid_wickets,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_death_balls END AS odi_death_balls,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_death_runs_conceded END AS odi_death_runs_conceded,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE COALESCE(wk.odi_death_wickets,0) END AS odi_death_wickets
     FROM mbowl
-    ORDER BY match_date, match_id, innings_number, bowler_id, batting_hand
+    LEFT JOIN wkt_agg wk
+      ON mbowl.match_id = wk.match_id AND mbowl.innings_number = wk.innings_number
+     AND mbowl.bowler_id = wk.bowler_id AND mbowl.batting_hand = wk.batting_hand
+    ORDER BY mbowl.match_date, mbowl.match_id, mbowl.innings_number, mbowl.bowler_id, mbowl.batting_hand
     """
 
 
@@ -1262,6 +1401,67 @@ def run_gates(con, out_dir):
          f"{mbowl_conceded} vs {ref_conceded}")
     gate(mbowl_wkts == ref_wkts, "matchup_bowling wickets == credited wickets",
          f"{mbowl_wkts} vs {ref_wkts}")
+
+    # --- D4-R3: dismissal/wicket-kind splits + phase trios reconcile ---
+    mbat_dis_split = q(
+        f"""SELECT SUM(dis_bowled + dis_lbw + dis_caught + dis_caught_and_bowled
+                        + dis_stumped + dis_hit_wicket)
+            FROM read_parquet('{mbat_p}')"""
+    )
+    gate(mbat_dis_split == mbat_dis,
+         "matchup_batting dis_* six-way split == dismissals (global)",
+         f"{mbat_dis_split} vs {mbat_dis}")
+
+    mbowl_wkt_split = q(
+        f"""SELECT SUM(wkt_bowled + wkt_lbw + wkt_caught + wkt_caught_and_bowled
+                        + wkt_stumped + wkt_hit_wicket)
+            FROM read_parquet('{mbowl_p}')"""
+    )
+    gate(mbowl_wkt_split == mbowl_wkts,
+         "matchup_bowling wkt_* six-way split == wickets (global)",
+         f"{mbowl_wkt_split} vs {mbowl_wkts}")
+
+    mbat_t20_bad = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{mbat_p}')
+            WHERE match_type IN ('T20','IT20')
+              AND (pp_runs + mid_runs + death_runs != runs
+                   OR pp_balls + mid_balls + death_balls != balls_faced)"""
+    )
+    gate(mbat_t20_bad == 0,
+         "matchup_batting T20/IT20 phase splits sum to runs/balls_faced",
+         f"{mbat_t20_bad} mismatched rows")
+
+    mbat_odi_bad = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{mbat_p}')
+            WHERE match_type IN ('ODI','ODM')
+              AND (odi_pp_runs + odi_mid_runs + odi_death_runs != runs
+                   OR odi_pp_balls + odi_mid_balls + odi_death_balls != balls_faced)"""
+    )
+    gate(mbat_odi_bad == 0,
+         "matchup_batting ODI/ODM phase splits sum to runs/balls_faced",
+         f"{mbat_odi_bad} mismatched rows")
+
+    mbowl_t20_bad = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{mbowl_p}')
+            WHERE match_type IN ('T20','IT20')
+              AND (pp_balls + mid_balls + death_balls != balls
+                   OR pp_runs_conceded + mid_runs_conceded + death_runs_conceded != runs_conceded
+                   OR pp_wickets + mid_wickets + death_wickets != wickets)"""
+    )
+    gate(mbowl_t20_bad == 0,
+         "matchup_bowling T20/IT20 phase splits sum to balls/runs_conceded/wickets",
+         f"{mbowl_t20_bad} mismatched rows")
+
+    mbowl_odi_bad = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{mbowl_p}')
+            WHERE match_type IN ('ODI','ODM')
+              AND (odi_pp_balls + odi_mid_balls + odi_death_balls != balls
+                   OR odi_pp_runs_conceded + odi_mid_runs_conceded + odi_death_runs_conceded != runs_conceded
+                   OR odi_pp_wickets + odi_mid_wickets + odi_death_wickets != wickets)"""
+    )
+    gate(mbowl_odi_bad == 0,
+         "matchup_bowling ODI/ODM phase splits sum to balls/runs_conceded/wickets",
+         f"{mbowl_odi_bad} mismatched rows")
 
     # --- Coverage scope identity (task-required): a specific slice reconciles ---
     # Men's T20 (match_type='T20') in 2024: matchup_batting faced balls (all
