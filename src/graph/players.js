@@ -28,28 +28,32 @@ const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
 const NAME_COL = { batting: "batter_name", bowling: "bowler_name" };
 const TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
 
-/** Sort comparator matching table.js's compareRows semantics: NULLs last always. */
-function sortValueForMetric(row, metric) {
-  const raw = metric.sortExpression ? row[`${metric.key}__sort`] : row[metric.key];
-  if (raw === null || raw === undefined) return null;
-  const n = Number(raw);
-  return Number.isNaN(n) ? null : n;
-}
-
-function compareBySort(a, b, metric, dir) {
-  const va = sortValueForMetric(a, metric);
-  const vb = sortValueForMetric(b, metric);
-  if (va === null && vb === null) return 0;
-  if (va === null) return 1;
-  if (vb === null) return -1;
-  return dir === "asc" ? va - vb : vb - va;
-}
-
 /**
  * Run the SAME query the Compare Stats table would run for the current state
  * (state.js's buildQuery + the currently visible columns' set — but we only
  * need id/name/sort column here), then take the top N by the active sort.
  * Returns [{id, name}].
+ *
+ * Batch 5b C3: previously this ran buildQuery's SQL with no LIMIT, pulled
+ * EVERY qualifying player's row across the wire (Arrow -> JS for the full
+ * leaderboard), sorted client-side, then sliced to `cap`. Now the same
+ * ranking is expressed in SQL — `ORDER BY <sort col> <dir> NULLS LAST` wrapped
+ * around the query builder's own SQL, then `LIMIT cap` — so DuckDB only ever
+ * returns the `cap` rows we keep. This reproduces table.js's compareRows
+ * exactly: NULLs sort last regardless of direction (`NULLS LAST` after either
+ * ASC or DESC). Ties (equal sort values) are broken by `id ASC` for a
+ * deterministic cap boundary — the client sort this replaces had no explicit
+ * tie-break (Array.sort is stable, so ties just kept the DB's own row order,
+ * itself unspecified), so this is a defensible, deterministic choice rather
+ * than an exact reproduction of undefined behavior.
+ *
+ * The seed step never excluded anyone for failing hasMetricData — it only
+ * ever ranked by the table's active sort (NULLs last) and sliced to `cap`.
+ * That's unchanged: a player with NULL for the sort metric can still be
+ * seeded (filling remaining slots after non-NULL rows), same as before. The
+ * separate "Excluded (no data)" note the Graph Builder shows (graph/charts.js)
+ * operates on the CHARTED metric — which may differ from the table's sort
+ * metric — against the already-seeded roster, and is untouched by this change.
  */
 export async function seedFromFilteredSet(store, cap) {
   const state = store.get();
@@ -61,8 +65,16 @@ export async function seedFromFilteredSet(store, cap) {
   const colsForQuery = cols.includes(sortKey) ? cols : [...cols, sortKey];
 
   const { sql, matchesSql } = buildQuery(state, colsForQuery);
+
+  const sortMetric = getMetric(sortKey, discipline);
+  const dir = state.sort.dir === "asc" ? "ASC" : "DESC";
+  const orderCol = sortMetric ? (sortMetric.sortExpression ? `${sortKey}__sort` : sortKey) : null;
+  const outerSql = orderCol
+    ? `SELECT * FROM (\n${sql}\n) seed_q\nORDER BY ${orderCol} ${dir} NULLS LAST, id ASC\nLIMIT ${cap}`
+    : `SELECT * FROM (\n${sql}\n) seed_q\nLIMIT ${cap}`;
+
   const [{ rows }, matchesResult] = await Promise.all([
-    query(sql),
+    query(outerSql),
     matchesSql ? query(matchesSql) : Promise.resolve({ rows: [] }),
   ]);
 
@@ -72,10 +84,7 @@ export async function seedFromFilteredSet(store, cap) {
     merged = rows.map((r) => ({ ...r, matches: byId.get(r.id) ?? null }));
   }
 
-  const sortMetric = getMetric(sortKey, discipline);
-  const sorted = sortMetric ? merged.slice().sort((a, b) => compareBySort(a, b, sortMetric, state.sort.dir)) : merged;
-
-  return sorted.slice(0, cap).map((r) => ({ id: r.id, name: r.name }));
+  return merged.map((r) => ({ id: r.id, name: r.name }));
 }
 
 /**
