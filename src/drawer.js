@@ -393,12 +393,22 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   async function loadProfileOptions() {
     const token = ++profileOptionsLoadToken;
     try {
-      const [roleRows, bowlRows, handRows, teamRows] = await Promise.all([
+      // Batch 5b C4: bowling_type / batting_style / teams_played_for used to
+      // be three separate DISTINCT scans over `profiles`; they're now three
+      // parallel scalar-subquery aggregates in ONE query (one round trip).
+      // Each subquery keeps the EXACT same FROM/WHERE as its old standalone
+      // query — only DISTINCT-as-multiple-rows became list(DISTINCT …)-as-
+      // one-array — so the option sets are provably unchanged. role_group/
+      // role_subgroup was already a single combined query; left as-is.
+      const [roleRows, optionRows] = await Promise.all([
         query(`SELECT DISTINCT role_group, role_subgroup FROM profiles WHERE role_group IS NOT NULL`),
-        query(`SELECT DISTINCT bowling_type FROM profiles WHERE bowling_type IS NOT NULL`),
-        query(`SELECT DISTINCT batting_style FROM profiles WHERE batting_style IS NOT NULL`),
         query(
-          `SELECT DISTINCT team FROM (SELECT UNNEST(string_split(teams_played_for, '|')) AS team FROM profiles WHERE teams_played_for IS NOT NULL) WHERE team <> '' ORDER BY team`
+          [
+            `SELECT`,
+            `  (SELECT list(DISTINCT bowling_type) FROM profiles WHERE bowling_type IS NOT NULL) AS bowling_types,`,
+            `  (SELECT list(DISTINCT batting_style) FROM profiles WHERE batting_style IS NOT NULL) AS batting_styles,`,
+            `  (SELECT list(DISTINCT team) FROM (SELECT UNNEST(string_split(teams_played_for, '|')) AS team FROM profiles WHERE teams_played_for IS NOT NULL) WHERE team <> '') AS teams`,
+          ].join("\n")
         ),
       ]);
       if (token !== profileOptionsLoadToken) return; // a newer request superseded this one
@@ -409,12 +419,14 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
         if (r.role_subgroup) (subByGroup[r.role_group] ||= []).push(r.role_subgroup);
       }
       for (const g of Object.keys(subByGroup)) subByGroup[g] = orderBy(subByGroup[g], ROLE_SUB_ORDER);
+      const optRow = optionRows.rows[0] ?? {};
+      const teams = (optRow.teams ?? []).slice().sort();
       profileOptions = {
         roleGroups: orderBy([...groups], ROLE_GROUP_ORDER),
         subByGroup,
-        bowlingTypes: orderBy(bowlRows.rows.map((r) => r.bowling_type), BOWLING_TYPE_ORDER),
-        battingHands: orderBy(handRows.rows.map((r) => r.batting_style), BATTING_HAND_ORDER),
-        teams: teamRows.rows.map((r) => r.team),
+        bowlingTypes: orderBy(optRow.bowling_types ?? [], BOWLING_TYPE_ORDER),
+        battingHands: orderBy(optRow.batting_styles ?? [], BATTING_HAND_ORDER),
+        teams,
       };
       profileOptionsErrored = false;
     } catch (e) {

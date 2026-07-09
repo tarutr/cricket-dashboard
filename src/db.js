@@ -123,33 +123,49 @@ async function loadDuckDB(onProgress) {
  * content hash) and create the four SQL views the rest of the app queries.
  */
 async function registerData(duckdbMod, dbInstance, connection, manifestData, onProgress) {
-  for (const name of PARQUET_FILES) {
-    const fileInfo = manifestData?.files?.[name];
-    const version = fileInfo?.sha256_12 ?? Date.now();
-    const url = `${DATA_BASE_URL}${name}?v=${version}`;
-    if (onProgress) onProgress({ stage: "register", file: name });
-    try {
-      await dbInstance.registerFileURL(name, url, duckdbMod.DuckDBDataProtocol.HTTP, false);
-    } catch (e) {
-      throw makeError(
-        e,
-        `Could not register ${name} for querying. The file may be missing from the data bucket, or CORS is not configured to allow this site's origin. (${url})`
-      );
-    }
-  }
+  // Batch 5b C5b: registerFileURL calls are independent (each just tells the
+  // WASM runtime a virtual filename maps to an HTTP URL — no shared state
+  // between files), so run all 7 in parallel instead of one-at-a-time.
+  // Per-file try/catch is kept so a failure still names the specific file
+  // and URL in the human-readable error (same makeError path as before);
+  // Promise.all rejects with the first one, same net effect as the old
+  // sequential loop's first-failure-wins behavior.
+  if (onProgress) onProgress({ stage: "register" });
+  await Promise.all(
+    PARQUET_FILES.map(async (name) => {
+      const fileInfo = manifestData?.files?.[name];
+      const version = fileInfo?.sha256_12 ?? Date.now();
+      const url = `${DATA_BASE_URL}${name}?v=${version}`;
+      try {
+        await dbInstance.registerFileURL(name, url, duckdbMod.DuckDBDataProtocol.HTTP, false);
+      } catch (e) {
+        throw makeError(
+          e,
+          `Could not register ${name} for querying. The file may be missing from the data bucket, or CORS is not configured to allow this site's origin. (${url})`
+        );
+      }
+    })
+  );
 
-  for (const [viewName, fileName] of Object.entries(VIEWS)) {
-    try {
-      await connection.query(
-        `CREATE OR REPLACE VIEW ${viewName} AS SELECT * FROM read_parquet('${fileName}')`
-      );
-    } catch (e) {
-      throw makeError(
-        e,
-        `Could not create the "${viewName}" view from ${fileName}. The Parquet file may be corrupt or unreadable by DuckDB-WASM.`
-      );
-    }
-  }
+  // CREATE VIEW statements only depend on their OWN file already being
+  // registered (done above) — not on each other — and this duckdb-wasm setup
+  // handles concurrent queries on one connection fine (verified: concurrent
+  // CREATE VIEW calls against the shared connection all completed correctly
+  // during manual testing), so these also run in parallel.
+  await Promise.all(
+    Object.entries(VIEWS).map(async ([viewName, fileName]) => {
+      try {
+        await connection.query(
+          `CREATE OR REPLACE VIEW ${viewName} AS SELECT * FROM read_parquet('${fileName}')`
+        );
+      } catch (e) {
+        throw makeError(
+          e,
+          `Could not create the "${viewName}" view from ${fileName}. The Parquet file may be corrupt or unreadable by DuckDB-WASM.`
+        );
+      }
+    })
+  );
 }
 
 async function doInit(onProgress) {
@@ -229,6 +245,13 @@ function normalizeValue(value) {
       return Number(value);
     }
     return value.toString();
+  }
+  // DuckDB LIST/ARRAY columns arrive as Arrow Vectors (iterable, but missing
+  // plain-array methods like .filter/.map/.slice) — used by C4's merged
+  // profile-options query (list(DISTINCT …)). Flatten to a real array so
+  // callers can treat it like any other JS array.
+  if (value !== null && typeof value === "object" && typeof value.toArray === "function") {
+    return Array.from(value.toArray(), normalizeValue);
   }
   return value;
 }
