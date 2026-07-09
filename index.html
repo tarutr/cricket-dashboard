@@ -20,12 +20,12 @@
       </div>
       <div class="app-header__controls">
         <div class="segmented" data-role="view" role="group" aria-label="View">
-          <button type="button" class="segmented__btn" data-value="table">Leaderboard</button>
-          <button type="button" class="segmented__btn" data-value="graph">Graph Builder</button>
+          <button type="button" class="segmented__btn is-active" data-value="table">Stats</button>
+          <button type="button" class="segmented__btn" data-value="graph">Graphs</button>
         </div>
         <div class="app-header__discipline">
           <div class="segmented" data-role="discipline" role="group" aria-label="Discipline">
-            <button type="button" class="segmented__btn" data-value="batting">Batting</button>
+            <button type="button" class="segmented__btn is-active" data-value="batting">Batting</button>
             <button type="button" class="segmented__btn" data-value="bowling">Bowling</button>
           </div>
         </div>
@@ -46,13 +46,12 @@
 
         <section class="table-section" id="table-area" aria-label="Player stats table"></section>
 
-        <section class="graph-section" id="graph-area" aria-label="Graph Builder" hidden></section>
+        <section class="graph-section" id="graph-area" aria-label="Graphs" hidden></section>
       </div>
     </main>
 
     <footer class="app-footer">
       <span id="footer-data-date"></span>
-      <a href="/debug/">debug console</a>
     </footer>
   </div>
 

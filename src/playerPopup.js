@@ -36,7 +36,7 @@ export function mountPlayerPopup(hostEl, store) {
   function open(id, name) {
     page.showPlayer(id, name);
     els.popup.hidden = false;
-    els.panel.scrollTop = 0;
+    els.body.scrollTop = 0;
     els.panel.focus();
   }
 

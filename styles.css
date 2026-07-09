@@ -174,6 +174,16 @@ a { color: var(--color-accent); }
   max-width: 34rem;
 }
 
+/* Authored layout for what used to be an accidental stack (two segmented
+   controls happened to end up right-aligned because .app-header is a row
+   with justify-content: space-between and this box just hugged its
+   content). Same visual arrangement, now on purpose. */
+.app-header__controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
 .app-header__discipline {
   flex-shrink: 0;
   padding-top: var(--space-1);
@@ -198,13 +208,30 @@ a { color: var(--color-accent); }
   gap: var(--space-5);
 }
 
-.init-status { padding: var(--space-5) 0; }
+.init-status {
+  padding: var(--space-7) 0;
+  display: flex;
+  justify-content: center;
+  text-align: center;
+}
 
 .init-status:empty { padding: 0; }
 
 .init-status__line--loading {
   color: var(--color-muted);
-  font-size: 0.95rem;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  letter-spacing: 0.01em;
+  animation: init-status-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes init-status-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .init-status__line--loading { animation: none; }
 }
 
 /* ── Segmented control (Gender / Team type / Discipline) ──────────────────── */
@@ -243,6 +270,13 @@ a { color: var(--color-accent); }
 
 .segmented__btn.is-active:hover { background: var(--color-active-bg); }
 
+/* .segmented--small (0,2,0) otherwise beats the general mobile tap-target
+   batch's bare .segmented__btn rule (0,1,0) regardless of source order —
+   restate the 40px floor explicitly for small segments at mobile widths. */
+@media (max-width: 640px) {
+  .segmented--small .segmented__btn { min-height: 40px; }
+}
+
 /* Discipline toggle reads as the header's prominent control */
 .app-header__discipline .segmented {
   border-color: var(--color-fg);
@@ -276,6 +310,12 @@ a { color: var(--color-accent); }
   flex-direction: column;
   gap: var(--space-2);
 }
+
+/* Gender / Team type segmented controls otherwise get cross-axis stretched
+   to the filter-group's full column width (e.g. the drawer's fixed 420px
+   panel), leaving a dead white strip past the last button. The control
+   should hug its own buttons, not the column. */
+.filter-group .segmented { align-self: flex-start; }
 
 .filter-label {
   font-size: 0.72rem;
@@ -436,7 +476,9 @@ a { color: var(--color-accent); }
 
 .profile-role { display: flex; gap: var(--space-2); }
 
-.filter-bar--profile.is-disabled { opacity: 0.55; }
+/* Disabled section state lives entirely on the individual controls inside
+   (see the unified :disabled rules below) — no wrapper-level opacity here,
+   so it can't stack with a control's own disabled styling. */
 
 /* Blank/prompt state for the results table (owner: explicit "Show results"). */
 .table-prompt {
@@ -454,11 +496,32 @@ a { color: var(--color-accent); }
   font-size: 1rem;
 }
 
+/* ── One disabled language, everywhere ────────────────────────────────────────
+   Recolor only — muted foreground on panel background, no opacity. Opacity
+   used to live on wrapper elements too (.is-disabled) and stacked with a
+   control's own disabled opacity, over-dimming; that wrapper opacity is gone
+   now (see the profile/position/opposition group comments above and below) —
+   each control's own :disabled rule is the single source of the disabled
+   look. A selected-but-disabled control (e.g. the boot state disabling the
+   view toggles) gets its own dimmed-fill variant below so it still reads as
+   selected rather than disappearing into the plain disabled state. */
 .select:disabled,
-.team-dropdown__toggle:disabled {
+.input:disabled,
+.team-dropdown__toggle:disabled,
+.chip:disabled,
+.chip--sm:disabled,
+.segmented__btn:disabled {
   cursor: not-allowed;
   background: var(--color-panel);
   color: var(--color-muted);
+  border-color: var(--color-line);
+}
+
+.chip.is-active:disabled,
+.segmented__btn.is-active:disabled {
+  background: color-mix(in srgb, var(--color-active-bg) 45%, var(--color-panel));
+  color: color-mix(in srgb, var(--color-active-fg) 65%, var(--color-muted));
+  border-color: var(--color-active-bg);
 }
 
 /* ── Free splits (D4 Piece 3) — position / opposition / split-by row ────────── */
@@ -466,8 +529,9 @@ a { color: var(--color-accent); }
 .filter-bar--splits { margin-top: var(--space-5); }
 
 /* Individual group greying (position and opposition can be disabled
-   independently of each other, unlike the single profile row). */
-.filter-group.is-disabled { opacity: 0.55; }
+   independently of each other, unlike the single profile row) — the
+   group's own controls carry the recolor-only :disabled state above; no
+   wrapper opacity here either. */
 
 .chip-group--positions { max-width: 22rem; }
 
@@ -475,12 +539,6 @@ a { color: var(--color-accent); }
   padding: var(--space-2) var(--space-3);
   min-width: 2.5rem;
   text-align: center;
-}
-
-.chip:disabled,
-.chip--sm:disabled {
-  cursor: not-allowed;
-  opacity: 0.7;
 }
 
 /* ── Buttons / links ───────────────────────────────────────────────────────── */
@@ -512,6 +570,13 @@ a { color: var(--color-accent); }
 }
 
 .btn--ghost:hover { border-color: var(--color-fg); }
+
+.btn:disabled {
+  cursor: not-allowed;
+  background: var(--color-panel);
+  color: var(--color-muted);
+  border-color: var(--color-line);
+}
 
 .link-btn,
 .text-btn {
@@ -545,46 +610,6 @@ a { color: var(--color-accent); }
 .icon-btn:hover { color: var(--color-bad); background: var(--color-bad-bg); }
 
 /* ── Advanced filters ──────────────────────────────────────────────────────── */
-
-.advanced-section {
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
-
-.advanced-toggle {
-  font: inherit;
-  font-weight: 600;
-  font-size: 0.9rem;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-5);
-  background: var(--color-panel);
-  border: none;
-  cursor: pointer;
-  text-align: left;
-  min-height: 48px;
-}
-
-.advanced-toggle:hover { background: var(--color-line); }
-
-.advanced-toggle__count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.4rem;
-  height: 1.4rem;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-pill);
-  background: var(--color-accent);
-  color: #fff;
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-.advanced-panel-container { padding: var(--space-5); background: var(--color-bg-raised); }
 
 .advanced-panel {
   display: flex;
@@ -796,7 +821,9 @@ a { color: var(--color-accent); }
 /* Columns popover */
 
 .columns-popover {
-  position: absolute;
+  /* JS always positions this with fixed + explicit top/left (it's rendered
+     on document.body to escape table-scroll clipping) — match reality. */
+  position: fixed;
   top: calc(100% + 6px);
   right: 0;
   z-index: 20;
@@ -928,6 +955,7 @@ a { color: var(--color-accent); }
 }
 
 .pill__x {
+  position: relative;
   font: inherit;
   font-size: 0.95rem;
   line-height: 1;
@@ -939,6 +967,19 @@ a { color: var(--color-accent); }
   min-width: 22px;
   min-height: 22px;
   border-radius: var(--radius-pill);
+}
+
+/* Visual glyph stays small (matches the pill's compact rhythm); the tap
+   target is expanded to 40x40 via a transparent hit-area, not by resizing
+   the visible button box. */
+.pill__x::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 40px;
+  height: 40px;
+  transform: translate(-50%, -50%);
 }
 
 .pill__x:hover { color: var(--color-bad); background: var(--color-bad-bg); }
@@ -1110,9 +1151,6 @@ a { color: var(--color-accent); }
     align-items: stretch;
   }
 
-  .advanced-toggle,
-  .advanced-panel-container { padding-left: var(--space-4); padding-right: var(--space-4); }
-
   .table-toolbar { padding: var(--space-3) var(--space-4); }
 
   .data-table__th,
@@ -1131,11 +1169,15 @@ a { color: var(--color-accent); }
   .input,
   .btn,
   .icon-btn,
-  .advanced-toggle,
+  .drawer__close,
+  .player-popup__close,
   .columns-popover__item,
   .team-dropdown__item {
     min-height: 40px;
   }
+
+  /* icon-btn is square; the batch above only floors its height. */
+  .icon-btn { min-width: 40px; }
 
   .app-footer {
     flex-direction: column;
@@ -1311,6 +1353,18 @@ a { color: var(--color-accent); }
 .paper-card__title:focus,
 .paper-card__subtitle:focus { background: rgba(27, 36, 48, 0.06); border-radius: 3px; }
 
+/* The paper card is a fixed light "printed artifact" regardless of app
+   theme (see .paper-card above) — its focus ring is a fixed color to
+   match, not the theme-reactive --color-focus-ring. A 6%-opacity tint
+   alone is too faint to read as a real focus indicator for keyboard use. */
+.paper-card__title:focus-visible,
+.paper-card__subtitle:focus-visible {
+  outline: 2px solid #9c2b2b;
+  outline-offset: 2px;
+  background: rgba(27, 36, 48, 0.06);
+  border-radius: 3px;
+}
+
 .paper-card__chart-area {
   position: relative;
   background: var(--paper-panel);
@@ -1370,40 +1424,59 @@ a { color: var(--color-accent); }
 
 [data-theme="dark"] .player-popup__backdrop { background: rgba(0, 0, 0, 0.6); }
 
+/* Panel is a non-scrolling flex column: the close button floats (absolute,
+   pinned top-right) above it, .player-popup__body is the only thing that
+   scrolls, and the player-page header row (below) rides sticky at the top
+   of that scroll so it and the close button read as one fixed header band
+   even though they're not DOM siblings. */
 .player-popup__panel {
   position: relative;
   margin: 4vh auto;
   width: min(920px, 94vw);
   max-height: 88vh;
-  overflow-y: auto;
+  overflow: hidden;
   background: var(--color-bg);
   box-shadow: var(--shadow-popover);
   border-radius: 10px;
-  padding: var(--space-5) var(--space-6) var(--space-6);
+  display: flex;
+  flex-direction: column;
 }
 
 .player-popup__close {
-  position: sticky;
-  top: 0;
-  float: right;
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font: inherit;
   font-size: 1.4rem;
   line-height: 1;
-  background: var(--color-bg);
+  background: none;
   border: none;
   cursor: pointer;
   color: var(--color-muted);
-  padding: var(--space-2);
-  z-index: 2;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  z-index: 3;
 }
-.player-popup__close:hover { color: var(--color-fg); }
+.player-popup__close:hover { color: var(--color-bad); background: var(--color-bad-bg); }
+
+.player-popup__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-6) var(--space-6);
+}
 
 @media (max-width: 640px) {
   .player-popup__panel {
+    position: absolute;
+    inset: 0;
     margin: 0;
-    width: 100vw;
-    max-height: 100vh;
-    height: 100%;
+    width: auto;
+    max-height: none;
     border-radius: 0;
   }
 }
@@ -1505,6 +1578,22 @@ a { color: var(--color-accent); }
 
 .player-page__back {
   align-self: flex-start;
+}
+
+/* Non-scrolling header row inside the popup: cancels .player-popup__body's
+   padding (space-5 top + space-6 sides) plus .player-page's own space-2 top
+   padding — space-2 + space-5 == space-6, so one negative-margin value
+   cancels both and the row sits flush at the scrollport's top edge, where
+   position: sticky then pins it. Right padding clears the close button
+   (44px box, inset space-2 from the panel edge). */
+.player-page__header-row {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: calc(-1 * var(--space-6)) calc(-1 * var(--space-6)) 0;
+  padding: var(--space-4) 3.5rem var(--space-3) var(--space-6);
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-line);
 }
 
 .player-page__loading {
@@ -1766,7 +1855,7 @@ a { color: var(--color-accent); }
   font-weight: 600;
 }
 
-@media (max-width: 620px) {
+@media (max-width: 640px) {
   .player-page__two-col {
     grid-template-columns: 1fr;
   }
@@ -1816,8 +1905,10 @@ a { color: var(--color-accent); }
 
 /* Bowling-type optgroup can carry long style names ("Slow left-arm
    orthodox") — cap the closed-select width so the toolbar doesn't stretch,
-   the dropdown panel itself still renders at full label width. */
-.table-toolbar__group-label .select--compact {
+   the dropdown panel itself still renders at full label width. Self-
+   contained (not reliant on the .table-toolbar__group-label ancestor) so
+   the modifier works wherever a compact select is reused. */
+.select--compact {
   max-width: 11rem;
 }
 
@@ -1839,7 +1930,7 @@ a { color: var(--color-accent); }
 }
 
 @media (max-width: 480px) {
-  .table-toolbar__group-label .select--compact {
+  .select--compact {
     max-width: 9rem;
   }
 }

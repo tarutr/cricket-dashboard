@@ -307,6 +307,16 @@ function headerHTML(current, profile) {
     </div>`;
 }
 
+/** Non-scrolling header row (popup only): pairs with .player-popup__close —
+ * see styles.css's .player-page__header-row comment for how the two line up
+ * without being DOM siblings. Kept as one helper so all three shells (page,
+ * loading, error) stay identical here. */
+function headerRowHTML() {
+  return `<div class="player-page__header-row">
+      <button type="button" class="link-btn player-page__back" data-role="back">&larr; Find another player</button>
+    </div>`;
+}
+
 function pageHTML({ state, current, profile, battingSummary, battingExtra, bowlingSummary, bowlingExtra }) {
   const bothEmpty = Number(battingSummary.innings) === 0 && Number(bowlingSummary.innings) === 0;
   const body = bothEmpty
@@ -315,7 +325,7 @@ function pageHTML({ state, current, profile, battingSummary, battingExtra, bowli
 
   return `
     <div class="player-page">
-      <button type="button" class="link-btn player-page__back" data-role="back">&larr; Find another player</button>
+      ${headerRowHTML()}
       ${headerHTML(current, profile)}
       <p class="player-page__scope">${escHtml(scopeLine(state))}</p>
       ${body}
@@ -325,7 +335,7 @@ function pageHTML({ state, current, profile, battingSummary, battingExtra, bowli
 function loadingShellHTML(current) {
   return `
     <div class="player-page">
-      <button type="button" class="link-btn player-page__back" data-role="back">&larr; Find another player</button>
+      ${headerRowHTML()}
       <h2 class="player-page__name">${escHtml(current.name)}</h2>
       <p class="player-page__loading">Loading…</p>
     </div>`;
@@ -335,7 +345,7 @@ function errorShellHTML(current, err) {
   const message = (err && (err.userMessage || err.message)) || "Something went wrong loading this player.";
   return `
     <div class="player-page">
-      <button type="button" class="link-btn player-page__back" data-role="back">&larr; Find another player</button>
+      ${headerRowHTML()}
       <h2 class="player-page__name">${escHtml(current.name)}</h2>
       <div class="error-box">
         <p>${escHtml(message)}</p>

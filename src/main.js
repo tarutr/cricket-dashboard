@@ -34,17 +34,24 @@ const graphAreaEl = document.getElementById("graph-area");
 function describeProgress(progress) {
   switch (progress.stage) {
     case "manifest":
-      return "Fetching manifest…";
+      return "Loading the database…";
     case "loading-duckdb":
+    // db.js's loadDuckDB() reports fine-grained "instantiate" ticks while the
+    // WASM module itself downloads — same step from the user's point of view.
+    case "instantiate":
       return "Loading DuckDB-WASM…";
     case "connecting":
       return "Opening database connection…";
+    // db.js's registerData() reports "register" once before its per-file
+    // fetches — same step as the "registering-data" stage doInit() reports
+    // just before calling it.
+    case "register":
     case "registering-data":
       return progress.file ? `Loading ${progress.file}…` : "Loading data…";
     case "ready":
       return "Finalizing…";
     default:
-      return "Working…";
+      return "Loading the database…";
   }
 }
 

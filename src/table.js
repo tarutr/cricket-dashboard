@@ -592,10 +592,26 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
   // lookup that never changes at runtime.
   let bowlingTypesCache = null;
   let lastBowlingTypes = [];
-  // The currently-open "Customise…" columns popover, if any (Batch 3 fix 3).
-  // Tracked here (not just a local DOM query) so load() can find and refresh
-  // it after every reload — see openColumnsPopover()'s doc comment.
+  // The currently-open "Columns" popover, if any (Batch 3 fix 3). Tracked here
+  // (not just a local DOM query) so load() can find and refresh it after
+  // every reload — see openColumnsPopover()'s doc comment.
   let openColumnsPopoverState = null;
+
+  // Persistent table-mode skeleton (Batch 1 mechanical fix, decision 42/43):
+  // the toolbar and table shell are built ONCE per entry into "table mode"
+  // (the first load from the blank prompt, or after an error) and never
+  // innerHTML-replaced by container.innerHTML wholesale again — every
+  // subsequent render (loading, loaded, re-sort) writes into these nodes'
+  // OWN innerHTML in place. This is what keeps the toolbar's controls
+  // (Vs / Group rows / Columns / presets) visible and interactive-looking
+  // DURING a re-query instead of vanishing under the user's cursor and the
+  // toolbar's geometry jumping. Null whenever we're not in table mode
+  // (prompt/error), so ensureSkeleton() knows to rebuild fresh next time.
+  let toolbarEl = null;
+  let overlayEl = null;
+  let scrollEl = null;
+  let theadEl = null;
+  let tbodyEl = null;
 
   function visibleColumns() {
     const state = store.get();
@@ -635,20 +651,34 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
     }
   }
 
-  function renderLoading() {
-    // Deliberately does NOT close an open columns popover: this is the
-    // in-flight state of a reload the popover's OWN checkbox change just
-    // triggered (Batch 3 fix 3) — closing here would undo the fix (the
-    // popover would vanish on every tick again). It briefly points at a
-    // detached anchor until renderTable() finishes and
-    // refreshOpenColumnsPopover() re-homes it to the new button.
+  /** Build the persistent table-mode skeleton (toolbar + loading overlay +
+   * table shell) once and cache node references. A no-op if it already
+   * exists — repeated calls across a query cycle must never rebuild it,
+   * that's the whole point of this fix. */
+  function ensureSkeleton() {
+    if (toolbarEl) return;
     container.innerHTML = `
-      <div class="table-toolbar">
-        <div class="table-toolbar__row-count">Loading…</div>
-      </div>
-      <div class="table-loading-overlay" aria-live="polite">Running query…</div>
-      <div class="table-scroll"><table class="data-table"><tbody></tbody></table></div>
+      <div class="table-toolbar"></div>
+      <div class="table-loading-overlay" aria-live="polite" hidden>Running query…</div>
+      <div class="table-scroll"><table class="data-table"><thead></thead><tbody></tbody></table></div>
     `;
+    toolbarEl = container.querySelector(".table-toolbar");
+    overlayEl = container.querySelector(".table-loading-overlay");
+    scrollEl = container.querySelector(".table-scroll");
+    theadEl = container.querySelector(".data-table thead");
+    tbodyEl = container.querySelector(".data-table tbody");
+  }
+
+  /** Forget the skeleton node references — called whenever container.innerHTML
+   * is about to be replaced wholesale by a non-table-mode render (prompt or
+   * error), so a later return to table mode rebuilds fresh via ensureSkeleton()
+   * instead of writing into now-detached nodes. */
+  function teardownSkeleton() {
+    toolbarEl = null;
+    overlayEl = null;
+    scrollEl = null;
+    theadEl = null;
+    tbodyEl = null;
   }
 
   /**
@@ -658,6 +688,7 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
    */
   function renderPrompt() {
     closeColumnsPopover(); // no columns-btn here either — same reasoning.
+    teardownSkeleton();
     container.innerHTML = `
       <div class="table-prompt">
         <p class="table-prompt__text">Choose your filters, then show the results.</p>
@@ -669,6 +700,7 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
   }
 
   function renderError(err, retryFn) {
+    teardownSkeleton();
     container.innerHTML = `
       <div class="error-box">
         <p>${escHtml((err && (err.userMessage || err.message)) || "Something went wrong running the query.")}</p>
@@ -733,10 +765,182 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
     `;
   }
 
-  function renderTable(rows, state, bowlingTypes = lastBowlingTypes) {
+  /** The split dimension actually in effect for rendering — null in matchup
+   * mode (no row-grouping there) regardless of a leftover state.splitBy. */
+  function effectiveSplitDim(state) {
+    return matchupVsActive(state) ? null : lastSplitDim;
+  }
+
+  /** Row-count slot text. `rows === null` means "still loading". Split rows
+   * are (player × split value), so "players" would be dishonest there.
+   * Thousands separators throughout (Batch 1 mechanical fix). */
+  function rowCountLabel(rows, splitDim) {
+    if (rows === null) return "Loading…";
+    return splitDim
+      ? `${rows.length.toLocaleString()} row${rows.length === 1 ? "" : "s"} (split by ${splitDim.label.toLowerCase()})`
+      : `${rows.length.toLocaleString()} player${rows.length === 1 ? "" : "s"}`;
+  }
+
+  /**
+   * Render the persistent toolbar's contents in place (row count, preset
+   * chips, "Vs" / Group rows / Columns actions) and rebind its listeners.
+   * Called both mid-query (`rows: null` → "Loading…" row count, everything
+   * else still fully interactive-looking) and after a load resolves (`rows`:
+   * the result set) — same markup shape either way, so no control ever
+   * vanishes or changes position between the two states (Batch 1 mechanical
+   * fix: previously the whole toolbar was replaced by a bare "Loading…" div
+   * on every re-query).
+   *
+   * Column presets and "Group rows" don't apply in matchup mode (no row
+   * grouping/preset vocabulary there — only the restricted column picker
+   * applies), but they stay in their normal toolbar slot, just greyed out
+   * (disabled + title) instead of being removed — removing them (the old
+   * behavior) is what let the "Vs" control and the Columns button drift to
+   * different positions between modes, since removing an earlier sibling
+   * reflows everything after it.
+   */
+  function renderToolbar(state, rows, bowlingTypes) {
     const matchupOn = matchupVsActive(state);
     const ns = effectiveDiscipline(state);
-    const splitDim = matchupOn ? null : lastSplitDim;
+    const splitDim = effectiveSplitDim(state);
+
+    // Position filters DO apply in both modes now (D4-R4) — only the honest
+    // stat-condition applicability note remains conditional.
+    const { total: condTotal, applied: condApplied } = conditionApplicability(state.advanced, ns);
+    const conditionNoteText =
+      condTotal > 0 && condApplied < condTotal ? `${condApplied} of ${condTotal} stat conditions apply here` : "";
+
+    // Column presets (R1): one-click sets; the active chip is the preset whose
+    // columns exactly match the current selection (none = no-preset/custom
+    // territory). Always rendered — greyed out in matchup mode rather than
+    // swapped for a note, so the toolbar's shape never changes between modes.
+    const currentPreset = matchupOn ? null : activePresetKey(state.discipline, state.formats, visibleColumns());
+    const presetChipsHTML = COLUMN_PRESET_DEFS[state.discipline]
+      .map((def) => {
+        const phaseAvailable = def.columns(state.formats) !== null;
+        const disabled = matchupOn || !phaseAvailable;
+        const title = matchupOn
+          ? ` title="Presets don't apply in matchup mode — column picker only"`
+          : phaseAvailable
+            ? ""
+            : ` title="Pick a single phase family (T20, or ODI/ODM) to use phase columns"`;
+        const active = !matchupOn && def.key === currentPreset;
+        return `<button type="button" class="chip chip--preset ${active ? "is-active" : ""}"
+          data-preset="${def.key}" ${disabled ? "disabled" : ""}${title}>${def.label}</button>`;
+      })
+      .join("");
+    const noteText = matchupOn
+      ? conditionNoteText
+        ? `Matchup mode, ${conditionNoteText}`
+        : "Matchup mode"
+      : conditionNoteText;
+    const noteHTML = noteText ? `<div class="table-toolbar__matchup-note">${noteText}</div>` : "";
+    const presetsBlockHTML = `<div class="table-toolbar__presets" role="group" aria-label="Column presets">${presetChipsHTML}</div>${noteHTML}`;
+
+    // "Group rows" (decision 29: row-splitting kept, tucked in the toolbar).
+    // A presentation control like the column picker, so changes reload directly
+    // (no Show-results round trip — the scope hasn't changed, only its layout).
+    // Always rendered, greyed out in matchup mode (same reasoning as presets).
+    const groupOptionsHTML = ["", ...Object.keys(SPLIT_DIMENSIONS)]
+      .map((key) => {
+        if (key === "") return `<option value="">No grouping</option>`;
+        const dim = SPLIT_DIMENSIONS[key];
+        const allowed = splitAllowed(state, key);
+        return `<option value="${key}" ${allowed ? "" : "disabled"} ${state.splitBy === key ? "selected" : ""}>${dim.label}</option>`;
+      })
+      .join("");
+    const groupDisabledAttr = matchupOn ? ` disabled title="Row grouping isn't available in matchup mode"` : "";
+    const groupRowsHTML = `<label class="table-toolbar__group-label">Group rows
+      <select class="select select--compact" data-role="group-rows" aria-label="Group rows"${groupDisabledAttr}>${groupOptionsHTML}</select>
+    </label>`;
+
+    const columnsBtnHTML = `<button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>`;
+
+    // "Vs" matchup select (D4 R3, decision 33): ALWAYS rendered, both modes —
+    // greyed for women (no style data yet, decision 21), presentation-mode
+    // control like Group rows (changes reload directly).
+    const vsDisabled = state.gender === "female";
+    const vsTitle = vsDisabled ? ` title="No style data for women's cricket yet"` : "";
+    const vsSelectHTML = `<label class="table-toolbar__group-label">Vs
+      <select class="select select--compact" data-role="matchup-vs" aria-label="Matchup opponent" ${vsDisabled ? "disabled" : ""}${vsTitle}>${matchupVsOptionsHTML(state, bowlingTypes)}</select>
+    </label>`;
+
+    toolbarEl.innerHTML = `
+      <div class="table-toolbar__row-count">${rowCountLabel(rows, splitDim)}</div>
+      ${presetsBlockHTML}
+      <div class="table-toolbar__actions">
+        ${vsSelectHTML}
+        ${groupRowsHTML}
+        ${columnsBtnHTML}
+      </div>
+    `;
+
+    toolbarEl.querySelectorAll(".chip--preset").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (btn.disabled) return;
+        const def = COLUMN_PRESET_DEFS[state.discipline].find((d) => d.key === btn.dataset.preset);
+        const cols = def ? def.columns(store.get().formats) : null;
+        if (!cols) return;
+        const s = store.get();
+        store.set({ columns: { ...s.columns, [s.discipline]: cols } });
+        load();
+      });
+    });
+
+    const groupSelect = toolbarEl.querySelector('[data-role="group-rows"]');
+    if (groupSelect) {
+      groupSelect.addEventListener("change", () => {
+        store.set({ splitBy: groupSelect.value || null });
+        load();
+      });
+    }
+
+    const vsSelect = toolbarEl.querySelector('[data-role="matchup-vs"]');
+    if (vsSelect) {
+      vsSelect.addEventListener("change", () => {
+        const raw = vsSelect.value;
+        if (!raw) {
+          store.set({ matchupVs: null });
+        } else {
+          const idx = raw.indexOf(":");
+          store.set({ matchupVs: { dim: raw.slice(0, idx), value: raw.slice(idx + 1) } });
+        }
+        load();
+      });
+    }
+
+    const columnsBtn = toolbarEl.querySelector('[data-role="columns-btn"]');
+    if (columnsBtn) {
+      columnsBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openColumnsPopover(columnsBtn);
+      });
+    }
+  }
+
+  /** Mid-query state: the toolbar stays mounted and fully interactive-looking
+   * (only its row-count slot reads "Loading…"); the table area shows the
+   * existing "Running query…" overlay in place of the table-scroll, which is
+   * hidden rather than emptied (Batch 1 mechanical fix — see mountTable's
+   * skeleton doc comment). */
+  function renderLoadingState(state, bowlingTypes = lastBowlingTypes) {
+    ensureSkeleton();
+    overlayEl.hidden = false;
+    scrollEl.hidden = true;
+    renderToolbar(state, null, bowlingTypes);
+  }
+
+  /** Loaded state: fills in the table head/body and the toolbar's final row
+   * count, then rebinds the table's own listeners (sort, player links).
+   * `rows` must already be the split/matchup-aware, sorted rows for `state`. */
+  function renderLoaded(rows, state, bowlingTypes = lastBowlingTypes) {
+    ensureSkeleton();
+    overlayEl.hidden = true;
+    scrollEl.hidden = false;
+
+    const matchupOn = matchupVsActive(state);
+    const ns = effectiveDiscipline(state);
+    const splitDim = effectiveSplitDim(state);
     const colKeys = state.columns[ns];
     const cols = colKeys.map((key) => getMetric(key, ns)).filter(Boolean);
 
@@ -750,7 +954,7 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
       ? `<th class="data-table__th data-table__th--coverage" scope="col">Coverage</th>`
       : "";
 
-    const theadHTML = `
+    theadEl.innerHTML = `
       <tr>
         <th class="data-table__th data-table__th--sticky" scope="col">Player</th>
         ${coverageTh}
@@ -758,7 +962,7 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
         ${cols.map((m) => headerCellHTML(m, state)).join("")}
       </tr>`;
 
-    const tbodyHTML = rows
+    tbodyEl.innerHTML = rows
       .map((row) => {
         const coverageTd = matchupOn
           ? `<td class="data-table__td data-table__td--coverage">${coverageLabel(row.coverage)}</td>`
@@ -777,124 +981,14 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
       })
       .join("");
 
-    // Split rows are (player × split value), so "players" would be dishonest.
-    const countLabel = splitDim
-      ? `${rows.length} row${rows.length === 1 ? "" : "s"} (${splitDim.label.toLowerCase()} split)`
-      : `${rows.length} player${rows.length === 1 ? "" : "s"} match`;
-
-    // Column presets (R1) and "Group rows" don't apply in matchup mode — no
-    // row-grouping there — a muted toolbar note replaces them instead. The
-    // column SET is still pickable via "Customise…" (restricted picker, D4 R3
-    // follow-up: the matchup vocabulary, not the fixed set it used to be).
-    // Position filters DO apply in both modes now (D4-R4) — only the honest
-    // stat-condition applicability note remains conditional.
-    const { total: condTotal, applied: condApplied } = conditionApplicability(state.advanced, ns);
-    const conditionNoteText =
-      condTotal > 0 && condApplied < condTotal ? `${condApplied} of ${condTotal} stat conditions apply here` : "";
-
-    let presetsOrNoteHTML = "";
-    let groupRowsHTML = "";
-    let columnsBtnHTML = "";
-    if (matchupOn) {
-      const matchupNote = conditionNoteText ? `Matchup mode, ${conditionNoteText}` : "Matchup mode";
-      presetsOrNoteHTML = `<div class="table-toolbar__matchup-note">${matchupNote}</div>`;
-      columnsBtnHTML = `<button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Customise…</button>`;
-    } else {
-      // Column presets (R1): one-click sets; the active chip is the preset whose
-      // columns exactly match the current selection (none = "Customise" territory).
-      const currentPreset = activePresetKey(state.discipline, state.formats, visibleColumns());
-      const presetChipsHTML = COLUMN_PRESET_DEFS[state.discipline]
-        .map((def) => {
-          const available = def.columns(state.formats) !== null;
-          return `<button type="button" class="chip chip--preset ${def.key === currentPreset ? "is-active" : ""}"
-            data-preset="${def.key}" ${available ? "" : `disabled title="Pick a single phase family (T20, or ODI/ODM) to use phase columns"`}>${def.label}</button>`;
-        })
-        .join("");
-      const normalConditionNoteHTML = conditionNoteText
-        ? `<div class="table-toolbar__matchup-note">${conditionNoteText}</div>`
-        : "";
-      presetsOrNoteHTML = `<div class="table-toolbar__presets" role="group" aria-label="Column presets">${presetChipsHTML}</div>${normalConditionNoteHTML}`;
-
-      // "Group rows" (decision 29: row-splitting kept, tucked in the toolbar).
-      // A presentation control like the column picker, so changes reload directly
-      // (no Show-results round trip — the scope hasn't changed, only its layout).
-      const groupOptionsHTML = ["", ...Object.keys(SPLIT_DIMENSIONS)]
-        .map((key) => {
-          if (key === "") return `<option value="">No grouping</option>`;
-          const dim = SPLIT_DIMENSIONS[key];
-          const allowed = splitAllowed(state, key);
-          return `<option value="${key}" ${allowed ? "" : "disabled"} ${state.splitBy === key ? "selected" : ""}>${dim.label}</option>`;
-        })
-        .join("");
-      groupRowsHTML = `<label class="table-toolbar__group-label">Group rows
-        <select class="select select--compact" data-role="group-rows" aria-label="Group rows">${groupOptionsHTML}</select>
-      </label>`;
-      columnsBtnHTML = `<button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Customise…</button>`;
-    }
-
-    // "Vs" matchup select (D4 R3, decision 33): ALWAYS rendered, both modes —
-    // greyed for women (no style data yet, decision 21), presentation-mode
-    // control like Group rows (changes reload directly).
-    const vsDisabled = state.gender === "female";
-    const vsTitle = vsDisabled ? ` title="No style data for women's cricket yet"` : "";
-    const vsSelectHTML = `<label class="table-toolbar__group-label">Vs
-      <select class="select select--compact" data-role="matchup-vs" aria-label="Matchup opponent" ${vsDisabled ? "disabled" : ""}${vsTitle}>${matchupVsOptionsHTML(state, bowlingTypes)}</select>
-    </label>`;
-
-    container.innerHTML = `
-      <div class="table-toolbar">
-        <div class="table-toolbar__row-count">${countLabel}</div>
-        ${presetsOrNoteHTML}
-        <div class="table-toolbar__actions">
-          ${vsSelectHTML}
-          ${groupRowsHTML}
-          ${columnsBtnHTML}
-        </div>
-      </div>
-      <div class="table-scroll">
-        <table class="data-table">
-          <thead>${theadHTML}</thead>
-          <tbody>${tbodyHTML}</tbody>
-        </table>
-      </div>
-    `;
-
-    container.querySelectorAll(".chip--preset").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const def = COLUMN_PRESET_DEFS[state.discipline].find((d) => d.key === btn.dataset.preset);
-        const cols = def ? def.columns(store.get().formats) : null;
-        if (!cols) return;
-        const s = store.get();
-        store.set({ columns: { ...s.columns, [s.discipline]: cols } });
-        load();
-      });
-    });
-
-    const groupSelect = container.querySelector('[data-role="group-rows"]');
-    if (groupSelect) {
-      groupSelect.addEventListener("change", () => {
-        store.set({ splitBy: groupSelect.value || null });
-        load();
-      });
-    }
-
-    const vsSelect = container.querySelector('[data-role="matchup-vs"]');
-    if (vsSelect) {
-      vsSelect.addEventListener("change", () => {
-        const raw = vsSelect.value;
-        if (!raw) {
-          store.set({ matchupVs: null });
-        } else {
-          const idx = raw.indexOf(":");
-          store.set({ matchupVs: { dim: raw.slice(0, idx), value: raw.slice(idx + 1) } });
-        }
-        load();
-      });
-    }
+    renderToolbar(state, rows, bowlingTypes);
 
     // Sorting: click header to sort/flip. Re-sorts the cached rows client-side
-    // (no requery needed — the result set is unchanged, only its order).
-    container.querySelectorAll(".data-table__th[data-key]").forEach((th) => {
+    // (no requery needed — the result set is unchanged, only its order). The
+    // sort-state class (is-sorted / arrow) is recomputed from `state` on every
+    // renderLoaded call, so it survives this persistent-skeleton refactor the
+    // same way it always did — headerCellHTML just reads state.sort fresh.
+    theadEl.querySelectorAll(".data-table__th[data-key]").forEach((th) => {
       th.addEventListener("click", () => {
         const key = th.dataset.key;
         const s = store.get();
@@ -910,23 +1004,15 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
         }
         const next = store.get();
         lastRows = applySort(lastRows, next);
-        renderTable(lastRows, next, bowlingTypes);
+        renderLoaded(lastRows, next, bowlingTypes);
       });
     });
 
     if (onPlayerClick) {
-      container.querySelectorAll(".player-link").forEach((btn) => {
+      tbodyEl.querySelectorAll(".player-link").forEach((btn) => {
         btn.addEventListener("click", () => {
           onPlayerClick(btn.dataset.playerId, btn.textContent);
         });
-      });
-    }
-
-    const columnsBtn = container.querySelector('[data-role="columns-btn"]');
-    if (columnsBtn) {
-      columnsBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openColumnsPopover(columnsBtn);
       });
     }
   }
@@ -941,10 +1027,14 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
    * vice versa (they're different namespaces/keys).
    *
    * Batch 3 fix 3: hosted on document.body, NOT inside `container`. Every
-   * checkbox change calls load(), which reassigns container.innerHTML
-   * wholesale (renderLoading() then renderTable()) — a popover living inside
-   * that subtree was destroyed the instant the first checkbox fired, so only
-   * one column could be ticked per open (the owner's known complaint).
+   * checkbox change calls load(), which (pre-Batch-1) reassigned
+   * container.innerHTML wholesale (renderLoading() then renderTable()) — a
+   * popover living inside that subtree was destroyed the instant the first
+   * checkbox fired, so only one column could be ticked per open (the owner's
+   * known complaint). Batch 1's persistent-toolbar refactor (renderLoadingState()
+   * / renderLoaded(), see above) no longer nukes `container` wholesale either,
+   * but this popover still lives on document.body regardless — it must survive
+   * even a full prompt/error transition, which DOES still replace `container`.
    * Living on body lets it survive reloads for free; positionColumnsPopover()
    * places it from the anchor button's getBoundingClientRect(), and
    * refreshOpenColumnsPopover() (called from load(), see below) re-finds the
@@ -1101,7 +1191,7 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
     const cols = state.columns[ns];
     const { sql, matchesSql, splitDim } = buildQuery(state, cols, { split: true });
     const token = ++loadToken;
-    renderLoading();
+    renderLoadingState(state);
     try {
       const [{ rows }, matchesResult, bowlingTypes] = await Promise.all([
         query(sql),
@@ -1132,7 +1222,7 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
       const sorted = applySort(merged, state);
 
       lastRows = sorted;
-      renderTable(sorted, state, bowlingTypes);
+      renderLoaded(sorted, state, bowlingTypes);
       // The columns popover (if open) lives outside `container` precisely so
       // this reload never destroys it (Batch 3 fix 3) — re-find its anchor in
       // the freshly-rendered toolbar, reposition, and re-sync checked state.
