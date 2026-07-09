@@ -34,6 +34,12 @@ R2_BUCKET = "cricket-db"
 R2_DB_KEY = "cricket.duckdb"
 R2_EXPORT_PREFIX = "explorer/"
 
+# Upload robustness (pipeline safety net, 2026-07-09): each file gets up to
+# this many attempts with a short exponential backoff between retries before
+# being declared failed.
+UPLOAD_MAX_ATTEMPTS = 3
+UPLOAD_BACKOFF_BASE_SECONDS = 2  # attempt 2 waits 2s, attempt 3 waits 4s
+
 DEFAULT_DB = "data/cricket.duckdb"
 DEFAULT_OUT = "data/export"
 
@@ -2176,17 +2182,64 @@ def r2_download(db_path):
     log("Download complete.")
 
 
+def _upload_one(client, out_dir, fname):
+    """Upload one file with retry + short exponential backoff. Returns True/False."""
+    p = os.path.join(out_dir, fname)
+    key = f"{R2_EXPORT_PREFIX}{fname}"
+    last_exc = None
+    for attempt in range(1, UPLOAD_MAX_ATTEMPTS + 1):
+        try:
+            client.upload_file(
+                p, R2_BUCKET, key,
+                ExtraArgs={"ContentType": CONTENT_TYPES[fname]},
+            )
+            suffix = f" (attempt {attempt}/{UPLOAD_MAX_ATTEMPTS})" if attempt > 1 else ""
+            log(f"  uploaded {key}{suffix}")
+            return True
+        except Exception as e:  # noqa: BLE001 — any boto3/network failure is retryable
+            last_exc = e
+            log(f"  WARN upload attempt {attempt}/{UPLOAD_MAX_ATTEMPTS} failed for {key}: {e!r}")
+            if attempt < UPLOAD_MAX_ATTEMPTS:
+                backoff = UPLOAD_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                time.sleep(backoff)
+    log(f"  FAILED all {UPLOAD_MAX_ATTEMPTS} attempts for {key}: {last_exc!r}")
+    return False
+
+
 def r2_upload(out_dir):
+    """
+    Upload every export file, then manifest.json STRICTLY LAST (the browser
+    reads manifest.json first and trusts it to name files that already
+    exist — publishing it before every data file has landed would let a
+    client fetch a manifest pointing at a missing/half-written object).
+
+    Each file gets UPLOAD_MAX_ATTEMPTS tries with a short exponential backoff.
+    If ANY file ultimately fails, this raises (nonzero exit) with a clear
+    summary of what uploaded and what didn't — never leaves the run looking
+    green with a partial R2 state. manifest.json is only attempted if every
+    data file succeeded.
+    """
     log(f"Uploading exports to s3://{R2_BUCKET}/{R2_EXPORT_PREFIX}")
     client = _r2_client()
-    for f in list(EXPORT_FILES) + ["manifest.json"]:
-        p = os.path.join(out_dir, f)
-        key = f"{R2_EXPORT_PREFIX}{f}"
-        client.upload_file(
-            p, R2_BUCKET, key,
-            ExtraArgs={"ContentType": CONTENT_TYPES[f]},
+
+    data_files = list(EXPORT_FILES)
+    succeeded, failed = [], []
+    for f in data_files:
+        (succeeded if _upload_one(client, out_dir, f) else failed).append(f)
+
+    if failed:
+        log(f"  SKIPPED manifest.json — {len(failed)} data file(s) failed to upload")
+    else:
+        (succeeded if _upload_one(client, out_dir, "manifest.json") else failed).append(
+            "manifest.json"
         )
-        log(f"  uploaded {key}")
+
+    if failed:
+        raise SystemExit(
+            "R2 upload FAILED for: " + ", ".join(failed) + ". "
+            "Uploaded OK: " + (", ".join(succeeded) if succeeded else "(none)") + ". "
+            "R2 explorer/ prefix is now in a PARTIAL state — do not treat this run as green."
+        )
     log("Upload complete.")
 
 
