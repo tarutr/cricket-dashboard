@@ -37,6 +37,7 @@ Usage:
 """
 
 import argparse
+import importlib.util
 import os
 import sys
 import time
@@ -59,6 +60,28 @@ REAL_DB = "/Users/tarutr/Desktop/Cricket_DB/cricket.duckdb".replace(
 assert REAL_DB == "/Users/tarutr/Desktop/Cricket_DB/DB_files_scripts/cricket.duckdb"
 
 DEFAULT_SCRATCH = os.path.join(_REPO, "scratchpad", "matchup_ext")
+
+# --------------------------------------------------------------------------- #
+# D4-R4 extension: batting_position on matchup_batting + grain change on
+# matchup_bowling (match_id, innings_number, bowler_id, batting_hand) ->
+# (..., batting_position). `ep` (import above) is the CURRENT, already-patched
+# export_parquet.py (this repo state) whose sql_matchup_batting/bowling now
+# include batting_position. `ep_old` below is a FROZEN pre-patch snapshot
+# (scratchpad/matchup_ext_pos/export_parquet_OLD.py, a `git show HEAD:...`
+# copy taken before the D4-R4 patch landed) used ONLY as the OLD-grain
+# reference for the rollup-preservation check -- it is never written to and
+# never touches the real DB except via the same READ_ONLY attach `con` shares.
+# --------------------------------------------------------------------------- #
+
+OLD_EP_PATH = os.path.join(_REPO, "scratchpad", "matchup_ext_pos", "export_parquet_OLD.py")
+DEFAULT_SCRATCH_POS = os.path.join(_REPO, "scratchpad", "matchup_ext_pos")
+
+
+def load_old_ep():
+    spec = importlib.util.spec_from_file_location("export_parquet_OLD", OLD_EP_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 CHECKS_PASSED = []
 CHECKS_FAILED = []
@@ -678,13 +701,41 @@ def run_checks(con, scratch_dir, use_patched):
         n = q1(con, f"SELECT SUM({c}) FROM {rp(mbat_p)}")
         record(o == n, f"5b matchup_batting SUM({c}) unchanged", f"orig={o} vs new={n}")
 
-    orig_bowl_rows = q1(con, f"SELECT COUNT(*) FROM {rp(mbowl_orig_p)}")
+    # matchup_bowling's grain gained a 5th PK column (batting_position) in the
+    # D4-R4 extension. `mbowl_orig_p` is always materialized from the CURRENT
+    # (possibly further-evolved) ep.sql_matchup_bowling(), while `mbowl_p` here
+    # may be this file's frozen D4-R3-era dev copy (no batting_position) when
+    # --patched is not given. Comparing raw row counts across two different
+    # grains would always "fail" for a reason that has nothing to do with this
+    # check's actual purpose (did the OLD columns change?), so: if the current
+    # output has gained batting_position, roll it back up to the pre-D4-R4
+    # 4-column grain before comparing -- keeping this check meaningful across
+    # both extensions instead of being a permanently-broken false failure.
+    # Only roll up if the two sides are actually at DIFFERENT grains (default
+    # mode: mbowl_p is the frozen no-position dev copy, mbowl_orig_p is the
+    # position-patched ep function). In --patched mode both sides come from
+    # the SAME ep.sql_matchup_bowling(), so no rollup is needed (or correct --
+    # rolling up only one identical side would spuriously break equality).
+    mbowl_cols = [d[0] for d in con.execute(f"DESCRIBE SELECT * FROM {rp(mbowl_p)}").fetchall()]
+    orig_bowl_cols = [d[0] for d in con.execute(f"DESCRIBE SELECT * FROM {rp(mbowl_orig_p)}").fetchall()]
+    if "batting_position" in orig_bowl_cols and "batting_position" not in mbowl_cols:
+        rollup_cols_sql = ", ".join(f"SUM({c}) AS {c}" for c in old_bowl_cols)
+        mbowl_orig_ref = f"""(
+            SELECT match_id, innings_number, bowler_id, batting_hand, {rollup_cols_sql}
+            FROM {rp(mbowl_orig_p)}
+            GROUP BY match_id, innings_number, bowler_id, batting_hand
+        )"""
+    else:
+        mbowl_orig_ref = rp(mbowl_orig_p)
+
+    orig_bowl_rows = q1(con, f"SELECT COUNT(*) FROM {mbowl_orig_ref}")
     new_bowl_rows = q1(con, f"SELECT COUNT(*) FROM {rp(mbowl_p)}")
-    record(orig_bowl_rows == new_bowl_rows, "5c matchup_bowling row count unchanged",
+    record(orig_bowl_rows == new_bowl_rows,
+           "5c matchup_bowling row count unchanged (rolled up to pre-D4-R4 grain if needed)",
            f"orig={orig_bowl_rows} vs new={new_bowl_rows}")
 
     for c in old_bowl_cols:
-        o = q1(con, f"SELECT SUM({c}) FROM {rp(mbowl_orig_p)}")
+        o = q1(con, f"SELECT SUM({c}) FROM {mbowl_orig_ref}")
         n = q1(con, f"SELECT SUM({c}) FROM {rp(mbowl_p)}")
         record(o == n, f"5d matchup_bowling SUM({c}) unchanged", f"orig={o} vs new={n}")
 
@@ -695,20 +746,299 @@ def run_checks(con, scratch_dir, use_patched):
     log(f"    matchup_bowling.parquet columns ({len(new_bowl_cols)}): {new_bowl_cols}")
 
 
+# --------------------------------------------------------------------------- #
+# D4-R4 POSITION CHECKS (owner-mandated 5-point list).
+# --------------------------------------------------------------------------- #
+
+def run_position_checks(con, scratch_dir):
+    """
+    Runs the 5 owner-mandated checks for the D4-R4 extension:
+      1. matchup_batting.batting_position == batting_innings position (0
+         mismatches); NOT NULL; within 1..12.
+      2. matchup_bowling regrain preserves everything: rolling the NEW grain
+         up to the OLD (match,inn,bowler,batting_hand) grain reproduces the
+         OLD sql_matchup_bowling output on every numeric column, every row (0
+         rows differing either direction); row-count/SUM totals match globally.
+      3. Innings-count semantics: for 20 random bowlers,
+         COUNT(DISTINCT match_id||':'||innings_number) per (bowler,hand) on the
+         NEW grain == COUNT(*) per (bowler,hand) on the OLD grain.
+      4. Delivery-level two-way check: JJ Bumrah, men's T20+IT20 international
+         2023-07-01..2026-08-01, balls+wickets vs Right-hand bat at
+         batting_position IN (1,2) -- via the new aggregated table AND
+         directly from deliveries; equal.
+      5. batting_position NOT NULL + 1..12 on the new bowling grain too.
+
+    Uses `ep` (the CURRENT, already-patched export_parquet.py in this repo) for
+    the NEW sql_matchup_batting()/sql_matchup_bowling()/sql_batting(), and
+    `ep_old` (a frozen pre-patch snapshot) ONLY for check 2's OLD-grain
+    reference. Both run against the same READ_ONLY-attached real DB via `con`.
+    """
+    os.makedirs(scratch_dir, exist_ok=True)
+    ep_old = load_old_ep()
+
+    mbat_p = os.path.join(scratch_dir, "matchup_batting_NEW.parquet")
+    mbowl_p = os.path.join(scratch_dir, "matchup_bowling_NEW.parquet")
+    mbowl_old_p = os.path.join(scratch_dir, "matchup_bowling_OLD.parquet")
+    bat_p = os.path.join(scratch_dir, "batting_innings_ref.parquet")
+
+    t0 = time.time()
+    log("Materializing NEW matchup_batting (with batting_position) ...")
+    ep.write_parquet(con, ep.sql_matchup_batting(), mbat_p)
+    log("Materializing NEW matchup_bowling (new grain incl. batting_position) ...")
+    ep.write_parquet(con, ep.sql_matchup_bowling(), mbowl_p)
+    log("Materializing OLD (pre-patch) matchup_bowling for the rollup reference ...")
+    ep.write_parquet(con, ep_old.sql_matchup_bowling(), mbowl_old_p)
+    log("Materializing batting_innings (ground truth for batting_position) ...")
+    ep.write_parquet(con, ep.sql_batting(), bat_p)
+    log(f"  all 4 materialized in {time.time()-t0:.1f}s")
+
+    def rp(p):
+        return f"read_parquet('{p}')"
+
+    # ----------------------------------------------------------------- #
+    # CHECK 1: matchup_batting.batting_position == batting_innings position.
+    # ----------------------------------------------------------------- #
+    log("=" * 70)
+    log("POSITION CHECK 1: matchup_batting.batting_position == batting_innings position")
+
+    # LEFT JOIN FROM matchup_batting: every distinct (match,inn,batter) that has
+    # a matchup_batting row necessarily faced >=1 delivery (mb requires
+    # d.batter_id IS NOT NULL), and every such batter is therefore guaranteed to
+    # also appear in batting_innings (its crease criterion includes batter_id
+    # from `d`) -- so this join can never spuriously produce a NULL bi_pos.
+    # (A plain FULL OUTER JOIN would additionally surface "diamond duck"
+    # batters -- 0 balls faced, present only in batting_innings via a
+    # wickets-only crease appearance -- who structurally have NO matchup_batting
+    # row at all, by the file's pre-existing, unchanged PK definition; those are
+    # not mismatches and must not be counted here.)
+    pos_mismatch = q1(con, f"""
+        SELECT COUNT(*) FROM (
+            SELECT DISTINCT match_id, innings_number, batter_id, batting_position
+            FROM {rp(mbat_p)}
+        ) mb
+        LEFT JOIN (
+            SELECT match_id, innings_number, batter_id, batting_position AS bi_pos
+            FROM {rp(bat_p)}
+        ) bi
+        USING (match_id, innings_number, batter_id)
+        WHERE mb.batting_position IS DISTINCT FROM bi.bi_pos
+    """)
+    record(pos_mismatch == 0,
+           "1a matchup_batting.batting_position == batting_innings position (0 mismatches)",
+           f"{pos_mismatch} mismatching (match,innings,batter) rows")
+
+    mbat_pos_null = q1(con, f"SELECT COUNT(*) FROM {rp(mbat_p)} WHERE batting_position IS NULL")
+    record(mbat_pos_null == 0, "1b matchup_batting.batting_position NOT NULL everywhere",
+           f"{mbat_pos_null} NULL rows")
+
+    mbat_pos_range = q1(con, f"SELECT COUNT(*) FROM {rp(mbat_p)} WHERE batting_position NOT BETWEEN 1 AND 12")
+    record(mbat_pos_range == 0, "1c matchup_batting.batting_position within 1..12",
+           f"{mbat_pos_range} out-of-range rows")
+
+    # ----------------------------------------------------------------- #
+    # CHECK 2: NEW-grain rollup to OLD grain reproduces OLD output exactly.
+    # ----------------------------------------------------------------- #
+    log("=" * 70)
+    log("POSITION CHECK 2: matchup_bowling regrain preserves OLD output on every numeric column")
+
+    numeric_cols = [
+        "balls", "runs_conceded", "wickets", "dots", "fours_conceded", "sixes_conceded",
+        "wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket",
+        "pp_balls", "pp_runs_conceded", "pp_wickets",
+        "mid_balls", "mid_runs_conceded", "mid_wickets",
+        "death_balls", "death_runs_conceded", "death_wickets",
+        "odi_pp_balls", "odi_pp_runs_conceded", "odi_pp_wickets",
+        "odi_mid_balls", "odi_mid_runs_conceded", "odi_mid_wickets",
+        "odi_death_balls", "odi_death_runs_conceded", "odi_death_wickets",
+    ]
+    sum_cols_sql = ",\n               ".join(f"SUM({c}) AS {c}" for c in numeric_cols)
+    col_list_sql = ", ".join(numeric_cols)
+
+    rolled_sql = f"""
+        WITH rolled AS (
+            SELECT match_id, innings_number, bowler_id, batting_hand,
+                   {sum_cols_sql}
+            FROM {rp(mbowl_p)}
+            GROUP BY match_id, innings_number, bowler_id, batting_hand
+        )
+        SELECT match_id, innings_number, bowler_id, batting_hand, {col_list_sql}
+        FROM rolled
+    """
+    old_sql = f"""
+        SELECT match_id, innings_number, bowler_id, batting_hand, {col_list_sql}
+        FROM {rp(mbowl_old_p)}
+    """
+
+    rolled_row_count = q1(con, f"SELECT COUNT(*) FROM ({rolled_sql})")
+    old_row_count = q1(con, f"SELECT COUNT(*) FROM ({old_sql})")
+    record(rolled_row_count == old_row_count,
+           "2a rolled-up NEW-grain row count == OLD-grain row count",
+           f"rolled={rolled_row_count} vs old={old_row_count}")
+
+    diff_fwd = q1(con, f"SELECT COUNT(*) FROM (({rolled_sql}) EXCEPT ({old_sql}))")
+    diff_bwd = q1(con, f"SELECT COUNT(*) FROM (({old_sql}) EXCEPT ({rolled_sql}))")
+    record(diff_fwd == 0 and diff_bwd == 0,
+           "2b rolled-up NEW grain == OLD output on every numeric column, every row (both directions)",
+           f"rolled-not-in-old={diff_fwd}, old-not-in-rolled={diff_bwd}")
+
+    for c in numeric_cols:
+        s_new = q1(con, f"SELECT SUM({c}) FROM {rp(mbowl_p)}")
+        s_old = q1(con, f"SELECT SUM({c}) FROM {rp(mbowl_old_p)}")
+        record(s_new == s_old, f"2c global SUM({c}) unchanged (NEW vs OLD)",
+               f"new={s_new} vs old={s_old}")
+
+    # ----------------------------------------------------------------- #
+    # CHECK 3: innings-count semantics for 20 random bowlers.
+    # ----------------------------------------------------------------- #
+    log("=" * 70)
+    log("POSITION CHECK 3: innings-count semantics (20 random bowlers)")
+
+    sample_bowlers = [r[0] for r in con.execute(f"""
+        SELECT DISTINCT bowler_id FROM {rp(mbowl_p)} ORDER BY random() LIMIT 20
+    """).fetchall()]
+
+    all_ok = True
+    mismatches_detail = []
+    for bid in sample_bowlers:
+        bid_esc = bid.replace("'", "''")
+        new_counts = dict(con.execute(f"""
+            SELECT batting_hand, COUNT(DISTINCT match_id || ':' || innings_number)
+            FROM {rp(mbowl_p)}
+            WHERE bowler_id = '{bid_esc}'
+            GROUP BY batting_hand
+        """).fetchall())
+        old_counts = dict(con.execute(f"""
+            SELECT batting_hand, COUNT(*)
+            FROM {rp(mbowl_old_p)}
+            WHERE bowler_id = '{bid_esc}'
+            GROUP BY batting_hand
+        """).fetchall())
+        if new_counts != old_counts:
+            all_ok = False
+            mismatches_detail.append((bid, new_counts, old_counts))
+
+    record(all_ok,
+           "3 20 random bowlers: COUNT(DISTINCT match:innings) per hand (NEW) == COUNT(*) per hand (OLD)",
+           f"{len(mismatches_detail)} of {len(sample_bowlers)} bowlers mismatch: {mismatches_detail[:3]}")
+    log(f"    sampled bowler_ids: {sample_bowlers}")
+
+    # ----------------------------------------------------------------- #
+    # CHECK 4: JJ Bumrah delivery-level two-way check.
+    # ----------------------------------------------------------------- #
+    log("=" * 70)
+    log("POSITION CHECK 4: JJ Bumrah delivery-level two-way check "
+        "(men's T20+IT20 international, 2023-07-01..2026-08-01, vs Right-hand bat, position 1/2)")
+
+    scope4 = ("gender='male' AND team_type='international' "
+              "AND match_type IN ('T20','IT20') "
+              "AND match_date BETWEEN DATE '2023-07-01' AND DATE '2026-08-01'")
+
+    via_agg4 = con.execute(f"""
+        SELECT COALESCE(SUM(balls),0), COALESCE(SUM(wickets),0)
+        FROM {rp(mbowl_p)}
+        WHERE bowler_name = 'JJ Bumrah' AND batting_hand = 'Right-hand bat'
+          AND batting_position IN (1,2) AND {scope4}
+    """).fetchone()
+
+    bowler_ids4 = [r[0] for r in con.execute(f"""
+        SELECT DISTINCT bowler_id FROM {rp(mbowl_p)} WHERE bowler_name = 'JJ Bumrah'
+    """).fetchall()]
+    bwid_list4 = ", ".join(f"'{b}'" for b in bowler_ids4) if bowler_ids4 else "NULL"
+
+    cte = ep.build_delivery_cte(hundred_only=None)
+    pos_cte = ep.build_positions_cte()
+    KINDS_IN = ep._KINDS_IN
+    LEGAL_BOWLER = ep.LEGAL_BOWLER
+
+    via_raw4 = con.execute(f"""
+        WITH {cte},
+        {pos_cte},
+        kept_wickets AS (
+            SELECT w.match_id, w.innings_number, w.over_number, w.ball_index, w.kind
+            FROM wickets w
+            JOIN kept_innings ki
+              ON w.match_id = ki.match_id AND w.innings_number = ki.innings_number
+            WHERE w.kind IN ({KINDS_IN})
+        ),
+        cwkt AS (
+            SELECT d.match_id, d.innings_number, d.over_number, d.ball_index,
+                   d.batter_id, d.bowler_id, COUNT(*) AS wkts
+            FROM kept_wickets kw
+            JOIN d
+              ON kw.match_id = d.match_id AND kw.innings_number = d.innings_number
+             AND kw.over_number = d.over_number AND kw.ball_index = d.ball_index
+            GROUP BY d.match_id, d.innings_number, d.over_number, d.ball_index,
+                     d.batter_id, d.bowler_id
+        )
+        SELECT
+            COALESCE(SUM(CASE WHEN {LEGAL_BOWLER} THEN 1 ELSE 0 END), 0) AS balls,
+            COALESCE(SUM(COALESCE(cwkt.wkts, 0)), 0) AS wickets
+        FROM d
+        LEFT JOIN player_profiles pp ON d.batter_id = pp.player_id
+        LEFT JOIN positions pos
+          ON d.match_id = pos.match_id AND d.innings_number = pos.innings_number
+         AND d.batter_id = pos.pid
+        LEFT JOIN cwkt
+          ON d.match_id = cwkt.match_id AND d.innings_number = cwkt.innings_number
+         AND d.over_number = cwkt.over_number AND d.ball_index = cwkt.ball_index
+         AND d.batter_id = cwkt.batter_id AND d.bowler_id = cwkt.bowler_id
+        WHERE d.bowler_id IN ({bwid_list4})
+          AND COALESCE(pp.batting_style, '(unmapped)') = 'Right-hand bat'
+          AND pos.batting_position IN (1,2)
+          AND {scope4}
+    """).fetchone()
+
+    log(f"    JJ Bumrah balls/wickets vs Right-hand bat, position 1/2: via aggregated cols = "
+        f"balls={via_agg4[0]}, wickets={via_agg4[1]}")
+    log(f"    JJ Bumrah balls/wickets vs Right-hand bat, position 1/2: via raw deliveries  = "
+        f"balls={via_raw4[0]}, wickets={via_raw4[1]}")
+    log(f"    (bowler_id(s) resolved for 'JJ Bumrah': {bowler_ids4})")
+    record(tuple(via_agg4) == tuple(via_raw4),
+           "4 JJ Bumrah balls+wickets vs Right-hand bat @ position 1/2: aggregated == raw deliveries",
+           f"agg={tuple(via_agg4)} vs raw={tuple(via_raw4)}")
+
+    # ----------------------------------------------------------------- #
+    # CHECK 5: batting_position NOT NULL + 1..12 on the new bowling grain.
+    # ----------------------------------------------------------------- #
+    log("=" * 70)
+    log("POSITION CHECK 5: matchup_bowling.batting_position NOT NULL + within 1..12")
+
+    mbowl_pos_null = q1(con, f"SELECT COUNT(*) FROM {rp(mbowl_p)} WHERE batting_position IS NULL")
+    record(mbowl_pos_null == 0, "5a matchup_bowling.batting_position NOT NULL everywhere",
+           f"{mbowl_pos_null} NULL rows")
+
+    mbowl_pos_range = q1(con, f"SELECT COUNT(*) FROM {rp(mbowl_p)} WHERE batting_position NOT BETWEEN 1 AND 12")
+    record(mbowl_pos_range == 0, "5b matchup_bowling.batting_position within 1..12",
+           f"{mbowl_pos_range} out-of-range rows")
+
+    new_bowl_rows = q1(con, f"SELECT COUNT(*) FROM {rp(mbowl_p)}")
+    new_bat_rows = q1(con, f"SELECT COUNT(*) FROM {rp(mbat_p)}")
+    log(f"    matchup_bowling.parquet row count (NEW grain) = {new_bowl_rows:,} "
+        f"(vs OLD grain = {old_row_count:,})")
+    log(f"    matchup_batting.parquet row count (batting_position added, PK unchanged) = {new_bat_rows:,}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--patched", action="store_true",
                      help="use export_parquet.py's own sql_matchup_* (STEP 3)")
     ap.add_argument("--scratch", default=DEFAULT_SCRATCH)
+    ap.add_argument("--positions", action="store_true",
+                     help="run the D4-R4 batting_position/grain-change checks "
+                          "instead of the D4-R3 dis_*/phase checks")
+    ap.add_argument("--scratch-pos", default=DEFAULT_SCRATCH_POS)
     args = ap.parse_args()
 
     t0 = time.time()
     log(f"dev_test_matchup_extension starting (real_db={REAL_DB}, "
-        f"scratch={args.scratch}, patched={args.patched})")
+        f"scratch={args.scratch}, patched={args.patched}, positions={args.positions})")
 
     con = make_connection()
     build_player_profiles(con)
-    run_checks(con, args.scratch, args.patched)
+    if args.positions:
+        run_position_checks(con, args.scratch_pos)
+    else:
+        run_checks(con, args.scratch, args.patched)
     con.close()
 
     log("=" * 70)
