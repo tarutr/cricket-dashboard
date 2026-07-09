@@ -359,3 +359,14 @@ change requires a new owner decision recorded here. Dates are decision dates.
     Karanbir Singh vs Spin at 1–2 = 33 inns, 488 runs @ 190.63, out 11;
     "caught vs spin ≥ 2, min 10 innings" = 576 players. Branch
     `d4-r3-matchups` + main (pipeline).
+
+38. **R3 GATE PASSED + PUBLIC DEPLOY (owner, 2026-07-09):** "All looks good."
+    The full D4 scope — restructure (R1 leaderboard, R2 profile pop-ups),
+    matchups everywhere (style/hand/position/conditions, coverage-honest),
+    splits, dismissal breakdowns, progression, profile filters — is
+    owner-approved. Owner chose to DEPLOY NOW: the branch chain merges to main
+    and ships to the public Vercel site (cricdb.vercel.app), with the batched
+    design/polish pass to follow on top. NEXT PHASE = polish: owner's design
+    list + feedback form (Supabase, RLS) + performance audit + README, then
+    optional deferred items (team/venue pop-ups, headshots, preview-domain
+    CORS, name normalization).
