@@ -257,3 +257,15 @@ change requires a new owner decision recorded here. Dates are decision dates.
     bowling block (32 inns, 48 wkts, kinds 24/19/3/2 summing to 48, Pakistan &
     South Africa 9 wkts each), NR Sciver-Brunt (women: 30 inns, 954 runs,
     41.48, 137.07, HS 77). Branch `d4-r2-player-pages`.
+
+32. **R2 gate ruling (owner, 2026-07-09): player profiles are POP-UPS, not a
+    page.** "The player profiles look good… make the player profiles pop-ups,
+    not a new page. Should be easy to close (an [x] or clicking outside) to go
+    back to the original page." Implemented same-day: the Players tab is
+    removed; clicking any player name in the leaderboard opens the profile as
+    a centered overlay (full-screen on phones) over the current view, closing
+    via ×, backdrop click, or Escape — the page behind is untouched. The
+    in-popup "Find another player" search is kept. This realizes D5's original
+    pop-up interaction model; other design changes remain batched for the
+    final polish pass (decisions 25/30). Content/numbers unchanged from
+    decision 31's verification.

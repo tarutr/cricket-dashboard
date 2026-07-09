@@ -10,7 +10,7 @@ import { mountFilters } from "./filters.js";
 import { mountFilterDrawer } from "./drawer.js";
 import { mountPills } from "./pills.js";
 import { mountTable } from "./table.js";
-import { mountPlayerPage } from "./playerPage.js";
+import { mountPlayerPopup } from "./playerPopup.js";
 import { getMetric } from "./metrics.js";
 import { mountGraph } from "./graph/graph.js";
 
@@ -28,7 +28,7 @@ const drawerHostEl = document.getElementById("filter-drawer-host");
 const playerSearchSectionEl = document.getElementById("player-search-section");
 const playerSearchInputEl = document.getElementById("player-search-input");
 const tableAreaEl = document.getElementById("table-area");
-const playerPageAreaEl = document.getElementById("player-page-area");
+const playerPopupHostEl = document.getElementById("player-popup-host");
 const graphAreaEl = document.getElementById("graph-area");
 
 function describeProgress(progress) {
@@ -70,7 +70,7 @@ let filterController;
 let graphController;
 let drawerController;
 let pillsController;
-let playerPageController;
+let playerPopupController;
 
 // Tracks the columns array we last auto-applied as a "default preset" per
 // discipline, so we can tell whether the user has since customized columns
@@ -122,23 +122,17 @@ function updateViewToggle() {
   });
 }
 
-/** Show/hide the leaderboard / player page / graph panels for state.view (§6: same page, no iframe). */
+/** Show/hide the leaderboard vs graph panels for state.view (§6: same page, no iframe).
+ * Player profiles are a POP-UP over either view (owner ruling at the R2 gate), not a view. */
 function applyView() {
   const state = store.get();
   const view = state.view;
   tableAreaEl.hidden = view !== "table";
   playerSearchSectionEl.hidden = view !== "table";
-  playerPageAreaEl.hidden = view !== "players";
   graphAreaEl.hidden = view !== "graph";
-  // Players view uses a REDUCED scope strip: Format + Date + Team type only.
-  // Gender, the drawer filters, and pills don't apply to a player page (its
-  // queries key on the player's id) — hiding them keeps the page honest.
-  document.querySelector(".app").classList.toggle("app--players", view === "players");
   updateViewToggle();
   if (view === "graph") {
     graphController.onShow();
-  } else if (view === "players") {
-    playerPageController.onShow();
   } else {
     // Owner: no automated search — entering the table view shows the blank
     // prompt; the query runs only when "Show results" is clicked.
@@ -161,14 +155,13 @@ function onFiltersChanged() {
   if (pillsController) pillsController.render();
   updateScopeSentence();
   updateDrawerBadge();
-  // Only the visible view re-queries; the others refresh when switched to.
+  // Only the visible view re-queries; the other refreshes when switched to.
   // Table view: filter changes revert to the blank prompt (no automated search);
   // the query runs on "Show results" / the drawer's "Apply and show results".
-  const view = store.get().view;
-  if (view === "graph") {
+  // (The player popup blocks the filters while open; it refetches on reopen if
+  // the scope moved, via its own cache key.)
+  if (store.get().view === "graph") {
     graphController.onScopeChanged();
-  } else if (view === "players") {
-    playerPageController.onScopeChanged();
   } else {
     tableController.showPrompt();
   }
@@ -265,13 +258,9 @@ function boot() {
       });
 
       tableController = mountTable(tableAreaEl, store, {
-        onPlayerClick: (id, name) => {
-          playerPageController.showPlayer(id, name);
-          store.set({ view: "players" });
-          applyView();
-        },
+        onPlayerClick: (id, name) => playerPopupController.open(id, name),
       });
-      playerPageController = mountPlayerPage(playerPageAreaEl, store);
+      playerPopupController = mountPlayerPopup(playerPopupHostEl, store);
       graphController = mountGraph(graphAreaEl, store);
 
       viewToggleEl.addEventListener("click", (e) => {

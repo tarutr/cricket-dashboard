@@ -1353,13 +1353,59 @@ a { color: var(--color-accent); }
 
 /* ── Players view (R2) — reduced scope strip + player links ─────────────────── */
 
-/* Gender, the drawer, and pills don't apply to a player page (queries key on
-   the player's id); the strip shows Format + Date range + Team type only. */
-.app--players .filter-group--gender,
-.app--players .filter-open-btn,
-.app--players .pills-section,
-.app--players .app-header__discipline {
-  display: none;
+/* Player profiles are a pop-up over the current view (owner ruling at the R2
+   gate — the original D5 interaction model). Same overlay tokens as the
+   drawer; centered panel, full-screen on small viewports. */
+.player-popup {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
+.player-popup__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(27, 36, 48, 0.45);
+}
+
+[data-theme="dark"] .player-popup__backdrop { background: rgba(0, 0, 0, 0.6); }
+
+.player-popup__panel {
+  position: relative;
+  margin: 4vh auto;
+  width: min(920px, 94vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--color-bg);
+  box-shadow: var(--shadow-popover);
+  border-radius: 10px;
+  padding: var(--space-5) var(--space-6) var(--space-6);
+}
+
+.player-popup__close {
+  position: sticky;
+  top: 0;
+  float: right;
+  font: inherit;
+  font-size: 1.4rem;
+  line-height: 1;
+  background: var(--color-bg);
+  border: none;
+  cursor: pointer;
+  color: var(--color-muted);
+  padding: var(--space-2);
+  z-index: 2;
+}
+.player-popup__close:hover { color: var(--color-fg); }
+
+@media (max-width: 640px) {
+  .player-popup__panel {
+    margin: 0;
+    width: 100vw;
+    max-height: 100vh;
+    height: 100%;
+    border-radius: 0;
+  }
 }
 
 .player-link {
