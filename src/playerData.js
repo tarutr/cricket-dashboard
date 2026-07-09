@@ -81,9 +81,25 @@ const BOWLING_SUMMARY_KEYS = ["innings", "wickets", "average", "economy", "strik
 const SPLIT_BATTING_KEYS = ["innings", "runs", "average", "strike_rate"];
 const SPLIT_BOWLING_KEYS = ["innings", "wickets", "average", "economy"];
 
-/** One row of batting totals in scope; `innings` = 0 means no batting here. */
-export async function fetchBattingSummary(playerId, state) {
-  const sql = `SELECT ${selectList("batting", BATTING_SUMMARY_KEYS)} FROM batting WHERE ${whereFor(state, "batter_id", playerId)}`;
+const PROGRESSION_KEYS = ["sr_first10", "sr_11_20", "sr_21plus"];
+
+/**
+ * Batting summary + dismissal fingerprint + scoring progression, in ONE query
+ * (Batch 5b C2): all three shared the exact same `FROM batting WHERE …`
+ * aggregate with no GROUP BY, so they're one row of ~22 columns instead of
+ * three round trips. The single returned row carries every field each of the
+ * three render call-sites needs (innings/runs/average/… for the summary
+ * cards, dismissals + each out_* kind for the fingerprint, sr_first10/11_20/
+ * 21plus for the progression cards) — callers index it by name, so one
+ * shared object serves all three call sites unchanged.
+ */
+export async function fetchBattingCore(playerId, state) {
+  const kindSelects = DISMISSAL_KINDS.map((d) => `${expr("batting", d.key)} AS ${d.key}`).join(", ");
+  const sql = [
+    `SELECT ${selectList("batting", BATTING_SUMMARY_KEYS)}, SUM(dismissed) AS dismissals, ${kindSelects},`,
+    `       ${selectList("batting", PROGRESSION_KEYS)}`,
+    `FROM batting WHERE ${whereFor(state, "batter_id", playerId)}`,
+  ].join("\n");
   const { rows } = await query(sql);
   return rows[0] ?? null;
 }
@@ -109,38 +125,19 @@ export async function fetchBattingOpposition(playerId, state) {
   return rows;
 }
 
+const WICKET_TYPE_KEYS = ["wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket"];
+
 /**
- * Dismissal fingerprint: innings, total dismissals, and one count per kind
- * (keys from metrics.js's DISMISSAL_KINDS — the 12 kinds partition
- * SUM(dismissed) exactly; not-outs = innings − dismissals).
+ * Bowling summary + wicket-type breakdown in ONE query (Batch 5b C2): same
+ * `FROM bowling WHERE …` aggregate with no GROUP BY, differing only in SELECT
+ * list, so one row (12 columns) replaces two round trips. `wickets` is
+ * selected once and read by both the summary cards and the wicket-types bars.
  */
-export async function fetchBattingDismissals(playerId, state) {
-  const kindSelects = DISMISSAL_KINDS.map((d) => `${expr("batting", d.key)} AS ${d.key}`).join(", ");
+export async function fetchBowlingCore(playerId, state) {
   const sql = [
-    `SELECT COUNT(*) AS innings, SUM(dismissed) AS dismissals, ${kindSelects}`,
-    `FROM batting WHERE ${whereFor(state, "batter_id", playerId)}`,
+    `SELECT ${selectList("bowling", BOWLING_SUMMARY_KEYS)}, ${selectList("bowling", WICKET_TYPE_KEYS)}`,
+    `FROM bowling WHERE ${whereFor(state, "bowler_id", playerId)}`,
   ].join("\n");
-  const { rows } = await query(sql);
-  return rows[0] ?? null;
-}
-
-export async function fetchBattingProgression(playerId, state) {
-  const keys = ["sr_first10", "sr_11_20", "sr_21plus"];
-  const sql = `SELECT ${selectList("batting", keys)} FROM batting WHERE ${whereFor(state, "batter_id", playerId)}`;
-  const { rows } = await query(sql);
-  return rows[0] ?? null;
-}
-
-/** One row of bowling totals in scope; `innings` = 0 means no bowling here. */
-export async function fetchBowlingSummary(playerId, state) {
-  const sql = `SELECT ${selectList("bowling", BOWLING_SUMMARY_KEYS)} FROM bowling WHERE ${whereFor(state, "bowler_id", playerId)}`;
-  const { rows } = await query(sql);
-  return rows[0] ?? null;
-}
-
-export async function fetchBowlingWicketTypes(playerId, state) {
-  const keys = ["wickets", "wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket"];
-  const sql = `SELECT ${selectList("bowling", keys)} FROM bowling WHERE ${whereFor(state, "bowler_id", playerId)}`;
   const { rows } = await query(sql);
   return rows[0] ?? null;
 }
