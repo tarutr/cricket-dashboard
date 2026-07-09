@@ -5,10 +5,12 @@
 // and do the initial render.
 
 import { initDB, getManifest } from "./db.js";
-import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState } from "./state.js";
+import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, splitAllowed } from "./state.js";
 import { mountFilters } from "./filters.js";
-import { mountAdvanced, activeConditionCount } from "./advanced.js";
+import { mountFilterDrawer } from "./drawer.js";
+import { mountPills } from "./pills.js";
 import { mountTable } from "./table.js";
+import { mountPlayerPopup } from "./playerPopup.js";
 import { getMetric } from "./metrics.js";
 import { mountGraph } from "./graph/graph.js";
 
@@ -21,12 +23,12 @@ const footerDataDateEl = document.getElementById("footer-data-date");
 const disciplineToggleEl = document.querySelector('[data-role="discipline"]');
 const viewToggleEl = document.querySelector('[data-role="view"]');
 const filterBarEl = document.getElementById("filter-bar");
-const advancedToggleEl = document.getElementById("advanced-toggle");
-const advancedCountEl = document.getElementById("advanced-count");
-const advancedPanelEl = document.getElementById("advanced-panel");
+const pillsBarEl = document.getElementById("pills-bar");
+const drawerHostEl = document.getElementById("filter-drawer-host");
 const playerSearchSectionEl = document.getElementById("player-search-section");
 const playerSearchInputEl = document.getElementById("player-search-input");
 const tableAreaEl = document.getElementById("table-area");
+const playerPopupHostEl = document.getElementById("player-popup-host");
 const graphAreaEl = document.getElementById("graph-area");
 
 function describeProgress(progress) {
@@ -64,9 +66,11 @@ function renderInitError(err, retryFn) {
 
 let store;
 let tableController;
-let advancedController;
 let filterController;
 let graphController;
+let drawerController;
+let pillsController;
+let playerPopupController;
 
 // Tracks the columns array we last auto-applied as a "default preset" per
 // discipline, so we can tell whether the user has since customized columns
@@ -102,11 +106,13 @@ function updateDisciplineToggle() {
   });
 }
 
-function updateAdvancedCount() {
-  const state = store.get();
-  const n = activeConditionCount(state.advanced);
-  advancedCountEl.hidden = n === 0;
-  advancedCountEl.textContent = String(n);
+/** Count badge on the "All filters" button — how many drawer filters are active. */
+function updateDrawerBadge() {
+  const countEl = filterBarEl.querySelector('[data-role="open-drawer-count"]');
+  if (!countEl || !drawerController) return;
+  const n = drawerController.activeCount();
+  countEl.hidden = n === 0;
+  countEl.textContent = String(n);
 }
 
 function updateViewToggle() {
@@ -116,35 +122,48 @@ function updateViewToggle() {
   });
 }
 
-/** Show/hide the table vs graph panels for the current state.view (§6: same page, no iframe). */
+/** Show/hide the leaderboard vs graph panels for state.view (§6: same page, no iframe).
+ * Player profiles are a POP-UP over either view (owner ruling at the R2 gate), not a view. */
 function applyView() {
   const state = store.get();
-  const graph = state.view === "graph";
-  tableAreaEl.hidden = graph;
-  playerSearchSectionEl.hidden = graph;
-  graphAreaEl.hidden = !graph;
+  const view = state.view;
+  tableAreaEl.hidden = view !== "table";
+  playerSearchSectionEl.hidden = view !== "table";
+  graphAreaEl.hidden = view !== "graph";
   updateViewToggle();
-  if (graph) {
+  if (view === "graph") {
     graphController.onShow();
   } else {
-    tableController.load();
+    // Owner: no automated search — entering the table view shows the blank
+    // prompt; the query runs only when "Show results" is clicked.
+    tableController.showPrompt();
   }
 }
 
 function onFiltersChanged() {
   // Drop columns/conditions orphaned by the new scope BEFORE anything renders,
-  // so the advanced panel, count badge, and query all agree (§8.4 honesty).
+  // so the drawer, badge, pills, and query all agree (§8.4 honesty).
   pruneIneligibleState(store);
+  // A row grouping the new scope disallows (position/dismissal grouping in the
+  // bowling view; opposition grouping outside international) resets to None —
+  // never a ghost mode the controls can't show honestly.
+  const s = store.get();
+  if (s.splitBy && !splitAllowed(s, s.splitBy)) {
+    store.set({ splitBy: null });
+  }
+  if (drawerController) drawerController.sync();
+  if (pillsController) pillsController.render();
   updateScopeSentence();
-  updateAdvancedCount();
-  // Re-render the advanced panel too: its metric dropdown must reflect the
-  // current format scope (§8.9 phase-metric gating) whenever formats change.
-  if (advancedController) advancedController.render();
+  updateDrawerBadge();
   // Only the visible view re-queries; the other refreshes when switched to.
+  // Table view: filter changes revert to the blank prompt (no automated search);
+  // the query runs on "Show results" / the drawer's "Apply and show results".
+  // (The player popup blocks the filters while open; it refetches on reopen if
+  // the scope moved, via its own cache key.)
   if (store.get().view === "graph") {
     graphController.onScopeChanged();
   } else {
-    tableController.load();
+    tableController.showPrompt();
   }
 }
 
@@ -206,16 +225,44 @@ function boot() {
         }
       );
       filterController.setDateBounds(minMonth, maxMonth);
-      filterController.refreshTeamOptions();
 
-      advancedController = mountAdvanced(advancedPanelEl, store, () => {
+      drawerController = mountFilterDrawer(drawerHostEl, store, {
+        onChange: () => {
+          onFiltersChanged();
+        },
+        onApply: () => {
+          drawerController.close();
+          // Apply = the one query trigger (no automated search, decision 25).
+          // The graph already follows scope changes live via onFiltersChanged.
+          if (store.get().view === "table") tableController.load();
+        },
+      });
+      drawerController.sync();
+
+      pillsController = mountPills(pillsBarEl, store, () => {
         onFiltersChanged();
       });
+      pillsController.render();
 
-      advancedToggleEl.addEventListener("click", () => {
-        const isOpen = !advancedPanelEl.hidden;
-        advancedPanelEl.hidden = isOpen;
-        advancedToggleEl.setAttribute("aria-expanded", String(!isOpen));
+      const openDrawerBtn = filterBarEl.querySelector('[data-role="open-drawer"]');
+      if (openDrawerBtn) openDrawerBtn.addEventListener("click", () => drawerController.open());
+
+      // Presentation controls in the table toolbar (presets, Group rows, Vs)
+      // set state and reload directly without onFiltersChanged — keep the
+      // honest scope sentence, pills, and badge in step with EVERY state
+      // change (e.g. entering matchup mode makes the position filter inert,
+      // so its pill and badge count must drop immediately).
+      store.subscribe(() => {
+        updateScopeSentence();
+        if (pillsController) pillsController.render();
+        updateDrawerBadge();
+        // The drawer too: toolbar presentation controls (Vs, Group rows,
+        // presets) bypass onFiltersChanged, but since D4-R4 the drawer's
+        // position-chip enablement and the condition builder's metric
+        // vocabulary DEPEND on the Vs selection. drawer.sync() is cheap and
+        // scope-key-cached internally, so calling it on every state change is
+        // safe (its option-list refetches no-op unless the scope moved).
+        if (drawerController) drawerController.sync();
       });
 
       playerSearchInputEl.addEventListener("input", () => {
@@ -223,7 +270,10 @@ function boot() {
         onFiltersChanged();
       });
 
-      tableController = mountTable(tableAreaEl, store);
+      tableController = mountTable(tableAreaEl, store, {
+        onPlayerClick: (id, name) => playerPopupController.open(id, name),
+      });
+      playerPopupController = mountPlayerPopup(playerPopupHostEl, store);
       graphController = mountGraph(graphAreaEl, store);
 
       viewToggleEl.addEventListener("click", (e) => {
@@ -236,9 +286,10 @@ function boot() {
       });
 
       updateScopeSentence();
-      updateAdvancedCount();
+      updateDrawerBadge();
       updateViewToggle();
-      tableController.load();
+      // Owner: blank on first load — show the prompt, don't auto-run the query.
+      tableController.showPrompt();
     })
     .catch((err) => {
       renderInitError(err, boot);

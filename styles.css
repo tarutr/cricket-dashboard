@@ -414,6 +414,75 @@ a { color: var(--color-accent); }
   border-top: 1px solid var(--color-line);
 }
 
+/* ── Profile filters (D4.2) — second filter row ────────────────────────────── */
+
+.filter-bar--profile {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px dashed var(--color-line);
+}
+
+.filter-group--profile-head { gap: var(--space-1); }
+
+.profile-note {
+  font-size: 0.78rem;
+  color: var(--color-muted);
+  font-style: italic;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  max-width: 16rem;
+}
+
+.profile-role { display: flex; gap: var(--space-2); }
+
+.filter-bar--profile.is-disabled { opacity: 0.55; }
+
+/* Blank/prompt state for the results table (owner: explicit "Show results"). */
+.table-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-7) var(--space-4);
+  text-align: center;
+}
+
+.table-prompt__text {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 1rem;
+}
+
+.select:disabled,
+.team-dropdown__toggle:disabled {
+  cursor: not-allowed;
+  background: var(--color-panel);
+  color: var(--color-muted);
+}
+
+/* ── Free splits (D4 Piece 3) — position / opposition / split-by row ────────── */
+
+.filter-bar--splits { margin-top: var(--space-5); }
+
+/* Individual group greying (position and opposition can be disabled
+   independently of each other, unlike the single profile row). */
+.filter-group.is-disabled { opacity: 0.55; }
+
+.chip-group--positions { max-width: 22rem; }
+
+.chip--sm {
+  padding: var(--space-2) var(--space-3);
+  min-width: 2.5rem;
+  text-align: center;
+}
+
+.chip:disabled,
+.chip--sm:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
 /* ── Buttons / links ───────────────────────────────────────────────────────── */
 
 .btn {
@@ -680,6 +749,20 @@ a { color: var(--color-accent); }
 
 .data-table thead th.data-table__th--sticky { z-index: 3; }
 
+/* Split-value column (D4 Piece 3) — subtle tint so the breakdown row reads as
+   distinct from the player's regular metric columns. */
+.data-table__th--split { color: var(--color-accent-strong); }
+
+.data-table__td--split {
+  font-style: italic;
+  color: var(--color-muted);
+  background: var(--color-accent-tint);
+}
+
+.data-table tbody tr:nth-child(even) .data-table__td--split {
+  background: var(--color-accent-tint);
+}
+
 .data-table__td:first-child {
   font-weight: 600;
   color: var(--color-fg);
@@ -797,6 +880,199 @@ a { color: var(--color-accent); }
 
 .app-footer a { color: inherit; }
 .app-footer a:hover { color: var(--color-accent); }
+
+/* ── "All filters" open button + count badge (owner decision 29) ──────────── */
+
+.filter-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  align-self: center;
+}
+
+.filter-open-btn__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4rem;
+  height: 1.4rem;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+/* ── Applied-filter pills (owner decision 29) ──────────────────────────────── */
+
+.pills-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.8rem;
+  line-height: 1.2;
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-raised);
+  color: var(--color-fg);
+}
+
+.pill__x {
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-muted);
+  padding: var(--space-1);
+  min-width: 22px;
+  min-height: 22px;
+  border-radius: var(--radius-pill);
+}
+
+.pill__x:hover { color: var(--color-bad); background: var(--color-bad-bg); }
+
+/* ── "All filters" drawer (owner decision 29) ──────────────────────────────── */
+
+.filter-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
+.filter-drawer__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(27, 36, 48, 0.45);
+}
+
+[data-theme="dark"] .filter-drawer__backdrop { background: rgba(0, 0, 0, 0.6); }
+
+.filter-drawer__panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 100vw);
+  background: var(--color-bg);
+  box-shadow: var(--shadow-popover);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.filter-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--color-line);
+  position: sticky;
+  top: 0;
+  background: var(--color-bg);
+  z-index: 1;
+}
+
+.filter-drawer__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.3rem;
+}
+
+.drawer__close {
+  font: inherit;
+  font-size: 1.4rem;
+  line-height: 1;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-muted);
+  padding: var(--space-1);
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: var(--radius-sm);
+}
+
+.drawer__close:hover { color: var(--color-bad); background: var(--color-bad-bg); }
+
+.filter-drawer__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: var(--space-5);
+  gap: var(--space-5);
+}
+
+.filter-drawer__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--color-line);
+}
+
+.filter-drawer__section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.filter-drawer__section-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.filter-drawer__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--color-line);
+  background: var(--color-bg);
+  position: sticky;
+  bottom: 0;
+}
+
+@media (max-width: 480px) {
+  .filter-drawer__panel { width: 100vw; }
+
+  .filter-drawer__footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .filter-drawer__footer .btn { width: 100%; }
+}
+
+/* ── Table toolbar preset chips (owner decision 29) ────────────────────────── */
+
+.table-toolbar__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.chip--preset {
+  padding: var(--space-1) var(--space-3);
+  font-size: 0.8rem;
+  min-height: 32px;
+}
 
 /* ── Mobile (~380px) ───────────────────────────────────────────────────────── */
 
@@ -1073,4 +1349,497 @@ a { color: var(--color-accent); }
   .paper-card { padding: var(--space-4); }
   .paper-card__chart-area { height: 300px; }
   .graph-builder__controls { padding: var(--space-4); }
+}
+
+/* ── Players view (R2) — reduced scope strip + player links ─────────────────── */
+
+/* Player profiles are a pop-up over the current view (owner ruling at the R2
+   gate — the original D5 interaction model). Same overlay tokens as the
+   drawer; centered panel, full-screen on small viewports. */
+.player-popup {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
+.player-popup__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(27, 36, 48, 0.45);
+}
+
+[data-theme="dark"] .player-popup__backdrop { background: rgba(0, 0, 0, 0.6); }
+
+.player-popup__panel {
+  position: relative;
+  margin: 4vh auto;
+  width: min(920px, 94vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--color-bg);
+  box-shadow: var(--shadow-popover);
+  border-radius: 10px;
+  padding: var(--space-5) var(--space-6) var(--space-6);
+}
+
+.player-popup__close {
+  position: sticky;
+  top: 0;
+  float: right;
+  font: inherit;
+  font-size: 1.4rem;
+  line-height: 1;
+  background: var(--color-bg);
+  border: none;
+  cursor: pointer;
+  color: var(--color-muted);
+  padding: var(--space-2);
+  z-index: 2;
+}
+.player-popup__close:hover { color: var(--color-fg); }
+
+@media (max-width: 640px) {
+  .player-popup__panel {
+    margin: 0;
+    width: 100vw;
+    max-height: 100vh;
+    height: 100%;
+    border-radius: 0;
+  }
+}
+
+.player-link {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 30%, transparent);
+  text-underline-offset: 3px;
+}
+.player-link:hover {
+  text-decoration-color: currentColor;
+}
+
+/* ── Player page (R2) — search mode + single-player page ────────────────────── */
+
+.player-page-search {
+  max-width: 30rem;
+  margin: var(--space-7) auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  text-align: center;
+}
+
+.player-page-search__heading {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 2rem;
+  letter-spacing: -0.02em;
+  text-transform: lowercase;
+  color: var(--color-fg);
+}
+
+.player-page-search__input {
+  width: 100%;
+  font-size: 1rem;
+}
+
+.player-page-search__results {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.player-page-search__item {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-raised);
+  color: var(--color-fg);
+  cursor: pointer;
+}
+
+.player-page-search__item:hover {
+  border-color: var(--color-fg);
+  background: var(--color-panel);
+}
+
+.player-page-search__item-name {
+  font-weight: 600;
+}
+
+.player-page-search__item-meta {
+  font-size: 0.82rem;
+  color: var(--color-muted);
+  margin-top: var(--space-1);
+}
+
+.player-page-search__empty {
+  color: var(--color-muted);
+  font-size: 0.9rem;
+  padding: var(--space-3) var(--space-4);
+  margin: 0;
+}
+
+/* Player page shell */
+
+.player-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-2) 0 var(--space-6);
+}
+
+.player-page__back {
+  align-self: flex-start;
+}
+
+.player-page__loading {
+  color: var(--color-muted);
+  font-size: 0.95rem;
+}
+
+.player-page__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.player-page__avatar {
+  flex-shrink: 0;
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 50%;
+  background: var(--color-active-bg);
+  color: var(--color-active-fg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.2rem;
+  letter-spacing: -0.01em;
+}
+
+.player-page__header-text { min-width: 0; }
+
+.player-page__name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.9rem;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--color-fg);
+}
+
+.player-page__registry-name {
+  margin: var(--space-1) 0 0;
+  font-size: 0.85rem;
+  color: var(--color-muted);
+}
+
+.player-page__meta {
+  margin: var(--space-1) 0 0;
+  color: var(--color-muted);
+  font-size: 0.95rem;
+}
+
+.player-page__meta--note {
+  font-style: italic;
+}
+
+.player-page__scope {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+  border-top: 1px solid var(--color-line);
+  border-bottom: 1px solid var(--color-line);
+  padding: var(--space-3) 0;
+}
+
+.player-page__note {
+  color: var(--color-muted);
+  font-size: 0.95rem;
+}
+
+.player-page__note--muted {
+  font-style: italic;
+}
+
+.player-page__block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-line);
+}
+
+.player-page__block-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.4rem;
+  letter-spacing: -0.01em;
+  color: var(--color-fg);
+}
+
+.player-page__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.player-page__section-title {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+.player-page__footnote {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-muted);
+}
+
+.player-page__two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-5);
+}
+
+/* Stat cards */
+
+.player-stat-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  gap: var(--space-3);
+}
+
+.player-stat-card {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-panel);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.player-stat-card__label {
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+.player-stat-card__value {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.5rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg);
+}
+
+/* Compact split tables */
+
+.mini-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+}
+
+.mini-table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: max-content;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.mini-table th,
+.mini-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.mini-table th:first-child,
+.mini-table td:first-child { text-align: left; }
+
+.mini-table thead th {
+  background: var(--color-panel);
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+.mini-table tbody tr:last-child td { border-bottom: none; }
+
+.mini-table tbody tr:nth-child(even) td {
+  background: var(--color-panel);
+}
+
+/* Dismissal / wicket-type fingerprint bars */
+
+.fingerprint {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.fingerprint__row {
+  display: grid;
+  grid-template-columns: 7rem 1fr 6.5rem;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.fingerprint__label {
+  font-size: 0.85rem;
+  color: var(--color-fg);
+}
+
+.fingerprint__track {
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-panel);
+  overflow: hidden;
+}
+
+.fingerprint__fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+}
+
+.fingerprint__stat {
+  font-size: 0.82rem;
+  color: var(--color-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Matchups (D4 R3): coverage line + grouped sub-tables (vs pace/spin, vs bowling type) */
+
+.matchup__coverage {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.matchup__subtable {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.matchup__subtable-title {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+@media (max-width: 620px) {
+  .player-page__two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .player-page-search {
+    margin: var(--space-5) auto;
+  }
+
+  .player-page__header {
+    gap: var(--space-3);
+  }
+
+  .player-page__name {
+    font-size: 1.5rem;
+  }
+
+  .fingerprint__row {
+    grid-template-columns: 5.5rem 1fr 5.5rem;
+    gap: var(--space-2);
+  }
+}
+
+/* ── Leaderboard matchup mode (D4 R3, decision 33) ──────────────────────────
+   "Vs" comparison: a fixed-column table where every row also carries a
+   coverage figure. Reuses .select/.table-toolbar primitives; adds the
+   coverage cell, the toolbar note that replaces presets/Customise, and a
+   little breathing room for the Vs/Group-rows/Customise cluster now that it
+   can hold three controls. */
+
+.table-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.table-toolbar__group-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+/* Bowling-type optgroup can carry long style names ("Slow left-arm
+   orthodox") — cap the closed-select width so the toolbar doesn't stretch,
+   the dropdown panel itself still renders at full label width. */
+.table-toolbar__group-label .select--compact {
+  max-width: 11rem;
+}
+
+.table-toolbar__matchup-note {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  font-style: italic;
+}
+
+.data-table__th--coverage {
+  color: var(--color-muted);
+}
+
+.data-table__td--coverage {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 480px) {
+  .table-toolbar__group-label .select--compact {
+    max-width: 9rem;
+  }
 }

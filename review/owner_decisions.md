@@ -135,3 +135,238 @@ change requires a new owner decision recorded here. Dates are decision dates.
     fine-grained "vs Off-spin / Leg-spin / …" view they appear under a 'Spin'
     (unspecified type) bucket; in the coarse pace-vs-spin view they correctly
     count as Spin. Faithful to decision 15; owner to confirm the fine-view label.
+    (Matchup views are Pieces 4–5 — still to be built, so this is not yet
+    gate-confirmed against a live UI.)
+
+## 2026-07-08 — D4 frontend build (Pieces 1–2)
+
+25. **Piece 1 (profile filters) — GATE APPROVED** ("This all looks good"), reviewed
+    on localhost. Owner design rulings realized in the build:
+    - **Playing-role filter = BOTH levels:** a broad Batter / Allrounder / Bowler
+      picker plus a cascading detailed sub-role (Opening / Top-order / Middle-order /
+      Wicketkeeper for Batter; Batting/Bowling allrounder for Allrounder).
+    - **Bowling filter = the 10 specific types** (Off-spin, Leg-spin, Slow left-arm
+      orthodox, Left-arm wrist-spin, Slow-medium, Medium, Medium-fast, Fast-medium,
+      Fast) — matches the decision-13 taxonomy. Not the coarse Pace/Spin.
+    - **Women view:** the profile-filter row greys out with the exact note
+      **"We don't have profile data on Women yet."** (profiles are men-only; 0% of
+      women players have one). Switching gender clears any profile filter.
+    - **Men is now the DEFAULT gender** (overrides SPEC §5.1 "Women"), so profile
+      filters are live on first load.
+    - **No automated search:** the Compare Stats results table is **blank on first
+      load** and shows a **"Show results"** button; it reverts to that prompt on any
+      filter change (so numbers are never shown for a scope the filters no longer
+      describe). Table only — the Graph Builder still auto-updates. Owner: fine for
+      now, "a million small design changes" get batched at the end.
+26. **Piece 2 (new table metrics) — BUILT + VERIFIED, not yet gate-reviewed.**
+    Bowler wicket-type breakdown = **counts** (six kinds; sum to `wickets`); a
+    percentage/"dismissal fingerprint" split was NOT built — deferred to end-polish
+    unless owner asks. Batting progression = first-10-ball / 11–20 / 21+ **faced-ball**
+    strike rates, available in **all formats** (not phase-gated). Numbers cross-checked
+    exact vs raw R2.
+27. **CORS / preview:** R2 bucket CORS allows `localhost:8000` but not Vercel preview
+    domains, so branch previews error. Owner declined to change R2 CORS / README now
+    ("just show me the localhost"); reviews happen on localhost until owner chooses to
+    widen CORS. Deferred, non-blocking.
+
+## 2026-07-09 — D4 Piece 3 (free splits) owner design answers + build
+
+28. **Piece 3 design answers (owner, 2026-07-09) — BUILT + VERIFIED, awaiting gate review:**
+    - **Split style = BOTH.** Position and opposition ship as *filters* (every stat
+      recomputes over the slice, composes across many players) AND a table-only
+      **"Split by"** selector (one row per player × batting position / opposition /
+      dismissal kind). The Graph Builder ignores Split-by and its honest scope line
+      never claims it; the graph DOES honor the position/opposition filters.
+    - **Position filter = individual positions 1–12** (12 = rare concussion-sub
+      innings), multi-select chips, no grouping taxonomy baked in. Batting view only:
+      greyed with "Batting view only" in bowling; selections kept inert.
+    - **Dismissal breakdown = every kind separately, counts + % of dismissals.**
+      24 new batting columns (12 kinds × count and % of dismissals) in a
+      "Dismissals" section of the column picker. The 12 kinds are exactly the
+      dismissal_kind values that carry dismissed = 1; retired hurt / retired not out
+      are NOT dismissals and are excluded (in the dismissal split they read
+      "not out"). Verified: the 12 kinds partition total dismissals exactly.
+    - **Opposition = international only** (per decision 20): the filter, and the
+      opposition split, grey out with "International cricket only for now" unless
+      Team type = International.
+    - **"Matches" honesty rule:** while a position/opposition filter or any split is
+      active, the Matches column counts matches in which the player actually
+      batted/bowled within the slice (the match-list data has no opponent or
+      position columns, so this is the only honest count). Min innings applies
+      within the slice too ("min 10 innings vs Australia").
+    - **Verified exact vs raw R2** (browser = duckdb to the decimal): SA Yadav vs
+      Australia (10 inns, 259 runs, 28.78 avg, 167.10 SR); Karanbir Singh at 1–2
+      (51 inns, 2454 runs, 175.29 SR); SA Yadav dismissal columns (Ct 43 = 81.1%,
+      Bwd 1, LBW 4, RO 1, St 3, C&B 1) and all position/dismissal split rows;
+      Rashid Khan bowling × opposition split (the famous Rashid Khan is absent
+      because Afghanistan does not exist in Cricsheet — SPEC §4.1, honest result);
+      global 12-kind partition = 22,517 = SUM(dismissed) in the default scope.
+    Branch `d4-piece3-free-splits`, stacked on Piece 2.
+
+## 2026-07-09 — Site restructure (owner-directed, supersedes the one-page layout)
+
+29. **Owner verdict on the current dashboard: too overloaded, unintuitive** — too
+    many filters in too many places, too many column options, new features
+    undiscoverable. Owner reviewed wireframes and chose a **FULL RESTRUCTURE**
+    around three destinations:
+    - **Leaderboard** (the compare table, slimmed): only Gender / Format / Date /
+      Team type stay visible; Team, Min innings, the profile filters, position,
+      opposition, and the advanced condition builder all collapse into ONE
+      "All filters" drawer with a single "Apply and show results" button (the
+      no-automated-search rule survives, decision 25). Applied filters render as
+      removable pills. The 45 column checkboxes become one-click **presets**
+      (Core / Boundaries / Dismissals / Phases / Progression + Customise).
+    - **Player pages** (new destination): everything single-player moves here and
+      just appears — position/opposition splits, dismissal fingerprint (counts +
+      % in one visual), progression SRs, and the upcoming matchups. Reached by
+      clicking any player name or via search. This **supersedes SPEC §2's "no
+      player pages" non-goal and absorbs/expands the D5 pop-up plan.**
+    - **Graph Builder**: unchanged.
+    - **Sequencing: RESTRUCTURE FIRST** — matchups (old Pieces 4–5) are built
+      once, directly into the player page, after the new structure lands.
+    - **Leaderboard row-splitting: KEEP, TUCKED AWAY** — a small "Group rows"
+      control in the table toolbar (off by default, out of the filter area);
+      full splits live on player pages.
+    New gates: **R1** leaderboard slim-down (scope strip + drawer + pills +
+    presets + toolbar group-rows) → **R2** player pages → **R3** matchups on the
+    player page (decisions 23/24 confirmed there) → final polish. All existing
+    verified queries/metrics are re-homed, not rebuilt; numbers stay identical.
+
+30. **R1 gate PASSED (2026-07-09):** owner reviewed the slimmed leaderboard on
+    localhost — "this is largely good. There are design fixes, but we can do
+    that later." Remaining visual tweaks are BATCHED into the final polish pass
+    (consistent with decision 25's batching rule). R2 (player pages) proceeds.
+
+31. **R2 (player pages) — BUILT + VERIFIED, awaiting gate review.** New Players
+    destination: search-first; page shows a profile header (or the honest "No
+    profile data for this player." — all women, unmatched men), an honest scope
+    line (Format + Date + Team type only; the fixed caveat "leaderboard-only
+    filters don't apply here"), then Batting (overview cards with the Test/MDM
+    BPD swap, by-position table, vs-opposition table [international-only,
+    greyed note elsewhere], "How out" fingerprint bars with counts + % of
+    dismissals + not-out line, faced-balls progression cards) and Bowling
+    (cards incl. BBI, wicket-type bars, vs-opposition). Blocks with no innings
+    in scope show honest notes; player names in the leaderboard click through.
+    Notable calls: (a) **player search matches EVERY name a player has appeared
+    under and displays the most recent** — players.parquet keeps only the
+    oldest registry name (e.g. NR Sciver), so the search reads name history
+    from player_matches (covers decision-9 never-bat-never-bowl players too);
+    (b) verbatim playing_role "Unknown" is suppressed in header lines.
+    Verified exact vs raw R2: SA Yadav full page (incl. progression
+    133.19/148.79/178.55 and his 1-innings 2-5 bowling card), JJ Bumrah
+    bowling block (32 inns, 48 wkts, kinds 24/19/3/2 summing to 48, Pakistan &
+    South Africa 9 wkts each), NR Sciver-Brunt (women: 30 inns, 954 runs,
+    41.48, 137.07, HS 77). Branch `d4-r2-player-pages`.
+
+32. **R2 gate ruling (owner, 2026-07-09): player profiles are POP-UPS, not a
+    page.** "The player profiles look good… make the player profiles pop-ups,
+    not a new page. Should be easy to close (an [x] or clicking outside) to go
+    back to the original page." Implemented same-day: the Players tab is
+    removed; clicking any player name in the leaderboard opens the profile as
+    a centered overlay (full-screen on phones) over the current view, closing
+    via ×, backdrop click, or Escape — the page behind is untouched. The
+    in-popup "Find another player" search is kept. This realizes D5's original
+    pop-up interaction model; other design changes remain batched for the
+    final polish pass (decisions 25/30). Content/numbers unchanged from
+    decision 31's verification.
+
+33. **R2 pop-up gate PASSED + R3 scope addition (owner, 2026-07-09):** "Looks
+    good." Matchup stats must be available in BOTH homes: the profile pop-up
+    AND "searchable via the regular dashboard" — i.e. the original Piece-4
+    leaderboard comparison mode returns alongside the pop-up sections. R3
+    proceeds. Also confirmed: the owner's main model is Fable 5 High acting as
+    orchestrator/planner/reviewer only; building is delegated to right-sized
+    sub-agents; token efficiency is a standing requirement.
+
+34. **R3 (matchups, both homes) — BUILT + VERIFIED, awaiting gate review.**
+    (a) **Profile pop-up sections:** Batting gains "Vs pace and spin" (coarse) +
+    "Vs bowling type" (fine, bare-slow bucket labelled "Spin (unspecified)" per
+    decision 24); Bowling gains "Vs left- and right-handers". Every section
+    leads with its coverage line ("Style data covers N of M balls faced (X%)")
+    and renders an honest greyed note instead of tables when coverage is zero
+    (all women, unmapped men — decision 21). (b) **Leaderboard matchup mode
+    (decision 33):** a "Vs" selector in the table toolbar (batting: Pace/Spin +
+    the fine types; bowling: right/left-handers). Active mode switches the
+    table to the matchup views with fixed columns and a per-player Coverage
+    column ("N of M (X%)"); position filters, stat conditions, row grouping,
+    and column presets are inert with an explicit toolbar note; pills/badge
+    update instantly; the scope sentence reads "vs Spin" (coarse) vs
+    "vs Spin (unspecified)" (fine bucket) vs "vs left-handers"; the Vs select
+    is disabled for Women with "No style data for women's cricket yet".
+    Dismissals shown are bowler-credited only (decision 23, as baked into the
+    data). **Data notes:** the dataset has NO bare-'Pace' bucket (only the 10
+    bare-slow='Spin' bowlers, decision 15), so "Pace (unspecified)" never
+    appears — correct, data-driven. **Verified exact vs raw R2:** SA Yadav vs
+    Spin (59 inns, 322 balls, 454 runs, SR 140.99, avg 64.86, 7 out, coverage
+    913 of 1,027 = 88.9%) in both homes; JJ Bumrah vs left-handers (25 inns,
+    185 balls, 13 wkts, econ 6.75, coverage 649 of 707 = 91.8%) in both homes;
+    his bowler-credited dismissal identity (52 = 53 minus the one run-out)
+    reconfirms decision 23. Decisions 23 + 24 are due for owner confirmation
+    at THIS gate against the live UI. Branch `d4-r3-matchups`.
+
+35. **Decisions 23 + 24 CONFIRMED AT THE R3 GATE (owner, 2026-07-09):**
+    dismissal attribution (bowler-credited kinds only) and the
+    "Spin (unspecified)" bare-slow label are both approved against the live UI.
+    Owner also flagged: the search box needing "Show results" reads as
+    confusing — batched to the design/polish pass. Follow-up owner request:
+    matchup mode gets a RESTRICTED column picker (choose among matchup-view
+    metrics only; Coverage column always present), plus the free extra
+    vs-style stats computable from existing matchup columns. Dismissal-KIND
+    and PHASE breakdowns per style are acknowledged as possible but require a
+    pipeline/data-layer extension (new columns in the matchup parquets) —
+    offered to the owner as an optional future gated piece, not yet scheduled.
+
+36. **Matchup data extension + restricted picker — BUILT, DEPLOYED, VERIFIED
+    (2026-07-09, owner: "Add everything you can… build an alternate script to
+    test first").** Pipeline: matchup_batting +18 columns (six dis_* dismissal
+    kinds partitioning `dismissals`; T20 + ODI phase runs/balls per style),
+    matchup_bowling +24 (six wkt_* kinds; T20 + ODI phase balls/runs/wickets
+    per hand); odi_* NULL for Hundred matches like the main views. Process as
+    mandated: pipeline/dev_test_matchup_extension.py verified everything
+    read-only against the local DB copy BEFORE export_parquet.py was patched
+    (zero mismatches on all 1.49M rows; delivery-level two-way checks equal;
+    old columns byte-identical), then six permanent reconciliation gates were
+    added to run_gates. The export change was cherry-picked to main (additive
+    data, decision-22 precedent — live site unaffected) and a green pipeline
+    run published the extended parquets to R2. Frontend: matchup mode's fixed
+    columns replaced by a RESTRICTED PICKER (matchup-only vocabulary, Basic/
+    Dismissals/Phase sections, phase gated by format, Coverage always fixed)
+    plus free stats (4s/6s/BPB/BPD vs style; boundary counts + wickets-per-
+    innings vs hand). Verified exact vs R2 in-browser: SA Yadav vs Spin —
+    caught 4 + stumped 3 = 7 dismissals, death SR 200.00, PP SR 143.64;
+    JJ Bumrah vs right-handers — caught 13, bowled 13, PP econ 6.18, PP
+    wkts 8. Branch `d4-r3-matchups` (frontend) + main (pipeline).
+
+37. **Matchup positions + stat conditions — BUILT, DEPLOYED, VERIFIED
+    (2026-07-09, owner: "same problem with bowlers — why aren't we allowed to
+    do matchups by positions and stat-conditions?").** Pipeline (test-first
+    again, 39/39 harness checks, then main + green run): matchup_batting
+    gains `batting_position` (the batter's own, verbatim sql_batting
+    definition); matchup_bowling REGRAINED to (match, innings, bowler,
+    batting_hand, striker's batting_position) — 1.35M rows — with rollup to
+    the old grain reproducing every row/column exactly and permanent gates
+    added. Frontend: the position filter now applies in matchup mode — on the
+    bowling side it filters the position of the batters faced ("Bumrah vs
+    openers"), with the scope token/pill reading "to batters at 1, 2" and a
+    drawer hint; bowling-matchup innings counts are DISTINCT innings (not
+    position buckets). Stat conditions are namespace-aware: authored in the
+    active mode's vocabulary, applied by key-overlap, with honest
+    "N of M stat conditions apply here" notes in both modes and cross-mode
+    condition survival. A stale-sync wiring bug (drawer controls not
+    refreshing on Vs changes) was caught in verification and fixed
+    (drawer.sync on every store change). Verified exact vs raw R2: Bumrah vs
+    right-handers at 1–2 = 27 distinct innings, 177 balls, 9 wickets;
+    Karanbir Singh vs Spin at 1–2 = 33 inns, 488 runs @ 190.63, out 11;
+    "caught vs spin ≥ 2, min 10 innings" = 576 players. Branch
+    `d4-r3-matchups` + main (pipeline).
+
+38. **R3 GATE PASSED + PUBLIC DEPLOY (owner, 2026-07-09):** "All looks good."
+    The full D4 scope — restructure (R1 leaderboard, R2 profile pop-ups),
+    matchups everywhere (style/hand/position/conditions, coverage-honest),
+    splits, dismissal breakdowns, progression, profile filters — is
+    owner-approved. Owner chose to DEPLOY NOW: the branch chain merges to main
+    and ships to the public Vercel site (cricdb.vercel.app), with the batched
+    design/polish pass to follow on top. NEXT PHASE = polish: owner's design
+    list + feedback form (Supabase, RLS) + performance audit + README, then
+    optional deferred items (team/venue pop-ups, headshots, preview-domain
+    CORS, name normalization).

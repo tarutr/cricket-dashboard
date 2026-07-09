@@ -23,7 +23,7 @@
 // match_type values — "T20" here means the T20-bucket (T20 + IT20), matching the
 // Phase 2 brief's owner decision that Cricsheet mislabels internationals.
 
-import { metricsFor } from "./metrics.js";
+import { metricsFor, matchupBucketLabel } from "./metrics.js";
 
 /** The five format buckets surfaced in the UI, and the match_type values each expands to. */
 export const FORMAT_BUCKETS = [
@@ -33,6 +33,186 @@ export const FORMAT_BUCKETS = [
   { key: "Test", label: "Test", matchTypes: ["Test"] },
   { key: "MDM", label: "MDM", matchTypes: ["MDM"] },
 ];
+
+// ── Profile filters (D4.2) ────────────────────────────────────────────────────
+// The four profile-powered filters live in a single `profile` state block. They
+// filter the Compare Stats table (and everything downstream that shares
+// buildScopeClauses) to players whose player_profiles row matches. Profiles are
+// men-only by design (the sheet is men-only), so these never apply while
+// gender = female — the filter bar greys them out there (owner decision 21).
+
+/** Fresh, all-cleared profile-filter block. */
+export function emptyProfile() {
+  return { roleGroup: null, roleSub: null, battingHand: null, bowlingType: null, teams: [] };
+}
+
+/** True if any profile filter is currently narrowing the set. */
+export function hasActiveProfileFilter(profile) {
+  if (!profile) return false;
+  return Boolean(
+    profile.roleGroup || profile.roleSub || profile.battingHand || profile.bowlingType || (profile.teams && profile.teams.length)
+  );
+}
+
+function escSql(s) {
+  return String(s).replace(/'/g, "''");
+}
+
+/**
+ * SQL semi-join clause restricting `idColumn` (batter_id / bowler_id / player_id)
+ * to the player_ids whose profile matches every active profile filter. Returns
+ * null when no profile filter is active OR gender = female (profiles are
+ * men-only — never silently empty the women's view; the filter bar disables the
+ * controls there per decision 21). Shared by table, graph, and team-option
+ * lookups so the honest scope sentence and every query agree.
+ */
+export function profileSemiJoinSql(state, idColumn) {
+  if (!idColumn) return null;
+  if (state.gender === "female") return null;
+  const p = state.profile;
+  if (!hasActiveProfileFilter(p)) return null;
+
+  const preds = [];
+  if (p.roleGroup) preds.push(`role_group = '${escSql(p.roleGroup)}'`);
+  if (p.roleSub) preds.push(`role_subgroup = '${escSql(p.roleSub)}'`);
+  if (p.battingHand) preds.push(`batting_style = '${escSql(p.battingHand)}'`);
+  if (p.bowlingType) preds.push(`bowling_type = '${escSql(p.bowlingType)}'`);
+  if (p.teams && p.teams.length) {
+    const teamPreds = p.teams
+      .map((t) => `list_contains(string_split(teams_played_for, '|'), '${escSql(t)}')`)
+      .join(" OR ");
+    preds.push(`(${teamPreds})`);
+  }
+  if (preds.length === 0) return null;
+  return `${idColumn} IN (SELECT player_id FROM profiles WHERE ${preds.join(" AND ")})`;
+}
+
+/** Human tokens for describeScope() — only the profile filters actually applied. */
+function profileScopeTokens(state) {
+  if (state.gender === "female") return [];
+  const p = state.profile;
+  const tokens = [];
+  if (p.roleGroup) tokens.push(p.roleGroup);
+  if (p.roleSub) tokens.push(p.roleSub);
+  if (p.battingHand) tokens.push(p.battingHand);
+  if (p.bowlingType) tokens.push(p.bowlingType);
+  if (p.teams && p.teams.length) {
+    tokens.push(p.teams.length <= 2 ? p.teams.join(", ") : `${p.teams.length} teams played for`);
+  }
+  return tokens;
+}
+
+// ── Free splits (D4 Piece 3) ─────────────────────────────────────────────────
+// Two innings-level filters (batting position, opposition) plus a table-only
+// "Split by" breakdown. Opposition is INTERNATIONAL cricket only (decision 20 —
+// club team names are unnormalized), so both the filter and the opposition
+// split apply ONLY while teamType === "international"; the controls grey out
+// elsewhere (decision-21 treatment: inert, never silently wrong). Positions
+// are a batting concept and apply only in the batting discipline.
+
+/** The three split dimensions. sqlExpr must be valid in both the SELECT and GROUP BY of the innings views. */
+export const SPLIT_DIMENSIONS = {
+  position: {
+    key: "position",
+    label: "Batting position",
+    columnLabel: "Pos",
+    disciplines: ["batting"],
+    internationalOnly: false,
+    numeric: true,
+    sqlExpr: () => "batting_position",
+  },
+  opposition: {
+    key: "opposition",
+    label: "Opposition",
+    columnLabel: "Opposition",
+    disciplines: ["batting", "bowling"],
+    internationalOnly: true,
+    numeric: false,
+    sqlExpr: (discipline) => (discipline === "batting" ? "bowling_team" : "batting_team"),
+  },
+  dismissal: {
+    key: "dismissal",
+    label: "Dismissal",
+    columnLabel: "Dismissal",
+    disciplines: ["batting"],
+    internationalOnly: false,
+    numeric: false,
+    // Retired hurt / retired not out are not dismissals — they read "not out",
+    // matching the dismissed flag (and the batting-average denominator).
+    sqlExpr: () => "CASE WHEN dismissed = 1 THEN dismissal_kind ELSE 'not out' END",
+  },
+};
+
+/** True if this split dimension may apply under the current discipline + team type. */
+export function splitAllowed(state, key) {
+  const dim = SPLIT_DIMENSIONS[key];
+  if (!dim) return false;
+  if (!dim.disciplines.includes(state.discipline)) return false;
+  if (dim.internationalOnly && state.teamType !== "international") return false;
+  if (matchupVsActive(state)) return false; // no row-grouping in matchup mode (R3)
+  return true;
+}
+
+/** The active split dimension object, or null if none is set / it isn't allowed right now. */
+export function activeSplit(state) {
+  if (!state.splitBy) return null;
+  return splitAllowed(state, state.splitBy) ? SPLIT_DIMENSIONS[state.splitBy] : null;
+}
+
+/** True if the batting-position filter is currently narrowing the innings/matchup
+ * set. Both matchup views now carry a batting_position column (D4-R4): in
+ * matchup_batting it is the batter's OWN position; in matchup_bowling it is the
+ * position of the STRIKER the bowler faced. So the filter applies in the
+ * batting discipline always (plain batting innings and matchup_batting both
+ * have the column), and in the bowling discipline ONLY while a matchup "Vs"
+ * selection is active (plain bowling innings have no such column — a bowler's
+ * own "position" isn't a batting concept). One gate that keeps the query
+ * (buildScopeClauses), the drawer's position chips, the pill, and the honest
+ * scope sentence all agreeing automatically. */
+export function positionsFilterActive(state) {
+  return (
+    Array.isArray(state.positions) &&
+    state.positions.length > 0 &&
+    (state.discipline === "batting" || (state.discipline === "bowling" && matchupVsActive(state)))
+  );
+}
+
+// ── Matchups (D4 R3, decision 33) ───────────────────────────────────────────
+// The leaderboard's "Vs" comparison mode: pick a bowling style (batting view)
+// or a batting hand (bowling view) and every stat recomputes against that
+// bucket, with a coverage figure attached. Men-only in practice — matchup
+// coverage for women is ~0% (decision 21).
+
+/**
+ * True iff a matchup "Vs" selection is currently active AND applicable to the
+ * current discipline. A stale value in the OTHER discipline (e.g. dim "hand"
+ * picked while bowling, then the user switches to batting) stays in
+ * state.matchupVs but is INERT here — same keep-but-inert precedent as the
+ * positions filter — so switching back and forth never loses the pick.
+ */
+export function matchupVsActive(state) {
+  if (!state.matchupVs || state.gender !== "male") return false;
+  const { dim } = state.matchupVs;
+  if (dim === "hand") return state.discipline === "bowling";
+  if (dim === "group" || dim === "type") return state.discipline === "batting";
+  return false;
+}
+
+/** Effective metrics namespace for the current state: matchup_batting/
+ * matchup_bowling while a "Vs" selection is active and applicable, otherwise
+ * the plain discipline. Every lookup that needs to agree on which vocabulary
+ * is "live" right now — column rendering/sorting (table.js's
+ * effectiveDiscipline delegates here), the advanced-filter metric picker
+ * (advanced.js) — must go through this single mapping. */
+export function effectiveNamespace(state) {
+  if (!matchupVsActive(state)) return state.discipline;
+  return state.discipline === "batting" ? "matchup_batting" : "matchup_bowling";
+}
+
+/** True if the opposition filter is currently narrowing the innings set. */
+export function oppositionFilterActive(state) {
+  return state.teamType === "international" && Array.isArray(state.opposition) && state.opposition.length > 0;
+}
 
 /** Expand the selected format bucket keys into the raw match_type values for SQL IN (...). */
 export function expandFormats(formatKeys) {
@@ -47,6 +227,14 @@ export function expandFormats(formatKeys) {
 const DEFAULT_COLUMNS = {
   batting: ["matches", "innings", "runs", "average", "strike_rate", "high_score", "fours", "sixes"],
   bowling: ["matches", "innings", "wickets", "average", "economy", "strike_rate", "best"],
+};
+
+// Matchup-mode default column sets (D4 R3 follow-up, restricted picker): equal
+// to the fixed sets matchup mode has always shown. Kept here (not in table.js)
+// so state.js owns every column default, matchup namespaces included.
+const DEFAULT_MATCHUP_COLUMNS = {
+  matchup_batting: ["innings", "balls", "runs", "strike_rate", "average", "dismissals", "dot_pct", "boundary_pct"],
+  matchup_bowling: ["innings", "balls", "wickets", "runs_conceded", "economy", "average", "strike_rate", "dot_pct"],
 };
 
 function monthsAgo(yyyymm, months) {
@@ -67,18 +255,25 @@ export function createInitialState(maxMonth) {
   return {
     view: "table", // "table" | "graph" (SPEC §6 Graph Builder)
     discipline: "batting",
-    gender: "female",
+    gender: "male", // owner default (overrides SPEC §5.1 "Women"): profile filters live on load
     formats: ["T20"],
     dateFrom,
     dateTo,
     teams: [],
     teamType: "international",
     minInnings: 10,
+    profile: emptyProfile(),
+    positions: [], // batting positions (ints); [] = no predicate. Applies in batting only.
+    opposition: [], // opposition team names; [] = no predicate. International only (decision 20).
+    splitBy: null, // null | "position" | "opposition" | "dismissal" — table-only breakdown
+    matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)
     search: "",
     sort: { key: "runs", dir: "desc" },
     columns: {
       batting: [...DEFAULT_COLUMNS.batting],
       bowling: [...DEFAULT_COLUMNS.bowling],
+      matchup_batting: [...DEFAULT_MATCHUP_COLUMNS.matchup_batting],
+      matchup_bowling: [...DEFAULT_MATCHUP_COLUMNS.matchup_bowling],
     },
     advanced: { op: "AND", groups: [] },
   };
@@ -91,6 +286,84 @@ export function defaultColumnsFor(discipline, formats) {
     return ["matches", "innings", "runs", "average", "balls_per_dismissal", "high_score", "fours", "sixes"];
   }
   return [...DEFAULT_COLUMNS[discipline]];
+}
+
+// ── Column presets (R1, decision 29) ─────────────────────────────────────────
+// One-click column sets replacing the 45-checkbox picker as the primary way to
+// choose columns ("Customise…" still opens the full picker). A preset is a
+// FUNCTION of the current formats: Core respects the owner's Test/MDM swap and
+// Phases resolves to the T20 or ODI phase family — or null when the current
+// formats don't allow phase metrics at all (chip renders disabled).
+
+export const COLUMN_PRESET_DEFS = {
+  batting: [
+    { key: "core", label: "Core", columns: (formats) => defaultColumnsFor("batting", formats) },
+    {
+      key: "boundaries",
+      label: "Boundaries",
+      columns: () => ["innings", "runs", "fours", "sixes", "boundary_pct", "balls_per_boundary", "dot_pct"],
+    },
+    {
+      key: "dismissals",
+      label: "Dismissals",
+      columns: () => [
+        "innings", "runs", "average",
+        "out_caught_pct", "out_bowled_pct", "out_lbw_pct", "out_run_out_pct",
+        "out_stumped_pct", "out_caught_and_bowled_pct", "out_hit_wicket_pct",
+      ],
+    },
+    {
+      key: "phases",
+      label: "Phases",
+      columns: (formats) => {
+        if (formats.length === 1 && formats[0] === "T20")
+          return ["innings", "runs", "strike_rate", "pp_strike_rate", "mid_strike_rate", "death_strike_rate"];
+        if (formats.length > 0 && formats.every((f) => f === "ODI" || f === "ODM"))
+          return ["innings", "runs", "strike_rate", "odi_pp_strike_rate", "odi_mid_strike_rate", "odi_death_strike_rate"];
+        return null;
+      },
+    },
+    {
+      key: "progression",
+      label: "Progression",
+      columns: () => ["innings", "runs", "strike_rate", "sr_first10", "sr_11_20", "sr_21plus"],
+    },
+  ],
+  bowling: [
+    { key: "core", label: "Core", columns: (formats) => defaultColumnsFor("bowling", formats) },
+    {
+      key: "control",
+      label: "Control",
+      columns: () => ["innings", "wickets", "economy", "dot_pct", "boundary_pct_conceded", "maidens"],
+    },
+    {
+      key: "wicket_types",
+      label: "Wicket types",
+      columns: () => ["innings", "wickets", "wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket"],
+    },
+    {
+      key: "phases",
+      label: "Phases",
+      columns: (formats) => {
+        if (formats.length === 1 && formats[0] === "T20")
+          return ["innings", "wickets", "pp_economy", "death_economy", "pp_wickets", "death_wickets"];
+        if (formats.length > 0 && formats.every((f) => f === "ODI" || f === "ODM"))
+          return ["innings", "wickets", "odi_pp_economy", "odi_death_economy", "odi_pp_wickets", "odi_death_wickets"];
+        return null;
+      },
+    },
+  ],
+};
+
+/** The preset key whose column set equals `columns` exactly (order-sensitive), or null ("custom"). */
+export function activePresetKey(discipline, formats, columns) {
+  for (const def of COLUMN_PRESET_DEFS[discipline]) {
+    const preset = def.columns(formats);
+    if (preset && preset.length === columns.length && preset.every((k, i) => k === columns[i])) {
+      return def.key;
+    }
+  }
+  return null;
 }
 
 /**
@@ -133,18 +406,53 @@ export function pruneIneligibleState(store) {
   const prunedCols = cols.filter((k) => allowed.has(k));
   const colsChanged = prunedCols.length !== cols.length;
 
+  // Matchup namespaces (D4 R3 follow-up, restricted picker): the same phase
+  // gating (§8.9) applies there — a picked pp_/mid_/death_/odi_* column must
+  // drop out the moment the format selection no longer permits it, exactly
+  // like the plain batting/bowling picker. Prune both namespaces regardless
+  // of which discipline is currently active, so a stale pick never resurfaces
+  // silently when the user flips back into matchup mode.
+  const newMatchupColumns = { ...s.columns };
+  let matchupChanged = false;
+  for (const ns of ["matchup_batting", "matchup_bowling"]) {
+    const nsAllowed = new Set(eligibleMetrics(ns, s.formats).map((m) => m.key));
+    const nsCols = s.columns[ns] || [];
+    const nsPruned = nsCols.filter((k) => nsAllowed.has(k));
+    if (nsPruned.length !== nsCols.length) {
+      newMatchupColumns[ns] = nsPruned;
+      matchupChanged = true;
+    }
+  }
+
+  // Advanced-condition pruning uses a WIDER allow-set than columns: the union
+  // of eligible keys across both plain namespaces AND both matchup namespaces
+  // (D4 R3/R4). A condition authored in matchup mode (e.g. "dis_caught >= 2")
+  // must survive leaving matchup mode — and vice versa — so switching
+  // discipline/Vs never silently deletes a condition written in the OTHER
+  // vocabulary. table.js's conditionToHaving() already re-resolves each
+  // condition's metric against the CURRENT effective namespace and skips it
+  // (returns null) when the key doesn't exist there — that's the mechanism
+  // that keeps a condition from a different namespace inert rather than wrong.
+  const advancedAllowed = new Set([
+    ...eligibleMetrics("batting", s.formats).map((m) => m.key),
+    ...eligibleMetrics("matchup_batting", s.formats).map((m) => m.key),
+    ...eligibleMetrics("bowling", s.formats).map((m) => m.key),
+    ...eligibleMetrics("matchup_bowling", s.formats).map((m) => m.key),
+  ]);
+
   const groups = (s.advanced.groups || [])
     .map((g) => ({
       ...g,
       // keep incomplete conditions (blank metric) — they're inert edit rows
-      conds: g.conds.filter((c) => !c.metricKey || allowed.has(c.metricKey)),
+      conds: g.conds.filter((c) => !c.metricKey || advancedAllowed.has(c.metricKey)),
     }))
     .filter((g) => g.conds.length > 0);
   const condsChanged = JSON.stringify(groups) !== JSON.stringify(s.advanced.groups || []);
 
-  if (!colsChanged && !condsChanged) return false;
+  if (!colsChanged && !matchupChanged && !condsChanged) return false;
+  if (colsChanged) newMatchupColumns[s.discipline] = prunedCols;
   store.set({
-    columns: colsChanged ? { ...s.columns, [s.discipline]: prunedCols } : s.columns,
+    columns: colsChanged || matchupChanged ? newMatchupColumns : s.columns,
     advanced: condsChanged ? { ...s.advanced, groups } : s.advanced,
   });
   return true;
@@ -216,12 +524,50 @@ export function createStore(initial) {
       parts.push(s.teams.length <= 3 ? s.teams.join(", ") : `${s.teams.length} teams`);
     }
 
+    // Free splits (D4 Piece 3) — only tokens for filters actually applied:
+    // positions apply in batting only, opposition in international only.
+    if (oppositionFilterActive(s)) {
+      parts.push(s.opposition.length <= 3 ? `vs ${s.opposition.join(", ")}` : `vs ${s.opposition.length} opponents`);
+    }
+    if (positionsFilterActive(s)) {
+      const sorted = [...s.positions].sort((a, b) => a - b);
+      // Bowling-matchup mode: the position filter narrows the BATTERS faced,
+      // not the bowler's own (nonexistent) batting position — say so plainly.
+      const bowlingMatchup = s.discipline === "bowling" && matchupVsActive(s);
+      parts.push(bowlingMatchup ? `to batters at ${sorted.join(", ")}` : `batting at ${sorted.join(", ")}`);
+    }
+
+    // Matchup mode (R3, decision 33) — table only, right after the
+    // opposition/positions tokens. The "(unspecified)" relabel (decision 24)
+    // applies ONLY to the fine bowling_type buckets — coarse "vs Spin" means
+    // ALL spin and must read plainly. The hand dim reads as plain English.
+    if (s.view === "table" && matchupVsActive(s)) {
+      const mv = s.matchupVs;
+      if (mv.dim === "hand") {
+        parts.push(mv.value === "Left-hand bat" ? "vs left-handers" : "vs right-handers");
+      } else if (mv.dim === "type") {
+        parts.push(`vs ${matchupBucketLabel(mv.value)}`);
+      } else {
+        parts.push(`vs ${mv.value}`);
+      }
+    }
+
     if (s.minInnings && s.minInnings > 1) {
       parts.push(`min ${s.minInnings} innings`);
     }
 
+    for (const token of profileScopeTokens(s)) parts.push(token);
+
     if (s.search && s.search.trim()) {
       parts.push(`matching "${s.search.trim()}"`);
+    }
+
+    // Row grouping shapes the TABLE only (the graph ignores it), so the token
+    // appears only while the table view is active — the graph card's
+    // subtitle/footer read describeScope() and must stay honest (§8.4).
+    const split = activeSplit(s);
+    if (s.view === "table" && split) {
+      parts.push(`grouped by ${split.label.toLowerCase()}`);
     }
 
     return parts.filter(Boolean).join(", ");

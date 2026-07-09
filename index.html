@@ -10,6 +10,8 @@
 <script src="/vendor/chartjs/chart.umd.min.js"></script>
 </head>
 <body>
+  <div id="filter-drawer-host"></div>
+  <div id="player-popup-host"></div>
   <div class="app">
     <header class="app-header">
       <div class="app-header__brand">
@@ -18,7 +20,7 @@
       </div>
       <div class="app-header__controls">
         <div class="segmented" data-role="view" role="group" aria-label="View">
-          <button type="button" class="segmented__btn" data-value="table">Table</button>
+          <button type="button" class="segmented__btn" data-value="table">Leaderboard</button>
           <button type="button" class="segmented__btn" data-value="graph">Graph Builder</button>
         </div>
         <div class="app-header__discipline">
@@ -36,12 +38,7 @@
       <div id="app-content" class="app-content" hidden>
         <section class="filter-section" id="filter-bar" aria-label="Filters"></section>
 
-        <section class="advanced-section" aria-label="Advanced filters">
-          <button type="button" class="advanced-toggle" id="advanced-toggle" aria-expanded="false" aria-controls="advanced-panel">
-            Advanced filters <span class="advanced-toggle__count" id="advanced-count" hidden></span>
-          </button>
-          <div id="advanced-panel" class="advanced-panel-container" hidden></div>
-        </section>
+        <section class="pills-section" id="pills-bar" aria-label="Applied filters"></section>
 
         <div class="player-search" id="player-search-section">
           <input type="text" id="player-search-input" class="input" placeholder="Search players…" aria-label="Search players" />

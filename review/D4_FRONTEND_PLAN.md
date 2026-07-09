@@ -5,6 +5,29 @@ Status as of 2026-07-08. The D4 **data layer is DONE, deployed to R2, verified**
 remaining D4 **frontend** work, split into 5 small, independently-reviewable pieces so
 each fits one working session and ends at a screenshot-verifiable state (SPEC §8.6).
 
+**Progress: Piece 1 ✅ owner-approved · Piece 2 ✅ built + verified (not yet gate-reviewed)
+· Piece 3 ✅ built + verified (not yet gate-reviewed; owner design answers = decision 28)
+· Pieces 4–5 remain.** Branches: `d4-piece1-profile-filters`, `d4-piece2-metrics`,
+`d4-piece3-free-splits` (each stacked on the previous, not yet merged to `main`).
+
+> **RESTRUCTURE (2026-07-09, decision 29) — READ FIRST.** After Piece 3 the owner
+> ruled the one-page layout overloaded and approved a full restructure around three
+> destinations: **Leaderboard** (slim scope strip + ONE "All filters" drawer + filter
+> pills + column presets + toolbar "Group rows"), **Player pages** (new home for all
+> single-player features: splits, dismissal fingerprint, progression, matchups;
+> supersedes SPEC §2 "no player pages" and absorbs D5's pop-ups), and **Graph
+> Builder** (unchanged). Remaining work is re-sequenced as gates **R1** (leaderboard
+> slim-down, ✅ owner-approved, decision 30) → **R2** (player profiles, ✅ approved
+> + converted to POP-UPS per decision 32) → **R3** (matchups in BOTH homes: popup
+> sections + leaderboard "Vs" mode, ✅ built + verified, decision 34, awaiting
+> gate — decisions 23/24 confirmed there) → polish. The
+> Piece 4–5 specs below still define matchup content/coverage rules; only their
+> HOME changed. Branch chain: `d4-r1-leaderboard` → `d4-r2-player-pages`, stacked
+> on `d4-piece3-free-splits`. Owner reviews on **localhost:8000**
+(`python3 -m http.server 8000`) — the R2 CORS policy allows localhost but NOT Vercel
+preview domains, so branch previews on Vercel currently error until CORS is widened
+(deferred, owner's call).
+
 Read alongside: `SPEC.md` (§4.1 calc rules, §5 Compare Stats, §8 engineering rules),
 `SPEC_ADDENDUM_DATA.md` (Phase D4), and `review/owner_decisions.md` (all rulings —
 these override the addendum where they conflict).
@@ -72,19 +95,33 @@ over ~600 lines; honest auto-descriptions.
 
 ## The 5 pieces (each ends reviewable)
 
-**Piece 1 — Data plumbing + profile filters (D4.2).** Register `player_profiles`,
-`matchup_batting`, `matchup_bowling` in config.js + db.js views. Add the 4 profile filters
-to the Compare Stats filter bar; options limited to values with matched players; unmatched
-excluded only when a profile filter is active. Women/unmapped → inert. *Review:* filter by
-"leg-spin" or "India" works. (Small/foundational — do inline, not via subagent.)
+**Piece 1 — Data plumbing + profile filters (D4.2). ✅ DONE + owner-approved.** Registered
+`player_profiles`, `matchup_batting`, `matchup_bowling` in config.js + db.js views. Added
+the 4 profile filters (Role, Batting hand, Bowling, Teams played for) to the Compare Stats
+filter bar; options limited to values with matched players; unmatched excluded only when a
+profile filter is active; the semi-join lives in `profileSemiJoinSql` (state.js) injected via
+`buildScopeClauses(idColumn)`. Owner design calls realized: **Role = both levels** (broad
+Batter/Allrounder/Bowler + cascading detailed sub-role); **Bowling = the 10 specific types**;
+**Women view = greyed with note "We don't have profile data on Women yet."** (0% of women
+have a profile); **Men is now the default gender**; **no automated search — the results table
+is blank on first load with a "Show results" button and reverts to it on any filter change**
+(table only; graph still auto-updates). Numbers cross-checked exact vs raw R2.
 
-**Piece 2 — New table metrics.** Surface bowler wicket-type breakdown (from the 6 new
-bowling cols) and batting progression SR (first-10-ball SR, 11–20, 21+) as selectable
-metrics in metrics.js + table. Respect `hasMetricData`. *Review:* new sortable columns.
+**Piece 2 — New table metrics. ✅ DONE + verified (awaiting gate review).** Added to
+metrics.js (column picker lists them automatically, no table changes): batting
+`sr_first10` / `sr_11_20` / `sr_21plus` (faced-ball progression SR, all formats, not
+phase-gated) and bowling `wkt_bowled` / `wkt_lbw` / `wkt_caught` / `wkt_caught_and_bowled`
+/ `wkt_stumped` / `wkt_hit_wicket` (counts, the six sum to `wickets`). Verified exact vs raw
+R2 (Karanbir Singh 140.48/155.23/213.97; Ali Dawood 54/13/43 = 113).
 
-**Piece 3 — Free splits.** Batting-position, opposition (international only), and
-dismissal-type breakdowns — no new data, UI only. *Review:* splits read correctly for a
-known player.
+**Piece 3 — Free splits. ✅ DONE + verified (awaiting gate review).** Owner chose BOTH
+split styles (decision 28): batting-position (individual 1–12 chips) and opposition
+(international only) as *filters*, PLUS a table-only "Split by" breakdown (one row per
+player × position / opposition / dismissal kind), and 24 dismissal-breakdown batting
+columns (every kind, counts + % of dismissals, "Dismissals" picker section). Matches
+column switches to slice-honest match counts under any innings-level filter/split.
+Graph honors the filters, ignores Split-by. All numbers cross-checked exact vs raw R2.
+*Review:* splits read correctly for a known player.
 
 **Piece 4 — Matchup mode: batting (D4.3a).** New comparison mode: batter × bowling-style
 (coarse pace/spin + fine type), every stat with its N-of-M coverage line, inert for

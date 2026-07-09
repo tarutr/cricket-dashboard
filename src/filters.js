@@ -1,15 +1,17 @@
 // src/filters.js
 //
-// The filter bar (SPEC §5.1, with owner adjustments from the Phase 2 brief):
-// Gender segmented control, Format chips (5 buckets), Date range (month+year),
-// Team multi-select (checkbox dropdown with search), Team type, Min innings.
-// Advanced filters (AND/OR condition builder) live in src/advanced.js.
+// The scope strip (owner decision 29: one slim filter bar + one "All filters"
+// drawer, replacing the old three-row layout). This module keeps ONLY the
+// filters common to every query — Gender, Format, Date range, Team type —
+// plus the button that opens the drawer (src/drawer.js) holding everything
+// else: Team, Min innings, Player profile, Innings (position/opposition),
+// and Stat conditions (src/advanced.js).
 //
 // This module only renders/wires the DOM and calls store.set(...); it never
-// queries the database directly — src/table.js owns re-querying on state change.
+// queries the database directly — src/table.js owns re-querying on state
+// change, and src/drawer.js owns the team/opposition option-list lookups.
 
-import { FORMAT_BUCKETS, expandFormats } from "./state.js";
-import { query } from "./db.js";
+import { FORMAT_BUCKETS, expandFormats, emptyProfile, profileSemiJoinSql, oppositionFilterActive, positionsFilterActive } from "./state.js";
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -33,28 +35,27 @@ function esc(s) {
   return String(s).replace(/'/g, "''");
 }
 
-/**
- * Query DISTINCT teams present under the current gender+format+date+team_type
- * scope (excluding the team filter itself, and excluding minInnings/search —
- * those don't affect which teams exist). batting_team for batting, bowling_team
- * for bowling.
- */
-async function fetchTeamOptions(state) {
-  const view = state.discipline === "batting" ? "batting" : "bowling";
-  const teamCol = state.discipline === "batting" ? "batting_team" : "bowling_team";
-  const clauses = buildScopeClauses(state, { includeTeams: false });
-  const where = clauses.length ? clauses.join(" AND ") : "TRUE";
-  const sql = `SELECT DISTINCT ${teamCol} AS team FROM ${view} WHERE ${where} AND ${teamCol} IS NOT NULL ORDER BY team`;
-  const { rows } = await query(sql);
-  return rows.map((r) => r.team);
-}
-
 /** Shared WHERE-clause builder for gender/format/date/team_type/(team) — used by
- * both the team-options lookup and src/table.js's main query. Exported so
- * table.js builds an identical scope. */
-export function buildScopeClauses(state, { includeTeams = true, teamColumn } = {}) {
+ * both the drawer's team/opposition-options lookups and src/table.js's main
+ * query. Exported so table.js, drawer.js, and graph builders all build an
+ * identical scope.
+ *
+ * D4 Piece 3 opt-ins (both default OFF because some callers query views that
+ * lack the columns, e.g. player_matches):
+ *   oppositionColumn — the view's opposition column (bowling_team for batting,
+ *     batting_team for bowling). The opposition filter applies ONLY while
+ *     teamType === "international" (decision 20; the controls grey out
+ *     elsewhere, so an inert selection must never filter silently).
+ *   includePositions — apply the batting-position filter (batting innings
+ *     views only; positions are a batting concept, inert in bowling). */
+export function buildScopeClauses(
+  state,
+  { includeTeams = true, teamColumn, idColumn, oppositionColumn, includePositions = false, includeGender = true } = {}
+) {
   const clauses = [];
-  clauses.push(`gender = '${esc(state.gender)}'`);
+  // Player-page queries (R2) filter by a specific player_id, so gender is
+  // redundant there — every other caller keeps the gender clause.
+  if (includeGender) clauses.push(`gender = '${esc(state.gender)}'`);
 
   const matchTypes = expandFormats(state.formats);
   if (matchTypes.length === 0) {
@@ -80,13 +81,34 @@ export function buildScopeClauses(state, { includeTeams = true, teamColumn } = {
     clauses.push(`${teamColumn} IN (${state.teams.map((t) => `'${esc(t)}'`).join(", ")})`);
   }
 
+  if (oppositionColumn && oppositionFilterActive(state)) {
+    clauses.push(`${oppositionColumn} IN (${state.opposition.map((t) => `'${esc(t)}'`).join(", ")})`);
+  }
+
+  if (includePositions && positionsFilterActive(state)) {
+    // Positions are user-picked ints; coerce + drop anything non-integral so
+    // nothing unsanitized reaches the SQL.
+    const nums = state.positions.map(Number).filter(Number.isInteger);
+    if (nums.length > 0) clauses.push(`batting_position IN (${nums.join(", ")})`);
+  }
+
+  // Profile-powered filters (D4.2): semi-join to matched player_ids. Only added
+  // when an idColumn is supplied by the caller (the player_matches/innings views
+  // and matchup views all have a join key; some scoped lookups don't) and a
+  // profile filter is active. profileSemiJoinSql itself no-ops for women.
+  if (idColumn) {
+    const profileClause = profileSemiJoinSql(state, idColumn);
+    if (profileClause) clauses.push(profileClause);
+  }
+
   return clauses;
 }
 
 /**
- * Mount the filter bar into `container`. Calls `onChange()` after any state
- * mutation so the caller (main.js) can re-render the table. Returns an object
- * with `refreshTeamOptions()` so table.js/main.js can force a repopulate.
+ * Mount the scope strip into `container`. Calls `onChange()` after any state
+ * mutation so the caller (main.js) can re-render the table. The "All filters"
+ * button itself (open-drawer) is rendered here but left unwired — main.js
+ * owns opening src/drawer.js and keeping its count badge in sync.
  */
 export function mountFilters(container, store, onChange, onFormatsChanged) {
   container.innerHTML = `
@@ -117,22 +139,6 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
         </div>
       </div>
 
-      <div class="filter-group filter-group--team">
-        <span class="filter-label">Team</span>
-        <div class="team-dropdown" data-role="team-dropdown">
-          <button type="button" class="team-dropdown__toggle" data-role="team-toggle" aria-haspopup="true" aria-expanded="false">
-            All teams
-          </button>
-          <div class="team-dropdown__panel" data-role="team-panel" hidden>
-            <input type="text" class="team-dropdown__search" data-role="team-search" placeholder="Search teams…" />
-            <div class="team-dropdown__list" data-role="team-list"></div>
-            <div class="team-dropdown__actions">
-              <button type="button" class="link-btn" data-role="team-clear">Clear</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <div class="filter-group filter-group--teamtype">
         <span class="filter-label">Team type</span>
         <div class="segmented" data-role="teamType" role="group" aria-label="Team type">
@@ -142,10 +148,9 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
         </div>
       </div>
 
-      <div class="filter-group filter-group--mininnings">
-        <label class="filter-label" for="min-innings-input">Min innings</label>
-        <input type="number" id="min-innings-input" class="input input--number" data-role="minInnings" min="1" step="1" />
-      </div>
+      <button type="button" class="btn btn--ghost filter-open-btn" data-role="open-drawer" aria-haspopup="dialog">
+        All filters <span class="filter-open-btn__count" data-role="open-drawer-count" hidden></span>
+      </button>
     </div>
   `;
 
@@ -154,21 +159,8 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
     formats: container.querySelector('[data-role="formats"]'),
     dateFrom: container.querySelector('[data-role="dateFrom"]'),
     dateTo: container.querySelector('[data-role="dateTo"]'),
-    teamToggle: container.querySelector('[data-role="team-toggle"]'),
-    teamPanel: container.querySelector('[data-role="team-panel"]'),
-    teamSearch: container.querySelector('[data-role="team-search"]'),
-    teamList: container.querySelector('[data-role="team-list"]'),
-    teamClear: container.querySelector('[data-role="team-clear"]'),
     teamType: container.querySelector('[data-role="teamType"]'),
-    minInnings: container.querySelector('[data-role="minInnings"]'),
   };
-
-  let teamOptionsCache = []; // all available team names for the current scope
-  let lastTeamScopeKey = null;
-
-  function scopeKeyFor(state) {
-    return JSON.stringify([state.discipline, state.gender, state.formats, state.dateFrom, state.dateTo, state.teamType]);
-  }
 
   function syncSegmented(el, value) {
     el.querySelectorAll(".segmented__btn").forEach((btn) => {
@@ -187,73 +179,22 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
     els.dateTo.innerHTML = monthOptionsHTML(minMonth, maxMonth, state.dateTo);
   }
 
-  function renderTeamList(filterText) {
-    const q = (filterText || "").trim().toLowerCase();
-    const selected = new Set(store.get().teams);
-    const filtered = teamOptionsCache.filter((t) => t.toLowerCase().includes(q));
-    els.teamList.innerHTML = filtered
-      .map(
-        (t) => `<label class="team-dropdown__item">
-          <input type="checkbox" data-team="${t.replace(/"/g, "&quot;")}" ${selected.has(t) ? "checked" : ""} />
-          <span>${t}</span>
-        </label>`
-      )
-      .join("") || `<p class="team-dropdown__empty">No teams match.</p>`;
-
-    els.teamList.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const current = new Set(store.get().teams);
-        if (cb.checked) current.add(cb.dataset.team);
-        else current.delete(cb.dataset.team);
-        store.set({ teams: [...current] });
-        updateTeamToggleLabel();
-        onChange();
-      });
-    });
-  }
-
-  function updateTeamToggleLabel() {
-    const teams = store.get().teams;
-    els.teamToggle.textContent = teams.length === 0 ? "All teams" : teams.length === 1 ? teams[0] : `${teams.length} teams`;
-  }
-
-  async function refreshTeamOptions({ preserveSelection = true } = {}) {
-    const state = store.get();
-    const key = scopeKeyFor(state);
-    if (key === lastTeamScopeKey) return;
-    lastTeamScopeKey = key;
-    try {
-      teamOptionsCache = await fetchTeamOptions(state);
-    } catch (e) {
-      teamOptionsCache = [];
-    }
-    if (preserveSelection) {
-      const validSet = new Set(teamOptionsCache);
-      const stillValid = state.teams.filter((t) => validSet.has(t));
-      if (stillValid.length !== state.teams.length) {
-        store.set({ teams: stillValid });
-      }
-    }
-    renderTeamList(els.teamSearch.value);
-    updateTeamToggleLabel();
-  }
-
   function render() {
     const state = store.get();
     syncSegmented(els.gender, state.gender);
     syncChips(els.formats, state.formats);
     syncSegmented(els.teamType, state.teamType);
-    els.minInnings.value = state.minInnings;
-    updateTeamToggleLabel();
   }
 
   // ---- wire events ----
   els.gender.addEventListener("click", (e) => {
     const btn = e.target.closest(".segmented__btn");
     if (!btn) return;
-    store.set({ gender: btn.dataset.value, teams: [] });
+    // Switching gender clears team + profile filters: teams differ by gender, and
+    // profile filters are men-only (cleared so the women's view is never silently
+    // empty — the drawer's profile controls also grey out, decision 21).
+    store.set({ gender: btn.dataset.value, teams: [], profile: emptyProfile() });
     render();
-    refreshTeamOptions().then(onChange);
     onChange();
   });
 
@@ -268,18 +209,15 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
     store.set({ formats: [...set], teams: [] });
     render();
     if (onFormatsChanged) onFormatsChanged();
-    refreshTeamOptions().then(onChange);
     onChange();
   });
 
   els.dateFrom.addEventListener("change", () => {
     store.set({ dateFrom: els.dateFrom.value });
-    refreshTeamOptions().then(onChange);
     onChange();
   });
   els.dateTo.addEventListener("change", () => {
     store.set({ dateTo: els.dateTo.value });
-    refreshTeamOptions().then(onChange);
     onChange();
   });
 
@@ -288,44 +226,6 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
     if (!btn) return;
     store.set({ teamType: btn.dataset.value, teams: [] });
     render();
-    refreshTeamOptions().then(onChange);
-    onChange();
-  });
-
-  els.minInnings.addEventListener("change", () => {
-    const v = Math.max(1, parseInt(els.minInnings.value, 10) || 1);
-    els.minInnings.value = v;
-    store.set({ minInnings: v });
-    onChange();
-  });
-
-  els.teamToggle.addEventListener("click", () => {
-    const isOpen = !els.teamPanel.hidden;
-    els.teamPanel.hidden = isOpen;
-    els.teamToggle.setAttribute("aria-expanded", String(!isOpen));
-    if (!isOpen) {
-      els.teamSearch.value = "";
-      renderTeamList("");
-      els.teamSearch.focus();
-    }
-  });
-  document.addEventListener("click", (e) => {
-    if (!container.contains(e.target)) return;
-    if (e.target.closest('[data-role="team-dropdown"]')) return;
-    els.teamPanel.hidden = true;
-    els.teamToggle.setAttribute("aria-expanded", "false");
-  });
-  document.addEventListener("click", (e) => {
-    if (container.contains(e.target)) return;
-    els.teamPanel.hidden = true;
-    els.teamToggle.setAttribute("aria-expanded", "false");
-  });
-
-  els.teamSearch.addEventListener("input", () => renderTeamList(els.teamSearch.value));
-  els.teamClear.addEventListener("click", () => {
-    store.set({ teams: [] });
-    renderTeamList(els.teamSearch.value);
-    updateTeamToggleLabel();
     onChange();
   });
 
@@ -333,7 +233,6 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
 
   return {
     render,
-    refreshTeamOptions,
     setDateBounds(minMonth, maxMonth) {
       syncDateOptions(minMonth, maxMonth, store.get());
     },

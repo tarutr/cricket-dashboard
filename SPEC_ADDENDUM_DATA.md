@@ -4,9 +4,12 @@
 > cricket.duckdb on R2, runs every 6h). D1 ✅ (matching analysis). D2 ✅ (player_profiles
 > built + enriched taxonomy, live). D3 ✅ (Dropbox resilience + alert emails, gate passed).
 > Review workflow ✅ (two-sheet, `review/PLAYER_REVIEW.md`). **D4: data layer ✅ done +
-> deployed + verified; D4 FRONTEND is the current work — see `review/D4_FRONTEND_PLAN.md`
-> for the 5-piece build plan.** D5 (profile pop-ups) and original Phase 4 (polish) remain.
-> All owner rulings are recorded in `review/owner_decisions.md` (authoritative).
+> deployed + verified. D4 FRONTEND in progress (5-piece plan in
+> `review/D4_FRONTEND_PLAN.md`): Piece 1 (profile filters) ✅ owner-approved,
+> Piece 2 (wicket-type + progression-SR metrics) ✅ built + verified; Pieces 3–5
+> (free splits, batting matchup, bowling matchup + polish) remain.** D5 (profile
+> pop-ups) and original Phase 4 (polish) follow. All owner rulings are recorded in
+> `review/owner_decisions.md` (authoritative).
 
 Read together with SPEC.md. SPEC.md's rules §8 (non-negotiables), §4.1 (calculation
 rules), and its ask-don't-assume working style apply here unchanged. These phases run
