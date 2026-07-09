@@ -52,6 +52,8 @@ import unicodedata
 
 import duckdb
 
+import alerts
+
 # --------------------------------------------------------------------------- #
 # Paths / constants                                                           #
 # --------------------------------------------------------------------------- #
@@ -801,6 +803,86 @@ def coverage_report(con):
         log(f"  {label:32s}: {m:>6,}/{n:>6,} = {pc:5.1f}%")
 
 
+# --------------------------------------------------------------------------- #
+# Both-gender tripwire (pipeline safety net, 2026-07-09)                      #
+# --------------------------------------------------------------------------- #
+def detect_new_both_gender_ids(con, held_ids, resolved_pids):
+    """
+    Owner-approved safety net (extends decision 2's held-id mechanism to
+    future data). Decision 2 hard-coded the 10 both-gender player_ids known at
+    the time into review/ambiguous_matches.csv (ambiguity_type
+    'E_both_gender_id_held_by_owner'); those are excluded from automatic
+    matching via `held_ids` in build_auto_tiers(). But a FUTURE Cricsheet
+    ingest can reveal a NEW player_id with both >=1 men's and >=1 women's
+    appearance that isn't in that static list yet.
+
+    This recomputes the both-gender set from live data every run (`uni_attr`,
+    built by build_universe(), already carries is_male/is_female per
+    decision-9's XI-selected universe) and diffs it against the held list PLUS
+    anything already resolved via manual_matches.csv / new_players_reviewed.csv
+    / ambiguous_matches.csv's own resolution column (the merged
+    matches/no_match_pairs/no_profile override surface — `resolved_pids`).
+
+    Any newly-appearing id is:
+      (a) excluded from automatic matching this run (caller folds the
+          returned set into `held_ids` before calling build_auto_tiers), same
+          treatment as a decision-2 held id;
+      (b) logged loudly;
+      (c) alerted via alerts.send_alert (best-effort; never raises).
+    This function itself never raises SanityError and must never fail the run
+    — a bug in the tripwire is a missed alert, not a broken pipeline.
+    """
+    both = {
+        r[0] for r in con.execute(
+            "SELECT pid FROM uni_attr WHERE is_male = 1 AND is_female = 1"
+        ).fetchall()
+    }
+    already_known = held_ids | resolved_pids
+    new_ids = both - already_known
+
+    if new_ids:
+        sorted_ids = sorted(new_ids)
+        log("=" * 60)
+        log(f"BOTH-GENDER TRIPWIRE: {len(new_ids)} NEW both-gender player_id(s) "
+            f"detected (>=1 men's AND >=1 women's appearance) not in the held "
+            f"list ({len(held_ids)} ids) and not already resolved via "
+            f"manual/reviewed files: {sorted_ids}")
+        log("Excluding from automatic matching this run pending owner review "
+            "(same treatment as decision-2 held ids). Add rows to "
+            "review/manual_matches.csv or resolve via the review CSVs to "
+            "clear this permanently.")
+        log("=" * 60)
+        names = {}
+        try:
+            rows = con.execute(
+                f"""
+                SELECT pid, player_name FROM uni_attr
+                WHERE pid IN ({",".join("'" + i + "'" for i in sorted_ids)})
+                """
+            ).fetchall()
+            names = dict(rows)
+        except Exception as e:  # never let alert body formatting break the run
+            log(f"  WARN: could not fetch names for tripwire alert body: {e!r}")
+        body_lines = "\n".join(f"  - {pid}  {names.get(pid, '?')}" for pid in sorted_ids)
+        alerts.send_alert(
+            "New both-gender player_id detected — held from auto-matching, needs owner review",
+            f"The player_profiles rebuild found {len(new_ids)} NEW both-gender "
+            f"player_id(s) (appear in at least one men's AND one women's match) "
+            f"that are not in the existing held list and have not been resolved:\n\n"
+            f"{body_lines}\n\n"
+            f"These have been excluded from automatic matching this run (same as "
+            f"the original 10 held ids from decision 2). Resolve via "
+            f"review/manual_matches.csv, or add a row to "
+            f"review/ambiguous_matches.csv with ambiguity_type "
+            f"'E_both_gender_id_held_by_owner' to hold permanently. This is an "
+            f"advisory; the run is green.\n",
+        )
+    else:
+        log(f"Both-gender tripwire: 0 new ids (held list of {len(held_ids)} "
+            f"+ {len(resolved_pids)} already-resolved id(s) still covers all).")
+    return new_ids
+
+
 def unmatched_summary(con):
     n = con.execute("""
         SELECT COUNT(*) FROM uni_attr ua
@@ -869,7 +951,18 @@ def main():
 
         # 3. Universe + automatic tiers.
         build_universe(con)
-        n_1a, n_1b = build_auto_tiers(con, held_ids)
+
+        # Both-gender tripwire (pipeline safety net): recompute the both-
+        # gender set from live data and hold any NEW ones from auto-matching,
+        # same as the decision-2 held ids. Never allowed to fail the run.
+        resolved_pids = set(matches) | {pid for (pid, _spid) in no_match_pairs} | set(no_profile)
+        try:
+            new_both_gender = detect_new_both_gender_ids(con, held_ids, resolved_pids)
+        except Exception as e:  # tripwire must never take down the pipeline
+            log(f"WARNING: both-gender tripwire check failed (non-fatal): {e!r}")
+            new_both_gender = set()
+
+        n_1a, n_1b = build_auto_tiers(con, held_ids | new_both_gender)
         log(f"Automatic matches: Tier 1a (intl)={n_1a:,}, "
             f"Tier 1b (club, containment)={n_1b:,}, total={n_1a + n_1b:,}")
 
