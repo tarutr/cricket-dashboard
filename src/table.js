@@ -12,6 +12,7 @@ import { getMetric, hasMetricData, matchupBucketLabel } from "./metrics.js";
 import { query } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
 import { activeGroups } from "./advanced.js";
+import { escHtml, escAttr } from "./html.js";
 import {
   eligibleMetrics,
   activeSplit,
@@ -23,17 +24,10 @@ import {
   splitAllowed,
   matchupVsActive,
   effectiveNamespace,
+  escSql as esc,
 } from "./state.js";
 
 export { eligibleMetrics };
-
-function esc(s) {
-  return String(s).replace(/'/g, "''");
-}
-
-function escAttr(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-}
 
 const VIEW_FOR_DISCIPLINE = { batting: "batting", bowling: "bowling" };
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
@@ -383,10 +377,6 @@ function compareSplitRows(a, b, splitDim, dir) {
   return dir === "asc" ? d : -d;
 }
 
-function escHtml(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
 // ── Table controller ─────────────────────────────────────────────────────────
 
 export function mountTable(container, store, { onPlayerClick } = {}) {
@@ -431,10 +421,13 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
         `SELECT DISTINCT bowling_type AS v FROM matchup_batting WHERE bowling_type <> '(unmapped)'`
       );
       bowlingTypesCache = orderBowlingTypes(rows.map((r) => r.v));
+      return bowlingTypesCache;
     } catch (e) {
-      bowlingTypesCache = [];
+      // Don't cache the failure — leave bowlingTypesCache null so the next
+      // load() call retries instead of permanently emptying the "Vs" fine
+      // bowling-type optgroup.
+      return [];
     }
-    return bowlingTypesCache;
   }
 
   function renderLoading() {
@@ -466,7 +459,7 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
   function renderError(err, retryFn) {
     container.innerHTML = `
       <div class="error-box">
-        <p>${(err && (err.userMessage || err.message)) || "Something went wrong running the query."}</p>
+        <p>${escHtml((err && (err.userMessage || err.message)) || "Something went wrong running the query.")}</p>
         <button type="button" class="btn btn--primary" data-role="retry">Retry</button>
       </div>
     `;
@@ -566,7 +559,7 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
           .join("");
         // Player names link to the player page (R2, decision 29).
         const nameCell = onPlayerClick
-          ? `<button type="button" class="player-link" data-player-id="${escHtml(row.id ?? "")}">${escHtml(row.name ?? "")}</button>`
+          ? `<button type="button" class="player-link" data-player-id="${escAttr(row.id ?? "")}">${escHtml(row.name ?? "")}</button>`
           : escHtml(row.name ?? "");
         return `<tr><td class="data-table__td data-table__td--sticky">${nameCell}</td>${coverageTd}${splitTd}${cells}</tr>`;
       })

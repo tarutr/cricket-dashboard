@@ -11,7 +11,15 @@
 // queries the database directly — src/table.js owns re-querying on state
 // change, and src/drawer.js owns the team/opposition option-list lookups.
 
-import { FORMAT_BUCKETS, expandFormats, emptyProfile, profileSemiJoinSql, oppositionFilterActive, positionsFilterActive } from "./state.js";
+import {
+  FORMAT_BUCKETS,
+  expandFormats,
+  emptyProfile,
+  profileSemiJoinSql,
+  oppositionFilterActive,
+  positionsFilterActive,
+  escSql as esc,
+} from "./state.js";
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -29,10 +37,6 @@ function monthOptionsHTML(minMonth, maxMonth, selected) {
     }
   }
   return opts.join("");
-}
-
-function esc(s) {
-  return String(s).replace(/'/g, "''");
 }
 
 /** Shared WHERE-clause builder for gender/format/date/team_type/(team) — used by

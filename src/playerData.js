@@ -12,10 +12,7 @@
 import { query } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
 import { getMetric, DISMISSAL_KINDS, metricsFor } from "./metrics.js";
-
-function esc(s) {
-  return String(s).replace(/'/g, "''");
-}
+import { escSql as esc } from "./state.js";
 
 function expr(discipline, key) {
   return getMetric(key, discipline).sqlExpression;

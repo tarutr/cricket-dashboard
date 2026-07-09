@@ -25,17 +25,7 @@ import {
 } from "./playerData.js";
 import { getMetric, DISMISSAL_KINDS, matchupBucketLabel } from "./metrics.js";
 import { formatValue } from "./table.js";
-
-function escHtml(s) {
-  return String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-function escAttr(s) {
-  return escHtml(s).replace(/"/g, "&quot;");
-}
+import { escHtml, escAttr } from "./html.js";
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function monthLabel(yyyymm) {

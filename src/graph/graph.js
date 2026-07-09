@@ -12,6 +12,7 @@
 
 import { eligibleMetrics } from "../state.js";
 import { getMetric, hasMetricData } from "../metrics.js";
+import { escHtml, escAttr } from "../html.js";
 import {
   CHART_CAPS,
   createSelection,
@@ -141,7 +142,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
   function showErrorStatus(err, retryFn) {
     els.status.innerHTML = `
       <div class="error-box">
-        <p>${(err && (err.userMessage || err.message)) || "Something went wrong building the chart."}</p>
+        <p>${escHtml((err && (err.userMessage || err.message)) || "Something went wrong building the chart.")}</p>
         <button type="button" class="btn btn--primary" data-role="graph-retry">Retry</button>
       </div>`;
     els.status.hidden = false;
@@ -259,7 +260,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
     els.playerList.innerHTML = players
       .map(
         (p) => `<li class="graph-player-list__item" data-id="${p.id}">
-          <span>${p.name}</span>
+          <span>${escHtml(p.name)}</span>
           <button type="button" class="icon-btn" data-role="remove-player" data-id="${p.id}" title="Remove">&times;</button>
         </li>`
       )
@@ -287,7 +288,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
         const results = await searchPlayers(store, term, excludeIds);
         els.playerSearchResults.innerHTML =
           results
-            .map((r) => `<button type="button" class="graph-player-search__item" data-id="${r.id}" data-name="${r.name.replace(/"/g, "&quot;")}">${r.name}</button>`)
+            .map((r) => `<button type="button" class="graph-player-search__item" data-id="${r.id}" data-name="${escAttr(r.name)}">${escHtml(r.name)}</button>`)
             .join("") || `<p class="graph-player-search__empty">No matches.</p>`;
         els.playerSearchResults.hidden = false;
 
@@ -305,7 +306,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
           });
         });
       } catch (e) {
-        els.playerSearchResults.innerHTML = `<p class="graph-player-search__empty">Search failed: ${e.message ?? "unknown error"}</p>`;
+        els.playerSearchResults.innerHTML = `<p class="graph-player-search__empty">Search failed: ${escHtml(e.message ?? "unknown error")}</p>`;
         els.playerSearchResults.hidden = false;
       }
     }, 250);
@@ -379,7 +380,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
   function renderExclusions(excluded, extra) {
     const notes = [];
     if (excluded && excluded.length) {
-      notes.push(`Excluded (no data): ${excluded.join(", ")}`);
+      notes.push(`Excluded (no data): ${excluded.map(escHtml).join(", ")}`);
     }
     if (extra) notes.push(extra);
     if (notes.length) {

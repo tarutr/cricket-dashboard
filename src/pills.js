@@ -11,10 +11,7 @@
 
 import { positionsFilterActive, oppositionFilterActive, hasActiveProfileFilter, matchupVsActive } from "./state.js";
 import { activeConditionCount } from "./advanced.js";
-
-function esc(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
+import { escHtml as esc } from "./html.js";
 
 /**
  * Mount the pills row into `container`. Calls `onChange()` after a pill's ×

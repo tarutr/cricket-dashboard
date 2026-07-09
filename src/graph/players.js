@@ -15,6 +15,7 @@ import { getMetric } from "../metrics.js";
 import { query } from "../db.js";
 import { buildScopeClauses } from "../filters.js";
 import { buildQuery } from "../table.js";
+import { escSql as esc } from "../state.js";
 
 export const CHART_CAPS = {
   bar: 15,
@@ -26,10 +27,6 @@ export const CHART_CAPS = {
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
 const NAME_COL = { batting: "batter_name", bowling: "bowler_name" };
 const TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
-
-function esc(s) {
-  return String(s).replace(/'/g, "''");
-}
 
 /** Sort comparator matching table.js's compareRows semantics: NULLs last always. */
 function sortValueForMetric(row, metric) {

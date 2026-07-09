@@ -16,14 +16,11 @@
 import { getMetric, hasMetricData } from "../metrics.js";
 import { query } from "../db.js";
 import { buildScopeClauses } from "../filters.js";
+import { escSql as esc } from "../state.js";
 
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
 const NAME_COL = { batting: "batter_name", bowling: "bowler_name" };
 const TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
-
-function esc(s) {
-  return String(s).replace(/'/g, "''");
-}
 
 /**
  * Query the metric values for exactly the selected player ids, honoring the
