@@ -315,3 +315,24 @@ change requires a new owner decision recorded here. Dates are decision dates.
     and PHASE breakdowns per style are acknowledged as possible but require a
     pipeline/data-layer extension (new columns in the matchup parquets) —
     offered to the owner as an optional future gated piece, not yet scheduled.
+
+36. **Matchup data extension + restricted picker — BUILT, DEPLOYED, VERIFIED
+    (2026-07-09, owner: "Add everything you can… build an alternate script to
+    test first").** Pipeline: matchup_batting +18 columns (six dis_* dismissal
+    kinds partitioning `dismissals`; T20 + ODI phase runs/balls per style),
+    matchup_bowling +24 (six wkt_* kinds; T20 + ODI phase balls/runs/wickets
+    per hand); odi_* NULL for Hundred matches like the main views. Process as
+    mandated: pipeline/dev_test_matchup_extension.py verified everything
+    read-only against the local DB copy BEFORE export_parquet.py was patched
+    (zero mismatches on all 1.49M rows; delivery-level two-way checks equal;
+    old columns byte-identical), then six permanent reconciliation gates were
+    added to run_gates. The export change was cherry-picked to main (additive
+    data, decision-22 precedent — live site unaffected) and a green pipeline
+    run published the extended parquets to R2. Frontend: matchup mode's fixed
+    columns replaced by a RESTRICTED PICKER (matchup-only vocabulary, Basic/
+    Dismissals/Phase sections, phase gated by format, Coverage always fixed)
+    plus free stats (4s/6s/BPB/BPD vs style; boundary counts + wickets-per-
+    innings vs hand). Verified exact vs R2 in-browser: SA Yadav vs Spin —
+    caught 4 + stumped 3 = 7 dismissals, death SR 200.00, PP SR 143.64;
+    JJ Bumrah vs right-handers — caught 13, bowled 13, PP econ 6.18, PP
+    wkts 8. Branch `d4-r3-matchups` (frontend) + main (pipeline).
