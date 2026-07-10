@@ -513,3 +513,9 @@ change requires a new owner decision recorded here. Dates are decision dates.
     Build order: B2R interaction model → B7 popup redesign → B8 graphs II;
     owner reviews each on localhost:8000 (explicit go-ahead supersedes a
     second wireframe round). Anchor re-verification wherever query code moves.
+
+45. **MIN_BALLS_PER_YEAR = 30 CONFIRMED (2026-07-10):** owner ruled 30 balls is
+    the right per-year sample floor for the By-year chart after having the
+    mechanism explained (points from thinner years draw faded, never hidden,
+    with the footnote stating the floor). No change needed — 30 was already
+    the shipped default in src/graph/timeseries.js.
