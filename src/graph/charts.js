@@ -319,8 +319,20 @@ export function buildBarChart(canvas, chartRef, { metric, rowsById, players, sty
 }
 
 /**
- * DONUT: one metric restricted to additive totals (format === "int" &&
- * zeroIsData === true). Shows share-of-total; legend with values.
+ * DONUT: one metric restricted to additive totals (metric.additive === true —
+ * see graph.js's donutEligibleMetrics). Shows share-of-total; legend with
+ * values.
+ *
+ * Batch 8 (task 3, decision 44f): CHART_CAPS.donut.max widened 10 -> 20 (up to
+ * 20 CHECKED players can now be compared at once — players.js), but a donut
+ * with 20 slices is unreadable, so this always plots the TOP 7 checked
+ * players by value plus ONE aggregated "Other (N players)" slice summing the
+ * rest of the checked set — v1's own top-7/Other convention (see this file's
+ * history/v1_reference/graph.html's DONUT_METRIC_OK section). Slices are
+ * therefore always <= 8 regardless of how many are checked. "Other" is only
+ * ever built from ADDITIVE metrics (donutEligibleMetrics already restricts
+ * the metric picker to `additive === true`), so summing the rest is a
+ * meaningful total, never a misleading average-of-averages.
  */
 export function buildDonutChart(canvas, chartRef, { metric, rowsById, players }) {
   destroyIfExists(chartRef);
@@ -342,17 +354,32 @@ export function buildDonutChart(canvas, chartRef, { metric, rowsById, players })
   }
 
   included.sort((a, b) => b.value - a.value);
+
+  // Top 7 individually named; the rest (if any) collapse into one "Other"
+  // slice. `included` (not the raw checked count) is what determines whether
+  // there's an "Other" bucket at all — a player excluded for no data was
+  // never a candidate for either bucket.
+  const TOP_N = 7;
+  const topSlices = included.slice(0, TOP_N);
+  const rest = included.slice(TOP_N);
+  const otherCount = rest.length;
+  const otherValue = rest.reduce((sum, r) => sum + r.value, 0);
+  const slices = otherCount > 0 ? [...topSlices, { id: "__other__", name: `Other (${otherCount} players)`, value: otherValue, isOther: true }] : topSlices;
+
+  // The honest total is every CHECKED-and-included player's value (top 7 +
+  // Other together), so percentages always reflect the whole checked set —
+  // never just the 7 individually-named slices.
   const total = included.reduce((sum, r) => sum + r.value, 0);
   const pal = palette();
 
   chartRef.current = new Chart(canvas, {
     type: "doughnut",
     data: {
-      labels: included.map((r) => r.name),
+      labels: slices.map((r) => r.name),
       datasets: [
         {
-          data: included.map((r) => r.value),
-          backgroundColor: included.map((_, i) => SERIES_COLORS[i % SERIES_COLORS.length]),
+          data: slices.map((r) => r.value),
+          backgroundColor: slices.map((s, i) => (s.isOther ? pal.muted : SERIES_COLORS[i % SERIES_COLORS.length])),
           borderColor: pal.bg,
           borderWidth: 2,
         },

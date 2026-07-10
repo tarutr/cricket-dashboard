@@ -1,13 +1,15 @@
 // src/graph/players.js
 //
-// Player selection for the Graph Builder (SPEC §6). Selection is a simple
-// ordered list of {id, name} seeded from the CURRENT filtered Compare Stats
-// result (same buildQuery as the table, same active sort), capped per the
-// active chart type. Manual add (search within current scope) / remove /
-// "Reset to filtered set" are supported. Caps are enforced on both add and
-// chart-type switch, truncating with a visible note (never silently) per the
-// task brief.
-//
+// Player selection for the Graph Builder (SPEC §6). Batch 8 (decision 44d)
+// rebuilds this on v1's two-list model:
+//   - candidates: the FULL ordered pool (from seeding + manual adds/search).
+//     NEVER truncated by anything except an explicit × removal.
+//   - checked:    the SUBSET actually plotted, capped by the active chart
+//     type's max, user-controlled via checkboxes in "manual" mode or
+//     re-derived by rank in "best"/"worst" mode (see graph.js's
+//     deriveChecked() — ranking needs metric VALUES, which requires a DB
+//     query, so it lives in graph.js alongside the other chart-domain
+//     queries, not here).
 // This module owns ONLY the selection list + caps + the seed/search queries;
 // it does not know about chart rendering (see charts.js) or the card (card.js).
 
@@ -25,7 +27,13 @@ import { escSql as esc } from "../state.js";
 // export name itself is unchanged (task brief: don't rename it).
 export const CHART_CAPS = {
   bar: { min: 2, max: 15 },
-  donut: { min: 2, max: 10 },
+  // Batch 8 (task 3, decision 44f): widened 10 -> 20 — the donut now plots the
+  // top 7 CHECKED players by value plus one aggregated "Other (N players)"
+  // slice for the rest, so up to 20 can be checked/compared even though the
+  // chart itself never draws more than 8 slices (see charts.js buildDonutChart
+  // and CHART_CAPS's own consumers, which only ever read `.max`, so nothing
+  // downstream had to change shape for this).
+  donut: { min: 2, max: 20 },
   radar: { min: 1, max: 6 },
   scatter: { min: 5, max: 60 },
   // Batch 4 part 1 (decision 43): Phases (grouped bars, one group per player —
@@ -143,111 +151,226 @@ export async function searchPlayers(store, searchText, excludeIds) {
 }
 
 /**
- * Selection controller: an ordered list of {id, name}, capped per active
- * chart type. `getCap()` returns the current cap's MAX (caller wires this to
- * the active chart type's CHART_CAPS[...].max); truncation is never
- * destructive — see below — and always calls `onTruncate(note)` when players
- * are hidden by a smaller cap, so the UI can show a visible note.
+ * Selection controller (Batch 8 rebuild, decision 44d — v1's two-list model):
  *
- * Batch 3 (graphs, part 1) fix — cap-switch memory: `players` is the FULL
- * ordered selection and is never sliced/discarded on a chart-type switch.
- * `get()` (used for rendering/querying/the sidebar list) derives the ACTIVE
- * set as the first `cap()` entries; switching to a chart type whose cap is
- * >= the full list's length brings every hidden player back automatically,
- * with no re-seed or re-add needed. Previously `setAll`/`applyCapForNewType`
- * both spliced `players` itself, so e.g. bar (15) -> donut (10) -> bar left
- * only 10 — the other 5 were gone for good.
+ *   - `candidates`: the FULL ordered pool ({id, name}). NEVER truncated by
+ *     anything except an explicit removeCandidate() (the roster picker's ×).
+ *     This is exactly the old single-list `players` array, renamed for what
+ *     it now represents alongside `checked` — the "cap-switch memory" it
+ *     already had (never spliced on a type switch) is preserved unchanged.
+ *   - `checked`: a Set of ids — the CHECKED/plotted subset, held to the
+ *     invariant `checked.size <= cap()` at every mutation point in this
+ *     module (never allowed to grow past cap; see toggleChecked/addCandidate).
+ *     `get()` derives the rendered/queried list from it, in candidate order.
+ *   - `mode`: "manual" | "best" | "worst" — which UI is driving `checked`
+ *     right now. This module does NOT rank anything itself (ranking needs a
+ *     metric VALUE per candidate, which needs a DB query — a chart-domain
+ *     concern owned by graph.js's deriveChecked()); it just stores the mode
+ *     and lets the caller push a freshly computed checked-set via
+ *     setChecked(). "manual" means checked only moves via toggleChecked/
+ *     addCandidate/removeCandidate — nothing here ever silently recomputes it.
+ *
+ * `getCap()` returns the current cap's MAX (caller wires this to the active
+ * chart type's CHART_CAPS[...].max). Cap-shrink truncation is never silent —
+ * see clampToCap()'s onTruncate note — but note the asymmetry with the old
+ * single-list model: THERE, any cap-grow-back-later always "restored" hidden
+ * players, because the one list was never touched by a shrink, just re-sliced.
+ * HERE, that restoring guarantee only holds for "best"/"worst" mode, because
+ * those modes fully RE-DERIVE `checked` from the untouched `candidates` pool
+ * on every relevant trigger (graph.js's deriveChecked(), called on type
+ * switch/metric change/reseed) — so a cap that grows back always re-ranks
+ * fresh from the full pool, same observable effect as before. In "manual"
+ * mode there is no such re-derivation (checked is the user's literal, ordered
+ * choice), so clampToCap() must genuininely trim it on a shrink, and a later
+ * grow does NOT bring the trimmed players back on its own — same principle as
+ * a user un-ticking those boxes themselves, and the honest thing given manual
+ * mode is a genuinely new, richer capability (arbitrary picks) the old model
+ * never had at all. Default mode is "best", which is what most users will be
+ * in most of the time, so the legacy guarantee holds for the common path.
  */
 export function createSelection({ getCap, onChange, onTruncate }) {
-  let players = []; // FULL ordered list — never destructively truncated
-  // Batch 3 part 2 (honest titles, decision 43): "dirty" means the roster no
-  // longer equals a fresh seed — set on manual add/remove, cleared by setAll
-  // (a fresh seed, forced or scope-triggered). graph.js reads this (plus the
-  // seed's sort key) to decide the paper-card title's phrasing ("top N" vs
-  // "top N by X" vs "N players") instead of inferring it from playerCount
-  // alone. Chart-type switches (applyCapForNewType) do NOT touch this — they
-  // only change which prefix of `players` is visible, not the roster's
-  // composition/provenance.
+  let candidates = []; // FULL ordered pool — never destructively truncated except by removeCandidate
+  let checkedIds = new Set(); // invariant: checkedIds.size <= cap() at every point this module returns control
+  let mode = "best"; // "manual" | "best" | "worst"
+  // Batch 3 part 2 (honest titles, decision 43), redefined for the two-list
+  // model (decision 44d): "dirty" now means the CHECKED set was shaped by a
+  // manual tick/untick/add/remove since the last fresh seed or the last
+  // clean Best/Worst re-derivation — NOT whether the candidate pool itself
+  // was hand-edited. A Best-mode auto-recompute after a manual candidate add
+  // is clean again ("top N"); a single manual checkbox toggle makes it dirty
+  // ("N players") even though the candidate pool hasn't changed at all.
   let dirty = false;
 
   function cap() {
     return getCap();
   }
 
-  function activeCount() {
-    return Math.min(players.length, cap());
-  }
-
-  function maybeNoteTruncation(reasonLabel) {
-    const c = cap();
-    if (players.length > c) {
-      const hidden = players.length - c;
-      if (onTruncate) {
-        onTruncate(
-          `${reasonLabel} caps this chart at ${c} players — ${hidden} player${hidden === 1 ? "" : "s"} not shown here — they'll come back when you switch to a larger chart type.`
-        );
-      }
-    }
-  }
-
-  /** The ACTIVE set: the first `cap()` entries of the full selection. This is
-   * what gets rendered, queried, and shown in the sidebar list. */
+  /** The ACTIVE/plotted set, in candidate order — what's rendered, queried,
+   * and counted everywhere else in the Graph Builder. Always size <= cap(). */
   function get() {
-    return players.slice(0, cap());
+    return candidates.filter((p) => checkedIds.has(p.id));
   }
 
-  /** The FULL selection, including any players currently hidden by a smaller
-   * cap — used to keep manual add/search from re-adding a hidden player. */
+  /** The FULL candidate pool, in order — used by search/dropdown rendering
+   * and by graph.js's ranking to keep add/search from re-adding a candidate
+   * already in the pool (checked or not). */
   function getFull() {
-    return players.slice();
+    return candidates.slice();
   }
 
   function has(id) {
-    return players.some((p) => p.id === id);
+    return candidates.some((p) => p.id === id);
   }
 
-  function setAll(newPlayers) {
-    players = newPlayers.slice();
-    dirty = false; // a fresh seed is clean by definition, however it was triggered
-    maybeNoteTruncation("The seeded set");
+  function isChecked(id) {
+    return checkedIds.has(id);
+  }
+
+  function checkedCount() {
+    return checkedIds.size;
+  }
+
+  function candidateCount() {
+    return candidates.length;
+  }
+
+  function getMode() {
+    return mode;
+  }
+
+  /** True iff `checked` was shaped by a manual edit since the last clean
+   * derivation — see the class doc comment above. */
+  function isDirty() {
+    return dirty;
+  }
+
+  /** Replace the full candidate pool (a fresh seed, forced or scope-
+   * triggered). Does NOT decide the new checked set on its own — the caller
+   * (graph.js's seedSelection, right after this) always follows with a
+   * setChecked() call derived per the CURRENT mode (default "best"), so a
+   * fresh seed's checked set is never left stale against the new pool. */
+  function setCandidates(newCandidates) {
+    candidates = newCandidates.slice();
+  }
+
+  /** Replace the mode flag only. The caller is responsible for actually
+   * re-deriving `checked` afterward (graph.js's deriveChecked()) — this
+   * module has no DB access to rank by a metric value itself. */
+  function setMode(newMode) {
+    mode = newMode;
+  }
+
+  /** Replace the checked set outright — used by graph.js's Best/Worst
+   * re-derivation and by the follow-up call after setCandidates(). `ids` is
+   * clamped to ids that actually exist in `candidates` and to cap() (a
+   * defensive backstop; callers should already respect the cap themselves).
+   * `dirty` is the caller's call: Best/Worst derivations and fresh-seed
+   * derivations pass false ("top N" is an honest claim); nothing else calls
+   * this with true today, but the option exists for symmetry. */
+  function setChecked(ids, { dirty: nextDirty = false } = {}) {
+    const candidateIds = new Set(candidates.map((p) => p.id));
+    const kept = ids.filter((id) => candidateIds.has(id)).slice(0, cap());
+    checkedIds = new Set(kept);
+    dirty = nextDirty;
     if (onChange) onChange();
   }
 
-  function add(player) {
-    if (has(player.id)) return { ok: false, reason: "already-selected" };
-    if (activeCount() >= cap()) {
-      return { ok: false, reason: "cap", cap: cap() };
+  /** Manual checkbox toggle (roster-picker dropdown row). Always marks dirty
+   * — a human just picked this individually. Ticking while already at cap is
+   * refused ({ok:false, reason:"cap"}) — the checkbox itself is disabled in
+   * the UI for exactly this reason (see graph.js's renderPlayerList()); this
+   * is just the defensive backstop, same idiom the old add() used. */
+  function toggleChecked(id) {
+    if (!has(id)) return { ok: false, reason: "unknown-candidate" };
+    if (checkedIds.has(id)) {
+      checkedIds.delete(id);
+      dirty = true;
+      if (onChange) onChange();
+      return { ok: true };
     }
-    players.push(player);
+    if (checkedIds.size >= cap()) return { ok: false, reason: "cap", cap: cap() };
+    checkedIds.add(id);
     dirty = true;
     if (onChange) onChange();
     return { ok: true };
   }
 
-  function remove(id) {
-    const before = players.length;
-    players = players.filter((p) => p.id !== id);
-    if (players.length !== before) {
+  /** Add a brand-new candidate to the pool (manual search-add, or an outside
+   * "Graph this player" jump) — the pool itself is NEVER capped (task brief).
+   * `autoCheck` (default true, mirrors the old add()'s "always selected on
+   * add" behavior) also ticks it, but only if there's room under cap; if not,
+   * the candidate still joins the pool (unticked) rather than being silently
+   * dropped, since the pool is never truncated. Always a manual edit (dirty)
+   * — this needs no mode branch: a search-add is a deliberate human pick
+   * regardless of whether Best/Worst happens to be the active mode. */
+  function addCandidate(player, { autoCheck = true } = {}) {
+    if (has(player.id)) return { ok: false, reason: "already-selected" };
+    candidates.push(player);
+    let checked = false;
+    if (autoCheck && checkedIds.size < cap()) {
+      checkedIds.add(player.id);
+      checked = true;
+    }
+    dirty = true;
+    if (onChange) onChange();
+    return { ok: true, checked };
+  }
+
+  /** Remove a candidate from the pool entirely (the roster picker's ×) — also
+   * unticks it if it was checked. Always a manual edit (dirty). */
+  function removeCandidate(id) {
+    const before = candidates.length;
+    candidates = candidates.filter((p) => p.id !== id);
+    checkedIds.delete(id);
+    if (candidates.length !== before) {
       dirty = true;
       if (onChange) onChange();
     }
   }
 
-  /** True if the roster has been manually edited (add/remove) since the last
-   * fresh seed. Reordering isn't a thing today — there's no drag/drop or
-   * explicit reorder control on the player list, only append (add) and
-   * removal, so "reorder" from the task brief has no code path to mark dirty
-   * from; noted as a non-issue rather than an omission. */
-  function isDirty() {
-    return dirty;
+  /** Called on a chart-type switch (cap may have shrunk). Only ever TRIMS
+   * (never grows) `checked` down to the new cap, in candidate order, noting
+   * the truncation exactly like the old model's onTruncate did.
+   *
+   * `silent` (graph.js passes true for "best"/"worst" mode): the invariant
+   * `checked.size <= cap()` must hold SYNCHRONOUSLY the instant the cap
+   * changes — get() has no clamp of its own, it trusts this invariant — but
+   * the real best/worst re-derivation is an ASYNC metric fetch
+   * (graph.js's deriveChecked()). So graph.js calls this first, silently, as
+   * an immediate provisional trim (plain candidate order — "first N", no
+   * ranking yet) to keep every reader consistent for that brief window,
+   * then deriveChecked() replaces it moments later with the real ranked set
+   * via setChecked(); the user only ever sees a truncation NOTE in "manual"
+   * mode, where no re-derivation follows to quietly fix things up. */
+  function clampToCap({ silent = false } = {}) {
+    const c = cap();
+    if (checkedIds.size <= c) return;
+    const kept = candidates.filter((p) => checkedIds.has(p.id)).slice(0, c);
+    const hidden = checkedIds.size - kept.length;
+    checkedIds = new Set(kept.map((p) => p.id));
+    if (!silent && onTruncate && hidden > 0) {
+      onTruncate(
+        `This chart type caps this chart at ${c} players — ${hidden} player${hidden === 1 ? "" : "s"} unchecked. Tick them again if you switch back to a larger chart type.`
+      );
+    }
+    if (onChange) onChange();
   }
 
-  /** Re-evaluate the cap note for a NEW chart type (called on type switch).
-   * No longer mutates `players` — the full selection is preserved and the
-   * active set is simply re-derived by `get()` against the new cap. */
-  function applyCapForNewType() {
-    maybeNoteTruncation("This chart type");
-  }
-
-  return { get, getFull, has, setAll, add, remove, applyCapForNewType, isDirty };
+  return {
+    get,
+    getFull,
+    has,
+    isChecked,
+    checkedCount,
+    candidateCount,
+    getMode,
+    setMode,
+    isDirty,
+    setCandidates,
+    setChecked,
+    toggleChecked,
+    addCandidate,
+    removeCandidate,
+    clampToCap,
+  };
 }

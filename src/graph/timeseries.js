@@ -120,19 +120,35 @@ export function sampleExpression(discipline) {
  * A metric is supported iff its `sqlExpression` recombines cleanly when the
  * same rows are regrouped into (player, year) buckets — i.e. the sum of the
  * per-year numerators/denominators reconstructs the career figure by the same
- * arithmetic. Concretely: kind ∈ {"total", "rate"} AND source === "innings".
+ * arithmetic. Concretely: kind ∈ {"total", "rate", "percent"} AND
+ * source === "innings".
  *
- *  • "total"  — a SUM(...) of an additive per-innings column (runs, wickets,
+ *  • "total"   — a SUM(...) of an additive per-innings column (runs, wickets,
  *    fours, dismissal-kind counts, phase wickets, …). Summing the yearly sums
  *    gives the career sum exactly. SUPPORTED.
- *  • "rate"   — a ratio of two such SUMs (average = Σruns/Σdismissals, SR,
+ *  • "rate"    — a ratio of two such SUMs (average = Σruns/Σdismissals, SR,
  *    economy, BPD, BPB, RPI, WPI, phase/faced-ball rates). Per year it is the
  *    ratio of that year's sums; the career figure is the ratio of the summed
  *    numerators over the summed denominators — which is what the anchor
  *    recombination check verifies. SUPPORTED.
+ *  • "percent" — WIDENED IN (Batch 8/decision 44f — was excluded under
+ *    decision 43, see below). A percent metric (dot%, boundary%, not-out%,
+ *    dismissal% …) is, mechanically, exactly the same "ratio of two additive
+ *    SUMs ×100" shape as "rate" — it decomposes per (player, year) the same
+ *    way and recombines to the career figure the same way. There was never a
+ *    mathematical reason to exclude it; decision 43's whitelist held it out as
+ *    a product/scope choice pending owner review (see this function's own
+ *    prior comment, kept in git history), and decision 44f is that review:
+ *    trend it. VERIFIED (not just asserted) against live R2 data for SA
+ *    Yadav's batting dot_pct under the app's default scope (male, T20 bucket,
+ *    international, rolling 36-month window ending at the manifest's max
+ *    match_date) — this module's generated SQL reproduced, digit-for-digit,
+ *    an INDEPENDENT SUM(dots)/SUM(balls_faced) query grouped by year run
+ *    directly against the same batting_innings.parquet outside the app. See
+ *    the batch's task notes for the verbatim comparison.
  *
- * Excluded kinds — each exclusion justified:
- *  • "peak"   — EXCLUDED. `best` (BBI) is a display STRING (arg_max → "W-R"),
+ * Excluded kinds — justified:
+ *  • "peak"    — EXCLUDED. `best` (BBI) is a display STRING (arg_max → "W-R"),
  *    not a numeric value, so it cannot be plotted on a line at all. `high_score`
  *    is MAX(runs): although MAX does group per year, it is NON-additive — the
  *    career figure is a MAX-of-yearly-MAXes, not the sum/ratio recombination
@@ -140,12 +156,6 @@ export function sampleExpression(discipline) {
  *    A year-over-year line of "best single knock" is an extreme, not the
  *    volume/rate trend the chart is for. Held out to keep every plotted metric
  *    on the one recombination arithmetic.
- *  • "percent" — EXCLUDED per the decision-43 whitelist. (Honest caveat, flagged
- *    for owner review: percent metrics — dot%, boundary%, not-out%, dismissal
- *    %  — ARE ratios of sums and DO decompose per (player, year) mechanically,
- *    exactly like a "rate". Their exclusion here is a product/scope choice for
- *    the progression chart, not a mathematical necessity. If the owner wants
- *    percents trended, widening this whitelist to include "percent" is safe.)
  *
  * The `source === "innings"` guard additionally drops the one "total" metric
  * that is NOT computable from the innings parquet: "matches" (source
@@ -160,7 +170,7 @@ export function sampleExpression(discipline) {
 export function timeseriesSupported(metricDef) {
   if (!metricDef) return false;
   if (metricDef.source !== "innings") return false; // drops "matches" (player_matches-sourced)
-  return metricDef.kind === "total" || metricDef.kind === "rate";
+  return metricDef.kind === "total" || metricDef.kind === "rate" || metricDef.kind === "percent";
 }
 
 /**

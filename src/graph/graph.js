@@ -119,6 +119,38 @@ function datasetMonthBounds() {
   return { minMonth, maxMonth };
 }
 
+/** Shared open/close/outside-click/Escape wiring for the roster picker
+ * dropdown below — byte-for-behavior identical to src/filters.js's own
+ * wireDropdown() (Batch 8, task 1: "shared .dropdown component from
+ * filters.js's pattern — reuse the classes"). Copied rather than imported:
+ * filters.js does not export this helper and this batch's ownership is
+ * src/graph/*.js only, so the ~20-line helper is duplicated here (same
+ * precedent as timeseries.js/dumbbell.js duplicating table.js internals they
+ * can't import) rather than editing a file outside this task's scope. */
+function wireDropdown(toggleEl, panelEl) {
+  function close() {
+    panelEl.hidden = true;
+    toggleEl.setAttribute("aria-expanded", "false");
+  }
+  function open() {
+    panelEl.hidden = false;
+    toggleEl.setAttribute("aria-expanded", "true");
+  }
+  toggleEl.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (panelEl.hidden) open();
+    else close();
+  });
+  document.addEventListener("click", (e) => {
+    if (panelEl.hidden) return;
+    if (panelEl.contains(e.target) || e.target === toggleEl) return;
+    close();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !panelEl.hidden) close();
+  });
+}
+
 /**
  * Whether the Dumbbell chart can be used at all right now: batting discipline
  * (see dumbbell.js's file header — matchup_bowling has no symmetric "two
@@ -168,6 +200,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
             ${CHART_TYPES.map((t) => `<button type="button" class="segmented__btn" data-value="${t.key}">${t.label}</button>`).join("")}
           </div>
           <p class="graph-chart-type-caption" data-role="chart-type-caption"></p>
+          <p class="graph-chart-type-reason" data-role="chart-type-reason" hidden></p>
           <div class="graph-bar-style" data-role="bar-style" hidden>
             <span class="graph-control-label">Style</span>
             <div class="segmented segmented--small" data-role="bar-style-toggle" role="group" aria-label="Bar style">
@@ -182,13 +215,22 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
         <div class="graph-control-group">
           <div class="graph-control-group__head">
             <span class="graph-control-label">Players</span>
-            <span class="graph-player-count" data-role="player-count"></span>
           </div>
           <div class="graph-player-search">
             <input type="text" class="input" data-role="player-search" placeholder="Add a player…" aria-label="Search players to add" />
             <div class="graph-player-search__results" data-role="player-search-results" hidden></div>
           </div>
-          <ul class="graph-player-list" data-role="player-list"></ul>
+          <div class="dropdown graph-roster-dropdown" data-role="roster-dropdown">
+            <button type="button" class="select dropdown__toggle graph-roster-toggle" data-role="roster-toggle" aria-haspopup="true" aria-expanded="false"></button>
+            <div class="dropdown__panel graph-roster-panel" data-role="roster-panel" hidden>
+              <div class="segmented segmented--small graph-roster-mode" data-role="roster-mode" role="group" aria-label="Show" hidden>
+                <button type="button" class="segmented__btn" data-value="manual">Manual</button>
+                <button type="button" class="segmented__btn" data-value="best">Best</button>
+                <button type="button" class="segmented__btn" data-value="worst">Worst</button>
+              </div>
+              <div class="dropdown__list graph-roster-list" data-role="roster-list"></div>
+            </div>
+          </div>
           <div class="graph-player-actions">
             <button type="button" class="link-btn" data-role="reset-players">Reset to filtered set</button>
           </div>
@@ -213,13 +255,16 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     bridgeBack: container.querySelector('[data-role="bridge-back"]'),
     chartType: container.querySelector('[data-role="chart-type"]'),
     chartTypeCaption: container.querySelector('[data-role="chart-type-caption"]'),
+    chartTypeReason: container.querySelector('[data-role="chart-type-reason"]'),
     barStyleGroup: container.querySelector('[data-role="bar-style"]'),
     barStyleToggle: container.querySelector('[data-role="bar-style-toggle"]'),
     metricControls: container.querySelector('[data-role="metric-controls"]'),
-    playerCount: container.querySelector('[data-role="player-count"]'),
     playerSearch: container.querySelector('[data-role="player-search"]'),
     playerSearchResults: container.querySelector('[data-role="player-search-results"]'),
-    playerList: container.querySelector('[data-role="player-list"]'),
+    rosterToggle: container.querySelector('[data-role="roster-toggle"]'),
+    rosterPanel: container.querySelector('[data-role="roster-panel"]'),
+    rosterMode: container.querySelector('[data-role="roster-mode"]'),
+    rosterList: container.querySelector('[data-role="roster-list"]'),
     resetPlayers: container.querySelector('[data-role="reset-players"]'),
     capNote: container.querySelector('[data-role="cap-note"]'),
     status: container.querySelector('[data-role="status"]'),
@@ -277,6 +322,22 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   let seedSortKey = null;
   let seedSortDiscipline = null;
 
+  // Batch 8 (task 1): which metric key most recently ranked the CHECKED set
+  // via an explicit per-type Best/Worst derivation (bar/donut/scatter-Y only
+  // — see rankMetricForActiveType/deriveChecked below); null whenever the
+  // "seed sort" fallback was used instead (radar/phases/slope/byyear/
+  // dumbbell, or a candidate pool <= cap) or the roster is dirty. Set on
+  // EVERY deriveChecked() call (including type switches), so it's always
+  // fresh for the CURRENT chart type by the time currentRosterMeta() reads
+  // it. resolveSeedMetric() below prefers this over the original seed's sort
+  // metric when present — otherwise a Best-mode re-rank by a metric OTHER
+  // than the table's original sort column (e.g. bar showing Average while the
+  // table itself was sorted by Runs) would misattribute the title's "top N by
+  // X" phrasing to the wrong metric, since the checked set's actual order no
+  // longer has anything to do with the seed's own ORDER BY once re-ranked.
+  let lastRankMetricKey = null;
+  let lastRankMetricDiscipline = null;
+
   // "Turn into graph" bridge (decision 43): true only when the Graphs view
   // was entered via the Stats-tab bridge button, until the user clicks the
   // back link or leaves via an organic tab visit (onShow() resets it — see
@@ -288,6 +349,15 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     getCap: () => CHART_CAPS[chartType].max,
     onChange: () => {
       renderPlayerList();
+      // The recommend engine's ok/disabled state and "Recommended" tag
+      // (task 2) depend on selection.candidateCount() — every candidate-pool
+      // change (a fresh seed landing async, a manual add/remove, a Best/
+      // Worst re-derivation) must re-sync the chart-type picker too, not just
+      // the roster dropdown, or the buttons freeze at whatever their
+      // pre-seed/pre-edit state happened to be (e.g. every type reading
+      // "disabled" on first paint, before the initial seed's candidates ever
+      // arrive, and never recovering).
+      syncChartTypeButtons();
       scheduleRender({ paramsChanged: true });
     },
     onTruncate: (note) => showCapNote(note),
@@ -379,6 +449,119 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     });
   }
 
+  // ── Selection model: Best/Worst ranking (Batch 8, task 1 — v1's
+  // rankAndApply()) ──────────────────────────────────────────────────────────
+
+  /** The metric to rank Best/Worst by for the CURRENT chart type. Bar/donut
+   * rank by their own single displayed metric; scatter ranks by its Y axis
+   * (the task brief's explicit choice — X is the OTHER axis, not "the"
+   * metric). Every other chart type (radar/phases/slope/byyear/dumbbell)
+   * shows either a GROUP of several metrics at once or needs its own
+   * chart-specific query per player (two windows/sides) to get a single
+   * value — too expensive/awkward to fetch just for a ranking preview across
+   * the WHOLE candidate pool — so those fall back to "the seed sort" in
+   * deriveChecked() below (returns null here to signal that fallback). */
+  function rankMetricForActiveType(state) {
+    if (chartType === "bar") return getMetric(barMetricKey, state.discipline);
+    if (chartType === "donut") return getMetric(donutMetricKey, state.discipline);
+    if (chartType === "scatter") return getMetric(scatterYKey, state.discipline);
+    return null;
+  }
+
+  // Guards a rank fetch that's been superseded by a newer one (metric/type
+  // changed again before the first fetch returned) — same "ignore stale async
+  // result" idiom renderChart() already uses via loadToken.
+  let rankDeriveToken = 0;
+
+  /**
+   * Re-derive the CHECKED set for "best"/"worst" mode by ranking the FULL
+   * candidate pool (never just the currently-checked subset — a hidden
+   * candidate must be able to become "the best" too) and keeping the top/
+   * bottom `cap` many. A no-op for "manual" (just records the mode and
+   * re-renders — "Manual leaves user picks alone", task brief).
+   *
+   * Players without real data for the ranking metric are never included —
+   * SPEC §8.1's hasMetricData rule applied here exactly like it already is at
+   * chart-render time (charts.js) and in v1's own rankAndApply ("never
+   * include a 0/null player just to fill the cap"): a 0/null player has no
+   * result to rank, so it can't be "best" or "worst".
+   *
+   * For chart types with no single rankable metric (rankMetricForActiveType
+   * returns null), "the seed sort" fallback (task brief) is simply the
+   * candidate pool's OWN existing order — which is either the seed query's
+   * `ORDER BY <table sort> ... LIMIT cap` (players.js's seedFromFilteredSet)
+   * or, for manually search-added players, append order. "Worst" under this
+   * fallback is that order reversed (the tail of the seed's ranking), since
+   * there's no per-type value to sort by directly.
+   */
+  async function deriveChecked(newMode) {
+    selection.setMode(newMode);
+    if (newMode === "manual") {
+      renderPlayerList();
+      return;
+    }
+    const token = ++rankDeriveToken;
+    const state = store.get();
+    const pool = selection.getFull();
+    const cap = CHART_CAPS[chartType].max;
+    if (pool.length === 0) {
+      selection.setChecked([], { dirty: false });
+      lastRankMetricKey = null;
+      lastRankMetricDiscipline = null;
+      return;
+    }
+    let metric = rankMetricForActiveType(state);
+    let ranked;
+    let rankedByMetric = false;
+    if (metric) {
+      let rowsById = null;
+      try {
+        rowsById = await fetchSelectedPlayerMetrics(state, pool.map((p) => p.id), [metric.key]);
+      } catch {
+        // A failed ranking fetch shouldn't empty the roster or crash the
+        // picker — fall back to seed order for this one derivation, exactly
+        // as if no per-type metric applied; the next real chart render still
+        // gets its own error handling/retry via renderChart()'s try/catch.
+        rowsById = null;
+      }
+      if (token !== rankDeriveToken) return; // superseded by a later derive call
+      if (rowsById) {
+        const withData = pool.filter((p) => {
+          const row = rowsById.get(p.id);
+          return row && hasMetricData(metric, row[metric.key]);
+        });
+        withData.sort((a, b) => {
+          const va = Number(rowsById.get(a.id)[metric.key]);
+          const vb = Number(rowsById.get(b.id)[metric.key]);
+          const diff = metric.higherIsBetter ? vb - va : va - vb; // best-first order
+          return newMode === "worst" ? -diff : diff;
+        });
+        ranked = withData;
+        rankedByMetric = true;
+      }
+    }
+    if (!rankedByMetric) {
+      metric = null; // seed-order fallback — no per-type metric actually ranked this
+      ranked = newMode === "worst" ? pool.slice().reverse() : pool.slice();
+    }
+    if (token !== rankDeriveToken) return;
+    selection.setChecked(ranked.slice(0, cap).map((p) => p.id), { dirty: false });
+    lastRankMetricKey = metric ? metric.key : null;
+    lastRankMetricDiscipline = metric ? state.discipline : null;
+  }
+
+  /** Wired to the bar/donut/scatter-Y metric selects only (the three that
+   * feed rankMetricForActiveType) — re-derives Best/Worst when the metric
+   * that ranks them changes ("switching to Best/Worst re-derives on metric
+   * change too", task brief); a no-op in Manual mode beyond the render. Every
+   * OTHER metric/group/family/window/side select (scatter-X, radar, phases,
+   * slope, byyear, dumbbell) does NOT call this — their ranking fallback is
+   * "the seed sort", which doesn't depend on which metric they display. */
+  function onRankMetricChanged() {
+    if (selection.getMode() !== "manual") deriveChecked(selection.getMode());
+    scheduleRender({ paramsChanged: true });
+  }
+
   // ── Metric controls (rebuilt per chart type) ──────────────────────────────
 
   function renderMetricControls() {
@@ -400,7 +583,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       `;
       els.metricControls.querySelector('[data-role="bar-metric"]').addEventListener("change", (e) => {
         barMetricKey = e.target.value;
-        scheduleRender({ paramsChanged: true });
+        onRankMetricChanged();
       });
     } else if (chartType === "donut") {
       const metrics = donutEligibleMetrics(discipline, formats);
@@ -422,7 +605,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       if (sel) {
         sel.addEventListener("change", (e) => {
           donutMetricKey = e.target.value;
-          scheduleRender({ paramsChanged: true });
+          onRankMetricChanged();
         });
       }
     } else if (chartType === "scatter") {
@@ -453,7 +636,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       });
       els.metricControls.querySelector('[data-role="scatter-y"]').addEventListener("change", (e) => {
         scatterYKey = e.target.value;
-        scheduleRender({ paramsChanged: true });
+        onRankMetricChanged();
       });
     } else if (chartType === "radar") {
       const groups = eligibleRadarGroups(discipline, formats);
@@ -634,27 +817,128 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     }
   }
 
-  // ── Player list UI ────────────────────────────────────────────────────────
+  // ── Player list UI (Batch 8, task 1 — v1's two-list model) ─────────────────
+  //
+  // The vertical always-visible list is gone; in its place, a dropdown BUTTON
+  // ("N of M selected") opens a checkbox panel with one row per CANDIDATE
+  // (the full pool, never truncated): checkbox (checked = plotted) + name +
+  // a muted meta + a small × (remove from the pool entirely). Above the rows,
+  // a "Show: Manual | Best | Worst" segmented appears ONLY once there are more
+  // candidates than the active chart type can plot (v1's rankAndApply gate) —
+  // Best/Worst re-derive `checked` by rank (see deriveChecked() above);
+  // Manual leaves whatever's checked alone.
+  //
+  // Checkbox interaction (judgment call, documented): ANY manual tick/untick
+  // always works, regardless of which mode segment is currently highlighted —
+  // the task brief describes the cap-disable rule for checkboxes without
+  // gating them behind "Manual" mode, and v1's own toggleSelCheck() likewise
+  // never checks state.selRank. But unlike v1 (which lets a manual override
+  // sit quietly under a still-"Best"-labeled segmented until the next
+  // recompute silently erases it), this app's whole roster-provenance model
+  // (players.js's `dirty` flag -> card.js's honest "top N" vs "N players"
+  // title phrasing) exists specifically so a manual edit is never silently
+  // overwritten without the user noticing — so a checkbox toggle here ALSO
+  // flips the mode to "manual" (freezing it from further auto-recompute)
+  // rather than leaving Best/Worst still displayed as active over a set a
+  // human just hand-edited. This is a deliberate, documented deviation from
+  // v1's literal mechanics in favor of this codebase's existing honesty rule.
+  //
+  // "Muted meta" per row: this app's row shape only ever carries {id, name}
+  // (players.js's seed/search queries project nothing else — team/country
+  // isn't selected, and adding it would be a NEW SQL column, barred by this
+  // batch's "zero SQL changes" rule). So the meta is the candidate's own
+  // position in the pool ("#3"), which needs no query at all and is always
+  // available immediately: for a fresh seed it doubles as "rank by the
+  // table's active sort"; for search-added players it's simply append order.
+  // A real per-player attribute (team, say) would be more informative but is
+  // out of scope here — flagged in the batch report as a follow-up candidate.
+
+  function rosterModeLabel(mode) {
+    if (mode === "best") return "Best";
+    if (mode === "worst") return "Worst";
+    return "Manual";
+  }
 
   function renderPlayerList() {
-    const players = selection.get();
+    const checkedCount = selection.checkedCount();
+    const candidates = selection.getFull();
+    const total = candidates.length;
     const cap = CHART_CAPS[chartType].max;
-    els.playerCount.textContent = `${players.length} / ${cap}`;
-    els.playerList.innerHTML = players
-      .map(
-        (p) => `<li class="graph-player-list__item" data-id="${p.id}">
-          <span>${escHtml(p.name)}</span>
-          <button type="button" class="icon-btn" data-role="remove-player" data-id="${p.id}" title="Remove">&times;</button>
-        </li>`
-      )
-      .join("") || `<li class="graph-player-list__empty">No players selected.</li>`;
+    const mode = selection.getMode();
 
-    els.playerList.querySelectorAll('[data-role="remove-player"]').forEach((btn) => {
-      btn.addEventListener("click", () => {
-        selection.remove(btn.dataset.id);
+    els.rosterToggle.textContent = `${checkedCount} of ${total} selected`;
+    els.rosterToggle.title = mode !== "manual" ? `Auto-selected: ${rosterModeLabel(mode)}` : "";
+
+    // "Show: Manual | Best | Worst" only once there's an actual choice to make
+    // (more candidates than this chart type can plot) — task brief.
+    const showModeSwitch = total > cap;
+    els.rosterMode.hidden = !showModeSwitch;
+    if (showModeSwitch) {
+      els.rosterMode.querySelectorAll(".segmented__btn").forEach((btn) => {
+        btn.classList.toggle("is-active", btn.dataset.value === mode);
+      });
+    }
+
+    els.rosterList.innerHTML = total
+      ? candidates
+          .map((p, i) => {
+            const checked = selection.isChecked(p.id);
+            const atCap = !checked && checkedCount >= cap;
+            const title = atCap ? `Max ${cap} for this chart type — untick one first` : checked ? "Remove from graph" : "Add to graph";
+            return `<div class="dropdown__item graph-roster-item${atCap ? " is-disabled" : ""}" data-id="${escAttr(p.id)}">
+              <input type="checkbox" data-role="roster-check" data-id="${escAttr(p.id)}" ${checked ? "checked" : ""} ${atCap ? "disabled" : ""} title="${escAttr(title)}" />
+              <span class="graph-roster-item__name">${escHtml(p.name)}</span>
+              <span class="graph-roster-item__meta">#${i + 1}</span>
+              <button type="button" class="icon-btn graph-roster-item__remove" data-role="remove-candidate" data-id="${escAttr(p.id)}" title="Remove from list">&times;</button>
+            </div>`;
+          })
+          .join("")
+      : `<p class="graph-player-search__empty">No players yet — search above or use Filters.</p>`;
+
+    els.rosterList.querySelectorAll('[data-role="roster-check"]').forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const id = cb.dataset.id;
+        // Freeze auto-recompute BEFORE toggling — see the doc comment above:
+        // any manual tick means the mode segmented should already read
+        // "Manual" by the time toggleChecked's own onChange (below) re-renders
+        // the panel, not one render-pass later.
+        selection.setMode("manual");
+        const result = selection.toggleChecked(id);
+        if (!result.ok && result.reason === "cap") {
+          showCapNote(`Can't select — this chart type is capped at ${result.cap} players. Untick one first.`);
+          cb.checked = false; // defensive: disabled should already prevent this
+          renderPlayerList(); // toggleChecked's own onChange didn't fire on this failure path
+          return;
+        }
+        clearCapNote();
+      });
+    });
+    els.rosterList.querySelectorAll('[data-role="remove-candidate"]').forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        selection.removeCandidate(id);
+        // Removing a candidate may have freed a slot best/worst should refill
+        // from the rest of the pool; a manual removal just re-renders as-is.
+        if (selection.getMode() !== "manual") deriveChecked(selection.getMode());
       });
     });
   }
+
+  wireDropdown(els.rosterToggle, els.rosterPanel);
+
+  els.rosterMode.addEventListener("click", (e) => {
+    const btn = e.target.closest(".segmented__btn");
+    if (!btn) return;
+    const newMode = btn.dataset.value;
+    if (newMode === selection.getMode()) return;
+    if (newMode === "manual") {
+      selection.setMode("manual");
+      renderPlayerList();
+    } else {
+      deriveChecked(newMode);
+    }
+  });
 
   let searchDebounce = null;
   els.playerSearch.addEventListener("input", () => {
@@ -680,9 +964,14 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
 
         els.playerSearchResults.querySelectorAll(".graph-player-search__item").forEach((btn) => {
           btn.addEventListener("click", () => {
-            const result = selection.add({ id: btn.dataset.id, name: btn.dataset.name });
-            if (!result.ok && result.reason === "cap") {
-              showCapNote(`Can't add — this chart type is capped at ${result.cap} players. Remove one first.`);
+            // The candidate pool is never truncated (task brief) — a search-
+            // add always joins it; `checked` is false only if the active
+            // chart type is already at cap, in which case the player still
+            // shows up (unticked) in the roster dropdown rather than being
+            // silently dropped.
+            const result = selection.addCandidate({ id: btn.dataset.id, name: btn.dataset.name });
+            if (result.ok && !result.checked) {
+              showCapNote(`Added to your list, but this chart type is capped at ${CHART_CAPS[chartType].max} players — untick one to plot them instead.`);
             } else {
               clearCapNote();
             }
@@ -731,29 +1020,140 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     return CHART_TYPE_CAPTIONS[type] || "";
   }
 
-  function syncChartTypeButtons() {
-    const state = store.get();
-    els.chartType.querySelectorAll(".segmented__btn").forEach((btn) => {
-      btn.classList.toggle("is-active", btn.dataset.value === chartType);
-    });
-    els.chartTypeCaption.textContent = chartTypeCaption(chartType, state);
+  // ── Recommend engine (Batch 8, task 2 — v1's recommend()) ──────────────────
+  //
+  // v1's own recommend() ranks chart types by how many METRICS the user has
+  // checked in a single shared multi-select (1 metric -> Bar, exactly 2
+  // rate/pct metrics -> Scatter, 3+ -> Radar, all-"total" -> Donut, …) — that
+  // has no analogue here: every chart type in this app owns ITS OWN metric
+  // picker (bar's one select, scatter's X+Y, radar's whole group, …), so
+  // there is no single shared "how many metrics are checked" signal to rank
+  // by. The dimension that actually varies chart-type fit in THIS app is the
+  // PLAYER pool (each type's CHART_CAPS min/max) plus whether a metric/group/
+  // family even exists for the type under the current discipline/format
+  // scope — so this port keeps v1's STRUCTURE (ok/disabled + a reason per
+  // type; one "exactly fits" type gets a Recommended tag) but re-derives the
+  // ranking from player count + metric/group/family availability instead.
+
+  /** ok/disabled + an honest one-line reason for `typeKey` under the CURRENT
+   * scope/candidate pool. The player-count floor uses the CANDIDATE pool
+   * (selection.candidateCount()), not the checked count — switching TO a
+   * type re-derives checked from the whole pool up to that type's own cap,
+   * so what actually gates a type is "can the pool satisfy this type's
+   * minimum at all", not how many happen to be checked under some OTHER
+   * type's cap right now. There is no equivalent "too many" gate — an
+   * over-supply of candidates never disables a type here, it just leaves
+   * some unchecked (players.js's cap-clamp), unlike v1 where exceeding a
+   * metric-count max was a hard disqualifier. */
+  function evaluateTypeStatus(typeKey, state) {
+    if (typeKey === "dumbbell" && !dumbbellAvailable(state)) {
+      return { ok: false, reason: dumbbellUnavailableReason(state) };
+    }
+    if (typeKey === "donut" && donutEligibleMetrics(state.discipline, state.formats).length === 0) {
+      return { ok: false, reason: "Needs a countable stat" };
+    }
+    if (typeKey === "radar" && eligibleRadarGroups(state.discipline, state.formats).length === 0) {
+      return { ok: false, reason: "No metric groups available for this scope" };
+    }
+    if (typeKey === "phases" && eligiblePhaseFamilies(state.discipline, state.formats).length === 0) {
+      return { ok: false, reason: "No phase metric families available for this scope" };
+    }
+    if (typeKey === "slope" && eligibleMetrics(state.discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent").length === 0) {
+      return { ok: false, reason: "No rate/percent metric available for this scope" };
+    }
+    if (typeKey === "byyear" && eligibleMetrics(state.discipline, state.formats).filter((m) => timeseriesSupported(m)).length === 0) {
+      return { ok: false, reason: "No year-by-year metric available for this scope" };
+    }
+    if (typeKey === "dumbbell" && dumbbellEligibleMetrics(state.formats).length === 0) {
+      return { ok: false, reason: "No matchup rate/percent metric available for this scope" };
+    }
+    const capDef = CHART_CAPS[typeKey];
+    const candidateCount = selection.candidateCount();
+    if (candidateCount < capDef.min) {
+      return { ok: false, reason: `Add at least ${capDef.min} player${capDef.min === 1 ? "" : "s"}` };
+    }
+    return { ok: true, reason: null };
   }
 
-  /** Enables/disables the Dumbbell picker button for the current state
-   * (batting discipline + men's cricket — see dumbbellAvailable() above) —
-   * the "hide/disable ... with an honest caption swap" the task brief asks
-   * for, applied as the button's own disabled+title (the same
-   * "disabled + title, never removed" idiom table.js already uses for its
-   * preset chips / Turn-into-graph button) rather than removing the button
-   * from the grid. */
-  function syncChartTypeAvailability() {
+  /**
+   * The single best-fit type among the OK ones, for the current candidate
+   * pool size — v1's "prefer the type whose constraints the current state
+   * exactly satisfies" re-expressed over player count (see the file header
+   * comment above for why metric-count doesn't translate):
+   *   1. Scatter, once there's a proper crowd (>= 10 candidates) — its whole
+   *      niche (up to 60 players, uncapped-feeling) is the one type that
+   *      wants MORE players, not fewer, so a big pool is its "exact fit".
+   *   2. Radar, for a small handful within its own tight ceiling (2..6
+   *      candidates) — shape comparison is cluttered past a few players,
+   *      exactly radar's own cap.
+   *   3. Donut, when the pool is modest enough (<= 8) that every player gets
+   *      an individually-named slice with no "Other" bucket needed yet — the
+   *      cleanest, most literal "share of a total" read.
+   *   4. Bar — the general-purpose default once none of the above's tighter
+   *      niche applies.
+   *   5. Everything else (phases/slope/byyear/dumbbell, plus donut/scatter/
+   *      radar outside their niches above) — specialized lenses, only ever
+   *      recommended when they are the SOLE ok type (never displace the
+   *      general-purpose picks above), mirroring how v1 never recommends its
+   *      own specialized "arrow" type as a default either.
+   */
+  function recommendedChartType(state, statuses) {
+    const okKeys = CHART_TYPES.map((t) => t.key).filter((k) => statuses[k].ok);
+    if (okKeys.length === 0) return null;
+    const candidateCount = selection.candidateCount();
+    if (okKeys.includes("scatter") && candidateCount >= 10) return "scatter";
+    if (okKeys.includes("radar") && candidateCount >= 2 && candidateCount <= CHART_CAPS.radar.max) return "radar";
+    if (okKeys.includes("donut") && candidateCount <= 8) return "donut";
+    if (okKeys.includes("bar")) return "bar";
+    const fallbackOrder = ["donut", "scatter", "radar", "phases", "slope", "byyear", "dumbbell"];
+    return fallbackOrder.find((k) => okKeys.includes(k)) ?? okKeys[0];
+  }
+
+  function syncChartTypeButtons() {
     const state = store.get();
-    const dumbbellBtn = els.chartType.querySelector('[data-value="dumbbell"]');
-    if (dumbbellBtn) {
-      const disabled = !dumbbellAvailable(state);
-      dumbbellBtn.disabled = disabled;
-      dumbbellBtn.title = disabled ? dumbbellUnavailableReason(state) : "";
+    const statuses = {};
+    for (const t of CHART_TYPES) statuses[t.key] = evaluateTypeStatus(t.key, state);
+    const recommended = recommendedChartType(state, statuses);
+
+    els.chartType.querySelectorAll(".segmented__btn").forEach((btn) => {
+      const key = btn.dataset.value;
+      const type = CHART_TYPES.find((t) => t.key === key);
+      const status = statuses[key];
+      btn.classList.toggle("is-active", key === chartType);
+      btn.disabled = !status.ok;
+      // Shown as the button's own title when disabled (task brief) — an ok
+      // button carries no title (the caption below already describes it for
+      // the ACTIVE type; a titled tooltip on every enabled button would be
+      // noise, matching the existing "disabled + title" idiom elsewhere).
+      btn.title = status.ok ? "" : status.reason || "";
+      btn.innerHTML = `${type.label}${key === recommended ? '<span class="graph-chart-type-rec">Recommended</span>' : ""}`;
+    });
+
+    els.chartTypeCaption.textContent = chartTypeCaption(chartType, state);
+
+    // Muted inline reason under the picker — the ACTIVE type's own status
+    // only, shown whenever it's currently invalid (e.g. a scope change left
+    // too few candidates, or removed the only eligible metric/group/family
+    // for it) so the user immediately sees WHY nothing is drawing, beyond
+    // just the placeholder text in the chart area itself.
+    const activeStatus = statuses[chartType];
+    if (activeStatus && !activeStatus.ok && activeStatus.reason) {
+      els.chartTypeReason.textContent = activeStatus.reason;
+      els.chartTypeReason.hidden = false;
+    } else {
+      els.chartTypeReason.hidden = true;
+      els.chartTypeReason.textContent = "";
     }
+  }
+
+  /** Legacy name kept as a thin alias — syncChartTypeButtons() now computes
+   * every type's availability (not just Dumbbell's) in one pass, so this
+   * just re-runs it; kept separate (rather than deleting every call site)
+   * since several callers already call both in sequence for other reasons
+   * (bar-style visibility, metric controls, …) and reordering those calls is
+   * unrelated to this batch's scope. */
+  function syncChartTypeAvailability() {
+    syncChartTypeButtons();
   }
 
   // "Bars ⇄ Dots" style toggle — bar chart only (lollipop rendering, same
@@ -788,7 +1188,20 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     syncBarStyleVisibility();
     clearCapNote();
     renderMetricControls();
-    selection.applyCapForNewType();
+    // The cap (and, for bar/donut/scatter, the ranking metric) just changed
+    // with the chart type. In "manual" mode, only trim any genuine overflow
+    // (never re-pick). In "best"/"worst" mode, a synchronous silent trim
+    // keeps the checked<=cap invariant true for the brief window before the
+    // real async re-derivation (which re-ranks from the UNTOUCHED candidate
+    // pool under the new cap/metric — this is what makes "switch to a bigger
+    // chart type brings hidden players back" still true, see players.js's
+    // class doc comment) replaces it moments later.
+    if (selection.getMode() === "manual") {
+      selection.clampToCap();
+    } else {
+      selection.clampToCap({ silent: true });
+      deriveChecked(selection.getMode());
+    }
     renderPlayerList();
     scheduleRender({ paramsChanged: true });
   });
@@ -857,19 +1270,37 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       seedSortKey = state.sort.key;
       seedSortDiscipline = state.discipline;
       clearCapNote();
-      selection.setAll(seedPlayers);
+      // Batch 8 (task 1): a fresh seed replaces the candidate POOL only —
+      // `checked` is then derived per the CURRENTLY active mode ("auto-check
+      // per the active mode", task brief; default "best"). A reseed always
+      // lands in "best" if the previous mode was "manual": manual picks were
+      // made against the OLD pool and have no meaning against a brand new
+      // one, whereas an explicit "best"/"worst" preference is about HOW to
+      // auto-pick, not which specific pool it's applied to, so it persists.
+      selection.setCandidates(seedPlayers);
+      const modeForReseed = selection.getMode() === "manual" ? "best" : selection.getMode();
+      await deriveChecked(modeForReseed);
     } catch (e) {
       showErrorStatus(e, () => seedSelection({ force: true }));
     }
   }
 
-  /** The Metric that ranked the last successful seed, resolved for
-   * `discipline` — or null if there's been no seed yet, or the seed happened
-   * under a DIFFERENT discipline (a scope change should have already
-   * triggered a reseed via onScopeChanged; if it somehow hasn't, this falls
-   * back to "unknown provenance" rather than attributing a metric from the
-   * wrong namespace). */
+  /** The metric that actually ranked the CURRENT checked set, resolved for
+   * `discipline` — or null if unknown/inapplicable. Prefers the per-type
+   * Best/Worst ranking metric (lastRankMetricKey — bar/donut/scatter-Y only)
+   * when one was used; otherwise falls back to whatever metric ranked the
+   * original SQL seed (seedSortKey — the table's active sort at seed time),
+   * which is exactly right for the "seed sort" fallback types (radar/phases/
+   * slope/byyear/dumbbell) since their checked set's order literally IS that
+   * seed order (or its reverse, for "worst"). Returns null if there's been no
+   * seed yet, or either happened under a DIFFERENT discipline (a scope change
+   * should have already triggered a reseed via onScopeChanged; if it somehow
+   * hasn't, this falls back to "unknown provenance" rather than attributing a
+   * metric from the wrong namespace). */
   function resolveSeedMetric(discipline) {
+    if (lastRankMetricKey && lastRankMetricDiscipline === discipline) {
+      return getMetric(lastRankMetricKey, discipline) || null;
+    }
     if (!seedSortKey || seedSortDiscipline !== discipline) return null;
     return getMetric(seedSortKey, discipline) || null;
   }
@@ -1412,9 +1843,12 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
    * path already shows (no new copy for the same situation).
    */
   function addPlayerFromOutside(id, name) {
-    const result = selection.add({ id, name });
-    if (!result.ok && result.reason === "cap") {
-      showCapNote(`Can't add — this chart type is capped at ${result.cap} players. Remove one first.`);
+    // Same "pool is never truncated, checked only if there's room" contract
+    // as the manual search-add flow (Batch 8, task 1) — see that handler's
+    // comment for why this can no longer fail outright on a full cap.
+    const result = selection.addCandidate({ id, name });
+    if (result.ok && !result.checked) {
+      showCapNote(`Added to your list, but this chart type is capped at ${CHART_CAPS[chartType].max} players — untick one to plot them instead.`);
     } else if (result.ok) {
       clearCapNote();
     }
@@ -1433,7 +1867,16 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       syncChartTypeButtons();
       syncBarStyleVisibility();
       clearCapNote();
-      selection.applyCapForNewType();
+      // Same mode-aware cap reconciliation as the chart-type click handler
+      // (this fallback can flip the cap/ranking metric just like a manual
+      // switch would, and seedSelection() below may no-op if this alone
+      // didn't change the scope key, so it can't be relied on to reconcile).
+      if (selection.getMode() === "manual") {
+        selection.clampToCap();
+      } else {
+        selection.clampToCap({ silent: true });
+        deriveChecked(selection.getMode());
+      }
       renderPlayerList();
     }
     syncChartTypeAvailability();
