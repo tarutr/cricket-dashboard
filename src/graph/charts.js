@@ -16,6 +16,7 @@
 import { getMetric, hasMetricData } from "../metrics.js";
 import { query } from "../db.js";
 import { buildScopeClauses } from "../filters.js";
+import { buildQuery } from "../table.js";
 import { escSql as esc } from "../state.js";
 
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
@@ -69,6 +70,39 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   return byId;
 }
 
+/**
+ * SLOPE chart data (Batch 4 part 1, decision 43): one metric value per
+ * selected player for ONE date window. Reuses table.js's buildQuery
+ * UNCHANGED — the exact same min-innings-gated (HAVING) query
+ * players.js's seedFromFilteredSet already wraps for seeding — parameterised
+ * by the window's own dateFrom/dateTo instead of the live filter scope's
+ * (buildScopeClauses already reads dateFrom/dateTo off the state object it's
+ * given, so overriding those two fields is an existing parameter slot, not a
+ * new one), then restricted to exactly the already-selected roster ids via
+ * the identical "wrap the builder's SQL, filter in an outer SELECT" idiom
+ * seedFromFilteredSet already uses for its ORDER BY/LIMIT wrapper.
+ *
+ * This is why a player can be genuinely ABSENT from a window's result map:
+ * buildQuery's HAVING (COUNT(*) >= current min innings) is evaluated
+ * independently per window, over only that window's date-filtered rows —
+ * exactly the "current min-innings gate, applied independently per window"
+ * the slope chart's honesty note refers to. No new SQL shape is introduced:
+ * buildQuery itself is untouched, only its two existing date parameters are
+ * overridden, and the outer id-restriction wrapper mirrors an idiom that
+ * already exists in this codebase (players.js).
+ */
+export async function fetchWindowMetric(state, window, playerIds, metric) {
+  if (playerIds.length === 0) return new Map();
+  const windowState = { ...state, dateFrom: window.from, dateTo: window.to };
+  const { sql } = buildQuery(windowState, [metric.key]);
+  const idsSql = playerIds.map((id) => `'${esc(id)}'`).join(", ");
+  const outerSql = `SELECT * FROM (\n${sql}\n) window_q\nWHERE id IN (${idsSql})`;
+  const { rows } = await query(outerSql);
+  const byId = new Map();
+  for (const row of rows) byId.set(row.id, row);
+  return byId;
+}
+
 function formatMetricValue(metric, value) {
   if (!hasMetricData(metric, value)) return null;
   const n = Number(value);
@@ -109,6 +143,11 @@ function palette() {
   return {
     ink: "#1b2430",
     accent: "#9c2b2b",
+    // Matches --color-good's LIGHT-theme value (styles.css) — the paper card
+    // is a fixed-light artifact regardless of site theme (see file header),
+    // so this is the fixed hex equivalent of that token, not a live CSS var.
+    // Used by the slope chart for "rose" lines (Batch 4 part 1, decision 43).
+    good: "#2f6b3f",
     muted: "#6b6f76",
     line: "#ded7c8",
     panel: "#f2ede1",
@@ -485,6 +524,307 @@ function shortenName(name) {
   const last = parts[parts.length - 1];
   const initials = parts.slice(0, -1).map((p) => p[0] + ".").join("");
   return `${initials} ${last}`;
+}
+
+/**
+ * PHASES: grouped bars, one metric FAMILY (2–3 related metrics — e.g. T20
+ * powerplay/middle/death strike rate) shown side by side per player, players
+ * along the x axis (Batch 4 part 1, decision 43). `metrics` is the family's
+ * member metrics IN CHRONOLOGICAL ORDER (graph.js resolves the family's keys
+ * via getMetric() before calling this); `family.members[i].phaseLabel` is the
+ * short axis/legend name for `metrics[i]`.
+ *
+ * §8.1 semantics, applied per player: a player missing hasMetricData for SOME
+ * (not all) family members is still charted, with that specific phase's bar
+ * simply absent (Chart.js draws nothing for a `null` data point) — the value
+ * genuinely doesn't exist for that phase, same as any other honest gap. A
+ * player missing hasMetricData for EVERY family member has no phase data at
+ * all and is dropped from the chart entirely (`excluded`), with a "N of M"
+ * summary note the caller can show alongside the standard exclusion list.
+ */
+export function buildPhasesChart(canvas, chartRef, { family, metrics, rowsById, players }) {
+  destroyIfExists(chartRef);
+
+  const included = [];
+  const excluded = [];
+  for (const p of players) {
+    const row = rowsById.get(p.id);
+    const hasAny = row && metrics.some((m) => hasMetricData(m, row[m.key]));
+    if (hasAny) {
+      included.push({ id: p.id, name: p.name, row });
+    } else {
+      excluded.push(p.name);
+    }
+  }
+
+  const pal = palette();
+  // Editorial 3-series palette (judgment call, Batch 4 part 1): the first
+  // three SERIES_COLORS entries — accent red, green, blue — read cleanly as
+  // distinct phases against the paper card's cream/ink palette without
+  // inventing new hex values; the same array the donut/radar charts already
+  // draw from. Bowling's 2-phase family just uses the first two.
+  const colors = SERIES_COLORS.slice(0, metrics.length);
+
+  chartRef.current = new Chart(canvas, {
+    type: "bar",
+    data: {
+      labels: included.map((r) => r.name),
+      datasets: metrics.map((m, i) => ({
+        label: family.members[i]?.phaseLabel ?? m.shortLabel,
+        data: included.map((r) => (hasMetricData(m, r.row[m.key]) ? Number(r.row[m.key]) : null)),
+        backgroundColor: colors[i % colors.length],
+        borderRadius: 3,
+        maxBarThickness: 26,
+      })),
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: "top", labels: { color: pal.ink, boxWidth: 12 } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const m = metrics[ctx.datasetIndex];
+              const phaseLabel = family.members[ctx.datasetIndex]?.phaseLabel ?? m.label;
+              return `${phaseLabel}: ${labelForValue(m, ctx.raw)}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: pal.ink, autoSkip: false },
+        },
+        y: {
+          grid: { color: pal.line },
+          ticks: { color: pal.muted },
+          beginAtZero: true,
+        },
+      },
+    },
+  });
+
+  const note =
+    included.length < players.length
+      ? `${included.length} of ${players.length} selected players have phase data.`
+      : null;
+
+  return { excluded, note };
+}
+
+/**
+ * SLOPE ("then vs now"): one metric, two explicit date windows (Batch 4 part
+ * 1, decision 43). `rowsA`/`rowsB` are the Maps fetchWindowMetric() returned
+ * for Window A / Window B respectively — already independently min-innings
+ * gated per window (see that function's doc comment). A player present in
+ * both maps with real data (§8.1) gets one line from their Window A value to
+ * their Window B value; a player missing from either window (failed that
+ * window's min-innings gate, or has NULL/0 for a rate metric there) is
+ * dropped from the chart entirely — never partially drawn — with a "N of M
+ * ... qualify in both windows" note the caller shows alongside the standard
+ * exclusion list.
+ *
+ * Line color means IMPROVEMENT, not raw direction (orchestrator ruling over
+ * the earlier raw-movement draft): green/red universally read as good/bad, so
+ * a bowler whose economy CLIMBS must read red even though the number "rose".
+ * metrics.js's higherIsBetter says which way improvement points; for the
+ * metrics where it's null (no better/worse exists) raw movement is used, which
+ * is then genuinely judgment-free. Flat lines are muted either way.
+ */
+export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rowsA, rowsB, players }) {
+  destroyIfExists(chartRef);
+
+  const included = [];
+  const excluded = [];
+  for (const p of players) {
+    const rowA = rowsA.get(p.id);
+    const rowB = rowsB.get(p.id);
+    const rawA = rowA ? rowA[metric.key] : null;
+    const rawB = rowB ? rowB[metric.key] : null;
+    if (rowA && rowB && hasMetricData(metric, rawA) && hasMetricData(metric, rawB)) {
+      included.push({ id: p.id, name: p.name, a: Number(rawA), b: Number(rawB) });
+    } else {
+      excluded.push(p.name);
+    }
+  }
+
+  const pal = palette();
+
+  chartRef.current = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels: [labelA, labelB],
+      datasets: included.map((r) => {
+        const rose = r.b > r.a;
+        const fell = r.b < r.a;
+        const improved = metric.higherIsBetter === false ? fell : rose;
+        const worsened = metric.higherIsBetter === false ? rose : fell;
+        const color = improved ? pal.good : worsened ? pal.accent : pal.muted;
+        return {
+          label: r.name,
+          data: [r.a, r.b],
+          borderColor: color,
+          backgroundColor: color,
+          pointBackgroundColor: color,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          borderWidth: 2,
+          tension: 0,
+        };
+      }),
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      // Room on the right for the value + name labels drawn past Window B's
+      // points by the plugin below.
+      layout: { padding: { right: 96, top: 12, bottom: 12, left: 8 } },
+      plugins: {
+        legend: { display: false }, // player identity comes from the endpoint name label, not a legend
+        tooltip: {
+          callbacks: {
+            title: (items) => (items.length ? included[items[0].datasetIndex].name : ""),
+            label: (ctx) => `${ctx.label}: ${labelForValue(metric, ctx.raw)}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { color: pal.line },
+          ticks: { color: pal.ink, font: { weight: "600" } },
+        },
+        y: {
+          grid: { color: pal.line },
+          ticks: { color: pal.muted },
+        },
+      },
+    },
+    plugins: [
+      {
+        // Label collision fix (live testing at ~800px and narrower, 11
+        // players): endpoint value labels were overprinting each other on
+        // the Window A axis, and Window B's "flip to the point's left when
+        // it doesn't fit on the right" fallback was landing player-name
+        // labels mid-chart, jammed directly against the value text with no
+        // gap ("K. Kadowaki-F109.73"). Two independent fixes below:
+        //   1. Names are ALWAYS anchored at the right endpoint (Window B),
+        //      never flipped to a mid-chart position — if the full name+value
+        //      text would overflow the canvas, its horizontal START slides
+        //      left just enough to keep its END inside chartArea (a plain
+        //      clamp, not a side-flip, so it never drifts back toward Window
+        //      A's column).
+        //   2. Value labels are dropped entirely once more than ~8 players
+        //      are drawn (§ their exact numbers still live in the tooltip and
+        //      the name label); below that they're kept, each side (A and B)
+        //      decluttered independently since they're visually separate
+        //      columns.
+        // Both label columns use the same simple vertical nudge: sort top to
+        // bottom by desired pixel y, push any label closer than MIN_GAP to
+        // its predecessor further down, then (if that ran the column past
+        // the bottom edge) walk back up from the last label enforcing the
+        // same minimum gap — keeping the whole column inside chartArea
+        // rather than letting it slide off, the same "stay inside the plot"
+        // intent as scatter's point-label clamp, just applied to a column of
+        // labels instead of a single one.
+        id: "slopeEndLabels",
+        afterDatasetsDraw(chart) {
+          const { ctx, chartArea } = chart;
+
+          const rows = [];
+          chart.data.datasets.forEach((ds, i) => {
+            const meta = chart.getDatasetMeta(i);
+            const r = included[i];
+            const pointA = meta.data[0];
+            const pointB = meta.data[1];
+            if (pointA && pointB && r) rows.push({ r, pointA, pointB });
+          });
+          if (rows.length === 0) return;
+
+          const MIN_GAP = 12; // px between adjacent label rows in one column
+          const showValues = rows.length <= 8;
+
+          function declutter(items) {
+            const sorted = items.slice().sort((a, b) => a.y - b.y);
+            for (const it of sorted) {
+              it.y = Math.min(Math.max(it.y, chartArea.top + 8), chartArea.bottom - 8);
+            }
+            for (let i = 1; i < sorted.length; i++) {
+              if (sorted[i].y < sorted[i - 1].y + MIN_GAP) sorted[i].y = sorted[i - 1].y + MIN_GAP;
+            }
+            if (sorted.length && sorted[sorted.length - 1].y > chartArea.bottom - 8) {
+              sorted[sorted.length - 1].y = chartArea.bottom - 8;
+              for (let i = sorted.length - 2; i >= 0; i--) {
+                if (sorted[i].y > sorted[i + 1].y - MIN_GAP) sorted[i].y = sorted[i + 1].y - MIN_GAP;
+              }
+            }
+            return sorted;
+          }
+
+          ctx.save();
+          ctx.textBaseline = "middle";
+
+          // Window A value labels — own declutter column, independent of
+          // Window B's (fixes the reported left-axis overprint).
+          if (showValues) {
+            const aItems = declutter(rows.map((row) => ({ row, y: row.pointA.y })));
+            ctx.font = "600 11px Inter, sans-serif";
+            ctx.fillStyle = pal.ink;
+            ctx.textAlign = "right";
+            for (const { row, y } of aItems) {
+              const text = labelForValue(metric, row.r.a);
+              const width = ctx.measureText(text).width;
+              // Clamp so the text's LEFT edge never runs past the plot's
+              // left edge (same clamp idiom as scatter's point labels).
+              const x = Math.max(row.pointA.x - 8, chartArea.left + width + 4);
+              ctx.fillText(text, x, y);
+            }
+          }
+
+          // Window B: value label (only below the 8-player threshold) +
+          // player name, sharing ONE declutter column so a player's value and
+          // name always sit on the same row.
+          const bItems = declutter(rows.map((row) => ({ row, y: row.pointB.y })));
+          for (const { row, y } of bItems) {
+            const pointB = row.pointB;
+            let nameStart = pointB.x + 8;
+
+            if (showValues) {
+              ctx.font = "600 11px Inter, sans-serif";
+              const valueText = labelForValue(metric, row.r.b);
+              const valueWidth = ctx.measureText(valueText).width;
+              // Right-endpoint only: clamp the START leftward if needed to
+              // keep the END inside the canvas — never flip to the point's
+              // left (that's the mid-chart placement this fix removes).
+              const valueX = Math.min(pointB.x + 8, chartArea.right - 4 - valueWidth);
+              ctx.textAlign = "left";
+              ctx.fillStyle = pal.ink;
+              ctx.fillText(valueText, valueX, y);
+              nameStart = valueX + valueWidth + 4;
+            }
+
+            ctx.font = "11px Inter, sans-serif";
+            ctx.fillStyle = pal.muted;
+            const nameText = shortenName(row.r.name);
+            const nameWidth = ctx.measureText(nameText).width;
+            const nameX = Math.min(nameStart, chartArea.right - 4 - nameWidth);
+            ctx.textAlign = "left";
+            ctx.fillText(nameText, nameX, y);
+          }
+
+          ctx.restore();
+        },
+      },
+    ],
+  });
+
+  const note =
+    included.length < players.length
+      ? `${included.length} of ${players.length} selected players qualify in both windows.`
+      : null;
+
+  return { excluded, note };
 }
 
 /**

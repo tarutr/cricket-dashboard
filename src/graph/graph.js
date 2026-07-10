@@ -13,6 +13,7 @@
 import { eligibleMetrics } from "../state.js";
 import { getMetric, hasMetricData } from "../metrics.js";
 import { escHtml, escAttr } from "../html.js";
+import { getManifest } from "../db.js";
 import {
   CHART_CAPS,
   createSelection,
@@ -21,20 +22,85 @@ import {
 } from "./players.js";
 import {
   fetchSelectedPlayerMetrics,
+  fetchWindowMetric,
   buildBarChart,
   buildDonutChart,
   buildScatterChart,
   buildRadarSmallMultiples,
+  buildPhasesChart,
+  buildSlopeChart,
 } from "./charts.js";
 import { mountCard } from "./card.js";
 import { eligibleRadarGroups } from "./radarGroups.js";
+import { eligiblePhaseFamilies } from "./phaseFamilies.js";
 
 const CHART_TYPES = [
   { key: "bar", label: "Bar" },
   { key: "donut", label: "Donut" },
   { key: "scatter", label: "Scatter" },
   { key: "radar", label: "Radar" },
+  { key: "phases", label: "Phases" },
+  { key: "slope", label: "Slope" },
 ];
+
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Same tiny option-building idiom src/filters.js uses for its scope-strip
+ * month dropdowns — copied rather than imported (filters.js is table/scope-
+ * strip code, out of this module's ownership) so the Slope chart's Window A/B
+ * pickers offer the identical "Jul 2023"-style vocabulary. */
+function monthOptionsHTML(minMonth, maxMonth, selected) {
+  if (!minMonth || !maxMonth) return "";
+  const [minY, minM] = minMonth.split("-").map(Number);
+  const [maxY, maxM] = maxMonth.split("-").map(Number);
+  const opts = [];
+  for (let y = maxY; y >= minY; y--) {
+    const mFrom = y === maxY ? maxM : 12;
+    const mTo = y === minY ? minM : 1;
+    for (let m = mFrom; m >= mTo; m--) {
+      const val = `${y}-${String(m).padStart(2, "0")}`;
+      opts.push(`<option value="${val}" ${val === selected ? "selected" : ""}>${MONTH_NAMES[m - 1]} ${y}</option>`);
+    }
+  }
+  return opts.join("");
+}
+
+/** "YYYY-MM" -> "Mon YYYY", or null. */
+function monthLabel(yyyymm) {
+  if (!yyyymm) return null;
+  const [y, m] = yyyymm.split("-").map(Number);
+  return `${MONTH_NAMES[m - 1]} ${y}`;
+}
+
+/** A window's {from,to} -> "Mon YYYY–Mon YYYY" (or a single "Mon YYYY" when
+ * from and to are the same month), or null if either bound is unset. */
+function windowLabel(window) {
+  if (!window || !window.from || !window.to) return null;
+  const from = monthLabel(window.from);
+  const to = monthLabel(window.to);
+  return from === to ? from : `${from}–${to}`;
+}
+
+function monthIndex(yyyymm) {
+  const [y, m] = yyyymm.split("-").map(Number);
+  return y * 12 + (m - 1);
+}
+function monthFromIndex(idx) {
+  const y = Math.floor(idx / 12);
+  const m = (idx % 12) + 1;
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+
+/** Dataset-wide date bounds (the manifest's min/max match_date), for the
+ * Slope chart's Window A/B month-dropdown vocabulary — deliberately the FULL
+ * dataset range, not the live filter scope's (narrower) dateFrom/dateTo, same
+ * as the scope strip's own date pickers. */
+function datasetMonthBounds() {
+  const manifest = getManifest();
+  const maxMonth = manifest?.data?.max_match_date ? manifest.data.max_match_date.slice(0, 7) : null;
+  const minMonth = manifest?.data?.min_match_date ? manifest.data.min_match_date.slice(0, 7) : null;
+  return { minMonth, maxMonth };
+}
 
 /** Metrics eligible for the donut chart: additive totals only (Batch 3 fix 4 —
  * an explicit `additive: true` flag on the metric itself, set once in
@@ -135,6 +201,13 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   let scatterXKey = null;
   let scatterYKey = null;
   let radarGroupId = null;
+  let phaseFamilyId = null;
+  let slopeMetricKey = null;
+  // {from,to} "YYYY-MM" pairs, or null until ensureSlopeWindowDefaults() first
+  // sets them (Batch 4 part 1, decision 43) — owner-picked after that, never
+  // silently recomputed out from under the user.
+  let slopeWindowA = null;
+  let slopeWindowB = null;
 
   let seeded = false; // has the selection ever been seeded for the current discipline+scope?
   let lastSeedKey = null;
@@ -199,6 +272,31 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     els.status.hidden = false;
     const btn = els.status.querySelector('[data-role="graph-retry"]');
     if (btn) btn.addEventListener("click", retryFn);
+  }
+
+  /**
+   * Slope's Window A/B defaults (owner ruling, decision 43): "Window A = first
+   * half of the current scope's date range, Window B = second half." Computed
+   * ONCE — the first time the Slope chart type is used this session — from
+   * the live filter scope's dateFrom/dateTo (falling back to the dataset's
+   * full min/max if the scope isn't date-bounded yet). Never recomputed after
+   * that, even if the scope's date range later moves: these are the user's
+   * OWN pickers from that point on, not a mirror of the filter bar's.
+   */
+  function ensureSlopeWindowDefaults() {
+    if (slopeWindowA && slopeWindowB) return;
+    const state = store.get();
+    const { minMonth, maxMonth } = datasetMonthBounds();
+    const from = state.dateFrom || minMonth;
+    const to = state.dateTo || maxMonth;
+    if (!from || !to) return; // bounds not known yet — leave blank, user must pick both ends
+    const fromIdx = monthIndex(from);
+    const toIdx = monthIndex(to);
+    const span = Math.max(0, toIdx - fromIdx);
+    const midIdx = fromIdx + Math.floor(span / 2);
+    slopeWindowA = { from, to: monthFromIndex(midIdx) };
+    const secondFromIdx = Math.min(midIdx + (span > 0 ? 1 : 0), toIdx);
+    slopeWindowB = { from: monthFromIndex(secondFromIdx), to };
   }
 
   // ── Metric controls (rebuilt per chart type) ──────────────────────────────
@@ -299,6 +397,78 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
           scheduleRender({ paramsChanged: true });
         });
       }
+    } else if (chartType === "phases") {
+      const families = eligiblePhaseFamilies(discipline, formats);
+      if (!phaseFamilyId || !families.some((f) => f.id === phaseFamilyId)) {
+        phaseFamilyId = families[0]?.id ?? null;
+      }
+      els.metricControls.innerHTML = `
+        <span class="graph-control-label">Metric family</span>
+        <select class="select graph-metric-select" data-role="phase-family">
+          ${
+            families.length
+              ? families.map((f) => `<option value="${f.id}" ${f.id === phaseFamilyId ? "selected" : ""}>${f.label}</option>`).join("")
+              : `<option value="">No phase families available for this scope</option>`
+          }
+        </select>
+      `;
+      const sel = els.metricControls.querySelector('[data-role="phase-family"]');
+      if (sel) {
+        sel.addEventListener("change", (e) => {
+          phaseFamilyId = e.target.value;
+          scheduleRender({ paramsChanged: true });
+        });
+      }
+    } else if (chartType === "slope") {
+      const metrics = eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent");
+      if (!slopeMetricKey || !metrics.some((m) => m.key === slopeMetricKey)) {
+        const preferredKey = discipline === "batting" ? "strike_rate" : "economy";
+        slopeMetricKey = (metrics.find((m) => m.key === preferredKey) || metrics[0])?.key ?? null;
+      }
+      ensureSlopeWindowDefaults();
+      const { minMonth, maxMonth } = datasetMonthBounds();
+      els.metricControls.innerHTML = `
+        <span class="graph-control-label">Metric</span>
+        <select class="select graph-metric-select" data-role="slope-metric">
+          ${
+            metrics.length
+              ? metrics.map((m) => `<option value="${m.key}" ${m.key === slopeMetricKey ? "selected" : ""}>${m.label}</option>`).join("")
+              : `<option value="">No rate/percent metrics available for this scope</option>`
+          }
+        </select>
+        <span class="graph-control-label">Window A</span>
+        <div class="date-range graph-slope-range">
+          <select class="select" data-role="slope-a-from" aria-label="Window A from">${monthOptionsHTML(minMonth, maxMonth, slopeWindowA?.from)}</select>
+          <span class="date-range__sep">–</span>
+          <select class="select" data-role="slope-a-to" aria-label="Window A to">${monthOptionsHTML(minMonth, maxMonth, slopeWindowA?.to)}</select>
+        </div>
+        <span class="graph-control-label">Window B</span>
+        <div class="date-range graph-slope-range">
+          <select class="select" data-role="slope-b-from" aria-label="Window B from">${monthOptionsHTML(minMonth, maxMonth, slopeWindowB?.from)}</select>
+          <span class="date-range__sep">–</span>
+          <select class="select" data-role="slope-b-to" aria-label="Window B to">${monthOptionsHTML(minMonth, maxMonth, slopeWindowB?.to)}</select>
+        </div>
+      `;
+      const metricSel = els.metricControls.querySelector('[data-role="slope-metric"]');
+      if (metricSel) {
+        metricSel.addEventListener("change", (e) => {
+          slopeMetricKey = e.target.value;
+          scheduleRender({ paramsChanged: true });
+        });
+      }
+      const bindWindowSelect = (role, setter) => {
+        const el = els.metricControls.querySelector(`[data-role="${role}"]`);
+        if (el) {
+          el.addEventListener("change", (e) => {
+            setter(e.target.value);
+            scheduleRender({ paramsChanged: true });
+          });
+        }
+      };
+      bindWindowSelect("slope-a-from", (v) => (slopeWindowA = { ...slopeWindowA, from: v }));
+      bindWindowSelect("slope-a-to", (v) => (slopeWindowA = { ...slopeWindowA, to: v }));
+      bindWindowSelect("slope-b-from", (v) => (slopeWindowB = { ...slopeWindowB, from: v }));
+      bindWindowSelect("slope-b-to", (v) => (slopeWindowB = { ...slopeWindowB, to: v }));
     }
   }
 
@@ -384,6 +554,8 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     donut: "Share of a total — needs a countable stat",
     scatter: "Two stats mapped against each other",
     radar: "Player shape profiles, side by side",
+    phases: "One stat across match phases, side by side",
+    slope: "One stat, two date windows — who rose, who fell",
   };
 
   function syncChartTypeButtons() {
@@ -545,7 +717,42 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       const group = groups.find((g) => g.id === radarGroupId) || groups[0];
       return group ? { type: "radar", discipline, group, playerCount, roster } : null;
     }
+    if (chartType === "phases") {
+      const families = eligiblePhaseFamilies(discipline, state.formats);
+      const family = families.find((f) => f.id === phaseFamilyId) || families[0];
+      return family ? { type: "phases", discipline, family, playerCount, roster } : null;
+    }
+    if (chartType === "slope") {
+      const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
+      const metric = metrics.find((m) => m.key === slopeMetricKey) || metrics[0];
+      return metric
+        ? {
+            type: "slope",
+            discipline,
+            metric,
+            windowA: slopeWindowA,
+            windowB: slopeWindowB,
+            windowALabel: windowLabel(slopeWindowA),
+            windowBLabel: windowLabel(slopeWindowB),
+            playerCount,
+            roster,
+          }
+        : null;
+    }
     return null;
+  }
+
+  /** The scope/footer text for the card: the honest filter-scope sentence,
+   * plus — for Slope ONLY — the two explicit date windows (§8.4: the footer
+   * must state exactly what's applied, and the windows are real parameters
+   * of that chart the global scope sentence knows nothing about). */
+  function buildFooterScope(config) {
+    const base = store.describeScope();
+    if (!config || config.type !== "slope") return base;
+    const a = config.windowALabel ?? windowLabel(config.windowA);
+    const b = config.windowBLabel ?? windowLabel(config.windowB);
+    if (!a || !b) return base;
+    return `${base} · Window A: ${a} · Window B: ${b}`;
   }
 
   // ── Rendering ────────────────────────────────────────────────────────────
@@ -582,7 +789,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       // ACTUAL (empty) roster rather than leaving whatever a previous real
       // chart said — the card must never claim a chart it isn't drawing.
       const titleCfg = buildTitleOnlyConfig(0);
-      if (titleCfg) card.regenerate(titleCfg, store.describeScope());
+      if (titleCfg) card.regenerate(titleCfg, buildFooterScope(titleCfg));
       renderExclusions([], "No players selected. Add players or reset to the filtered set.");
       return;
     }
@@ -606,7 +813,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       // — 6 players" over a 1-player bar placeholder), which is exactly the
       // "claims a chart it isn't drawing" bug this batch fixes.
       const titleCfg = buildTitleOnlyConfig(players.length);
-      if (titleCfg) card.regenerate(titleCfg, store.describeScope());
+      if (titleCfg) card.regenerate(titleCfg, buildFooterScope(titleCfg));
       card.showPlaceholder(`Add at least ${capDef.min} player${capDef.min === 1 ? "" : "s"} to draw this chart.`);
       renderExclusions([]);
       return;
@@ -616,9 +823,72 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     showStatus("Running query…");
 
     try {
+      const roster = currentRosterMeta(discipline);
+
+      // Slope is handled entirely separately from the bar/donut/scatter/
+      // radar/phases chain below: it needs TWO independent queries (one per
+      // date window, via fetchWindowMetric — see charts.js) instead of the
+      // single fetchSelectedPlayerMetrics call every other chart type shares,
+      // and its charted player count (players who qualify in BOTH windows)
+      // isn't known until after those queries return, unlike every other type
+      // where playerCount is just the selection size.
+      if (chartType === "slope") {
+        const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
+        const metric = metrics.find((m) => m.key === slopeMetricKey) || metrics[0];
+        const windowsReady = Boolean(slopeWindowA?.from && slopeWindowA?.to && slopeWindowB?.from && slopeWindowB?.to);
+        if (!metric || !windowsReady) {
+          hideStatus();
+          if (chartRef.current) {
+            chartRef.current.destroy();
+            chartRef.current = null;
+          }
+          card.hidePlaceholder();
+          renderExclusions([], metric ? "Pick both date windows to draw this chart." : "No rate/percent metric available for this scope.");
+          return;
+        }
+
+        const ids = players.map((p) => p.id);
+        const [rowsA, rowsB] = await Promise.all([
+          fetchWindowMetric(state, slopeWindowA, ids, metric),
+          fetchWindowMetric(state, slopeWindowB, ids, metric),
+        ]);
+        if (token !== loadToken) return;
+        hideStatus();
+
+        const canvas = card.getCanvas();
+        const labelA = windowLabel(slopeWindowA);
+        const labelB = windowLabel(slopeWindowB);
+        const result = buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rowsA, rowsB, players });
+        renderExclusions(result?.excluded ?? [], result?.note);
+
+        const config = {
+          type: "slope",
+          discipline,
+          metric,
+          windowA: slopeWindowA,
+          windowB: slopeWindowB,
+          windowALabel: labelA,
+          windowBLabel: labelB,
+          // The honest count for THIS chart's title is how many actually got
+          // drawn (qualify in both windows), not the raw selection size.
+          playerCount: players.length - (result?.excluded?.length ?? 0),
+          // If qualification dropped anyone, the survivors are no longer
+          // exactly "the top N by <seed metric>" (a mid-ranked player may have
+          // dropped while a lower-ranked one survived) — force the plain
+          // "N players" phrasing rather than overclaim (§8.4).
+          roster: (result?.excluded?.length ?? 0) > 0 ? { ...roster, dirty: true } : roster,
+        };
+        if (pendingRegenerate) {
+          card.regenerate(config, buildFooterScope(config));
+          pendingRegenerate = false;
+        } else {
+          card.updateFooterScope(buildFooterScope(config));
+        }
+        return;
+      }
+
       let metricKeys = [];
       let config;
-      const roster = currentRosterMeta(discipline);
 
       if (chartType === "bar") {
         const metric = getMetric(barMetricKey, discipline);
@@ -651,6 +921,17 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
         const metrics = group.metricKeys.map((k) => getMetric(k, discipline)).filter(Boolean);
         metricKeys = metrics.map((m) => m.key);
         config = { type: "radar", discipline, group, metrics, playerCount: players.length, roster };
+      } else if (chartType === "phases") {
+        const families = eligiblePhaseFamilies(discipline, state.formats);
+        const family = families.find((f) => f.id === phaseFamilyId) || families[0];
+        if (!family) {
+          hideStatus();
+          renderExclusions([], "No phase metric families available for this scope.");
+          return;
+        }
+        const metrics = family.members.map((mm) => getMetric(mm.key, discipline)).filter(Boolean);
+        metricKeys = metrics.map((m) => m.key);
+        config = { type: "phases", discipline, family, metrics, playerCount: players.length, roster };
       }
 
       const rowsById = await fetchSelectedPlayerMetrics(state, players.map((p) => p.id), metricKeys);
@@ -667,15 +948,26 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
         result = buildScatterChart(canvas, chartRef, { metricX: config.metricX, metricY: config.metricY, rowsById, players });
       } else if (config.type === "radar") {
         result = buildRadarSmallMultiples(canvas, chartRef, { group: config.group, metrics: config.metrics, rowsById, players });
+      } else if (config.type === "phases") {
+        result = buildPhasesChart(canvas, chartRef, { family: config.family, metrics: config.metrics, rowsById, players });
       }
 
-      renderExclusions(result?.excluded ?? []);
+      renderExclusions(result?.excluded ?? [], result?.note);
+
+      // Exclusions (no data for the metric/family) mean the drawn set is no
+      // longer exactly the seeded "top N by X" — drop to honest "N players"
+      // phrasing and count only what's actually drawn (§8.4).
+      const excludedCount = result?.excluded?.length ?? 0;
+      if (excludedCount > 0) {
+        config.playerCount = Math.max(0, config.playerCount - excludedCount);
+        config.roster = { ...config.roster, dirty: true };
+      }
 
       if (pendingRegenerate) {
-        card.regenerate(config, store.describeScope());
+        card.regenerate(config, buildFooterScope(config));
         pendingRegenerate = false;
       } else {
-        card.updateFooterScope(store.describeScope());
+        card.updateFooterScope(buildFooterScope(config));
       }
     } catch (e) {
       if (token !== loadToken) return;

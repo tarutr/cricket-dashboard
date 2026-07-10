@@ -106,6 +106,25 @@ export function autoTitle(config) {
   if (type === "radar") {
     return rankedCountPhrase(config.group.label, config.playerCount, config.roster, null);
   }
+  if (type === "phases") {
+    // Same "group, not a single displayed metric" shape as radar — a family
+    // is several metrics at once, so there's no single key that could
+    // coincidentally match a seed's ranking metric (always "by X" or "N
+    // players", never "top N" bare).
+    return rankedCountPhrase(config.family.label, config.playerCount, config.roster, null);
+  }
+  if (type === "slope") {
+    // Batch 4 part 1 (decision 43): "<Metric> — <window A> vs <window B>",
+    // then the SAME top-N/by-X/N-players count phrasing every other ranked
+    // chart type uses — windowALabel/windowBLabel are pre-formatted "Mon
+    // YYYY–Mon YYYY" strings graph.js computes from its own date pickers (not
+    // global filter state), so this module needs no month-name logic of its
+    // own.
+    const windowsPart =
+      config.windowALabel && config.windowBLabel ? `${config.windowALabel} vs ${config.windowBLabel}` : "pick both windows";
+    const base = `${config.metric.label} — ${windowsPart}`;
+    return rankedCountPhrase(base, config.playerCount, config.roster, config.metric.key);
+  }
   return "Untitled chart";
 }
 
@@ -119,6 +138,12 @@ function regenKeyFor(config) {
   if (type === "bar" || type === "donut") return JSON.stringify([type, config.metric.key]);
   if (type === "scatter") return JSON.stringify([type, config.metricX.key, config.metricY.key]);
   if (type === "radar") return JSON.stringify([type, config.group.id]);
+  if (type === "phases") return JSON.stringify([type, config.family.id]);
+  // Slope's title embeds the window ranges themselves, so a window-date
+  // change must invalidate a manually-edited title exactly like a metric
+  // change does — unlike bar/donut/radar, where only the roster size moves
+  // and a custom title should survive that.
+  if (type === "slope") return JSON.stringify([type, config.metric.key, config.windowALabel, config.windowBLabel]);
   return JSON.stringify([type]);
 }
 

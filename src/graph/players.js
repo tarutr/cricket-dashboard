@@ -28,6 +28,12 @@ export const CHART_CAPS = {
   donut: { min: 2, max: 10 },
   radar: { min: 1, max: 6 },
   scatter: { min: 5, max: 60 },
+  // Batch 4 part 1 (decision 43): Phases (grouped bars, one group per player —
+  // gets crowded fast, so a tighter ceiling than bar's) and Slope (a
+  // two-column line-per-player chart — same "needs at least two to compare"
+  // floor as bar/donut, roomier ceiling since each player is just one line).
+  phases: { min: 2, max: 8 },
+  slope: { min: 2, max: 12 },
 };
 
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };

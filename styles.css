@@ -1232,14 +1232,19 @@ a { color: var(--color-accent); }
   color: var(--color-muted);
 }
 
-.graph-chart-type { display: flex; }
+/* Six chart types: a 3×2 grid inside the segmented pill (one row clips at
+   the sidebar's width). Row borders are hand-managed because the base
+   `.segmented__btn + .segmented__btn { border-left }` rule assumes one row. */
+.graph-chart-type { display: flex; flex-wrap: wrap; }
 .graph-chart-type .segmented__btn {
-  flex: 1 1 0;
-  min-width: 0; /* let segments shrink below content width so "Radar" isn't clipped */
+  flex: 1 1 33.33%;
+  min-width: 0;
   padding-left: var(--space-2);
   padding-right: var(--space-2);
   text-align: center;
 }
+.graph-chart-type .segmented__btn:nth-child(n + 4) { border-top: 1px solid var(--color-line-strong); }
+.graph-chart-type .segmented__btn:nth-child(4) { border-left: none; }
 
 /* Picker caption (Batch 3, decision 43): one line under the chart-type
    control describing what the selected chart type is for. */
@@ -1260,6 +1265,12 @@ a { color: var(--color-accent); }
 .graph-bar-style .segmented__btn { flex: 1; }
 
 .graph-metric-select { width: 100%; }
+
+/* Slope chart's Window A/B month pickers (Batch 4 part 1, decision 43) — the
+   scope strip's own `.date-range`/`.select` markup, reused verbatim, plus a
+   flex-shrink allowance since the sidebar column (300px) is much narrower
+   than the top filter bar these classes were first written for. */
+.graph-slope-range .select { flex: 1 1 0; min-width: 0; }
 
 .graph-player-count { font-size: 0.8rem; color: var(--color-muted); }
 
