@@ -24,7 +24,7 @@ import {
   buildBarChart,
   buildDonutChart,
   buildScatterChart,
-  buildRadarChart,
+  buildRadarSmallMultiples,
 } from "./charts.js";
 import { mountCard } from "./card.js";
 import { eligibleRadarGroups } from "./radarGroups.js";
@@ -56,6 +56,14 @@ export function mountGraph(container, store, { onRequery } = {}) {
           <div class="segmented graph-chart-type" data-role="chart-type" role="group" aria-label="Chart type">
             ${CHART_TYPES.map((t) => `<button type="button" class="segmented__btn" data-value="${t.key}">${t.label}</button>`).join("")}
           </div>
+          <p class="graph-chart-type-caption" data-role="chart-type-caption"></p>
+          <div class="graph-bar-style" data-role="bar-style" hidden>
+            <span class="graph-control-label">Style</span>
+            <div class="segmented segmented--small" data-role="bar-style-toggle" role="group" aria-label="Bar style">
+              <button type="button" class="segmented__btn" data-value="bars">Bars</button>
+              <button type="button" class="segmented__btn" data-value="dots">Dots</button>
+            </div>
+          </div>
         </div>
 
         <div class="graph-control-group" data-role="metric-controls"></div>
@@ -83,6 +91,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
         <div class="graph-exclusions" data-role="exclusions" hidden></div>
         <div class="graph-export">
           <button type="button" class="btn btn--primary" data-role="export-png">Export PNG</button>
+          <button type="button" class="btn btn--ghost" data-role="copy-png" hidden>Copy PNG</button>
           <span class="graph-export__status" data-role="export-status"></span>
         </div>
       </div>
@@ -91,6 +100,9 @@ export function mountGraph(container, store, { onRequery } = {}) {
 
   const els = {
     chartType: container.querySelector('[data-role="chart-type"]'),
+    chartTypeCaption: container.querySelector('[data-role="chart-type-caption"]'),
+    barStyleGroup: container.querySelector('[data-role="bar-style"]'),
+    barStyleToggle: container.querySelector('[data-role="bar-style-toggle"]'),
     metricControls: container.querySelector('[data-role="metric-controls"]'),
     playerCount: container.querySelector('[data-role="player-count"]'),
     playerSearch: container.querySelector('[data-role="player-search"]'),
@@ -102,14 +114,20 @@ export function mountGraph(container, store, { onRequery } = {}) {
     cardHost: container.querySelector('[data-role="card-host"]'),
     exclusions: container.querySelector('[data-role="exclusions"]'),
     exportBtn: container.querySelector('[data-role="export-png"]'),
+    copyPngBtn: container.querySelector('[data-role="copy-png"]'),
     exportStatus: container.querySelector('[data-role="export-status"]'),
   };
 
   const card = mountCard(els.cardHost);
   const chartRef = { current: null };
 
+  // Copy-to-clipboard is feature-detected (Clipboard API + ClipboardItem) —
+  // hidden entirely on unsupported browsers rather than shown disabled.
+  if (card.canCopyPNG()) els.copyPngBtn.hidden = false;
+
   // ── Local chart config state (separate from the global filter store) ─────
   let chartType = "bar";
+  let barStyle = "bars"; // "bars" | "dots" (lollipop) — bar chart only
   let barMetricKey = null;
   let donutMetricKey = null;
   let scatterXKey = null;
@@ -121,7 +139,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
   let loadToken = 0;
 
   const selection = createSelection({
-    getCap: () => CHART_CAPS[chartType],
+    getCap: () => CHART_CAPS[chartType].max,
     onChange: () => {
       renderPlayerList();
       scheduleRender({ paramsChanged: true });
@@ -261,7 +279,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
 
   function renderPlayerList() {
     const players = selection.get();
-    const cap = CHART_CAPS[chartType];
+    const cap = CHART_CAPS[chartType].max;
     els.playerCount.textContent = `${players.length} / ${cap}`;
     els.playerList.innerHTML = players
       .map(
@@ -290,7 +308,10 @@ export function mountGraph(container, store, { onRequery } = {}) {
     }
     searchDebounce = setTimeout(async () => {
       try {
-        const excludeIds = selection.get().map((p) => p.id);
+        // Full selection (not just the active/visible slice) — a player
+        // hidden by a smaller cap is still selected and shouldn't show up as
+        // addable in search (Batch 3 cap-switch-memory fix).
+        const excludeIds = selection.getFull().map((p) => p.id);
         const results = await searchPlayers(store, term, excludeIds);
         els.playerSearchResults.innerHTML =
           results
@@ -330,17 +351,50 @@ export function mountGraph(container, store, { onRequery } = {}) {
 
   // ── Chart type switching ──────────────────────────────────────────────────
 
+  // Batch 3 (graphs, part 1) picker captions — decision 43, exact strings.
+  const CHART_TYPE_CAPTIONS = {
+    bar: "Rank players on one stat",
+    donut: "Share of a total — needs a countable stat",
+    scatter: "Two stats mapped against each other",
+    radar: "Player shape profiles, side by side",
+  };
+
   function syncChartTypeButtons() {
     els.chartType.querySelectorAll(".segmented__btn").forEach((btn) => {
       btn.classList.toggle("is-active", btn.dataset.value === chartType);
     });
+    els.chartTypeCaption.textContent = CHART_TYPE_CAPTIONS[chartType] || "";
   }
+
+  // "Bars ⇄ Dots" style toggle — bar chart only (lollipop rendering, same
+  // data/caps, purely a chart.js rendering choice — see charts.js). This is
+  // NOT a chart "parameter" for the paper card's honesty rule (title/subtitle
+  // describe the metric and type, not the drawing style), so switching it
+  // re-renders without forcing a title/subtitle regeneration.
+  function syncBarStyleVisibility() {
+    els.barStyleGroup.hidden = chartType !== "bar";
+  }
+  function syncBarStyleButtons() {
+    els.barStyleToggle.querySelectorAll(".segmented__btn").forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.value === barStyle);
+    });
+  }
+  syncBarStyleButtons();
+
+  els.barStyleToggle.addEventListener("click", (e) => {
+    const btn = e.target.closest(".segmented__btn");
+    if (!btn || btn.dataset.value === barStyle) return;
+    barStyle = btn.dataset.value;
+    syncBarStyleButtons();
+    scheduleRender();
+  });
 
   els.chartType.addEventListener("click", (e) => {
     const btn = e.target.closest(".segmented__btn");
     if (!btn || btn.dataset.value === chartType) return;
     chartType = btn.dataset.value;
     syncChartTypeButtons();
+    syncBarStyleVisibility();
     clearCapNote();
     renderMetricControls();
     selection.applyCapForNewType();
@@ -354,6 +408,12 @@ export function mountGraph(container, store, { onRequery } = {}) {
     els.exportStatus.textContent = "";
     const result = await card.exportPNG(els.exportBtn);
     els.exportStatus.textContent = result.ok ? `Saved ${result.filename}` : `Export failed: ${result.error?.message ?? "unknown error"}`;
+  });
+
+  els.copyPngBtn.addEventListener("click", async () => {
+    els.exportStatus.textContent = "";
+    const result = await card.copyPNG(els.copyPngBtn);
+    els.exportStatus.textContent = result.ok ? "Copied to clipboard" : `Copy failed: ${result.error?.message ?? "unknown error"}`;
   });
 
   // ── Seeding ───────────────────────────────────────────────────────────────
@@ -395,7 +455,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
     const key = scopeSeedKey(state);
     if (!force && seeded && key === lastSeedKey) return;
     try {
-      const cap = CHART_CAPS[chartType];
+      const cap = CHART_CAPS[chartType].max;
       const seedPlayers = await seedFromFilteredSet(store, cap);
       seeded = true;
       lastSeedKey = key;
@@ -431,6 +491,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
 
     if (players.length === 0) {
       hideStatus();
+      card.hidePlaceholder();
       if (chartRef.current) {
         chartRef.current.destroy();
         chartRef.current = null;
@@ -439,6 +500,25 @@ export function mountGraph(container, store, { onRequery } = {}) {
       return;
     }
 
+    // Batch 3 (graphs, part 1) — per-chart-type MIN, not just max (decision
+    // 43): below it the chart can't be meaningfully drawn, so the paper card
+    // shows a short note in place of a chart rather than attempting to draw
+    // e.g. a 1-bar "ranking". (For radar, min is 1, so this is already
+    // subsumed by the players.length === 0 branch above — kept anyway so the
+    // rule reads the same for every chart type.)
+    const capDef = CHART_CAPS[chartType];
+    if (players.length < capDef.min) {
+      hideStatus();
+      if (chartRef.current) {
+        chartRef.current.destroy();
+        chartRef.current = null;
+      }
+      card.showPlaceholder(`Add at least ${capDef.min} player${capDef.min === 1 ? "" : "s"} to draw this chart.`);
+      renderExclusions([]);
+      return;
+    }
+
+    card.hidePlaceholder();
     showStatus("Running query…");
 
     try {
@@ -449,7 +529,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
         const metric = getMetric(barMetricKey, discipline);
         if (!metric) { hideStatus(); return; }
         metricKeys = [metric.key];
-        config = { type: "bar", discipline, metric, playerCount: players.length };
+        config = { type: "bar", discipline, metric, playerCount: players.length, style: barStyle };
       } else if (chartType === "donut") {
         const metric = getMetric(donutMetricKey, discipline);
         if (!metric) {
@@ -485,13 +565,13 @@ export function mountGraph(container, store, { onRequery } = {}) {
       let result;
       const canvas = card.getCanvas();
       if (config.type === "bar") {
-        result = buildBarChart(canvas, chartRef, { metric: config.metric, rowsById, players });
+        result = buildBarChart(canvas, chartRef, { metric: config.metric, rowsById, players, style: config.style });
       } else if (config.type === "donut") {
         result = buildDonutChart(canvas, chartRef, { metric: config.metric, rowsById, players });
       } else if (config.type === "scatter") {
         result = buildScatterChart(canvas, chartRef, { metricX: config.metricX, metricY: config.metricY, rowsById, players });
       } else if (config.type === "radar") {
-        result = buildRadarChart(canvas, chartRef, { group: config.group, metrics: config.metrics, rowsById, players });
+        result = buildRadarSmallMultiples(canvas, chartRef, { group: config.group, metrics: config.metrics, rowsById, players });
       }
 
       renderExclusions(result?.excluded ?? []);
@@ -520,6 +600,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
 
   async function onShow() {
     syncChartTypeButtons();
+    syncBarStyleVisibility();
     renderMetricControls();
     await seedSelection();
     scheduleRender({ paramsChanged: true });

@@ -1223,7 +1223,31 @@ a { color: var(--color-accent); }
 }
 
 .graph-chart-type { display: flex; }
-.graph-chart-type .segmented__btn { flex: 1; }
+.graph-chart-type .segmented__btn {
+  flex: 1 1 0;
+  min-width: 0; /* let segments shrink below content width so "Radar" isn't clipped */
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+  text-align: center;
+}
+
+/* Picker caption (Batch 3, decision 43): one line under the chart-type
+   control describing what the selected chart type is for. */
+.graph-chart-type-caption {
+  font-size: 0.78rem;
+  color: var(--color-muted);
+  margin: 0;
+}
+
+/* "Bars ⇄ Dots" style toggle — bar chart only, shown/hidden by graph.js. */
+.graph-bar-style {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+.graph-bar-style .segmented { display: flex; }
+.graph-bar-style .segmented__btn { flex: 1; }
 
 .graph-metric-select { width: 100%; }
 
@@ -1332,6 +1356,7 @@ a { color: var(--color-accent); }
 }
 
 .paper-card__title {
+  position: relative;
   margin: 0;
   font-family: var(--font-display);
   font-weight: 700;
@@ -1342,6 +1367,7 @@ a { color: var(--color-accent); }
 }
 
 .paper-card__subtitle {
+  position: relative;
   margin: 0;
   font-size: 0.95rem;
   color: var(--paper-sub);
@@ -1352,6 +1378,31 @@ a { color: var(--color-accent); }
 .paper-card__subtitle:hover { background: rgba(27, 36, 48, 0.04); border-radius: 3px; }
 .paper-card__title:focus,
 .paper-card__subtitle:focus { background: rgba(27, 36, 48, 0.06); border-radius: 3px; }
+
+/* Edit affordance (Batch 3, decision 43): title/subtitle are contenteditable
+   but look like plain text — a small pencil glyph on hover/focus (CSS only)
+   makes that discoverable, alongside the title="Click to edit" tooltip set
+   in card.js. Sits in the card's own right padding (--space-6), never
+   overlapping the text itself. */
+.paper-card__title::after,
+.paper-card__subtitle::after {
+  content: "✎";
+  position: absolute;
+  top: 50%;
+  right: -1.3em;
+  transform: translateY(-50%);
+  font-size: 0.75em;
+  color: var(--paper-sub);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+.paper-card__title:hover::after,
+.paper-card__title:focus::after,
+.paper-card__subtitle:hover::after,
+.paper-card__subtitle:focus::after {
+  opacity: 1;
+}
 
 /* The paper card is a fixed light "printed artifact" regardless of app
    theme (see .paper-card above) — its focus ring is a fixed color to
@@ -1376,6 +1427,72 @@ a { color: var(--color-accent); }
 }
 
 .paper-card__chart-area canvas { width: 100% !important; height: 100% !important; }
+
+/* Below-minimum-players state (Batch 3, decision 43): shown in place of a
+   chart when the selection is under the active chart type's minimum. */
+.paper-card__placeholder {
+  position: absolute;
+  inset: var(--space-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  margin: 0;
+  color: var(--paper-sub);
+  font-style: italic;
+  font-size: 0.95rem;
+}
+
+/* Radar small multiples (Batch 3, decision 43): one mini-radar per player,
+   built dynamically inside the chart-area (see charts.js's
+   buildRadarSmallMultiples) — lives inside .paper-card so html2canvas'
+   card-level PNG export/copy captures the whole grid. 3 cols desktop, 2
+   cols tablet, 1 col on small phones (mirrors the chart-area's own
+   breakpoints below). */
+.paper-card__radar-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-auto-rows: 1fr;
+  gap: var(--space-3);
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.paper-card__radar-mini {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  min-height: 0;
+}
+
+.paper-card__radar-mini-canvas-wrap {
+  position: relative;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 110px;
+}
+.paper-card__radar-mini-canvas-wrap canvas { width: 100% !important; height: 100% !important; }
+
+.paper-card__radar-mini-name {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--paper-ink);
+  text-align: center;
+}
+
+/* Breakpoints mirror the paper card's own existing ones below (900px is
+   where the graph builder stacks to one column; 480px is where the card's
+   own padding/chart-area height already shrink for phones). */
+@media (max-width: 900px) {
+  .paper-card__radar-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+  .paper-card__radar-grid { grid-template-columns: 1fr; }
+}
 
 .paper-card__footer {
   display: flex;

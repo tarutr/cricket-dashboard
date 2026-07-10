@@ -17,11 +17,17 @@ import { buildScopeClauses } from "../filters.js";
 import { buildQuery } from "../table.js";
 import { escSql as esc } from "../state.js";
 
+// Batch 3 (graphs, part 1): caps became {min, max} per owner ruling
+// (decision 43) — below `min` the chart can't be meaningfully drawn (the
+// paper card shows a short note instead, see graph.js); `max` is the
+// existing per-chart-type ceiling. Consumers that only ever needed the
+// ceiling (this module's own createSelection, seeding) read `.max`; the
+// export name itself is unchanged (task brief: don't rename it).
 export const CHART_CAPS = {
-  bar: 15,
-  donut: 10,
-  radar: 6,
-  scatter: 60,
+  bar: { min: 2, max: 15 },
+  donut: { min: 2, max: 10 },
+  radar: { min: 1, max: 6 },
+  scatter: { min: 5, max: 60 },
 };
 
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
@@ -126,31 +132,52 @@ export async function searchPlayers(store, searchText, excludeIds) {
 
 /**
  * Selection controller: an ordered list of {id, name}, capped per active
- * chart type. `getCap()` returns the current cap (caller wires this to the
- * active chart type); truncation always calls `onTruncate(note)` so the UI
- * can show a visible note — never a silent drop.
+ * chart type. `getCap()` returns the current cap's MAX (caller wires this to
+ * the active chart type's CHART_CAPS[...].max); truncation is never
+ * destructive — see below — and always calls `onTruncate(note)` when players
+ * are hidden by a smaller cap, so the UI can show a visible note.
+ *
+ * Batch 3 (graphs, part 1) fix — cap-switch memory: `players` is the FULL
+ * ordered selection and is never sliced/discarded on a chart-type switch.
+ * `get()` (used for rendering/querying/the sidebar list) derives the ACTIVE
+ * set as the first `cap()` entries; switching to a chart type whose cap is
+ * >= the full list's length brings every hidden player back automatically,
+ * with no re-seed or re-add needed. Previously `setAll`/`applyCapForNewType`
+ * both spliced `players` itself, so e.g. bar (15) -> donut (10) -> bar left
+ * only 10 — the other 5 were gone for good.
  */
 export function createSelection({ getCap, onChange, onTruncate }) {
-  let players = []; // [{id, name}]
+  let players = []; // FULL ordered list — never destructively truncated
 
   function cap() {
     return getCap();
   }
 
-  function truncateIfNeeded(reasonLabel) {
+  function activeCount() {
+    return Math.min(players.length, cap());
+  }
+
+  function maybeNoteTruncation(reasonLabel) {
     const c = cap();
     if (players.length > c) {
-      const dropped = players.length - c;
-      players = players.slice(0, c);
+      const hidden = players.length - c;
       if (onTruncate) {
         onTruncate(
-          `${reasonLabel} caps this chart at ${c} players — ${dropped} player${dropped === 1 ? "" : "s"} removed from the end of the selection.`
+          `${reasonLabel} caps this chart at ${c} players — ${hidden} player${hidden === 1 ? "" : "s"} not shown here — they'll come back when you switch to a larger chart type.`
         );
       }
     }
   }
 
+  /** The ACTIVE set: the first `cap()` entries of the full selection. This is
+   * what gets rendered, queried, and shown in the sidebar list. */
   function get() {
+    return players.slice(0, cap());
+  }
+
+  /** The FULL selection, including any players currently hidden by a smaller
+   * cap — used to keep manual add/search from re-adding a hidden player. */
+  function getFull() {
     return players.slice();
   }
 
@@ -160,13 +187,13 @@ export function createSelection({ getCap, onChange, onTruncate }) {
 
   function setAll(newPlayers) {
     players = newPlayers.slice();
-    truncateIfNeeded("The seeded set");
+    maybeNoteTruncation("The seeded set");
     if (onChange) onChange();
   }
 
   function add(player) {
     if (has(player.id)) return { ok: false, reason: "already-selected" };
-    if (players.length >= cap()) {
+    if (activeCount() >= cap()) {
       return { ok: false, reason: "cap", cap: cap() };
     }
     players.push(player);
@@ -180,10 +207,12 @@ export function createSelection({ getCap, onChange, onTruncate }) {
     if (players.length !== before && onChange) onChange();
   }
 
-  /** Re-apply the cap for a NEW chart type (called on type switch). */
+  /** Re-evaluate the cap note for a NEW chart type (called on type switch).
+   * No longer mutates `players` — the full selection is preserved and the
+   * active set is simply re-derived by `get()` against the new cap. */
   function applyCapForNewType() {
-    truncateIfNeeded("This chart type");
+    maybeNoteTruncation("This chart type");
   }
 
-  return { get, has, setAll, add, remove, applyCapForNewType };
+  return { get, getFull, has, setAll, add, remove, applyCapForNewType };
 }

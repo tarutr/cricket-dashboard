@@ -98,10 +98,11 @@ export function mountCard(container) {
   container.innerHTML = `
     <div class="paper-card" data-role="paper-card">
       <div class="paper-card__eyebrow" data-role="eyebrow"></div>
-      <h2 class="paper-card__title" data-role="title" contenteditable="true" spellcheck="false"></h2>
-      <p class="paper-card__subtitle" data-role="subtitle" contenteditable="true" spellcheck="false"></p>
+      <h2 class="paper-card__title" data-role="title" contenteditable="true" spellcheck="false" title="Click to edit"></h2>
+      <p class="paper-card__subtitle" data-role="subtitle" contenteditable="true" spellcheck="false" title="Click to edit"></p>
       <div class="paper-card__chart-area" data-role="chart-area">
         <canvas data-role="canvas"></canvas>
+        <p class="paper-card__placeholder" data-role="placeholder" hidden></p>
       </div>
       <div class="paper-card__footer">
         <span class="paper-card__scope" data-role="footer-scope"></span>
@@ -116,6 +117,7 @@ export function mountCard(container) {
     title: container.querySelector('[data-role="title"]'),
     subtitle: container.querySelector('[data-role="subtitle"]'),
     canvas: container.querySelector('[data-role="canvas"]'),
+    placeholder: container.querySelector('[data-role="placeholder"]'),
     footerScope: container.querySelector('[data-role="footer-scope"]'),
   };
 
@@ -163,6 +165,24 @@ export function mountCard(container) {
     return els.canvas;
   }
 
+  /**
+   * Batch 3 (graphs, part 1) min-cap handling (decision 43): when a chart
+   * type's player selection is below its minimum, the paper card shows a
+   * short honest note in place of a chart rather than attempting to draw one
+   * (e.g. a 1-bar "ranking"). The canvas is hidden (not removed) so a
+   * subsequent real chart just un-hides it.
+   */
+  function showPlaceholder(message) {
+    els.canvas.hidden = true;
+    els.placeholder.textContent = message;
+    els.placeholder.hidden = false;
+  }
+  function hidePlaceholder() {
+    els.canvas.hidden = false;
+    els.placeholder.hidden = true;
+    els.placeholder.textContent = "";
+  }
+
   function isEdited() {
     return titleEdited || subtitleEdited;
   }
@@ -206,12 +226,55 @@ export function mountCard(container) {
     }
   }
 
+  /** Feature-detect the Clipboard image API — the "Copy PNG" button is
+   * hidden entirely (not shown disabled) on browsers without it. */
+  function canCopyPNG() {
+    return !!(navigator.clipboard && typeof navigator.clipboard.write === "function" && typeof window.ClipboardItem === "function");
+  }
+
+  /** Same render as exportPNG (html2canvas @ scale 2), copied to the system
+   * clipboard via canvas.toBlob + ClipboardItem instead of downloaded. */
+  async function copyPNG(copyButton) {
+    const originalText = copyButton ? copyButton.textContent : null;
+    if (copyButton) {
+      copyButton.disabled = true;
+      copyButton.textContent = "Copying…";
+    }
+    try {
+      const html2canvas = await loadHtml2Canvas();
+      if (document.activeElement && els.card.contains(document.activeElement)) {
+        document.activeElement.blur();
+      }
+      const canvas = await html2canvas(els.card, {
+        scale: 2,
+        backgroundColor: "#ffffff",
+        useCORS: true,
+      });
+      const blob = await new Promise((resolve, reject) => {
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Canvas produced no image data"))), "image/png");
+      });
+      await navigator.clipboard.write([new window.ClipboardItem({ "image/png": blob })]);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e };
+    } finally {
+      if (copyButton) {
+        copyButton.disabled = false;
+        copyButton.textContent = originalText;
+      }
+    }
+  }
+
   return {
     regenerate,
     updateFooterScope,
     getCanvas,
+    showPlaceholder,
+    hidePlaceholder,
     isEdited,
     exportPNG,
+    canCopyPNG,
+    copyPNG,
     els,
   };
 }

@@ -139,8 +139,12 @@ function destroyIfExists(chartRef) {
  * metric.higherIsBetter — lower-better sorts ascending so best is on top),
  * value labels at bar ends, ink bars with the accent for the top bar.
  * Players failing hasMetricData are excluded (visible note returned).
+ *
+ * `style`: "bars" (default) or "dots" — a lollipop rendering (thin stem +
+ * endpoint dot) toggled from the sidebar (Batch 3, decision 43). Same data,
+ * same sort, same caps — purely how the value is drawn.
  */
-export function buildBarChart(canvas, chartRef, { metric, rowsById, players }) {
+export function buildBarChart(canvas, chartRef, { metric, rowsById, players, style = "bars" }) {
   destroyIfExists(chartRef);
 
   const included = [];
@@ -158,12 +162,17 @@ export function buildBarChart(canvas, chartRef, { metric, rowsById, players }) {
   // Best-on-top: higherIsBetter true/null -> descending value; false -> ascending.
   const ascending = metric.higherIsBetter === false;
   included.sort((a, b) => (ascending ? a.value - b.value : b.value - a.value));
-  // Chart.js horizontal bar renders category index 0 at the BOTTOM, so to show
-  // the best performer at the TOP we reverse after sorting best-first.
-  const displayOrder = included.slice().reverse();
+  // displayOrder is best-first (index 0 = best). Chart.js's horizontal bar
+  // (indexAxis: "y") places category index 0 at the TOP of the plot — verified
+  // live: the previous `.reverse()` here (based on the opposite assumption)
+  // put the leader at the BOTTOM with values ascending going down, which is
+  // the bug this batch fixes. No reversal needed: index 0 (best) at index 0
+  // renders at the top, exactly where it belongs.
+  const displayOrder = included;
 
   const pal = palette();
   const maxValue = included.length ? included[0].value : 0;
+  const isDots = style === "dots";
 
   chartRef.current = new Chart(canvas, {
     type: "bar",
@@ -173,8 +182,8 @@ export function buildBarChart(canvas, chartRef, { metric, rowsById, players }) {
         {
           data: displayOrder.map((r) => r.value),
           backgroundColor: displayOrder.map((r) => (r.value === maxValue ? pal.accent : pal.ink)),
-          borderRadius: 3,
-          maxBarThickness: 28,
+          borderRadius: isDots ? 2 : 3,
+          maxBarThickness: isDots ? 4 : 28,
         },
       ],
     },
@@ -182,6 +191,11 @@ export function buildBarChart(canvas, chartRef, { metric, rowsById, players }) {
       indexAxis: "y",
       responsive: true,
       maintainAspectRatio: false,
+      // Cushion for the value label at the max bar's end (fix: clipped
+      // "2,454"-style leader label at the chart's right edge) — the
+      // afterDatasetsDraw plugin below also clamps the label inside the bar
+      // if this padding still isn't enough at very narrow widths.
+      layout: { padding: { right: 16, top: 4, bottom: 4 } },
       plugins: {
         legend: { display: false },
         tooltip: {
@@ -199,25 +213,48 @@ export function buildBarChart(canvas, chartRef, { metric, rowsById, players }) {
         },
         y: {
           grid: { display: false },
-          ticks: { color: pal.ink },
+          // Every player gets a label — at 375px width this used to autoSkip
+          // roughly half of them (verified live).
+          ticks: { color: pal.ink, autoSkip: false },
         },
       },
     },
     plugins: [
       {
-        id: "barValueLabels",
+        id: "barDecorations",
         afterDatasetsDraw(chart) {
-          const { ctx } = chart;
+          const { ctx, chartArea } = chart;
           const meta = chart.getDatasetMeta(0);
           ctx.save();
-          ctx.fillStyle = pal.ink;
           ctx.font = "600 12px Inter, sans-serif";
           ctx.textBaseline = "middle";
           meta.data.forEach((bar, i) => {
             const val = displayOrder[i].value;
+            const isLeader = val === maxValue;
+            if (isDots) {
+              ctx.fillStyle = isLeader ? pal.accent : pal.ink;
+              ctx.beginPath();
+              ctx.arc(bar.x, bar.y, 5, 0, Math.PI * 2);
+              ctx.fill();
+            }
             const text = labelForValue(metric, val);
-            ctx.textAlign = "left";
-            ctx.fillText(text, bar.x + 6, bar.y);
+            const textWidth = ctx.measureText(text).width;
+            const gap = isDots ? 10 : 6;
+            const outsideX = bar.x + gap;
+            const fitsOutside = outsideX + textWidth + 4 <= chartArea.right;
+            if (fitsOutside) {
+              ctx.textAlign = "left";
+              ctx.fillStyle = pal.ink;
+              ctx.fillText(text, outsideX, bar.y);
+            } else {
+              // Not enough room outside the bar/dot (e.g. the leader's label
+              // right at the chart edge) — draw it clamped inside instead.
+              // A real bar has fill behind it so white reads better there; a
+              // dot has none, so keep dark ink text next to it.
+              ctx.textAlign = "right";
+              ctx.fillStyle = isDots ? pal.ink : "#ffffff";
+              ctx.fillText(text, bar.x - gap, bar.y);
+            }
           });
           ctx.restore();
         },
@@ -374,18 +411,64 @@ export function buildScatterChart(canvas, chartRef, { metricX, metricY, rowsById
     },
     plugins: [
       {
+        // Median guide lines (X and Y), computed from the plotted players
+        // only — drawn BEFORE the dataset's own points so the dashed lines
+        // read as quadrant dividers behind the dots, not over them.
+        id: "medianGuides",
+        beforeDatasetsDraw(chart) {
+          if (included.length === 0) return;
+          const { ctx, chartArea, scales } = chart;
+          const median = (values) => {
+            const sorted = values.slice().sort((a, b) => a - b);
+            const mid = Math.floor(sorted.length / 2);
+            return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+          };
+          const medianX = median(included.map((r) => r.x));
+          const medianY = median(included.map((r) => r.y));
+          const px = scales.x.getPixelForValue(medianX);
+          const py = scales.y.getPixelForValue(medianY);
+          ctx.save();
+          ctx.strokeStyle = pal.muted;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.moveTo(px, chartArea.top);
+          ctx.lineTo(px, chartArea.bottom);
+          ctx.moveTo(chartArea.left, py);
+          ctx.lineTo(chartArea.right, py);
+          ctx.stroke();
+          ctx.restore();
+        },
+      },
+      {
         id: "scatterPointLabels",
         afterDatasetsDraw(chart) {
-          const { ctx } = chart;
+          const { ctx, chartArea } = chart;
           const meta = chart.getDatasetMeta(0);
           ctx.save();
           ctx.font = "11px Inter, sans-serif";
           ctx.fillStyle = pal.muted;
-          ctx.textAlign = "left";
           ctx.textBaseline = "middle";
           meta.data.forEach((point, i) => {
             const shortName = shortenName(included[i].name);
-            ctx.fillText(shortName, point.x + 8, point.y);
+            const textWidth = ctx.measureText(shortName).width;
+            // Clamp vertically inside the plot area (textBaseline "middle"
+            // would otherwise let the glyph bleed past the top/bottom edge
+            // for points right on the boundary).
+            const y = Math.min(Math.max(point.y, chartArea.top + 8), chartArea.bottom - 8);
+            const fitsRight = point.x + 8 + textWidth <= chartArea.right;
+            if (fitsRight) {
+              ctx.textAlign = "left";
+              ctx.fillText(shortName, point.x + 8, y);
+            } else {
+              // Fix: labels for points near the right edge (e.g. "R. Gaikwad",
+              // verified live) clipped past the chart boundary. Flip the label
+              // to the point's LEFT instead, clamped so it doesn't also run
+              // past the left edge.
+              ctx.textAlign = "right";
+              const x = Math.max(point.x - 8, chartArea.left + textWidth);
+              ctx.fillText(shortName, x, y);
+            }
           });
           ctx.restore();
         },
@@ -405,14 +488,34 @@ function shortenName(name) {
 }
 
 /**
- * RADAR: metric GROUP (from radarGroups.js), cap 6 players. Per-metric
- * min-max scaling across the CHARTED players -> 0.1-1.0, inverting
- * lower-is-better metrics so outward always means better. Tooltips show the
- * REAL (unscaled) values. A player missing hasMetricData for ANY metric in
- * the group is excluded from the whole radar (visible note).
+ * RADAR → SMALL MULTIPLES (owner ruling, decision 43): kept radar, removed
+ * the overlay-of-datasets rendering. One mini-radar PER PLAYER (min 1, cap
+ * 6) in a responsive grid, each labelled with the player's name underneath;
+ * ONE shared honest footer (card.js's, untouched) and NO per-mini legends.
+ *
+ * All minis share ONE scale: the same per-metric min-max normalisation the
+ * old overlay radar used (0.1-1.0, inverting lower-is-better metrics so
+ * outward always means better) — computed ONCE across every CHARTED player,
+ * exactly as before, just rendered as N single-dataset charts instead of one
+ * multi-dataset chart. Tooltips still show the REAL (unscaled) values. A
+ * player missing hasMetricData for ANY metric in the group is excluded from
+ * the whole grid (visible note, same rule as before).
+ *
+ * The grid is built as a sibling of `canvas` inside the paper card's chart
+ * area (canvas.parentElement — card.js's `.paper-card__chart-area`), so it's
+ * captured by html2canvas along with the rest of the card on PNG
+ * export/copy. `canvas` itself is hidden while the grid is showing;
+ * chartRef.current is a small wrapper whose destroy() tears down every mini
+ * Chart instance, removes the grid, and restores the canvas — so switching
+ * to any other chart type (which always starts with the shared
+ * destroyIfExists(chartRef)) cleans this up for free, no special-casing
+ * needed elsewhere.
  */
-export function buildRadarChart(canvas, chartRef, { group, metrics, rowsById, players }) {
+export function buildRadarSmallMultiples(canvas, chartRef, { group, metrics, rowsById, players }) {
   destroyIfExists(chartRef);
+
+  const chartArea = canvas.parentElement;
+  canvas.hidden = true;
 
   const included = [];
   const excluded = [];
@@ -426,7 +529,8 @@ export function buildRadarChart(canvas, chartRef, { group, metrics, rowsById, pl
     }
   }
 
-  // Per-metric min/max across the charted (included) players only.
+  // Per-metric min/max across ALL charted (included) players — shared by
+  // every mini, so the same spoke means the same thing on every one of them.
   const ranges = metrics.map((m) => {
     const values = included.map((r) => Number(r.row[m.key]));
     const min = values.length ? Math.min(...values) : 0;
@@ -444,47 +548,78 @@ export function buildRadarChart(canvas, chartRef, { group, metrics, rowsById, pl
 
   const pal = palette();
 
-  chartRef.current = new Chart(canvas, {
-    type: "radar",
-    data: {
-      labels: metrics.map((m) => m.shortLabel),
-      datasets: included.map((r, i) => ({
-        label: r.name,
-        data: metrics.map((m, mi) => scaledValue(m, ranges[mi], Number(r.row[m.key]))),
-        borderColor: SERIES_COLORS[i % SERIES_COLORS.length],
-        backgroundColor: SERIES_COLORS[i % SERIES_COLORS.length] + "33",
-        pointBackgroundColor: SERIES_COLORS[i % SERIES_COLORS.length],
-        borderWidth: 2,
-      })),
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: "bottom", labels: { color: pal.ink } },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => {
-              const metric = metrics[ctx.dataIndex];
-              const r = included[ctx.datasetIndex];
-              const raw = Number(r.row[metric.key]);
-              return `${ctx.dataset.label} — ${metric.label}: ${labelForValue(metric, raw)}`;
+  const grid = document.createElement("div");
+  grid.className = "paper-card__radar-grid";
+  grid.dataset.role = "radar-grid";
+  chartArea.appendChild(grid);
+
+  const instances = included.map((r) => {
+    const cell = document.createElement("div");
+    cell.className = "paper-card__radar-mini";
+
+    const canvasWrap = document.createElement("div");
+    canvasWrap.className = "paper-card__radar-mini-canvas-wrap";
+    const miniCanvas = document.createElement("canvas");
+    canvasWrap.appendChild(miniCanvas);
+    cell.appendChild(canvasWrap);
+
+    const nameEl = document.createElement("p");
+    nameEl.className = "paper-card__radar-mini-name";
+    nameEl.textContent = r.name; // textContent, not innerHTML — no escaping needed
+    cell.appendChild(nameEl);
+
+    grid.appendChild(cell);
+
+    return new Chart(miniCanvas, {
+      type: "radar",
+      data: {
+        labels: metrics.map((m) => m.shortLabel),
+        datasets: [
+          {
+            data: metrics.map((m, mi) => scaledValue(m, ranges[mi], Number(r.row[m.key]))),
+            borderColor: pal.accent,
+            backgroundColor: pal.accent + "33",
+            pointBackgroundColor: pal.accent,
+            borderWidth: 2,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false }, // no per-mini legends — the name below IS the legend
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const metric = metrics[ctx.dataIndex];
+                const raw = Number(r.row[metric.key]);
+                return `${metric.label}: ${labelForValue(metric, raw)}`;
+              },
             },
           },
         },
-      },
-      scales: {
-        r: {
-          min: 0,
-          max: 1,
-          ticks: { display: false, stepSize: 0.2 },
-          grid: { color: pal.line },
-          angleLines: { color: pal.line },
-          pointLabels: { color: pal.ink, font: { size: 12 } },
+        scales: {
+          r: {
+            min: 0,
+            max: 1,
+            ticks: { display: false, stepSize: 0.2 },
+            grid: { color: pal.line },
+            angleLines: { color: pal.line },
+            pointLabels: { color: pal.ink, font: { size: 9 } },
+          },
         },
       },
-    },
+    });
   });
+
+  chartRef.current = {
+    destroy() {
+      instances.forEach((c) => c.destroy());
+      grid.remove();
+      canvas.hidden = false;
+    },
+  };
 
   return { excluded, group };
 }
