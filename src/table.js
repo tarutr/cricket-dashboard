@@ -66,6 +66,42 @@ function effectiveDiscipline(state) {
   return effectiveNamespace(state);
 }
 
+/** Serialize exactly the state fields that determine the query results AND
+ * how they're rendered — used by mountTable's enterView() to tell whether a
+ * cached last-load result set is still valid when the table view is
+ * re-entered (decision 44d: a plain view switch must never wipe results;
+ * only an actual change to one of these fields since the last successful
+ * query should). Deliberately EXCLUDES `view` itself (switching tabs is
+ * exactly the thing that must NOT invalidate the cache) and includes only
+ * the ACTIVE effective namespace's column list (a column edit made in the
+ * other discipline/matchup namespace while away doesn't change what's
+ * currently on screen). Every field here is either read directly by
+ * buildQuery/buildScopeClauses, or governs rendering shape (columns, sort,
+ * splitBy/matchupVs).
+ */
+function serializeQueryState(state) {
+  const ns = effectiveDiscipline(state);
+  return JSON.stringify({
+    discipline: state.discipline,
+    gender: state.gender,
+    formats: state.formats,
+    dateFrom: state.dateFrom,
+    dateTo: state.dateTo,
+    teams: state.teams,
+    teamType: state.teamType,
+    minInnings: state.minInnings,
+    profile: state.profile,
+    positions: state.positions,
+    opposition: state.opposition,
+    splitBy: state.splitBy,
+    matchupVs: state.matchupVs,
+    search: state.search,
+    sort: state.sort,
+    columns: state.columns[ns],
+    advanced: state.advanced,
+  });
+}
+
 /** Preferred display order for the fine "Bowling type" optgroup: named styles
  * in cricket-sensible order, then any unlisted style alphabetically, then the
  * bare pace/spin buckets last (decision 24 — bare-slow bowlers surface here
@@ -583,6 +619,11 @@ function compareSplitRows(a, b, splitDim, dir) {
 export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } = {}) {
   let lastRows = [];
   let loadToken = 0;
+  // Snapshot (serializeQueryState) of the state that produced lastRows, or
+  // null before any successful load. enterView() (decision 44d) compares this
+  // against the CURRENT state to decide whether re-entering the table view
+  // can restore lastRows instantly instead of showing the blank prompt.
+  let lastQueryStateKey = null;
   // The split dimension the CURRENT lastRows were queried with (null = no
   // split). Rendering and split-column sorting must use this, not live state —
   // the state may have moved on while the table still shows the old result.
@@ -697,6 +738,29 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
     `;
     const btn = container.querySelector('[data-role="show-results"]');
     if (btn) btn.addEventListener("click", () => load());
+  }
+
+  /** Called when the table view is (re-)entered — clicking the Stats tab, or
+   * the graph's "Back to your table" bridge (decision 44d) — as distinct from
+   * a filter change while the table is already showing, which always calls
+   * showPrompt() directly via main.js's onFiltersChanged (the no-automated-
+   * search rule is about filter changes, not tab switches, and is untouched
+   * by this). If the state that produced the last successful result set is
+   * IDENTICAL (per serializeQueryState — matchup mode, grouping, sort, and
+   * column choices all included) to the current state, that result set still
+   * describes exactly what the filters/pills currently show — re-render it
+   * from the in-memory cache instantly, no requery. Otherwise the scope moved
+   * on while the table was out of view; fall back to the blank prompt exactly
+   * as a filter change would.
+   */
+  function enterView() {
+    const state = store.get();
+    if (lastQueryStateKey !== null && serializeQueryState(state) === lastQueryStateKey) {
+      renderLoaded(lastRows, state, lastBowlingTypes);
+      refreshOpenColumnsPopover();
+      return;
+    }
+    renderPrompt();
   }
 
   function renderError(err, retryFn) {
@@ -856,15 +920,16 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
 
     const columnsBtnHTML = `<button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>`;
 
-    // "Turn into graph" bridge (Batch 3 part 2, decision 43; matchup mode
-    // enabled Batch 4 wave 2): seeds the Graph Builder from this exact table
-    // (current filters/sort/top-15, or — in matchup mode — the table's own
-    // Vs bucket as one side of the Dumbbell chart) — see graph.js's
-    // enterFromBridge(). An unqueried/empty table has nothing to seed from,
-    // so that's the only state that still disables the button, with an
-    // honest title rather than removing it (same reasoning as the
-    // presets/Group-rows greying above — the toolbar's shape never changes
-    // between modes).
+    // "Graph" bridge button (Batch 3 part 2, decision 43; matchup mode enabled
+    // Batch 4 wave 2; relabeled "Turn into graph" -> "Graph" and grouped with
+    // Columns as the toolbar's right-most cluster, decision 44d): seeds the
+    // Graph Builder from this exact table (current filters/sort/top-15, or —
+    // in matchup mode — the table's own Vs bucket as one side of the Dumbbell
+    // chart) — see graph.js's enterFromBridge(). An unqueried/empty table has
+    // nothing to seed from, so that's the only state that still disables the
+    // button, with an honest title rather than removing it (same reasoning as
+    // the presets/Group-rows greying above — the toolbar's shape never
+    // changes between modes).
     const noResultsForGraph = !rows || rows.length === 0;
     const graphBtnDisabled = noResultsForGraph;
     const graphBtnTitle = noResultsForGraph
@@ -872,7 +937,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
       : matchupOn
         ? "Seed the Graph Builder's Dumbbell chart from this Vs comparison"
         : "Seed the Graph Builder from this table";
-    const turnIntoGraphBtnHTML = `<button type="button" class="btn btn--ghost" data-role="turn-into-graph" ${graphBtnDisabled ? "disabled" : ""} title="${escAttr(graphBtnTitle)}">Turn into graph</button>`;
+    const turnIntoGraphBtnHTML = `<button type="button" class="btn btn--ghost" data-role="turn-into-graph" ${graphBtnDisabled ? "disabled" : ""} title="${escAttr(graphBtnTitle)}">Graph</button>`;
 
     // "Vs" matchup select (D4 R3, decision 33): ALWAYS rendered, both modes —
     // greyed for women (no style data yet, decision 21), presentation-mode
@@ -883,14 +948,24 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
       <select class="select select--compact" data-role="matchup-vs" aria-label="Matchup opponent" ${vsDisabled ? "disabled" : ""}${vsTitle}>${matchupVsOptionsHTML(state, bowlingTypes)}</select>
     </label>`;
 
+    // Right-most cluster (decision 44d): Graph + Columns grouped together and
+    // pushed flush to the card's right edge via .table-toolbar__graph-columns
+    // (margin-left: auto in styles.css), Graph immediately left of Columns.
+    // Vs / Group rows keep their own left-packed cluster so the two groups
+    // can wrap independently on narrow (~380px) viewports without losing the
+    // "flush right" placement of Graph/Columns.
     toolbarEl.innerHTML = `
       <div class="table-toolbar__row-count">${rowCountLabel(rows, splitDim)}</div>
       ${presetsBlockHTML}
       <div class="table-toolbar__actions">
-        ${vsSelectHTML}
-        ${groupRowsHTML}
-        ${turnIntoGraphBtnHTML}
-        ${columnsBtnHTML}
+        <div class="table-toolbar__controls">
+          ${vsSelectHTML}
+          ${groupRowsHTML}
+        </div>
+        <div class="table-toolbar__graph-columns">
+          ${turnIntoGraphBtnHTML}
+          ${columnsBtnHTML}
+        </div>
       </div>
     `;
 
@@ -1249,6 +1324,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
       const sorted = applySort(merged, state);
 
       lastRows = sorted;
+      lastQueryStateKey = serializeQueryState(state);
       renderLoaded(sorted, state, bowlingTypes);
       // The columns popover (if open) lives outside `container` precisely so
       // this reload never destroys it (Batch 3 fix 3) — re-find its anchor in
@@ -1263,5 +1339,5 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
     }
   }
 
-  return { load, showPrompt: renderPrompt };
+  return { load, showPrompt: renderPrompt, enterView };
 }

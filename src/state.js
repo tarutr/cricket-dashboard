@@ -462,7 +462,7 @@ export function pruneIneligibleState(store) {
 
 /** GENDER_LABELS / TEAM_TYPE_LABELS used by describeScope() and the filter bar. */
 export const GENDER_LABELS = { female: "Women's", male: "Men's" };
-export const TEAM_TYPE_LABELS = { international: "international", club: "club", both: null };
+export const TEAM_TYPE_LABELS = { international: "international", club: "domestic", both: null };
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function monthLabel(yyyymm) {

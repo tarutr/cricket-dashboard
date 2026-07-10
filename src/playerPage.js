@@ -31,7 +31,7 @@ function monthLabel(yyyymm) {
   return `${MONTH_NAMES[m - 1]} ${y}`;
 }
 
-const TEAM_TYPE_LABELS = { international: "International cricket", club: "Club cricket", both: "All cricket" };
+const TEAM_TYPE_LABELS = { international: "International cricket", club: "Domestic cricket", both: "All cricket" };
 
 /** Scope key: refetch only when the player OR this tuple changes (playerData.js's scope). */
 function scopeKeyFor(state) {

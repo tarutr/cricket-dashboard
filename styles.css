@@ -193,19 +193,10 @@ a { color: var(--color-accent); }
   max-width: 34rem;
 }
 
-/* Authored layout for what used to be an accidental stack (two segmented
-   controls happened to end up right-aligned because .app-header is a row
-   with justify-content: space-between and this box just hugged its
-   content). Same visual arrangement, now on purpose. */
+/* The header now holds only the Stats/Graphs view switcher — Discipline
+   moved into the scope strip (decision 44b, src/filters.js). */
 .app-header__controls {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-}
-
-.app-header__discipline {
   flex-shrink: 0;
-  padding-top: var(--space-1);
 }
 
 /* ── Main / layout ─────────────────────────────────────────────────────────── */
@@ -268,7 +259,7 @@ a { color: var(--color-accent); }
   .init-status__line--loading { animation: none; }
 }
 
-/* ── Segmented control (Gender / Team type / Discipline) ──────────────────── */
+/* ── Segmented control (Gender / Discipline) ──────────────────────────────── */
 
 .segmented {
   display: inline-flex;
@@ -309,18 +300,6 @@ a { color: var(--color-accent); }
    restate the 40px floor explicitly for small segments at mobile widths. */
 @media (max-width: 640px) {
   .segmented--small .segmented__btn { min-height: 40px; }
-}
-
-/* Discipline toggle reads as the header's prominent control */
-.app-header__discipline .segmented {
-  border-color: var(--color-fg);
-}
-
-.app-header__discipline .segmented__btn {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 0.95rem;
-  padding: var(--space-2) var(--space-5);
 }
 
 /* ── Filter bar ────────────────────────────────────────────────────────────── */
@@ -433,8 +412,9 @@ a { color: var(--color-accent); }
 
 /* Shared popover base (task 2): the floating-panel shape (border, radius,
    shadow, raised background, stacking order) is identical across the team
-   dropdown, the columns picker, and the graph player-search results — see
-   the selector list below. Position family (absolute vs fixed) and
+   dropdown, the columns picker, the graph player-search results, and (B2R
+   wave 1b, decision 44b) the Format/Team-type scope-strip dropdowns below —
+   see the selector list below. Position family (absolute vs fixed) and
    size/overflow/padding vary per instance and stay on each specific
    selector. This pass also fixes a real token bug: .graph-player-search__results
    used to read var(--color-bg) where the other two correctly used
@@ -442,7 +422,8 @@ a { color: var(--color-accent); }
    all three now consistently use --color-bg-raised. */
 .team-dropdown__panel,
 .columns-popover,
-.graph-player-search__results {
+.graph-player-search__results,
+.dropdown__panel {
   z-index: 20;
   background: var(--color-bg-raised);
   border: 1px solid var(--color-line);
@@ -515,6 +496,59 @@ a { color: var(--color-accent); }
   padding-top: var(--space-2);
   border-top: 1px solid var(--color-line);
 }
+
+/* Format / Team-type checkbox dropdowns (B2R wave 1b, decision 44b): same
+   open/close-on-outside-click-or-Escape mechanics as .team-dropdown above,
+   over a short FIXED vocabulary (five format buckets; two team types) —
+   no search box, no clear button. The toggle reuses the .select look
+   (class="select dropdown__toggle" in the markup); the panel joins the
+   shared popover base above. */
+.dropdown { position: relative; }
+
+.dropdown__toggle {
+  cursor: pointer;
+  text-align: left;
+  min-width: 9rem;
+}
+
+.dropdown__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 100%;
+  padding: var(--space-2);
+}
+
+.dropdown__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.dropdown__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: var(--space-2);
+  white-space: nowrap;
+  border-radius: var(--radius-sm);
+}
+
+.dropdown__item:hover { background: var(--color-panel); }
+
+/* Min-one guard (the sole remaining checked box in each dropdown is
+   disabled rather than left uncheckable-but-unmarked) — same recolor-only
+   disabled language as the rest of the app (see the ".select:disabled…"
+   batch below), applied to the label since a checkbox itself can't be
+   skinned the same way. */
+.dropdown__item.is-disabled {
+  cursor: not-allowed;
+  color: var(--color-muted);
+}
+
+.dropdown__item.is-disabled input { cursor: not-allowed; }
 
 /* ── Profile filters (D4.2) — second filter row ────────────────────────────── */
 
@@ -1229,7 +1263,8 @@ a { color: var(--color-accent); }
     flex-wrap: wrap;
   }
 
-  .team-dropdown__panel {
+  .team-dropdown__panel,
+  .dropdown__panel {
     width: 100%;
     left: 0;
     right: 0;
@@ -1261,7 +1296,8 @@ a { color: var(--color-accent); }
   .drawer__close,
   .player-popup__close,
   .columns-popover__item,
-  .team-dropdown__item {
+  .team-dropdown__item,
+  .dropdown__item {
     min-height: 40px;
   }
 
@@ -2142,6 +2178,24 @@ a { color: var(--color-accent); }
   align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
+}
+
+/* Decision 44d: Vs / Group rows pack on the left; Graph + Columns are a
+   distinct right-most cluster (margin-left: auto keeps it flush to the
+   card's right edge, and lets it drop to its own line — still right-aligned
+   on that line — before the left cluster does on narrow viewports). */
+.table-toolbar__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.table-toolbar__graph-columns {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
 }
 
 .table-toolbar__group-label {

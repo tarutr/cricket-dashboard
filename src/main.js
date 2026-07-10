@@ -160,9 +160,15 @@ function applyView() {
     return graphController.onShow();
   }
   showTableView();
-  // Owner: no automated search — entering the table view shows the blank
-  // prompt; the query runs only when "Show results" is clicked.
-  tableController.showPrompt();
+  // Decision 44d: a plain view switch must never wipe an already-computed
+  // result set. enterView() restores the cached rows instantly if the
+  // filters/scope haven't moved on since that query, and falls back to the
+  // blank prompt (today's behavior) otherwise. Filter CHANGES still revert to
+  // the blank prompt immediately via onFiltersChanged() (see below), which
+  // calls tableController.showPrompt() directly whenever the table view is
+  // active — the no-automated-search rule is unchanged; only bare tab
+  // switches / the graph's "Back to your table" bridge benefit here.
+  tableController.enterView();
   return Promise.resolve();
 }
 

@@ -108,6 +108,78 @@ export function buildScopeClauses(
   return clauses;
 }
 
+// Team type checkbox dropdown (decision 44b): the state value is still the
+// single 'international' | 'club' | 'both' string (untouched) — these two
+// checkboxes are just a different INPUT SHAPE over the same value. 'club' is
+// relabeled "Domestic" for display only; the state/SQL value stays 'club'
+// (buildScopeClauses, describeScope's TEAM_TYPE_LABELS key, everything else
+// keeps reading 'club' — only this dropdown's visible text changes).
+const TEAM_TYPE_OPTIONS = [
+  { key: "international", label: "International" },
+  { key: "club", label: "Domestic" },
+];
+
+/** Which of the two checkboxes are checked for a given teamType value. */
+function teamTypeChecked(teamType) {
+  return {
+    international: teamType === "international" || teamType === "both",
+    club: teamType === "club" || teamType === "both",
+  };
+}
+
+/** Live summary label for the Team type dropdown button. */
+function teamTypeSummaryLabel(teamType) {
+  if (teamType === "both") return "International + Domestic";
+  if (teamType === "international") return "International";
+  return "Domestic"; // 'club'
+}
+
+/**
+ * Live summary label for the Format dropdown button. Rule chosen (flagged
+ * per task): "first selected + N more" rather than a full comma-join once
+ * more than one bucket is selected — the comma-join reads cleaner at exactly
+ * two ("T20, ODI") but grows unbounded at three-plus ("T20, ODI, ODM, Test"),
+ * which defeats the point of a compact strip on mobile. "+N" stays a fixed
+ * short width regardless of how many buckets are picked, so it's used
+ * uniformly for every "more than one" case, not just the crowded ones.
+ */
+function formatSummaryLabel(formats) {
+  const ordered = FORMAT_BUCKETS.filter((b) => formats.includes(b.key)).map((b) => b.key);
+  if (ordered.length === 0) return "None"; // guarded against below — should not be reachable
+  if (ordered.length === FORMAT_BUCKETS.length) return "All formats";
+  if (ordered.length === 1) return ordered[0];
+  return `${ordered[0]} +${ordered.length - 1}`;
+}
+
+/** Shared open/close/outside-click/Escape wiring for the two checkbox-panel
+ * dropdowns below (Format, Team type). Mirrors the drawer's team-dropdown
+ * mechanics (src/drawer.js) — a bordered toggle + absolute panel — but as a
+ * self-contained helper since both new dropdowns need the identical behavior
+ * and this module owns neither drawer.js nor table.js's popover. */
+function wireDropdown(toggleEl, panelEl) {
+  function close() {
+    panelEl.hidden = true;
+    toggleEl.setAttribute("aria-expanded", "false");
+  }
+  function open() {
+    panelEl.hidden = false;
+    toggleEl.setAttribute("aria-expanded", "true");
+  }
+  toggleEl.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (panelEl.hidden) open();
+    else close();
+  });
+  document.addEventListener("click", (e) => {
+    if (panelEl.hidden) return;
+    if (panelEl.contains(e.target) || e.target === toggleEl) return;
+    close();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !panelEl.hidden) close();
+  });
+}
+
 /**
  * Mount the scope strip into `container`. Calls `onChange()` after any state
  * mutation so the caller (main.js) can re-render the table. The "All filters"
@@ -116,54 +188,86 @@ export function buildScopeClauses(
  */
 export function mountFilters(container, store, onChange, onFormatsChanged) {
   container.innerHTML = `
-    <div class="filter-bar">
-      <div class="filter-group filter-group--gender">
-        <span class="filter-label">Gender</span>
-        <div class="segmented" data-role="gender" role="group" aria-label="Gender">
-          <button type="button" class="segmented__btn" data-value="female">Women</button>
-          <button type="button" class="segmented__btn" data-value="male">Men</button>
-        </div>
+    <div class="filter-group filter-group--gender">
+      <span class="filter-label">Gender</span>
+      <div class="segmented" data-role="gender" role="group" aria-label="Gender">
+        <button type="button" class="segmented__btn" data-value="female">Women</button>
+        <button type="button" class="segmented__btn" data-value="male">Men</button>
       </div>
-
-      <div class="filter-group filter-group--format">
-        <span class="filter-label">Format</span>
-        <div class="chip-group" data-role="formats" role="group" aria-label="Format">
-          ${FORMAT_BUCKETS.map(
-            (b) => `<button type="button" class="chip" data-value="${b.key}">${b.label}</button>`
-          ).join("")}
-        </div>
-      </div>
-
-      <div class="filter-group filter-group--dates">
-        <span class="filter-label">Date range</span>
-        <div class="date-range">
-          <select class="select" data-role="dateFrom" aria-label="From"></select>
-          <span class="date-range__sep">–</span>
-          <select class="select" data-role="dateTo" aria-label="To"></select>
-        </div>
-      </div>
-
-      <div class="filter-group filter-group--teamtype">
-        <span class="filter-label">Team type</span>
-        <div class="segmented" data-role="teamType" role="group" aria-label="Team type">
-          <button type="button" class="segmented__btn" data-value="international">International</button>
-          <button type="button" class="segmented__btn" data-value="club">Club</button>
-          <button type="button" class="segmented__btn" data-value="both">Both</button>
-        </div>
-      </div>
-
-      <button type="button" class="btn btn--ghost filter-open-btn" data-role="open-drawer" aria-haspopup="dialog">
-        All filters <span class="filter-open-btn__count" data-role="open-drawer-count" hidden></span>
-      </button>
     </div>
+
+    <div class="filter-group filter-group--format">
+      <span class="filter-label">Format</span>
+      <div class="dropdown" data-role="format-dropdown">
+        <button type="button" class="select dropdown__toggle" data-role="format-toggle" aria-haspopup="true" aria-expanded="false"></button>
+        <div class="dropdown__panel" data-role="format-panel" hidden>
+          <div class="dropdown__list" data-role="format-list">
+            ${FORMAT_BUCKETS.map(
+              (b) => `<label class="dropdown__item">
+                <input type="checkbox" data-format="${b.key}" />
+                <span>${b.label}</span>
+              </label>`
+            ).join("")}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="filter-group filter-group--dates">
+      <span class="filter-label">Date range</span>
+      <div class="date-range">
+        <select class="select" data-role="dateFrom" aria-label="From"></select>
+        <span class="date-range__sep">–</span>
+        <select class="select" data-role="dateTo" aria-label="To"></select>
+      </div>
+    </div>
+
+    <div class="filter-group filter-group--teamtype">
+      <span class="filter-label">Team type</span>
+      <div class="dropdown" data-role="teamtype-dropdown">
+        <button type="button" class="select dropdown__toggle" data-role="teamtype-toggle" aria-haspopup="true" aria-expanded="false"></button>
+        <div class="dropdown__panel" data-role="teamtype-panel" hidden>
+          <div class="dropdown__list" data-role="teamtype-list">
+            ${TEAM_TYPE_OPTIONS.map(
+              (o) => `<label class="dropdown__item">
+                <input type="checkbox" data-teamtype="${o.key}" />
+                <span>${o.label}</span>
+              </label>`
+            ).join("")}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <button type="button" class="btn btn--ghost filter-open-btn" data-role="open-drawer" aria-haspopup="dialog">
+      All filters <span class="filter-open-btn__count" data-role="open-drawer-count" hidden></span>
+    </button>
   `;
+
+  // Discipline (decision 44b) relocation: the segmented control is static
+  // markup in index.html (main.js's module-level
+  // `document.querySelector('[data-role="discipline"]')` binds to it at
+  // script-load time, before this function has ever run — see index.html's
+  // comment above the filter-section). We move the EXISTING node into its
+  // visual slot, second, right after Gender, rather than re-rendering it:
+  // moving a DOM node doesn't invalidate main.js's reference or its event
+  // listener, so its wiring keeps working untouched wherever the node lives.
+  const disciplineGroup = container.parentElement?.querySelector(".filter-group--discipline");
+  const genderGroup = container.querySelector(".filter-group--gender");
+  if (disciplineGroup && genderGroup) {
+    genderGroup.insertAdjacentElement("afterend", disciplineGroup);
+  }
 
   const els = {
     gender: container.querySelector('[data-role="gender"]'),
-    formats: container.querySelector('[data-role="formats"]'),
     dateFrom: container.querySelector('[data-role="dateFrom"]'),
     dateTo: container.querySelector('[data-role="dateTo"]'),
-    teamType: container.querySelector('[data-role="teamType"]'),
+    formatToggle: container.querySelector('[data-role="format-toggle"]'),
+    formatPanel: container.querySelector('[data-role="format-panel"]'),
+    formatList: container.querySelector('[data-role="format-list"]'),
+    teamtypeToggle: container.querySelector('[data-role="teamtype-toggle"]'),
+    teamtypePanel: container.querySelector('[data-role="teamtype-panel"]'),
+    teamtypeList: container.querySelector('[data-role="teamtype-list"]'),
   };
 
   function syncSegmented(el, value) {
@@ -172,25 +276,93 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
     });
   }
 
-  function syncChips(el, values) {
-    el.querySelectorAll(".chip").forEach((btn) => {
-      btn.classList.toggle("is-active", values.includes(btn.dataset.value));
-    });
-  }
-
   function syncDateOptions(minMonth, maxMonth, state) {
     els.dateFrom.innerHTML = monthOptionsHTML(minMonth, maxMonth, state.dateFrom);
     els.dateTo.innerHTML = monthOptionsHTML(minMonth, maxMonth, state.dateTo);
   }
 
+  // ---- Format dropdown (multi-select, apply-live, min-one guard) ----
+  function syncFormatDropdown() {
+    const state = store.get();
+    els.formatToggle.textContent = formatSummaryLabel(state.formats);
+    els.formatList.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      const checked = state.formats.includes(cb.dataset.format);
+      cb.checked = checked;
+      // Guard against zero formats (the old chip row had no such guard — it
+      // could reach zero and silently return no rows; this dropdown adds the
+      // safety the task calls for): the sole remaining checked box is
+      // disabled so it can't be the click that empties the selection.
+      const sole = checked && state.formats.length === 1;
+      cb.disabled = sole;
+      cb.closest(".dropdown__item").classList.toggle("is-disabled", sole);
+      cb.title = sole ? "At least one format must stay selected" : "";
+    });
+  }
+
+  els.formatList.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const state = store.get();
+      const set = new Set(state.formats);
+      const key = cb.dataset.format;
+      if (cb.checked) {
+        set.add(key);
+      } else if (set.size <= 1) {
+        cb.checked = true; // defensive: the disabled attribute should already prevent this
+        return;
+      } else {
+        set.delete(key);
+      }
+      store.set({ formats: [...set], teams: [] });
+      syncFormatDropdown();
+      if (onFormatsChanged) onFormatsChanged();
+      onChange();
+    });
+  });
+  wireDropdown(els.formatToggle, els.formatPanel);
+
+  // ---- Team type dropdown (exactly two checkboxes, min-one guard) ----
+  function syncTeamTypeDropdown() {
+    const state = store.get();
+    els.teamtypeToggle.textContent = teamTypeSummaryLabel(state.teamType);
+    const checked = teamTypeChecked(state.teamType);
+    const totalChecked = Number(checked.international) + Number(checked.club);
+    els.teamtypeList.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      const key = cb.dataset.teamtype;
+      const isChecked = checked[key];
+      cb.checked = isChecked;
+      const sole = isChecked && totalChecked === 1;
+      cb.disabled = sole;
+      cb.closest(".dropdown__item").classList.toggle("is-disabled", sole);
+      cb.title = sole ? "At least one team type must stay selected" : "";
+    });
+  }
+
+  els.teamtypeList.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const state = store.get();
+      const current = teamTypeChecked(state.teamType);
+      const key = cb.dataset.teamtype;
+      const next = { ...current, [key]: cb.checked };
+      if (!next.international && !next.club) {
+        cb.checked = true; // defensive: the disabled attribute should already prevent this
+        return;
+      }
+      const teamType = next.international && next.club ? "both" : next.international ? "international" : "club";
+      store.set({ teamType, teams: [] });
+      syncTeamTypeDropdown();
+      onChange();
+    });
+  });
+  wireDropdown(els.teamtypeToggle, els.teamtypePanel);
+
   function render() {
     const state = store.get();
     syncSegmented(els.gender, state.gender);
-    syncChips(els.formats, state.formats);
-    syncSegmented(els.teamType, state.teamType);
+    syncFormatDropdown();
+    syncTeamTypeDropdown();
   }
 
-  // ---- wire events ----
+  // ---- wire remaining events ----
   els.gender.addEventListener("click", (e) => {
     const btn = e.target.closest(".segmented__btn");
     if (!btn) return;
@@ -202,34 +374,12 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
     onChange();
   });
 
-  els.formats.addEventListener("click", (e) => {
-    const btn = e.target.closest(".chip");
-    if (!btn) return;
-    const state = store.get();
-    const value = btn.dataset.value;
-    const set = new Set(state.formats);
-    if (set.has(value)) set.delete(value);
-    else set.add(value);
-    store.set({ formats: [...set], teams: [] });
-    render();
-    if (onFormatsChanged) onFormatsChanged();
-    onChange();
-  });
-
   els.dateFrom.addEventListener("change", () => {
     store.set({ dateFrom: els.dateFrom.value });
     onChange();
   });
   els.dateTo.addEventListener("change", () => {
     store.set({ dateTo: els.dateTo.value });
-    onChange();
-  });
-
-  els.teamType.addEventListener("click", (e) => {
-    const btn = e.target.closest(".segmented__btn");
-    if (!btn) return;
-    store.set({ teamType: btn.dataset.value, teams: [] });
-    render();
     onChange();
   });
 

@@ -23,12 +23,6 @@
           <button type="button" class="segmented__btn is-active" data-value="table">Stats</button>
           <button type="button" class="segmented__btn" data-value="graph">Graphs</button>
         </div>
-        <div class="app-header__discipline">
-          <div class="segmented" data-role="discipline" role="group" aria-label="Discipline">
-            <button type="button" class="segmented__btn is-active" data-value="batting">Batting</button>
-            <button type="button" class="segmented__btn" data-value="bowling">Bowling</button>
-          </div>
-        </div>
       </div>
     </header>
 
@@ -36,7 +30,22 @@
       <div id="init-status" class="init-status" role="status" aria-live="polite"></div>
 
       <div id="app-content" class="app-content" hidden>
-        <section class="filter-section" id="filter-bar" aria-label="Filters"></section>
+        <section class="filter-section" aria-label="Filters">
+          <!-- Discipline (decision 44b): static markup so main.js's module-level
+               `document.querySelector('[data-role="discipline"]')` (bound before
+               src/filters.js ever renders) finds a real element immediately.
+               src/filters.js relocates this node into its visual slot (second,
+               right after Gender) once it renders #filter-bar — see the
+               relocation comment in mountFilters(). -->
+          <div class="filter-group filter-group--discipline">
+            <span class="filter-label">Discipline</span>
+            <div class="segmented" data-role="discipline" role="group" aria-label="Discipline">
+              <button type="button" class="segmented__btn is-active" data-value="batting">Batting</button>
+              <button type="button" class="segmented__btn" data-value="bowling">Bowling</button>
+            </div>
+          </div>
+          <div class="filter-bar" id="filter-bar"></div>
+        </section>
 
         <section class="pills-section" id="pills-bar" aria-label="Applied filters"></section>
 
