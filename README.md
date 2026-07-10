@@ -4,6 +4,8 @@ Static cricket statistics explorer over the full Cricsheet dataset — DuckDB-WA
 
 ## Architecture
 
+Static browser-only site. DuckDB-WASM runs on the client and issues HTTPS range requests to Parquet files hosted on Cloudflare R2. The pipeline (GitHub Actions, `.github/workflows/pipeline.yml`) exports Parquet + manifest every 6 hours by running SQL against a local `cricket.duckdb` database (the source of truth) and uploading results to R2. Vercel hosts the static site (index.html + ES modules, no build step). The frontend is vanilla JS modules with no framework — the only bundled dependency is DuckDB-WASM (vendored locally in `vendor/`).
+
 ## Data pipeline
 
 `cricket-dashboard` is the primary and only owner of `cricket.duckdb` on Cloudflare
@@ -96,6 +98,24 @@ npx esbuild node_modules/@duckdb/duckdb-wasm/dist/duckdb-browser.mjs \
 
 ## Adding a metric
 
+All metrics live in a single module: `src/metrics.js` (SPEC §8.2 — duplicated metric
+vocabularies are banned). Each metric is one object whose important fields are:
+- `key`: stable identifier used by the column picker, charts, and queries.
+- `label`: the user-visible heading.
+- `sqlExpression`: the aggregation SQL. It runs **in the browser** (DuckDB-WASM) against
+  the exported Parquet views — the pipeline does not execute these.
+- `format`: `"int"`, `"dec1"`, `"dec2"`, or `"pct1"` — how the value renders.
+- `kind` (decision 43): `"total"` (countable, e.g. runs), `"rate"` (average, strike rate),
+  `"percent"` (dot %, boundary %), or `"peak"` (High Score, BBI). Charts use this to decide
+  which metrics they accept (e.g. donuts take totals only).
+- plus honesty metadata (`zeroIsData`, `additive`, `higherIsBetter`, `minSampleComponent`,
+  `isPhaseMetric`) documented at the top of the file.
+
+**Verification rule (decision 39):** any change to a metric's SQL must be re-verified
+against the raw R2 Parquet with an *independently derived* query (its own COUNT DISTINCT
+etc.), never by reusing the app's own aggregation shape. The standing anchor values live
+in `review/owner_decisions.md`.
+
 ## Triggering a data refresh
 
 Data refreshes automatically every 6 hours (03:47/09:47/15:47/21:47 UTC) via the "Data pipeline" GitHub
@@ -107,4 +127,10 @@ currently keeps DB writes disabled. Requires repo secrets `R2_ACCESS_KEY_ID`,
 
 ## Deployment (Vercel)
 
+The site auto-deploys from the `main` branch — on every push, Vercel builds the static site (no build step; just copying files) and serves it at https://cricdb.vercel.app.
+
+**Important:** R2 CORS allows `http://localhost:8000` (the local review environment) but not Vercel's preview domains, so preview branches show CORS errors when fetching Parquets. Review finished work on localhost before merging to main. To run locally: `python3 -m http.server 8000` in the repo root, then open http://localhost:8000/ (the SQL debug console lives at http://localhost:8000/debug/).
+
 ## Feedback table (Supabase RLS)
+
+**Not yet built.** This is a polish-phase feature (decision 43). Plan: an anonymous feedback form storing to a Supabase table with RLS policies that allow anonymous insert only (no select). Frontend form and Supabase table setup are pending owner approval of the full design review.
