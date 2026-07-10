@@ -1,17 +1,32 @@
 // src/playerPage.js
 //
-// Players destination (R2, decision 29): a search-first single-player page.
-// All SQL lives in src/playerData.js — this module only composes its results
-// into HTML. Metric vocabulary (labels, formatting) comes ONLY from
+// Players destination (R2, decision 29; redesigned B7, decision 44a): a
+// search-first single-player view rendered inside src/playerPopup.js's
+// overlay shell. All SQL lives in src/playerData.js — this module only
+// composes its results into HTML (via src/playerSections.js's pure builders)
+// and wires the DOM. Metric vocabulary (labels, formatting) comes ONLY from
 // src/metrics.js + table.js's formatValue (SPEC §8: one metrics module).
 //
-// Page scope is REDUCED to Format + Date range + Team type (see playerData.js
-// header) — gender and every drawer/leaderboard filter are inert here, and the
-// scope line always says so, honestly (§8.4).
+// Page scope is REDUCED to Format + Date range + Team type (see
+// playerData.js's header) — gender and every leaderboard/drawer filter are
+// inert here, and the scope line always says so, honestly (§8.4). On TOP of
+// that page scope, this popup now has its OWN local "Filters" overlay
+// (src/playerFilters.js) that narrows further (date/positions/opposition/vs)
+// — popup-local, never touching the global store, cleared on close/player
+// switch (see showPlayer() below).
+//
+// B7 (decision 44a) replaced the old stacked Batting-then-Bowling page with:
+//   - an identity header with a real headshot or a designed monogram medallion
+//   - a sticky [Batting | Bowling] toggle (default = the app's own discipline)
+//     rendering a tight grid per discipline, the OTHER discipline lazy-loaded
+//     on first switch and cached thereafter
+//   - the Filters drawer described above
+// Every section is still the SAME query from playerData.js — this is
+// re-composition of existing fetches, not new aggregation shapes.
 
 import {
-  searchPlayers,
   fetchProfile,
+  searchPlayers,
   fetchBattingCore,
   fetchBattingPositions,
   fetchBattingOpposition,
@@ -20,271 +35,52 @@ import {
   fetchBowlingOpposition,
   fetchBowlingMatchups,
 } from "./playerData.js";
-import { getMetric, DISMISSAL_KINDS, matchupBucketLabel } from "./metrics.js";
-import { formatValue } from "./table.js";
 import { escHtml, escAttr } from "./html.js";
+import { mountPlayerFilters } from "./playerFilters.js";
+import {
+  headerPhotoHTML,
+  scopeLine,
+  overlayPillsHTML,
+  normalizeBattingCore,
+  battingGridHTML,
+  bowlingGridHTML,
+} from "./playerSections.js";
 
-const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-function monthLabel(yyyymm) {
-  if (!yyyymm) return null;
-  const [y, m] = yyyymm.split("-").map(Number);
-  return `${MONTH_NAMES[m - 1]} ${y}`;
-}
-
-const TEAM_TYPE_LABELS = { international: "International cricket", club: "Domestic cricket", both: "All cricket" };
-
-/** Scope key: refetch only when the player OR this tuple changes (playerData.js's scope). */
+/** Scope key: the page re-fetches only when the player OR this tuple changes
+ * (playerData.js's scope — Format + Date + Team type). The popup's OWN
+ * Filters overlay is a SEPARATE key (see cacheKeyFor) — a global scope change
+ * invalidates both disciplines' caches, an overlay change invalidates them
+ * too, but they're tracked independently so each has one job. */
 function scopeKeyFor(state) {
   return JSON.stringify([state.formats, state.dateFrom, state.dateTo, state.teamType]);
 }
 
-/** Owner's red-ball exception: Test/MDM-only scopes swap SR for balls-per-dismissal. */
-function isRedBallOnly(state) {
-  return state.formats.length > 0 && state.formats.every((f) => f === "Test" || f === "MDM");
+/** Cache key for one discipline's fetched section data: changes whenever the
+ * global scope OR the popup's local overlay changes — either invalidates
+ * both disciplines' cached data (the other is simply re-fetched lazily, on
+ * next switch, not eagerly). */
+function cacheKeyFor(state, overlay) {
+  return JSON.stringify([scopeKeyFor(state), overlay]);
 }
 
-function initials(name) {
-  const words = String(name || "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2);
-  return words.map((w) => w[0].toUpperCase()).join("") || "?";
+function syncSegmented(el, value) {
+  el.querySelectorAll(".segmented__btn").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.value === value);
+  });
 }
 
-/** Honest scope sentence: only the three filters that apply on this page, plus the fixed caveat. */
-function scopeLine(state) {
-  const parts = [];
-  if (state.formats && state.formats.length) parts.push(state.formats.join(" + "));
-  const fromLbl = monthLabel(state.dateFrom);
-  const toLbl = monthLabel(state.dateTo);
-  if (fromLbl && toLbl) parts.push(`${fromLbl} – ${toLbl}`);
-  else if (toLbl) parts.push(`through ${toLbl}`);
-  else if (fromLbl) parts.push(`from ${fromLbl}`);
-  const teamTypeStr = TEAM_TYPE_LABELS[state.teamType];
-  if (teamTypeStr) parts.push(teamTypeStr);
-  const suffix = "leaderboard-only filters don't apply here";
-  return parts.length ? `${parts.join(" · ")} · ${suffix}` : suffix;
+function activeOverlayCount(overlay) {
+  if (!overlay) return 0;
+  let n = 0;
+  if (overlay.dateFrom || overlay.dateTo) n++;
+  if (overlay.positions && overlay.positions.length) n++;
+  if (overlay.opposition) n++;
+  if (overlay.vs) n++;
+  return n;
 }
 
-// ── Small HTML builders ──────────────────────────────────────────────────────
+// ── Header / shell HTML ──────────────────────────────────────────────────────
 
-function statCardsHTML(cards) {
-  // cards: [label, metric, value][]
-  return `<div class="player-stat-cards">${cards
-    .map(
-      ([label, metric, value]) => `
-      <div class="player-stat-card">
-        <div class="player-stat-card__label">${escHtml(label)}</div>
-        <div class="player-stat-card__value">${escHtml(formatValue(metric, value))}</div>
-      </div>`
-    )
-    .join("")}</div>`;
-}
-
-function miniTableHTML(headers, bodyRows) {
-  if (bodyRows.length === 0) {
-    return `<p class="player-page__note">No rows in this scope.</p>`;
-  }
-  return `<div class="mini-table-wrap"><table class="mini-table">
-    <thead><tr>${headers.map((h) => `<th>${escHtml(h)}</th>`).join("")}</tr></thead>
-    <tbody>${bodyRows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody>
-  </table></div>`;
-}
-
-function sectionHTML(title, bodyHTML) {
-  return `<div class="player-page__section">
-    <h4 class="player-page__section-title">${escHtml(title)}</h4>
-    ${bodyHTML}
-  </div>`;
-}
-
-function blockWrapperHTML(title, bodyHTML) {
-  return `<div class="player-page__block">
-    <h3 class="player-page__block-title">${escHtml(title)}</h3>
-    ${bodyHTML}
-  </div>`;
-}
-
-/** Thin rounded track + fill bars, sorted desc, count > 0 only. `items`: [{label, count}]. */
-function barsHTML(items, total, footnote) {
-  const filtered = items.filter((it) => it.count > 0).sort((a, b) => b.count - a.count);
-  const rows = filtered
-    .map((it) => {
-      const pct = total > 0 ? (it.count / total) * 100 : 0;
-      return `<div class="fingerprint__row">
-        <div class="fingerprint__label">${escHtml(it.label)}</div>
-        <div class="fingerprint__track"><div class="fingerprint__fill" style="width:${pct.toFixed(1)}%"></div></div>
-        <div class="fingerprint__stat">${it.count.toLocaleString()} · ${pct.toFixed(1)}%</div>
-      </div>`;
-    })
-    .join("");
-  const footnoteHTML = footnote ? `<p class="player-page__footnote">${escHtml(footnote)}</p>` : "";
-  return `<div class="fingerprint">${rows}</div>${footnoteHTML}`;
-}
-
-function howOutHTML(dismissals) {
-  const innings = Number(dismissals.innings) || 0;
-  const total = Number(dismissals.dismissals) || 0;
-  const items = DISMISSAL_KINDS.map((d) => ({
-    label: d.label.replace(/^Out /, ""),
-    count: Number(dismissals[d.key]) || 0,
-  }));
-  const notOut = innings - total;
-  return barsHTML(items, total, `Not out: ${notOut} of ${innings} innings`);
-}
-
-const WICKET_TYPE_KEYS = ["wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket"];
-function wicketTypesHTML(wt) {
-  const items = WICKET_TYPE_KEYS.map((key) => ({ label: getMetric(key, "bowling").label, count: Number(wt[key]) || 0 }));
-  return barsHTML(items, Number(wt.wickets) || 0, null);
-}
-
-function positionsTableHTML(rows) {
-  const m = { innings: getMetric("innings", "batting"), runs: getMetric("runs", "batting"), average: getMetric("average", "batting"), strike_rate: getMetric("strike_rate", "batting") };
-  const body = rows.map((r) => [
-    escHtml(r.position),
-    escHtml(formatValue(m.innings, r.innings)),
-    escHtml(formatValue(m.runs, r.runs)),
-    escHtml(formatValue(m.average, r.average)),
-    escHtml(formatValue(m.strike_rate, r.strike_rate)),
-  ]);
-  return miniTableHTML(["Pos", "Inns", "Runs", "Avg", "SR"], body);
-}
-
-/** "Vs opposition" is international-only (decision 20); `rows` is null when not fetched. */
-function oppositionSectionHTML(state, discipline, rows) {
-  if (state.teamType !== "international") {
-    return `<p class="player-page__note player-page__note--muted">Opposition splits are international-only for now.</p>`;
-  }
-  const keys = discipline === "batting" ? ["innings", "runs", "average", "strike_rate"] : ["innings", "wickets", "average", "economy"];
-  const headers = discipline === "batting" ? ["Team", "Inns", "Runs", "Avg", "SR"] : ["Team", "Inns", "Wkts", "Avg", "Econ"];
-  const metrics = keys.map((k) => getMetric(k, discipline));
-  const body = (rows || []).map((r) => [escHtml(r.team), ...metrics.map((m) => escHtml(formatValue(m, r[m.key])))]);
-  return miniTableHTML(headers, body);
-}
-
-/** A mini-table with its own small label above it, for grouping two tables under one section. */
-function subTableHTML(title, headers, bodyRows) {
-  return `<div class="matchup__subtable">
-    <p class="matchup__subtable-title">${escHtml(title)}</p>
-    ${miniTableHTML(headers, bodyRows)}
-  </div>`;
-}
-
-/**
- * Coverage-or-nothing gate (SPEC_ADDENDUM D4.3, decision 21): matchup data is
- * missing for every women's player and some men, so we never show a bucket
- * table without first stating what fraction of balls carry style/hand data —
- * and if that fraction is zero, we show a greyed note and NO tables at all.
- */
-function matchupCoverageLine(label, noun, coverage) {
-  const total = Number(coverage?.total) || 0;
-  const mapped = Number(coverage?.mapped) || 0;
-  if (total === 0 || mapped === 0) return null;
-  const pct = ((mapped / total) * 100).toFixed(1);
-  return `<p class="matchup__coverage">${escHtml(label)} covers ${mapped.toLocaleString()} of ${total.toLocaleString()} balls ${escHtml(noun)} (${pct}%).</p>`;
-}
-
-const BATTING_MATCHUP_KEYS = ["innings", "balls", "runs", "strike_rate", "average", "dismissals"];
-const BATTING_MATCHUP_HEADERS = ["Bucket", "Inns", "Balls", "Runs", "SR", "Avg", "Out"];
-// Coarse buckets always read Pace before Spin, regardless of which has more balls.
-const COARSE_ORDER = { Pace: 0, Spin: 1 };
-
-function battingMatchupsHTML(matchups) {
-  const coverageHTML = matchupCoverageLine("Style data", "faced", matchups.coverage);
-  if (!coverageHTML) {
-    return sectionHTML("Matchups", `<p class="player-page__note player-page__note--muted">No bowling-style data in this scope.</p>`);
-  }
-  const metrics = BATTING_MATCHUP_KEYS.map((k) => getMetric(k, "matchup_batting"));
-  const rowFor = (label, r) => [escHtml(label), ...metrics.map((m) => escHtml(formatValue(m, r[m.key])))];
-
-  const coarse = [...matchups.coarse].sort((a, b) => (COARSE_ORDER[a.bucket] ?? 2) - (COARSE_ORDER[b.bucket] ?? 2));
-  const coarseRows = coarse.map((r) => rowFor(r.bucket, r));
-  const fineRows = matchups.fine.map((r) => rowFor(matchupBucketLabel(r.bucket), r));
-
-  const tablesHTML = `${subTableHTML("Vs pace and spin", BATTING_MATCHUP_HEADERS, coarseRows)}${subTableHTML(
-    "Vs bowling type",
-    BATTING_MATCHUP_HEADERS,
-    fineRows
-  )}`;
-  return sectionHTML("Matchups", `${coverageHTML}${tablesHTML}`);
-}
-
-const BOWLING_MATCHUP_KEYS = ["innings", "balls", "runs_conceded", "wickets", "economy", "average", "strike_rate"];
-const BOWLING_MATCHUP_HEADERS = ["Bucket", "Inns", "Balls", "Runs", "Wkts", "Econ", "Avg", "SR"];
-const HAND_LABELS = { "Right-hand bat": "Right-handers", "Left-hand bat": "Left-handers" };
-
-function bowlingMatchupsHTML(matchups) {
-  const coverageHTML = matchupCoverageLine("Batting-hand data", "bowled", matchups.coverage);
-  if (!coverageHTML) {
-    return sectionHTML("Vs left- and right-handers", `<p class="player-page__note player-page__note--muted">No batting-hand data in this scope.</p>`);
-  }
-  const metrics = BOWLING_MATCHUP_KEYS.map((k) => getMetric(k, "matchup_bowling"));
-  const rows = matchups.hands.map((r) => [
-    escHtml(HAND_LABELS[r.bucket] ?? r.bucket),
-    ...metrics.map((m) => escHtml(formatValue(m, r[m.key]))),
-  ]);
-  return sectionHTML("Vs left- and right-handers", `${coverageHTML}${miniTableHTML(BOWLING_MATCHUP_HEADERS, rows)}`);
-}
-
-function battingBlockHTML(state, summary, extra) {
-  if (!summary || Number(summary.innings) === 0) {
-    return blockWrapperHTML("Batting", `<p class="player-page__note">No batting in this scope.</p>`);
-  }
-  const redBall = isRedBallOnly(state);
-  const srKey = redBall ? "balls_per_dismissal" : "strike_rate";
-  const srLabel = redBall ? "BPD" : "SR";
-  const cardsHTML = statCardsHTML([
-    ["Inns", getMetric("innings", "batting"), summary.innings],
-    ["Runs", getMetric("runs", "batting"), summary.runs],
-    ["Avg", getMetric("average", "batting"), summary.average],
-    [srLabel, getMetric(srKey, "batting"), summary[srKey]],
-    ["HS", getMetric("high_score", "batting"), summary.high_score],
-  ]);
-
-  const splitHTML = `<div class="player-page__two-col">
-    ${sectionHTML("By batting position", positionsTableHTML(extra.positions))}
-    ${sectionHTML("Vs opposition", oppositionSectionHTML(state, "batting", extra.opposition))}
-  </div>`;
-
-  const howOut = sectionHTML("How out", howOutHTML(extra.dismissals));
-
-  const progression = sectionHTML(
-    "Scoring by balls faced",
-    statCardsHTML([
-      ["SR, balls 1–10", getMetric("sr_first10", "batting"), extra.progression.sr_first10],
-      ["SR, balls 11–20", getMetric("sr_11_20", "batting"), extra.progression.sr_11_20],
-      ["SR, balls 21+", getMetric("sr_21plus", "batting"), extra.progression.sr_21plus],
-    ])
-  );
-
-  const matchups = battingMatchupsHTML(extra.matchups);
-
-  return blockWrapperHTML("Batting", `${cardsHTML}${splitHTML}${howOut}${progression}${matchups}`);
-}
-
-function bowlingBlockHTML(state, summary, extra) {
-  if (!summary || Number(summary.innings) === 0) {
-    return blockWrapperHTML("Bowling", `<p class="player-page__note">No bowling in this scope.</p>`);
-  }
-  const cardsHTML = statCardsHTML([
-    ["Inns", getMetric("innings", "bowling"), summary.innings],
-    ["Wkts", getMetric("wickets", "bowling"), summary.wickets],
-    ["Avg", getMetric("average", "bowling"), summary.average],
-    ["Econ", getMetric("economy", "bowling"), summary.economy],
-    ["SR", getMetric("strike_rate", "bowling"), summary.strike_rate],
-    ["BBI", getMetric("best", "bowling"), summary.best],
-  ]);
-
-  const wicketTypes = sectionHTML("Wicket types", wicketTypesHTML(extra.wicketTypes));
-  const opposition = sectionHTML("Vs opposition", oppositionSectionHTML(state, "bowling", extra.opposition));
-  const matchups = bowlingMatchupsHTML(extra.matchups);
-
-  return blockWrapperHTML("Bowling", `${cardsHTML}${wicketTypes}${opposition}${matchups}`);
-}
-
-/** Header: initials avatar + name + profile line, or the honest "no profile" note. */
 function headerHTML(current, profile) {
   const heading = profile && profile.full_name ? profile.full_name : current.name;
   const showRegistryName = Boolean(profile && profile.full_name && profile.full_name !== current.name);
@@ -298,7 +94,7 @@ function headerHTML(current, profile) {
   }
   return `
     <div class="player-page__header">
-      <div class="player-page__avatar" aria-hidden="true">${escHtml(initials(heading))}</div>
+      ${headerPhotoHTML(heading, profile)}
       <div class="player-page__header-text">
         <h2 class="player-page__name">${escHtml(heading)}</h2>
         ${showRegistryName ? `<p class="player-page__registry-name">${escHtml(current.name)}</p>` : ""}
@@ -307,35 +103,35 @@ function headerHTML(current, profile) {
     </div>`;
 }
 
-/** Non-scrolling header row (popup only): pairs with .player-popup__close —
- * see styles.css's .player-page__header-row comment for how the two line up
- * without being DOM siblings. Kept as one helper so all three shells (page,
- * loading, error) stay identical here. `showGraphButton` gates "Graph this
- * player" (task 4, decision 43): only the fully-loaded page shell passes
- * true — the loading/error shells have a `current` player but no confirmed
- * innings yet, so offering to chart them there would be premature. */
-function headerRowHTML({ showGraphButton = false } = {}) {
-  const graphBtnHTML = showGraphButton
+/** Sticky header row: back link + discipline toggle (left), Filters + Graph
+ * (right). `showControls` gates toggle/Filters/Graph together — only the
+ * fully-loaded page shell passes true (loading/error shells have a `current`
+ * player but no confirmed innings yet, same precedent as the old
+ * showGraphButton gate). */
+function headerRowHTML({ showControls = false } = {}) {
+  const toggleHTML = showControls
+    ? `<div class="segmented player-page__discipline-toggle" data-role="discipline-toggle" role="group" aria-label="Discipline">
+        <button type="button" class="segmented__btn" data-value="batting">Batting</button>
+        <button type="button" class="segmented__btn" data-value="bowling">Bowling</button>
+      </div>`
+    : "";
+  const filtersBtnHTML = showControls
+    ? `<button type="button" class="btn btn--ghost player-page__filters-btn" data-role="open-player-filters">
+        Filters <span class="filter-open-btn__count" data-role="filters-count" hidden></span>
+      </button>`
+    : "";
+  const graphBtnHTML = showControls
     ? `<button type="button" class="btn btn--ghost player-page__graph-btn" data-role="graph-player">Graph this player</button>`
     : "";
   return `<div class="player-page__header-row">
-      <button type="button" class="link-btn player-page__back" data-role="back">&larr; Find another player</button>
-      ${graphBtnHTML}
-    </div>`;
-}
-
-function pageHTML({ state, current, profile, battingSummary, battingExtra, bowlingSummary, bowlingExtra }) {
-  const bothEmpty = Number(battingSummary.innings) === 0 && Number(bowlingSummary.innings) === 0;
-  const body = bothEmpty
-    ? `<p class="player-page__note">No innings for this player under the current scope — try widening the formats or dates above.</p>`
-    : `${battingBlockHTML(state, battingSummary, battingExtra)}${bowlingBlockHTML(state, bowlingSummary, bowlingExtra)}`;
-
-  return `
-    <div class="player-page">
-      ${headerRowHTML({ showGraphButton: true })}
-      ${headerHTML(current, profile)}
-      <p class="player-page__scope">${escHtml(scopeLine(state))}</p>
-      ${body}
+      <div class="player-page__header-row-group player-page__header-row-group--left">
+        <button type="button" class="link-btn player-page__back" data-role="back">&larr; Find another player</button>
+        ${toggleHTML}
+      </div>
+      <div class="player-page__header-row-group player-page__header-row-group--right">
+        ${filtersBtnHTML}
+        ${graphBtnHTML}
+      </div>
     </div>`;
 }
 
@@ -361,13 +157,53 @@ function errorShellHTML(current, err) {
     </div>`;
 }
 
+function pageShellHTML({ current, profile }) {
+  return `
+    <div class="player-page">
+      ${headerRowHTML({ showControls: true })}
+      ${headerHTML(current, profile)}
+      <div class="player-page__scope-area" data-role="scope-area"></div>
+      <div class="player-page__discipline-body" data-role="discipline-body"></div>
+    </div>`;
+}
+
 // ── Controller ────────────────────────────────────────────────────────────────
 
 export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
   let current = null; // { id, name } | null
-  let scopeKey = null; // the scope this page was last rendered/fetched for
+  let scopeKey = null; // global scope this page was last rendered for
   let loadToken = 0;
   let searchDebounceId = null;
+
+  let activeDiscipline = "batting"; // local to this popup instance
+  let overlay = null; // popup-local Filters overlay — never touches the store
+  let profile = null;
+  let cacheKey = null; // cacheKeyFor(state, overlay) the cached data below matches
+  const data = { batting: undefined, bowling: undefined }; // undefined=not fetched, "loading", "error", or the fetched {core, ...extra}
+
+  // The filters-drawer overlay is `position: fixed` (see styles.css's
+  // .player-filters-drawer) and must escape the popup's own scrolling body —
+  // mounted as a sibling of the app's other overlay hosts (index.html's
+  // #filter-drawer-host / #player-popup-host both live directly under
+  // <body>), not nested inside `container`.
+  const filtersHost = document.createElement("div");
+  document.body.appendChild(filtersHost);
+  const filters = mountPlayerFilters(filtersHost, {
+    onApply: (newOverlay) => {
+      overlay = newOverlay;
+      invalidateCaches();
+      renderScopeArea();
+      loadDiscipline(activeDiscipline, { render: true });
+    },
+  });
+
+  function invalidateCaches() {
+    data.batting = undefined;
+    data.bowling = undefined;
+    cacheKey = null;
+  }
+
+  // ---------- Shared shell wiring ----------
 
   function bindShell(retryFn) {
     const backBtn = container.querySelector('[data-role="back"]');
@@ -381,15 +217,89 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
     const retryBtn = container.querySelector('[data-role="retry"]');
     if (retryBtn) retryBtn.addEventListener("click", retryFn);
 
-    // "Graph this player" (task 4, decision 43) — only present in the loaded
-    // page shell (headerRowHTML's showGraphButton), so this is a no-op on
-    // the loading/error shells.
     const graphBtn = container.querySelector('[data-role="graph-player"]');
     if (graphBtn) {
       graphBtn.addEventListener("click", () => {
         if (onGraphPlayer && current) onGraphPlayer(current.id, current.name);
       });
     }
+
+    const toggleEl = container.querySelector('[data-role="discipline-toggle"]');
+    if (toggleEl) {
+      syncSegmented(toggleEl, activeDiscipline);
+      toggleEl.addEventListener("click", (e) => {
+        const btn = e.target.closest(".segmented__btn");
+        if (!btn || btn.dataset.value === activeDiscipline) return;
+        activeDiscipline = btn.dataset.value;
+        syncSegmented(toggleEl, activeDiscipline);
+        loadDiscipline(activeDiscipline, { render: true });
+      });
+    }
+
+    const filtersBtn = container.querySelector('[data-role="open-player-filters"]');
+    if (filtersBtn) {
+      filtersBtn.addEventListener("click", () => {
+        if (!current) return;
+        filters.open({ playerId: current.id, discipline: activeDiscipline, pageState: store.get(), overlay });
+      });
+    }
+
+    // Identity photo (task 1, decision 44a): a broken/failed headshot URL
+    // falls back to the monogram medallion — a CSS class flip (see styles.
+    // css's .player-photo--broken rule), never a re-render, and never a
+    // browser broken-image glyph.
+    const photoImg = container.querySelector('[data-role="player-photo-img"]');
+    if (photoImg) {
+      photoImg.addEventListener("error", () => {
+        photoImg.closest('[data-role="player-photo"]')?.classList.add("player-photo--broken");
+      });
+    }
+  }
+
+  function renderFiltersCount() {
+    const el = container.querySelector('[data-role="filters-count"]');
+    if (!el) return;
+    const n = activeOverlayCount(overlay);
+    el.hidden = n === 0;
+    el.textContent = String(n);
+  }
+
+  function renderScopeArea() {
+    const el = container.querySelector('[data-role="scope-area"]');
+    if (!el) return;
+    const state = store.get();
+    el.innerHTML = `<p class="player-page__scope">${escHtml(scopeLine(state, overlay))}</p>${overlayPillsHTML(overlay)}`;
+    el.querySelectorAll(".pill__x").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        clearOverlayDim(btn.dataset.dim);
+      });
+    });
+    const resetBtn = el.querySelector('[data-role="reset-player-filters"]');
+    if (resetBtn) resetBtn.addEventListener("click", () => clearOverlayDim(null));
+    renderFiltersCount();
+  }
+
+  function clearOverlayDim(dim) {
+    if (!dim) {
+      overlay = null;
+    } else if (overlay) {
+      const next = { ...overlay };
+      if (dim === "date") {
+        next.dateFrom = null;
+        next.dateTo = null;
+      } else if (dim === "positions") {
+        next.positions = [];
+      } else if (dim === "opposition") {
+        next.opposition = null;
+      } else if (dim === "vs") {
+        next.vs = null;
+      }
+      const empty = !next.dateFrom && !next.dateTo && next.positions.length === 0 && !next.opposition && !next.vs;
+      overlay = empty ? null : next;
+    }
+    invalidateCaches();
+    renderScopeArea();
+    loadDiscipline(activeDiscipline, { render: true });
   }
 
   // ---------- Search mode ----------
@@ -433,11 +343,6 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
     resultsEl.innerHTML = rows
       .map((r) => {
         const meta = [r.country, r.playing_role === "Unknown" ? null : r.playing_role].filter(Boolean).join(" · ");
-        // No-profile cards used to render as a bare name with no explanation,
-        // reading as broken/incomplete next to cards that DO have a meta
-        // line — add the same honest "no profile" note used elsewhere in
-        // this file (e.g. headerHTML's player-page__meta--note) so both card
-        // shapes read consistently (task 5b).
         const metaHTML = meta
           ? `<span class="player-page-search__item-meta">${escHtml(meta)}</span>`
           : `<span class="player-page-search__item-meta player-page-search__item-meta--muted">No profile available</span>`;
@@ -454,6 +359,96 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
 
   // ---------- Player page ----------
 
+  /** Fetch + render ONE discipline's core+extras. Cached per (scope, overlay);
+   * a cache hit just re-renders instantly (no network). `render:true` swaps
+   * the body immediately (toggle click / Filters apply); the initial load
+   * always renders. */
+  async function loadDiscipline(discipline, { render }) {
+    const key = cacheKeyFor(store.get(), overlay);
+    if (key !== cacheKey) {
+      invalidateCaches();
+      cacheKey = key;
+    }
+    if (data[discipline] !== undefined) {
+      // Cache hit — including an already-in-flight "loading" placeholder, so
+      // a second call for the same discipline (e.g. a fast double toggle)
+      // never starts a second overlapping fetch. loadToken is deliberately
+      // NOT bumped on this path: doing so would wrongly mark the OTHER
+      // discipline's own in-flight fetch as "superseded" the next time it
+      // resolves and checks its token.
+      if (render) renderBody();
+      return;
+    }
+    const playerRef = current;
+    const token = ++loadToken;
+    data[discipline] = "loading";
+    if (render) renderBody();
+
+    let result;
+    try {
+      result = await fetchDisciplineData(discipline, playerRef.id, store.get(), overlay);
+    } catch (err) {
+      if (token !== loadToken || current !== playerRef) return; // superseded — don't clobber newer data
+      data[discipline] = { error: err };
+      if (render) renderBody();
+      return;
+    }
+    if (token !== loadToken || current !== playerRef) return; // superseded — don't clobber newer data
+    data[discipline] = result;
+    if (render) renderBody();
+  }
+
+  async function fetchDisciplineData(discipline, playerId, state, ov) {
+    if (discipline === "batting") {
+      const core = await fetchBattingCore(playerId, state, ov);
+      const coreNorm = normalizeBattingCore(core);
+      if (!coreNorm?.summary || Number(coreNorm.summary.innings) === 0) {
+        return { core: coreNorm, positions: [], opposition: null, matchups: { coverage: null, coarse: [], fine: [] } };
+      }
+      const [positions, opposition, matchups] = await Promise.all([
+        fetchBattingPositions(playerId, state, ov),
+        state.teamType === "international" ? fetchBattingOpposition(playerId, state, ov) : Promise.resolve(null),
+        fetchBattingMatchups(playerId, state, ov),
+      ]);
+      return { core: coreNorm, positions, opposition, matchups };
+    }
+    const core = await fetchBowlingCore(playerId, state, ov);
+    if (!core || Array.isArray(core.unsupported) || Number(core.innings) === 0) {
+      return { core, opposition: null, matchups: { coverage: null, hands: [] } };
+    }
+    const [opposition, matchups] = await Promise.all([
+      state.teamType === "international" ? fetchBowlingOpposition(playerId, state, ov) : Promise.resolve(null),
+      fetchBowlingMatchups(playerId, state, ov),
+    ]);
+    return { core, opposition, matchups };
+  }
+
+  function renderBody() {
+    const el = container.querySelector('[data-role="discipline-body"]');
+    if (!el) return;
+    const entry = data[activeDiscipline];
+    if (entry === undefined || entry === "loading") {
+      el.innerHTML = `<p class="player-page__loading">Loading…</p>`;
+      return;
+    }
+    if (entry && entry.error) {
+      el.innerHTML = `<div class="error-box"><p>${escHtml(
+        entry.error.userMessage || entry.error.message || "Couldn't load this tab."
+      )}</p><button type="button" class="btn btn--primary" data-role="retry-tab">Retry</button></div>`;
+      const retryTabBtn = el.querySelector('[data-role="retry-tab"]');
+      if (retryTabBtn) {
+        retryTabBtn.addEventListener("click", () => {
+          data[activeDiscipline] = undefined;
+          loadDiscipline(activeDiscipline, { render: true });
+        });
+      }
+      return;
+    }
+    const state = store.get();
+    el.innerHTML =
+      activeDiscipline === "batting" ? battingGridHTML(state, entry.core, entry) : bowlingGridHTML(state, entry.core, entry);
+  }
+
   async function loadAndRenderPlayer() {
     const playerRef = current;
     const state = store.get();
@@ -464,43 +459,13 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
     bindShell(loadAndRenderPlayer);
 
     try {
-      // battingCore/bowlingCore each merge what used to be 2-3 separate
-      // same-FROM/WHERE queries into one row (Batch 5b C2, see playerData.js)
-      // — the row carries every field the summary cards, dismissal
-      // fingerprint, and progression cards (batting) / wicket-type bars
-      // (bowling) need, so it's passed through unchanged as all three shapes.
-      const [profile, battingCore, bowlingCore] = await Promise.all([
-        fetchProfile(playerRef.id),
-        fetchBattingCore(playerRef.id, state),
-        fetchBowlingCore(playerRef.id, state),
-      ]);
+      profile = await fetchProfile(playerRef.id);
       if (token !== loadToken || current !== playerRef) return;
-      const battingSummary = battingCore;
-      const bowlingSummary = bowlingCore;
 
-      let battingExtra = null;
-      if (Number(battingSummary?.innings) > 0) {
-        const [positions, opposition, matchups] = await Promise.all([
-          fetchBattingPositions(playerRef.id, state),
-          state.teamType === "international" ? fetchBattingOpposition(playerRef.id, state) : Promise.resolve(null),
-          fetchBattingMatchups(playerRef.id, state),
-        ]);
-        if (token !== loadToken || current !== playerRef) return;
-        battingExtra = { positions, dismissals: battingCore, progression: battingCore, opposition, matchups };
-      }
-
-      let bowlingExtra = null;
-      if (Number(bowlingSummary?.innings) > 0) {
-        const [opposition, matchups] = await Promise.all([
-          state.teamType === "international" ? fetchBowlingOpposition(playerRef.id, state) : Promise.resolve(null),
-          fetchBowlingMatchups(playerRef.id, state),
-        ]);
-        if (token !== loadToken || current !== playerRef) return;
-        bowlingExtra = { wicketTypes: bowlingCore, opposition, matchups };
-      }
-
-      container.innerHTML = pageHTML({ state, current: playerRef, profile, battingSummary, battingExtra, bowlingSummary, bowlingExtra });
+      container.innerHTML = pageShellHTML({ current: playerRef, profile });
       bindShell(loadAndRenderPlayer);
+      renderScopeArea();
+      await loadDiscipline(activeDiscipline, { render: true });
     } catch (err) {
       if (token !== loadToken || current !== playerRef) return;
       container.innerHTML = errorShellHTML(playerRef, err);
@@ -512,6 +477,15 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
 
   function showPlayer(id, name) {
     current = { id, name };
+    // Fresh player: reset everything popup-local (task 4/decision 44a — the
+    // overlay and the discipline tab are cleared on every player switch, and
+    // by extension on every popup reopen too, since main.js always routes a
+    // reopen through this same showPlayer() call with an explicit id/name).
+    activeDiscipline = store.get().discipline;
+    overlay = null;
+    invalidateCaches();
+    profile = null;
+    filters.close();
     loadAndRenderPlayer();
   }
 

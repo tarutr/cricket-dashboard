@@ -1,0 +1,502 @@
+// src/playerSections.js
+//
+// Pure HTML builders for the player popup (B7, decision 44a). Every export
+// here is side-effect-free: data in, HTML string out — src/playerPage.js owns
+// fetching + DOM wiring, src/playerFilters.js owns the filters-drawer DOM;
+// this module only owns composing what a section's data means visually.
+// Metric vocabulary (labels, formatting, hasMetricData's no-data rule) comes
+// ONLY from src/metrics.js + table.js's formatValue (SPEC §8: one metrics
+// module) — nothing here redefines a metric.
+//
+// Split out of the old playerPage.js (which mixed rendering with fetching/
+// wiring and was approaching the ~600 line ceiling) so each file stays under
+// it — SPEC §8.3.
+
+import { getMetric, DISMISSAL_KINDS, matchupBucketLabel } from "./metrics.js";
+import { formatValue } from "./table.js";
+import { escHtml, escAttr } from "./html.js";
+
+// ── Months (shared by the header's scope line and playerFilters.js's date
+// pickers — one copy so both read "Jul 2023" identically). ─────────────────
+export const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+export function monthLabel(yyyymm) {
+  if (!yyyymm) return null;
+  const [y, m] = yyyymm.split("-").map(Number);
+  return `${MONTH_NAMES[m - 1]} ${y}`;
+}
+
+/** Same option-list shape as filters.js's monthOptionsHTML (duplicated on
+ * purpose — that one is local to the scope strip and not exported; kept in
+ * sync by hand, same precedent as state.js's CONDITION_OP_SYMBOLS comment). */
+export function monthOptionsHTML(minMonth, maxMonth, selected) {
+  if (!minMonth || !maxMonth) return "";
+  const [minY, minM] = minMonth.split("-").map(Number);
+  const [maxY, maxM] = maxMonth.split("-").map(Number);
+  const opts = [`<option value="">—</option>`];
+  for (let y = maxY; y >= minY; y--) {
+    const mFrom = y === maxY ? maxM : 12;
+    const mTo = y === minY ? minM : 1;
+    for (let m = mFrom; m >= mTo; m--) {
+      const val = `${y}-${String(m).padStart(2, "0")}`;
+      opts.push(`<option value="${val}" ${val === selected ? "selected" : ""}>${MONTH_NAMES[m - 1]} ${y}</option>`);
+    }
+  }
+  return opts.join("");
+}
+
+// ── Identity: initials + monogram medallion + headshot ──────────────────────
+
+export function initials(name) {
+  const words = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2);
+  return words.map((w) => w[0].toUpperCase()).join("") || "?";
+}
+
+/** Two-tone ink-on-panel monogram — the DELIBERATE fallback (women, unmatched
+ * men, broken headshot URLs), never a bare flat circle: a panel-gradient disc
+ * with an ink ring and ink initials reads as a designed crest, not a missing
+ * image. `extraClass` lets headerPhotoHTML add the "only shown on <img>
+ * error" modifier without a second markup shape. */
+export function medallionHTML(name, extraClass = "") {
+  return `<div class="player-photo__medallion ${extraClass}" aria-hidden="true">
+    <span class="player-photo__initials">${escHtml(initials(name))}</span>
+  </div>`;
+}
+
+/**
+ * Identity header photo: a real headshot (has_real_headshot, ~1,360 players)
+ * renders as a lazy <img>; every other case — no profile at all (women,
+ * unmatched men — profiles are men-only, decision 21), a profile with only
+ * the placeholder Cricinfo image, or a broken URL at runtime — is the
+ * medallion, so "no photo" always reads as an intentional design, never a
+ * broken-image glyph. The medallion sits behind the <img> as a sibling (not a
+ * lazy-swapped src) so a network failure just needs a CSS class flip
+ * (playerPage.js's onerror handler), no re-render.
+ */
+export function headerPhotoHTML(name, profile) {
+  const hasPhoto = Boolean(profile && profile.has_real_headshot && profile.headshot_url);
+  if (!hasPhoto) {
+    return `<div class="player-photo" data-role="player-photo">${medallionHTML(name)}</div>`;
+  }
+  return `<div class="player-photo player-photo--has-img" data-role="player-photo">
+    <img class="player-photo__img" data-role="player-photo-img" src="${escAttr(profile.headshot_url)}" alt="${escAttr(
+    name
+  )}" loading="lazy" decoding="async" />
+    ${medallionHTML(name, "player-photo__medallion--fallback")}
+  </div>`;
+}
+
+// ── Small HTML builders (unchanged shapes from the pre-B7 playerPage.js) ────
+
+export function statCardsHTML(cards) {
+  // cards: [label, metric, value][]
+  return `<div class="player-stat-cards">${cards
+    .map(
+      ([label, metric, value]) => `
+      <div class="player-stat-card">
+        <div class="player-stat-card__label">${escHtml(label)}</div>
+        <div class="player-stat-card__value">${escHtml(formatValue(metric, value))}</div>
+      </div>`
+    )
+    .join("")}</div>`;
+}
+
+export function miniTableHTML(headers, bodyRows) {
+  if (bodyRows.length === 0) {
+    return `<p class="player-page__note">No rows in this scope.</p>`;
+  }
+  return `<div class="mini-table-wrap"><table class="mini-table">
+    <thead><tr>${headers.map((h) => `<th>${escHtml(h)}</th>`).join("")}</tr></thead>
+    <tbody>${bodyRows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody>
+  </table></div>`;
+}
+
+export function sectionHTML(title, bodyHTML) {
+  return `<div class="player-page__section">
+    <h4 class="player-page__section-title">${escHtml(title)}</h4>
+    ${bodyHTML}
+  </div>`;
+}
+
+/** Thin rounded track + fill bars, sorted desc, count > 0 only. `items`: [{label, count}]. */
+export function barsHTML(items, total, footnote) {
+  const filtered = items.filter((it) => it.count > 0).sort((a, b) => b.count - a.count);
+  const rows = filtered
+    .map((it) => {
+      const pct = total > 0 ? (it.count / total) * 100 : 0;
+      return `<div class="fingerprint__row">
+        <div class="fingerprint__label">${escHtml(it.label)}</div>
+        <div class="fingerprint__track"><div class="fingerprint__fill" style="width:${pct.toFixed(1)}%"></div></div>
+        <div class="fingerprint__stat">${it.count.toLocaleString()} · ${pct.toFixed(1)}%</div>
+      </div>`;
+    })
+    .join("");
+  const footnoteHTML = footnote ? `<p class="player-page__footnote">${escHtml(footnote)}</p>` : "";
+  return `<div class="fingerprint">${rows}</div>${footnoteHTML}`;
+}
+
+/** Plain (non-vs) how-out fingerprint: bowler- and non-bowler-credited kinds
+ * alike (out_run_out included), "Not out: N of M innings" footnote — same
+ * shape as pre-B7. */
+export function howOutHTML(dismissals) {
+  const innings = Number(dismissals.innings) || 0;
+  const total = Number(dismissals.dismissals) || 0;
+  const items = DISMISSAL_KINDS.map((d) => ({
+    label: d.label.replace(/^Out /, ""),
+    count: Number(dismissals[d.key]) || 0,
+  }));
+  const notOut = innings - total;
+  return barsHTML(items, total, `Not out: ${notOut} of ${innings} innings`);
+}
+
+// matchup_batting's dismissal-kind columns (D4 R3 follow-up): bowler-credited
+// kinds ONLY — no run-out (never bowler-credited) and no not-out math (a
+// per-bowling-style "not out" isn't a real cricket quantity: being not out is
+// a whole-innings property, not a per-style one). This is why the vs-scoped
+// how-out gets its own caption instead of reusing howOutHTML's "Not out: N of
+// M" footnote (data-layer note, see playerData.js's fetchBattingCoreVs).
+const VS_DISMISSAL_KEYS = ["dis_bowled", "dis_lbw", "dis_caught", "dis_caught_and_bowled", "dis_stumped", "dis_hit_wicket"];
+
+/** Vs-scoped how-out: same bar shape, matchup_batting's dis_* columns, and an
+ * honest caption naming exactly what's being counted (task 3's required
+ * wording) instead of a "Not out" figure that doesn't exist in this view. */
+export function howOutVsHTML(vsRow, vsLabel) {
+  const total = Number(vsRow.dismissals) || 0;
+  const items = VS_DISMISSAL_KEYS.map((key) => ({
+    label: getMetric(key, "matchup_batting").label.replace(/^Out /, ""),
+    count: Number(vsRow[key]) || 0,
+  }));
+  return barsHTML(items, total, `Bowler-credited dismissals vs ${vsLabel}`);
+}
+
+export const WICKET_TYPE_KEYS = ["wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket"];
+
+export function wicketTypesHTML(wt) {
+  const items = WICKET_TYPE_KEYS.map((key) => ({ label: getMetric(key, "bowling").label, count: Number(wt[key]) || 0 }));
+  return barsHTML(items, Number(wt.wickets) || 0, null);
+}
+
+export function positionsTableHTML(rows) {
+  const m = {
+    innings: getMetric("innings", "batting"),
+    runs: getMetric("runs", "batting"),
+    average: getMetric("average", "batting"),
+    strike_rate: getMetric("strike_rate", "batting"),
+  };
+  const body = rows.map((r) => [
+    escHtml(r.position),
+    escHtml(formatValue(m.innings, r.innings)),
+    escHtml(formatValue(m.runs, r.runs)),
+    escHtml(formatValue(m.average, r.average)),
+    escHtml(formatValue(m.strike_rate, r.strike_rate)),
+  ]);
+  return miniTableHTML(["Pos", "Inns", "Runs", "Avg", "SR"], body);
+}
+
+/** "Vs opposition" is international-only (decision 20); `rows` is null when not fetched. */
+export function oppositionSectionHTML(state, discipline, rows) {
+  if (state.teamType !== "international") {
+    return `<p class="player-page__note player-page__note--muted">Opposition splits are international-only for now.</p>`;
+  }
+  const keys = discipline === "batting" ? ["innings", "runs", "average", "strike_rate"] : ["innings", "wickets", "average", "economy"];
+  const headers = discipline === "batting" ? ["Team", "Inns", "Runs", "Avg", "SR"] : ["Team", "Inns", "Wkts", "Avg", "Econ"];
+  const metrics = keys.map((k) => getMetric(k, discipline));
+  const body = (rows || []).map((r) => [escHtml(r.team), ...metrics.map((m) => escHtml(formatValue(m, r[m.key])))]);
+  return miniTableHTML(headers, body);
+}
+
+/** A mini-table with its own small label above it, for grouping two tables under one section. */
+export function subTableHTML(title, headers, bodyRows) {
+  return `<div class="matchup__subtable">
+    <p class="matchup__subtable-title">${escHtml(title)}</p>
+    ${miniTableHTML(headers, bodyRows)}
+  </div>`;
+}
+
+/**
+ * Coverage-or-nothing gate (SPEC_ADDENDUM D4.3, decision 21): matchup data is
+ * missing for every women's player and some men, so we never show a bucket
+ * table without first stating what fraction of balls carry style/hand data —
+ * and if that fraction is zero, we show a greyed note and NO tables at all.
+ */
+export function matchupCoverageLine(label, noun, coverage) {
+  const total = Number(coverage?.total) || 0;
+  const mapped = Number(coverage?.mapped) || 0;
+  if (total === 0 || mapped === 0) return null;
+  const pct = ((mapped / total) * 100).toFixed(1);
+  return `<p class="matchup__coverage">${escHtml(label)} covers ${mapped.toLocaleString()} of ${total.toLocaleString()} balls ${escHtml(
+    noun
+  )} (${pct}%).</p>`;
+}
+
+const BATTING_MATCHUP_KEYS = ["innings", "balls", "runs", "strike_rate", "average", "dismissals"];
+const BATTING_MATCHUP_HEADERS = ["Bucket", "Inns", "Balls", "Runs", "SR", "Avg", "Out"];
+// Coarse buckets always read Pace before Spin, regardless of which has more balls.
+const COARSE_ORDER = { Pace: 0, Spin: 1 };
+
+export function battingMatchupsHTML(matchups) {
+  const coverageHTML = matchupCoverageLine("Style data", "faced", matchups.coverage);
+  if (!coverageHTML) {
+    return `<p class="player-page__note player-page__note--muted">No bowling-style data in this scope.</p>`;
+  }
+  const metrics = BATTING_MATCHUP_KEYS.map((k) => getMetric(k, "matchup_batting"));
+  const rowFor = (label, r) => [escHtml(label), ...metrics.map((m) => escHtml(formatValue(m, r[m.key])))];
+
+  const coarse = [...matchups.coarse].sort((a, b) => (COARSE_ORDER[a.bucket] ?? 2) - (COARSE_ORDER[b.bucket] ?? 2));
+  const coarseRows = coarse.map((r) => rowFor(r.bucket, r));
+  const fineRows = matchups.fine.map((r) => rowFor(matchupBucketLabel(r.bucket), r));
+
+  return `${coverageHTML}${subTableHTML("Vs pace and spin", BATTING_MATCHUP_HEADERS, coarseRows)}${subTableHTML(
+    "Vs bowling type",
+    BATTING_MATCHUP_HEADERS,
+    fineRows
+  )}`;
+}
+
+const BOWLING_MATCHUP_KEYS = ["innings", "balls", "runs_conceded", "wickets", "economy", "average", "strike_rate"];
+const BOWLING_MATCHUP_HEADERS = ["Bucket", "Inns", "Balls", "Runs", "Wkts", "Econ", "Avg", "SR"];
+const HAND_LABELS = { "Right-hand bat": "Right-handers", "Left-hand bat": "Left-handers" };
+
+export function bowlingMatchupsHTML(matchups) {
+  const coverageHTML = matchupCoverageLine("Batting-hand data", "bowled", matchups.coverage);
+  if (!coverageHTML) {
+    return `<p class="player-page__note player-page__note--muted">No batting-hand data in this scope.</p>`;
+  }
+  const metrics = BOWLING_MATCHUP_KEYS.map((k) => getMetric(k, "matchup_bowling"));
+  const rows = matchups.hands.map((r) => [
+    escHtml(HAND_LABELS[r.bucket] ?? r.bucket),
+    ...metrics.map((m) => escHtml(formatValue(m, r[m.key]))),
+  ]);
+  return `${coverageHTML}${miniTableHTML(BOWLING_MATCHUP_HEADERS, rows)}`;
+}
+
+// ── Honest refusal rendering (B7 overlay) ────────────────────────────────────
+// A section fetcher returns `{ unsupported: [dims] }` when the popup's
+// filters-drawer overlay asked for something that source can't honor (see
+// playerData.js's PLAYER_SECTION_SUPPORT / applyOverlay). We NEVER show a
+// partially-filtered number — the section greys out in place with a plain-
+// English note instead, exactly like the leaderboard matchup mode's coverage
+// gate greys a whole bucket table rather than show a misleading partial one.
+const DIM_LABELS = { date: "date range", positions: "batting position", opposition: "opposition", vs: "Vs" };
+
+export function dimDisplayLabel(dim) {
+  return DIM_LABELS[dim] || dim;
+}
+
+export function unsupportedNoteHTML(sectionTitle, dims) {
+  const dimLabel = (dims || []).map(dimDisplayLabel).join(" or ");
+  return `<p class="player-page__note player-page__note--muted">Can't split "${escHtml(sectionTitle)}" by ${escHtml(
+    dimLabel
+  )} here.</p>`;
+}
+
+/** Wrap a section's fetch result: `{unsupported}` greys in place, otherwise
+ * `renderFn(result)` builds the real content. One call site for every
+ * section that can be refused by the filters-drawer overlay. */
+export function sectionOrUnsupported(title, result, renderFn) {
+  if (result && Array.isArray(result.unsupported)) {
+    return sectionHTML(title, unsupportedNoteHTML(title, result.unsupported));
+  }
+  return sectionHTML(title, renderFn(result));
+}
+
+/** Whole-tab refusal (bowling only in practice): the overlay carries a dim
+ * that NO section on this tab can honor at all (e.g. a Positions/Vs value
+ * set from the Batting tab, where bowling's own core has no position/vs
+ * concept — PLAYER_SECTION_SUPPORT's bowling.core says so). Greys the entire
+ * tab with one note rather than every section repeating itself. */
+export function wholeTabUnsupportedHTML(tabLabel, dims) {
+  const dimLabel = (dims || []).map(dimDisplayLabel).join(" and ");
+  return `<p class="player-page__note player-page__note--muted">${escHtml(
+    tabLabel
+  )} can't be shown with a ${escHtml(dimLabel)} filter active — remove it (Filters, or the pills above) to see this tab.</p>`;
+}
+
+// ── Scope line + overlay pills ───────────────────────────────────────────────
+
+export const TEAM_TYPE_LABELS = { international: "International cricket", club: "Domestic cricket", both: "All cricket" };
+
+/** Extra plain-English tokens for whatever the popup's filters-drawer overlay
+ * is currently narrowing — appended to the page's own honest scope sentence
+ * (§8.4: state only filters actually applied). Mirrored by overlayPillsHTML's
+ * removable pills below; both read the same overlay object so they can never
+ * disagree. */
+export function overlayTokens(overlay) {
+  if (!overlay) return [];
+  const tokens = [];
+  if (overlay.dateFrom || overlay.dateTo) {
+    const f = monthLabel(overlay.dateFrom);
+    const t = monthLabel(overlay.dateTo);
+    tokens.push(f && t ? `${f} – ${t}` : f ? `from ${f}` : t ? `through ${t}` : "narrower dates");
+  }
+  if (overlay.positions && overlay.positions.length) {
+    const sorted = [...overlay.positions].sort((a, b) => a - b);
+    tokens.push(`positions ${sorted.join(", ")}`);
+  }
+  if (overlay.opposition) tokens.push(`against ${overlay.opposition}`);
+  if (overlay.vs) tokens.push(`vs ${overlay.vs}`);
+  return tokens;
+}
+
+/** Honest scope sentence: the page's own three filters (Format/Date/Team
+ * type, unchanged from pre-B7) plus the overlay's tokens, plus the fixed
+ * caveat. */
+export function scopeLine(state, overlay) {
+  const parts = [];
+  if (state.formats && state.formats.length) parts.push(state.formats.join(" + "));
+  const fromLbl = monthLabel(state.dateFrom);
+  const toLbl = monthLabel(state.dateTo);
+  if (fromLbl && toLbl) parts.push(`${fromLbl} – ${toLbl}`);
+  else if (toLbl) parts.push(`through ${toLbl}`);
+  else if (fromLbl) parts.push(`from ${fromLbl}`);
+  const teamTypeStr = TEAM_TYPE_LABELS[state.teamType];
+  if (teamTypeStr) parts.push(teamTypeStr);
+  for (const t of overlayTokens(overlay)) parts.push(t);
+  const suffix = "leaderboard-only filters don't apply here";
+  return parts.length ? `${parts.join(" · ")} · ${suffix}` : suffix;
+}
+
+// ── Discipline grid composition (re-composition of existing sections) ───────
+// Moved out of playerPage.js (which owns fetching/wiring) to keep that file
+// under SPEC §8.3's ~600-line ceiling — these are still pure data-in/HTML-out
+// builders, just discipline-specific ones, same category as everything else
+// in this file.
+
+/** Owner's red-ball exception: Test/MDM-only scopes swap SR for balls-per-dismissal. */
+export function isRedBallOnly(state) {
+  return state.formats.length > 0 && state.formats.every((f) => f === "Test" || f === "MDM");
+}
+
+/** Normalizes fetchBattingCore's two possible shapes (plain row, or the
+ * `vs`-scoped composite from fetchBattingCoreVs) into one shape every
+ * downstream renderer reads the same way. */
+export function normalizeBattingCore(core) {
+  if (!core) return null;
+  if (core.source === "matchup_batting") return core; // { vs, source, coverage, summary, howout, progression }
+  return { source: "batting", vs: null, coverage: null, summary: core, howout: core, progression: core };
+}
+
+export function battingGridHTML(state, coreNorm, extra) {
+  const summary = coreNorm?.summary;
+  const isVs = coreNorm?.source === "matchup_batting";
+  if (!summary || Number(summary.innings) === 0) {
+    return isVs
+      ? `<p class="player-page__note">No innings vs ${escHtml(coreNorm.vs)} in this scope.</p>`
+      : `<p class="player-page__note">No batting in this scope.</p>`;
+  }
+  const redBall = isRedBallOnly(state);
+  let heroCardsHTML;
+  let coverageHTML = "";
+  if (isVs) {
+    // matchup_batting has no high_score column — the plain page's 5th tile
+    // (HS) has no analog here, so Boundary % takes its place (flagged: a
+    // judgment call, see the final report).
+    const dismissals = Number(summary.dismissals) || 0;
+    const bpd = dismissals > 0 ? Number(summary.balls) / dismissals : null;
+    heroCardsHTML = statCardsHTML([
+      ["Inns", getMetric("innings", "matchup_batting"), summary.innings],
+      ["Runs", getMetric("runs", "matchup_batting"), summary.runs],
+      ["Avg", getMetric("average", "matchup_batting"), summary.average],
+      redBall
+        ? ["BPD", getMetric("balls_per_dismissal", "matchup_batting"), bpd]
+        : ["SR", getMetric("strike_rate", "matchup_batting"), summary.strike_rate],
+      ["Bdry %", getMetric("boundary_pct", "matchup_batting"), summary.boundary_pct],
+    ]);
+    coverageHTML = matchupCoverageLine("Style data", "faced", coreNorm.coverage) || "";
+  } else {
+    const srKey = redBall ? "balls_per_dismissal" : "strike_rate";
+    const srLabel = redBall ? "BPD" : "SR";
+    heroCardsHTML = statCardsHTML([
+      ["Inns", getMetric("innings", "batting"), summary.innings],
+      ["Runs", getMetric("runs", "batting"), summary.runs],
+      ["Avg", getMetric("average", "batting"), summary.average],
+      [srLabel, getMetric(srKey, "batting"), summary[srKey]],
+      ["HS", getMetric("high_score", "batting"), summary.high_score],
+    ]);
+  }
+
+  const twoColA = `<div class="player-page__two-col">
+    ${sectionOrUnsupported("By batting position", extra.positions, positionsTableHTML)}
+    ${sectionOrUnsupported("Vs opposition", extra.opposition, (rows) => oppositionSectionHTML(state, "batting", rows))}
+  </div>`;
+
+  const howOutBody = isVs ? howOutVsHTML(coreNorm.howout, coreNorm.vs) : howOutHTML(coreNorm.howout);
+  const progression = coreNorm.progression;
+  const progressionBody =
+    progression && Array.isArray(progression.unsupported)
+      ? unsupportedNoteHTML("Scoring by balls faced", progression.unsupported)
+      : statCardsHTML([
+          ["SR, balls 1–10", getMetric("sr_first10", "batting"), progression.sr_first10],
+          ["SR, balls 11–20", getMetric("sr_11_20", "batting"), progression.sr_11_20],
+          ["SR, balls 21+", getMetric("sr_21plus", "batting"), progression.sr_21plus],
+        ]);
+
+  const twoColB = `<div class="player-page__two-col">
+    ${sectionHTML("How out", howOutBody)}
+    ${sectionHTML("Scoring by balls faced", progressionBody)}
+  </div>`;
+
+  const matchupsHTML = sectionOrUnsupported("Matchups", extra.matchups, battingMatchupsHTML);
+
+  return `${heroCardsHTML}${coverageHTML}${twoColA}${twoColB}${matchupsHTML}`;
+}
+
+/** Bowling's tight grid has one fewer row than batting's — bowling has no
+ * by-position/how-out/progression analog, only wicket types + opposition +
+ * matchups (flagged: the task's 4-row description was written with batting's
+ * shape in mind; adapted here to bowling's actual 4 existing sections). */
+export function bowlingGridHTML(state, core, extra) {
+  if (core && Array.isArray(core.unsupported)) {
+    return wholeTabUnsupportedHTML("Bowling", core.unsupported);
+  }
+  if (!core || Number(core.innings) === 0) {
+    return `<p class="player-page__note">No bowling in this scope.</p>`;
+  }
+  const heroCardsHTML = statCardsHTML([
+    ["Inns", getMetric("innings", "bowling"), core.innings],
+    ["Wkts", getMetric("wickets", "bowling"), core.wickets],
+    ["Avg", getMetric("average", "bowling"), core.average],
+    ["Econ", getMetric("economy", "bowling"), core.economy],
+    ["SR", getMetric("strike_rate", "bowling"), core.strike_rate],
+    ["BBI", getMetric("best", "bowling"), core.best],
+  ]);
+  const twoColA = `<div class="player-page__two-col">
+    ${sectionHTML("Wicket types", wicketTypesHTML(core))}
+    ${sectionOrUnsupported("Vs opposition", extra.opposition, (rows) => oppositionSectionHTML(state, "bowling", rows))}
+  </div>`;
+  const matchupsHTML = sectionOrUnsupported("Matchups", extra.matchups, bowlingMatchupsHTML);
+  return `${heroCardsHTML}${twoColA}${matchupsHTML}`;
+}
+
+/** One removable pill per active overlay dimension, `data-dim` naming which
+ * overlay key a click should clear, plus a "Reset filters" link clearing all
+ * of them at once. Returns "" when the overlay is empty (no pills row at
+ * all — matches the main app's pills.js precedent of hiding the whole row). */
+export function overlayPillsHTML(overlay) {
+  if (!overlay) return "";
+  const entries = [];
+  if (overlay.dateFrom || overlay.dateTo) {
+    const f = monthLabel(overlay.dateFrom);
+    const t = monthLabel(overlay.dateTo);
+    entries.push({ dim: "date", label: f && t ? `${f} – ${t}` : f ? `From ${f}` : `Through ${t}` });
+  }
+  if (overlay.positions && overlay.positions.length) {
+    const sorted = [...overlay.positions].sort((a, b) => a - b);
+    entries.push({ dim: "positions", label: `Batting at ${sorted.join(", ")}` });
+  }
+  if (overlay.opposition) entries.push({ dim: "opposition", label: `Against ${overlay.opposition}` });
+  if (overlay.vs) entries.push({ dim: "vs", label: `Vs ${overlay.vs}` });
+  if (entries.length === 0) return "";
+  return `<div class="pills-row player-page__filter-pills">${entries
+    .map(
+      (e) =>
+        `<span class="pill">${escHtml(e.label)} <button type="button" class="pill__x" data-dim="${e.dim}" aria-label="Remove filter">&times;</button></span>`
+    )
+    .join(
+      ""
+    )}<button type="button" class="link-btn player-page__reset-filters" data-role="reset-player-filters">Reset filters</button></div>`;
+}

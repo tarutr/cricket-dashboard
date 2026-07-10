@@ -41,6 +41,121 @@ function selectList(discipline, keys) {
   return keys.map((k) => `${expr(discipline, k)} AS ${k}`).join(", ");
 }
 
+// ── Popup overlay re-scoping (B7, decision 44a) ───────────────────────────────
+// The player popup gets its own filters drawer (UI lands in a later task) that
+// RE-SCOPES every section on top of the page scope (Format + Date + Team type).
+// The overlay object it passes is:
+//   { dateFrom, dateTo,                // "YYYY-MM" | null — extra date narrowing
+//     positions,                       // int[]  — batting positions (batter's own,
+//                                       //          or the STRIKER's for bowling matchups)
+//     opposition,                      // string | null — a single opponent team
+//     vs }                             // string | null — a bowling style/group,
+//                                       //          BATTING discipline only
+// A dimension is "requested" only when it carries a real value; an absent or
+// empty overlay leaves every query BYTE-IDENTICAL to the pre-B7 behaviour (the
+// applyOverlay fast-path returns the original WHERE string unchanged).
+//
+// Honesty rule (decision 44a): a section whose SOURCE table cannot honor a
+// requested dimension returns a STRUCTURED REFUSAL ({ unsupported: [...] })
+// instead of silently dropping the dimension — the UI greys that section with
+// a note. We NEVER apply a partial overlay. The one exception is `vs` on the
+// batting core/how-out sections, which switch source to matchup_batting (which
+// carries bowling_type/bowling_group) and answer WITH a coverage line, exactly
+// as the existing Matchups section already does.
+//
+// PLAYER_SECTION_SUPPORT is the machine-readable map the drawer reads to grey
+// impossible dimension×section combinations UP FRONT. Values: true (honored
+// natively), false (refused), "matchup" (honored by switching to the matchup
+// source). It is kept in lock-step with what each fetch function enforces at
+// query time — the two must never disagree.
+export const PLAYER_SECTION_SUPPORT = {
+  "batting.core": { date: true, positions: true, opposition: true, vs: "matchup" },
+  "batting.positions": { date: true, positions: true, opposition: true, vs: false },
+  "batting.opposition": { date: true, positions: true, opposition: true, vs: false },
+  "batting.howout": { date: true, positions: true, opposition: true, vs: "matchup" },
+  "batting.progression": { date: true, positions: true, opposition: true, vs: false },
+  "batting.matchups": { date: true, positions: true, opposition: true, vs: false },
+  "bowling.core": { date: true, positions: false, opposition: true, vs: false },
+  "bowling.wicketTypes": { date: true, positions: false, opposition: true, vs: false },
+  "bowling.opposition": { date: true, positions: false, opposition: true, vs: false },
+  "bowling.matchups": { date: true, positions: true, opposition: true, vs: false },
+};
+
+/** The overlay dimensions carrying a real (narrowing) value. */
+function requestedDims(overlay) {
+  if (!overlay) return [];
+  const req = [];
+  if (overlay.dateFrom || overlay.dateTo) req.push("date");
+  if (Array.isArray(overlay.positions) && overlay.positions.length > 0) req.push("positions");
+  if (overlay.opposition) req.push("opposition");
+  if (overlay.vs) req.push("vs");
+  return req;
+}
+
+/** Date narrowing — identical month semantics to filters.js buildScopeClauses
+ * (inclusive of the whole "to" month via first-day-of-next-month). */
+function overlayDateClauses(overlay) {
+  const c = [];
+  if (overlay.dateFrom) c.push(`match_date >= DATE '${esc(overlay.dateFrom)}-01'`);
+  if (overlay.dateTo) {
+    const [y, m] = overlay.dateTo.split("-").map(Number);
+    const nextY = m === 12 ? y + 1 : y;
+    const nextM = m === 12 ? 1 : m + 1;
+    c.push(`match_date < DATE '${nextY}-${String(nextM).padStart(2, "0")}-01'`);
+  }
+  return c;
+}
+
+/** `vs` bucket predicate (matchup_batting only). 'Spin'/'Pace' are the two
+ * bowling_GROUP values (coarse — ALL spin / ALL pace, matching the leaderboard
+ * "vs Spin" semantics and the standing anchor); any other value is a specific
+ * bowling_TYPE. This group-vs-type disambiguation is a JUDGMENT CALL forced by
+ * the flat `vs` overlay value (see final report). */
+function overlayVsClause(overlay) {
+  const v = overlay.vs;
+  if (v === "Spin" || v === "Pace") return [`bowling_group = '${esc(v)}'`];
+  return [`bowling_type = '${esc(v)}'`];
+}
+
+/**
+ * Fold the overlay's date/positions/opposition narrowing onto a base WHERE
+ * string for a plain (non-vs) section. `caps` names the source's columns:
+ *   positionCol   — batting_position, or null if the source lacks it
+ *   oppositionCol — the opponent column (bowling_team for batting sources,
+ *                   batting_team for bowling sources)
+ * `vs` is handled by callers, never here: plain sources cannot honor it, so a
+ * requested `vs` is always a refusal (returned in `unsupported`). Returns
+ * `{ where }` (all requested dims honored — and, crucially, the UNCHANGED base
+ * string when nothing was requested → byte-identical) or `{ unsupported: [...] }`
+ * (one or more requested dims can't be honored — NEVER a partial where). */
+function applyOverlay(baseWhere, overlay, caps) {
+  const req = requestedDims(overlay);
+  if (req.length === 0) return { where: baseWhere };
+  const unsupported = [];
+  const extra = [];
+  for (const dim of req) {
+    if (dim === "date") {
+      extra.push(...overlayDateClauses(overlay));
+    } else if (dim === "positions") {
+      if (!caps.positionCol) {
+        unsupported.push("positions");
+      } else {
+        // User-picked ints; coerce + drop anything non-integral (same guard as
+        // filters.js) so nothing unsanitized reaches the SQL.
+        const nums = overlay.positions.map(Number).filter(Number.isInteger);
+        if (nums.length > 0) extra.push(`${caps.positionCol} IN (${nums.join(", ")})`);
+      }
+    } else if (dim === "opposition") {
+      if (!caps.oppositionCol) unsupported.push("opposition");
+      else extra.push(`${caps.oppositionCol} = '${esc(overlay.opposition)}'`);
+    } else if (dim === "vs") {
+      unsupported.push("vs"); // plain sources can't; batting core switches upstream
+    }
+  }
+  if (unsupported.length > 0) return { unsupported };
+  return { where: [baseWhere, ...extra].join(" AND ") };
+}
+
 /**
  * Substring player search across ALL players (both genders), profile-enriched.
  * Names come from player_matches, not the players registry: a player can
@@ -93,21 +208,91 @@ const PROGRESSION_KEYS = ["sr_first10", "sr_11_20", "sr_21plus"];
  * 21plus for the progression cards) — callers index it by name, so one
  * shared object serves all three call sites unchanged.
  */
-export async function fetchBattingCore(playerId, state) {
+export async function fetchBattingCore(playerId, state, overlay = null) {
+  // `vs` cannot be answered from batting_innings (no bowling-type dimension):
+  // switch the core-tile + how-out sections to matchup_batting. The progression
+  // section has no matchup equivalent (matchup_batting carries no faced-ball
+  // fb*_runs/balls columns), so it comes back refused inside the composite.
+  if (requestedDims(overlay).includes("vs")) {
+    return fetchBattingCoreVs(playerId, state, overlay);
+  }
+  const base = whereFor(state, "batter_id", playerId);
+  // batting.core / .howout / .progression all live on batting_innings, which
+  // carries batting_position + bowling_team + match_date → every non-vs dim is
+  // honored; applyOverlay never refuses here.
+  const ov = applyOverlay(base, overlay, { positionCol: "batting_position", oppositionCol: "bowling_team" });
   const kindSelects = DISMISSAL_KINDS.map((d) => `${expr("batting", d.key)} AS ${d.key}`).join(", ");
   const sql = [
     `SELECT ${selectList("batting", BATTING_SUMMARY_KEYS)}, SUM(dismissed) AS dismissals, ${kindSelects},`,
     `       ${selectList("batting", PROGRESSION_KEYS)}`,
-    `FROM batting WHERE ${whereFor(state, "batter_id", playerId)}`,
+    `FROM batting WHERE ${ov.where}`,
   ].join("\n");
   const { rows } = await query(sql);
   return rows[0] ?? null;
 }
 
-export async function fetchBattingPositions(playerId, state) {
+// Core-tile + how-out keys recomputed from matchup_batting when a `vs` bucket is
+// active. One no-GROUP-BY row serves both the tiles (summary) and the dismissal
+// fingerprint (howout) — same shared-row pattern as the plain fetchBattingCore.
+const VS_CORE_KEYS = [
+  "innings", "balls", "runs", "strike_rate", "average", "dismissals", "dot_pct", "boundary_pct",
+  "dis_bowled", "dis_lbw", "dis_caught", "dis_caught_and_bowled", "dis_stumped", "dis_hit_wicket",
+];
+
+/**
+ * `vs`-scoped batting core: composed ENTIRELY from the matchup_batting
+ * fragments already used by fetchBattingMatchups (coverage line + the
+ * matchup_batting metric expressions) — no new aggregation shapes. Returns a
+ * composite the popup UI reads section-by-section:
+ *   { vs, source, coverage:{mapped,total}, summary, howout,
+ *     progression:{ unsupported:["vs"] } }
+ * `summary` and `howout` are the SAME single row (tiles read innings/balls/
+ * runs/strike_rate/average/…, how-out reads dismissals + the dis_* kinds).
+ * `coverage` is the overall style-data coverage across ALL balls in the
+ * (date/positions/opposition-narrowed) scope — NOT the vs bucket — so the UI
+ * shows "based on N of M balls faced" exactly like the Matchups section.
+ */
+async function fetchBattingCoreVs(playerId, state, overlay) {
+  const base = whereFor(state, "batter_id", playerId);
+  // date/positions/opposition narrowing on matchup_batting (which carries all
+  // three columns). Strip vs here — it's applied only to the tiles/how-out row.
+  const narrow = applyOverlay(base, { ...overlay, vs: null }, {
+    positionCol: "batting_position",
+    oppositionCol: "bowling_team",
+  });
+  const scopeWhere = narrow.where; // never refuses (all three columns present)
+  const vsWhere = [scopeWhere, ...overlayVsClause(overlay)].join(" AND ");
+
+  const coverageSql = [
+    `SELECT SUM(balls_faced) AS total,`,
+    `       SUM(balls_faced) FILTER (bowling_group <> '(unmapped)') AS mapped`,
+    `FROM matchup_batting WHERE ${scopeWhere}`,
+  ].join("\n");
+  const coreSql = [
+    `SELECT ${selectList("matchup_batting", VS_CORE_KEYS)}`,
+    `FROM matchup_batting WHERE ${vsWhere}`,
+  ].join("\n");
+
+  const [covRes, coreRes] = await Promise.all([query(coverageSql), query(coreSql)]);
+  const covRow = covRes.rows[0] ?? { mapped: 0, total: 0 };
+  const row = coreRes.rows[0] ?? null;
+  return {
+    vs: overlay.vs,
+    source: "matchup_batting",
+    coverage: { mapped: covRow.mapped ?? 0, total: covRow.total ?? 0 },
+    summary: row,
+    howout: row,
+    progression: { unsupported: ["vs"] },
+  };
+}
+
+export async function fetchBattingPositions(playerId, state, overlay = null) {
+  const base = whereFor(state, "batter_id", playerId);
+  const ov = applyOverlay(base, overlay, { positionCol: "batting_position", oppositionCol: "bowling_team" });
+  if (ov.unsupported) return { unsupported: ov.unsupported };
   const sql = [
     `SELECT batting_position AS position, ${selectList("batting", SPLIT_BATTING_KEYS)}`,
-    `FROM batting WHERE ${whereFor(state, "batter_id", playerId)}`,
+    `FROM batting WHERE ${ov.where}`,
     `GROUP BY batting_position ORDER BY batting_position`,
   ].join("\n");
   const { rows } = await query(sql);
@@ -115,10 +300,13 @@ export async function fetchBattingPositions(playerId, state) {
 }
 
 /** International only (decision 20) — callers gate on teamType and grey otherwise. */
-export async function fetchBattingOpposition(playerId, state) {
+export async function fetchBattingOpposition(playerId, state, overlay = null) {
+  const base = whereFor(state, "batter_id", playerId);
+  const ov = applyOverlay(base, overlay, { positionCol: "batting_position", oppositionCol: "bowling_team" });
+  if (ov.unsupported) return { unsupported: ov.unsupported };
   const sql = [
     `SELECT bowling_team AS team, ${selectList("batting", SPLIT_BATTING_KEYS)}`,
-    `FROM batting WHERE ${whereFor(state, "batter_id", playerId)}`,
+    `FROM batting WHERE ${ov.where}`,
     `GROUP BY bowling_team ORDER BY runs DESC, team`,
   ].join("\n");
   const { rows } = await query(sql);
@@ -133,20 +321,29 @@ const WICKET_TYPE_KEYS = ["wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and
  * list, so one row (12 columns) replaces two round trips. `wickets` is
  * selected once and read by both the summary cards and the wicket-types bars.
  */
-export async function fetchBowlingCore(playerId, state) {
+export async function fetchBowlingCore(playerId, state, overlay = null) {
+  const base = whereFor(state, "bowler_id", playerId);
+  // bowling_innings has NO batting_position (a bowler has no batting position;
+  // striker position lives only on matchup_bowling) → `positions` is refused
+  // here. `vs` (a batting-discipline dim) is refused too. Opponent = batting_team.
+  const ov = applyOverlay(base, overlay, { positionCol: null, oppositionCol: "batting_team" });
+  if (ov.unsupported) return { unsupported: ov.unsupported };
   const sql = [
     `SELECT ${selectList("bowling", BOWLING_SUMMARY_KEYS)}, ${selectList("bowling", WICKET_TYPE_KEYS)}`,
-    `FROM bowling WHERE ${whereFor(state, "bowler_id", playerId)}`,
+    `FROM bowling WHERE ${ov.where}`,
   ].join("\n");
   const { rows } = await query(sql);
   return rows[0] ?? null;
 }
 
 /** International only (decision 20) — callers gate on teamType and grey otherwise. */
-export async function fetchBowlingOpposition(playerId, state) {
+export async function fetchBowlingOpposition(playerId, state, overlay = null) {
+  const base = whereFor(state, "bowler_id", playerId);
+  const ov = applyOverlay(base, overlay, { positionCol: null, oppositionCol: "batting_team" });
+  if (ov.unsupported) return { unsupported: ov.unsupported };
   const sql = [
     `SELECT batting_team AS team, ${selectList("bowling", SPLIT_BOWLING_KEYS)}`,
-    `FROM bowling WHERE ${whereFor(state, "bowler_id", playerId)}`,
+    `FROM bowling WHERE ${ov.where}`,
     `GROUP BY batting_team ORDER BY wickets DESC, team`,
   ].join("\n");
   const { rows } = await query(sql);
@@ -172,8 +369,18 @@ const MATCHUP_BOWLING_KEYS = metricsFor("matchup_bowling").map((m) => m.key);
  * (also dropping '(unmapped)'; bare-slow bowlers surface as the group name
  * 'Pace'/'Spin' there per decision 24 — label via matchupBucketLabel()).
  */
-export async function fetchBattingMatchups(playerId, state) {
-  const where = whereFor(state, "batter_id", playerId);
+export async function fetchBattingMatchups(playerId, state, overlay = null) {
+  // matchup_batting carries batting_position + bowling_team + match_date, so
+  // date/positions/opposition all narrow it. `vs` is REFUSED here on purpose:
+  // this section IS the by-bowling-type breakdown, so pre-filtering it to a
+  // single style would collapse the very thing it shows (the UI greys it with
+  // "already viewing vs X above"). Matches PLAYER_SECTION_SUPPORT["batting.matchups"].
+  const ov = applyOverlay(whereFor(state, "batter_id", playerId), overlay, {
+    positionCol: "batting_position",
+    oppositionCol: "bowling_team",
+  });
+  if (ov.unsupported) return { unsupported: ov.unsupported };
+  const where = ov.where;
   const metricSelects = selectList("matchup_batting", MATCHUP_BATTING_KEYS);
 
   const coverageSql = [
@@ -210,8 +417,18 @@ export async function fetchBattingMatchups(playerId, state) {
  * bowled (M = all buckets, N = buckets with a mapped hand — batting_hand <>
  * '(unmapped)'). `hands` groups by batting_hand, '(unmapped)' dropped.
  */
-export async function fetchBowlingMatchups(playerId, state) {
-  const where = whereFor(state, "bowler_id", playerId);
+export async function fetchBowlingMatchups(playerId, state, overlay = null) {
+  // matchup_bowling carries batting_position (the STRIKER's position faced) +
+  // batting_team + match_date, so date/positions/opposition all narrow it
+  // (positions = "vs batters at position N", decision 37). `vs` is a
+  // batting-discipline dimension and never applies to a bowling section →
+  // refused. Matches PLAYER_SECTION_SUPPORT["bowling.matchups"].
+  const ov = applyOverlay(whereFor(state, "bowler_id", playerId), overlay, {
+    positionCol: "batting_position",
+    oppositionCol: "batting_team",
+  });
+  if (ov.unsupported) return { unsupported: ov.unsupported };
+  const where = ov.where;
   const metricSelects = selectList("matchup_bowling", MATCHUP_BOWLING_KEYS);
 
   const coverageSql = [
