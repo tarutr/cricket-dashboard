@@ -433,9 +433,17 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
     resultsEl.innerHTML = rows
       .map((r) => {
         const meta = [r.country, r.playing_role === "Unknown" ? null : r.playing_role].filter(Boolean).join(" · ");
+        // No-profile cards used to render as a bare name with no explanation,
+        // reading as broken/incomplete next to cards that DO have a meta
+        // line — add the same honest "no profile" note used elsewhere in
+        // this file (e.g. headerHTML's player-page__meta--note) so both card
+        // shapes read consistently (task 5b).
+        const metaHTML = meta
+          ? `<span class="player-page-search__item-meta">${escHtml(meta)}</span>`
+          : `<span class="player-page-search__item-meta player-page-search__item-meta--muted">No profile available</span>`;
         return `<button type="button" class="player-page-search__item" data-id="${escAttr(r.id)}" data-name="${escAttr(r.name)}">
           <span class="player-page-search__item-name">${escHtml(r.name)}</span>
-          ${meta ? `<span class="player-page-search__item-meta">${escHtml(meta)}</span>` : ""}
+          ${metaHTML}
         </button>`;
       })
       .join("");
