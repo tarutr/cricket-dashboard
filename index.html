@@ -50,7 +50,25 @@
         <section class="pills-section" id="pills-bar" aria-label="Applied filters"></section>
 
         <div class="player-search" id="player-search-section">
-          <input type="text" id="player-search-input" class="input" placeholder="Search players…" aria-label="Search players" />
+          <input
+            type="text"
+            id="player-search-input"
+            class="input"
+            placeholder="Search players…"
+            aria-label="Search players"
+            autocomplete="off"
+            role="combobox"
+            aria-expanded="false"
+            aria-controls="player-search-results"
+            aria-autocomplete="list"
+          />
+          <div
+            class="omnisearch__results"
+            id="player-search-results"
+            role="listbox"
+            aria-label="Player search results"
+            hidden
+          ></div>
         </div>
 
         <section class="table-section" id="table-area" aria-label="Player stats table"></section>

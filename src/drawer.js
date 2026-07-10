@@ -1,11 +1,20 @@
 // src/drawer.js
 //
 // The "All filters" drawer (owner decision 29): a right-side panel holding
-// everything beyond the slim scope strip (src/filters.js) — Team + Min
-// innings, Player profile, Innings (position/opposition — see
-// src/drawerInnings.js), and Stat conditions (src/advanced.js). Opened via
-// the "All filters" button in the scope strip; main.js owns wiring that
-// button plus the count badge (this module exposes `activeCount()` for it).
+// everything beyond the slim scope strip (src/filters.js) — Team, Player
+// profile, Innings (batting position — see src/drawerInnings.js), and
+// Advanced (opposition, career teams, and stat conditions — src/advanced.js).
+// Opened via the "All filters" button in the scope strip; main.js owns
+// wiring that button plus the count badge (this module exposes
+// `activeCount()` for it).
+//
+// B2R wave 2 (decision 44b/42) reorganized the sections: "Team" dropped its
+// Min-innings input (min innings is now an "Innings ≥ N" advanced condition;
+// table.js already ignores state.minInnings, decision 44c). "Innings" holds
+// ONLY Batting position now (multi-select dropdown, replacing the 1-12 chip
+// row). "Advanced" (renamed from "Stat conditions") gained "Against
+// (opposition)" (was Innings' Opposition) and "Has ever played for (career)"
+// (was Player profile's Teams played for), alongside the condition builder.
 //
 // This module renders/wires the DOM and calls store.set(...); it queries the
 // database only for the team option-list lookup below (the opposition lookup
@@ -16,7 +25,7 @@ import { emptyProfile, positionsFilterActive, oppositionFilterActive } from "./s
 import { query } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
 import { mountAdvanced, activeConditionCount } from "./advanced.js";
-import { mountDrawerInnings } from "./drawerInnings.js";
+import { mountBattingPosition, mountOpposition } from "./drawerInnings.js";
 import { escHtml, escAttr } from "./html.js";
 
 // Display order for the profile-filter option lists. Options are always
@@ -40,8 +49,8 @@ function orderBy(present, order) {
 
 /**
  * Query DISTINCT teams present under the current gender+format+date+team_type
- * scope (excluding the team filter itself, and excluding minInnings/search —
- * those don't affect which teams exist). batting_team for batting, bowling_team
+ * scope (excluding the team filter itself, and excluding search — that
+ * doesn't affect which teams exist). batting_team for batting, bowling_team
  * for bowling.
  */
 async function fetchTeamOptions(state) {
@@ -74,7 +83,7 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
 
         <div class="filter-drawer__body">
           <section class="filter-drawer__section" data-role="section-team">
-            <h3 class="filter-drawer__section-title">Team &amp; qualification</h3>
+            <h3 class="filter-drawer__section-title">Team</h3>
             <div class="filter-bar">
               <div class="filter-group filter-group--team">
                 <span class="filter-label">Team</span>
@@ -90,11 +99,6 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
                     </div>
                   </div>
                 </div>
-              </div>
-
-              <div class="filter-group filter-group--mininnings">
-                <label class="filter-label" for="drawer-min-innings-input">Min innings</label>
-                <input type="number" id="drawer-min-innings-input" class="input input--number" data-role="minInnings" min="1" step="1" />
               </div>
             </div>
           </section>
@@ -124,9 +128,20 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
                 <label class="filter-label" for="drawer-prof-bowlingType">Bowling</label>
                 <select class="select" id="drawer-prof-bowlingType" data-role="prof-bowlingType" aria-label="Bowling type"></select>
               </div>
+            </div>
+          </section>
 
+          <section class="filter-drawer__section" data-role="section-innings">
+            <h3 class="filter-drawer__section-title">Innings</h3>
+            <div class="filter-bar" data-role="innings-host"></div>
+          </section>
+
+          <section class="filter-drawer__section" data-role="section-advanced">
+            <h3 class="filter-drawer__section-title">Advanced</h3>
+            <div class="filter-bar" data-role="advanced-teams-bar">
+              <div data-role="opposition-host"></div>
               <div class="filter-group filter-group--profteams">
-                <span class="filter-label">Teams played for</span>
+                <span class="filter-label">Has ever played for (career)</span>
                 <div class="team-dropdown" data-role="profteam-dropdown">
                   <button type="button" class="team-dropdown__toggle" data-role="profteam-toggle" aria-haspopup="true" aria-expanded="false">
                     Any team
@@ -141,16 +156,11 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
                 </div>
               </div>
             </div>
-          </section>
 
-          <section class="filter-drawer__section" data-role="section-innings">
-            <h3 class="filter-drawer__section-title">Innings</h3>
-            <div data-role="innings-host"></div>
-          </section>
-
-          <section class="filter-drawer__section" data-role="section-advanced">
-            <h3 class="filter-drawer__section-title">Stat conditions</h3>
-            <div data-role="advanced-host"></div>
+            <div class="filter-group filter-group--conditions">
+              <h4 class="filter-drawer__subsection-title">Stat conditions</h4>
+              <div data-role="advanced-host"></div>
+            </div>
           </section>
         </div>
 
@@ -175,7 +185,6 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     teamSearch: hostEl.querySelector('[data-role="team-search"]'),
     teamList: hostEl.querySelector('[data-role="team-list"]'),
     teamClear: hostEl.querySelector('[data-role="team-clear"]'),
-    minInnings: hostEl.querySelector('[data-role="minInnings"]'),
 
     profileBar: hostEl.querySelector('[data-role="profile-bar"]'),
     profileNote: hostEl.querySelector('[data-role="profile-note"]'),
@@ -191,10 +200,11 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     profTeamClear: hostEl.querySelector('[data-role="profteam-clear"]'),
 
     inningsHost: hostEl.querySelector('[data-role="innings-host"]'),
+    oppositionHost: hostEl.querySelector('[data-role="opposition-host"]'),
     advancedHost: hostEl.querySelector('[data-role="advanced-host"]'),
   };
 
-  // ── Team dropdown + Min innings ─────────────────────────────────────────────
+  // ── Team dropdown ────────────────────────────────────────────────────────
   let teamOptionsCache = []; // all available team names for the current scope
   let lastTeamScopeKey = null;
   let teamOptionsLoadToken = 0;
@@ -294,13 +304,6 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     store.set({ teams: [] });
     renderTeamList(els.teamSearch.value);
     updateTeamToggleLabel();
-    onChange();
-  });
-
-  els.minInnings.addEventListener("change", () => {
-    const v = Math.max(1, parseInt(els.minInnings.value, 10) || 1);
-    els.minInnings.value = v;
-    store.set({ minInnings: v });
     onChange();
   });
 
@@ -487,19 +490,24 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     onChange();
   });
 
-  // ── Innings (position/opposition) — extracted, see src/drawerInnings.js ────
-  const inningsController = mountDrawerInnings(els.inningsHost, store, onChange);
-
-  // ── Stat conditions ──────────────────────────────────────────────────────────
+  // ── Innings (position) / Advanced (opposition + stat conditions) ───────────
+  // extracted, see src/drawerInnings.js and src/advanced.js
+  const positionController = mountBattingPosition(els.inningsHost, store, onChange);
+  const oppositionController = mountOpposition(els.oppositionHost, store, onChange);
   const advancedController = mountAdvanced(els.advancedHost, store, onChange);
 
   // ── Footer ───────────────────────────────────────────────────────────────────
-  els.applyBtn.addEventListener("click", () => onApply());
+  els.applyBtn.addEventListener("click", () => {
+    // decision 42: a condition with a metric but no value blocks Apply with
+    // an inline row message (validate() shows it, focuses the row, returns
+    // false) rather than being silently dropped.
+    if (!advancedController.validate()) return;
+    onApply();
+  });
 
   els.clearBtn.addEventListener("click", () => {
     store.set({
       teams: [],
-      minInnings: 10,
       profile: emptyProfile(),
       positions: [],
       opposition: [],
@@ -507,7 +515,8 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     });
     renderControls();
     advancedController.render();
-    inningsController.sync();
+    positionController.sync();
+    oppositionController.sync();
     onChange();
   });
 
@@ -552,7 +561,6 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   /** Re-render every control's value/disabled state from the store — cheap,
    * no network. */
   function renderControls() {
-    els.minInnings.value = store.get().minInnings;
     updateTeamToggleLabel();
     renderRoleSelects();
     renderProfSelects();
@@ -561,12 +569,13 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   }
 
   /** Called by main.js after every filter change: re-sync control states plus
-   * the two option lists (team, opposition) — each refetches only when its
+   * the option lists (team, opposition) — each refetches only when its
    * own scope key actually changed, so repeated calls are cheap. */
   function sync() {
     renderControls();
     refreshTeamOptions();
-    inningsController.sync();
+    positionController.sync();
+    oppositionController.sync();
     // The condition builder's metric dropdowns must re-gate when the
     // discipline/format scope changes (§8.9 phase-metric gating) — the same
     // re-render main.js used to trigger when the panel lived on the page.

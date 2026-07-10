@@ -338,12 +338,6 @@ a { color: var(--color-accent); }
   font-weight: 600;
 }
 
-.chip-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
 .chip {
   font: inherit;
   font-size: 0.9rem;
@@ -388,8 +382,6 @@ a { color: var(--color-accent); }
 .select:hover,
 .input:hover { border-color: var(--color-fg); }
 
-.input--number { width: 5.5rem; }
-
 /* Team multi-select dropdown */
 
 .team-dropdown { position: relative; }
@@ -423,7 +415,8 @@ a { color: var(--color-accent); }
 .team-dropdown__panel,
 .columns-popover,
 .graph-player-search__results,
-.dropdown__panel {
+.dropdown__panel,
+.omnisearch__results {
   z-index: 20;
   background: var(--color-bg-raised);
   border: 1px solid var(--color-line);
@@ -480,7 +473,8 @@ a { color: var(--color-accent); }
 .team-dropdown__empty,
 .graph-player-search__empty,
 .graph-player-list__empty,
-.player-page-search__empty {
+.player-page-search__empty,
+.omnisearch__empty {
   color: var(--color-muted);
 }
 
@@ -605,7 +599,6 @@ a { color: var(--color-accent); }
 .input:disabled,
 .team-dropdown__toggle:disabled,
 .chip:disabled,
-.chip--sm:disabled,
 .segmented__btn:disabled {
   cursor: not-allowed;
   background: var(--color-panel);
@@ -620,22 +613,13 @@ a { color: var(--color-accent); }
   border-color: var(--color-active-bg);
 }
 
-/* ── Free splits (D4 Piece 3) — position / opposition / split-by row ────────── */
-
-.filter-bar--splits { margin-top: var(--space-5); }
-
-/* Individual group greying (position and opposition can be disabled
+/* ── Free splits (D4 Piece 3) — position / opposition ────────────────────────
+   Individual group greying (position and opposition can be disabled
    independently of each other, unlike the single profile row) — the
    group's own controls carry the recolor-only :disabled state above; no
-   wrapper opacity here either. */
-
-.chip-group--positions { max-width: 22rem; }
-
-.chip--sm {
-  padding: var(--space-2) var(--space-3);
-  min-width: 2.5rem;
-  text-align: center;
-}
+   wrapper opacity here either. The old 1-12 chip row (chip-group--positions,
+   chip--sm) is gone — Batting position is a .dropdown checkbox panel now
+   (B2R wave 2, decision 42), same component as Format/Team-type below. */
 
 /* ── Buttons / links ───────────────────────────────────────────────────────── */
 
@@ -758,11 +742,39 @@ a { color: var(--color-accent); }
   gap: var(--space-2);
 }
 
+/* B2R wave 2 (decision 42): a condition row is now TWO stacked pieces — the
+   fields+remove-button line (.advanced-cond__row) and, only when this row
+   fails Apply's validation, an inline error message below it. Previously the
+   remove button lived inside the same wrapping flex row as the fields, so at
+   narrow widths it could wrap onto its own line and read as a stray floating
+   × rather than a clearly-placed one; .advanced-cond__remove now sits outside
+   the wrapping .advanced-cond__fields group so it never wraps away from the
+   row it belongs to. The group-level "remove whole group" × beside "Match
+   All/Any of:" is gone entirely (a group already disappears once its last
+   condition is removed) — advanced.js no longer renders it. */
 .advanced-cond {
   display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.advanced-cond__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.advanced-cond__fields {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.advanced-cond__remove {
+  flex-shrink: 0;
 }
 
 .advanced-cond__and {
@@ -770,20 +782,105 @@ a { color: var(--color-accent); }
   font-size: var(--text-md);
 }
 
-.advanced-actions {
-  display: flex;
-  gap: var(--space-3);
-  padding-top: var(--space-2);
+.advanced-cond__error {
+  margin: 0;
+  color: var(--color-bad);
+  font-size: var(--text-sm2);
 }
 
-/* ── Player search ─────────────────────────────────────────────────────────── */
+.advanced-cond--error .select,
+.advanced-cond--error .input {
+  border-color: var(--color-bad);
+}
 
-.player-search { display: flex; }
+/* ── Advanced section sub-heading (B2R wave 2) ────────────────────────────────
+   "Stat conditions" now sits inside the wider "Advanced" section alongside
+   the Against(opposition)/Has-ever-played-for(career) pickers, so it needs its
+   own small heading — one step down from .filter-drawer__section-title, one
+   step up from .filter-label's all-caps micro-label. */
+.filter-drawer__subsection-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-md);
+  color: var(--color-muted);
+}
+
+/* ── Player search (omnisearch, B2R wave 2) ───────────────────────────────────
+   The search box is player-first: typing opens .omnisearch__results, a
+   dropdown listing matching players from the whole database (src/omnisearch.js).
+   `position: relative` here anchors that dropdown under the input, same
+   pattern as .graph-player-search above. */
+
+.player-search {
+  display: flex;
+  position: relative;
+}
 
 .player-search .input {
   width: 100%;
   max-width: 22rem;
   font-size: 0.95rem;
+}
+
+.omnisearch__results {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 100%;
+  max-width: 22rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  padding: var(--space-1);
+}
+
+.omnisearch__item {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.9rem;
+  padding: var(--space-2);
+  border: none;
+  background: none;
+  color: var(--color-fg);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.omnisearch__item:hover,
+.omnisearch__item.is-active {
+  background: var(--color-panel);
+}
+
+.omnisearch__item-name { font-weight: 600; }
+
+.omnisearch__item-meta {
+  font-size: var(--text-sm2);
+  color: var(--color-muted);
+  margin-top: 2px;
+}
+
+.omnisearch__item-meta--muted { font-style: italic; }
+
+/* The trailing explicit table-filter row (decision 44) reads as an action,
+   not a player result — separated by a rule and set off in the accent
+   color used for other primary actions/links in the app. */
+.omnisearch__item--action {
+  flex-direction: row;
+  align-items: center;
+  border-top: 1px solid var(--color-line);
+  margin-top: var(--space-1);
+  padding-top: calc(var(--space-2) + var(--space-1));
+  color: var(--color-accent, var(--color-fg));
+  font-weight: 600;
+}
+
+.omnisearch__empty {
+  font-size: 0.9rem;
+  padding: var(--space-2);
+  margin: 0;
 }
 
 /* ── Table ─────────────────────────────────────────────────────────────────── */
@@ -1270,7 +1367,7 @@ a { color: var(--color-accent); }
     right: 0;
   }
 
-  .advanced-cond {
+  .advanced-cond__row {
     flex-direction: column;
     align-items: stretch;
   }

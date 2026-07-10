@@ -10,6 +10,7 @@ import { mountFilters } from "./filters.js";
 import { mountFilterDrawer } from "./drawer.js";
 import { mountPills } from "./pills.js";
 import { mountTable } from "./table.js";
+import { mountOmnisearch } from "./omnisearch.js";
 import { mountPlayerPopup } from "./playerPopup.js";
 import { getMetric } from "./metrics.js";
 import { mountGraph } from "./graph/graph.js";
@@ -27,6 +28,7 @@ const pillsBarEl = document.getElementById("pills-bar");
 const drawerHostEl = document.getElementById("filter-drawer-host");
 const playerSearchSectionEl = document.getElementById("player-search-section");
 const playerSearchInputEl = document.getElementById("player-search-input");
+const playerSearchResultsEl = document.getElementById("player-search-results");
 const tableAreaEl = document.getElementById("table-area");
 const playerPopupHostEl = document.getElementById("player-popup-host");
 const graphAreaEl = document.getElementById("graph-area");
@@ -205,6 +207,24 @@ function onFiltersChanged() {
   }
 }
 
+/**
+ * The omnisearch dropdown's explicit "Filter the table to names matching…"
+ * row (B2R wave 2, decision 44): the ONE place typing in the search box still
+ * reaches the leaderboard, and only when the user deliberately picks this
+ * row/hits Enter with nothing highlighted — never as a side effect of typing.
+ * Mirrors exactly what used to happen on every keystroke (store.set the
+ * search text, then run onFiltersChanged's honest revert-to-prompt) followed
+ * by the same "Show results" trigger the prompt's button and the drawer's
+ * Apply both use — tableController.load(). The search box only shows while
+ * the table view is visible, so the view guard here just matches the
+ * drawer's onApply for consistency.
+ */
+function triggerTableSearch(text) {
+  store.set({ search: text });
+  onFiltersChanged();
+  if (store.get().view === "table") tableController.load();
+}
+
 function boot() {
   renderInitLoading({ stage: "manifest" });
   initDB((progress) => renderInitLoading(progress))
@@ -301,9 +321,12 @@ function boot() {
         // scope-key-cached internally, so calling it on every state change is
         // safe (its option-list refetches no-op unless the scope moved) — but
         // ONLY while the drawer is actually visible (Batch 3 fix 2): every
-        // store.set() fires this subscriber, including every keystroke in the
-        // main player-search box (unrelated to the drawer) and every keystroke
-        // in the advanced panel's own value inputs, so syncing a HIDDEN drawer
+        // store.set() fires this subscriber, including every keystroke in
+        // the advanced panel's own value inputs (the main player-search box
+        // no longer store.sets on keystroke at all since B2R wave 2 — typing
+        // there only drives the omnisearch dropdown; store.search only
+        // changes on its explicit "Filter the table" action), so syncing a
+        // HIDDEN drawer
         // here was pure wasted work — and syncing while the drawer IS open
         // used to rebuild the advanced panel's innerHTML on every keystroke,
         // destroying the input the user was typing into. open() calls sync()
@@ -312,9 +335,16 @@ function boot() {
         if (drawerController && drawerController.isOpen()) drawerController.sync();
       });
 
-      playerSearchInputEl.addEventListener("input", () => {
-        store.set({ search: playerSearchInputEl.value });
-        onFiltersChanged();
+      // B2R wave 2 (decisions 42/44): the search box is player-first omnisearch
+      // now, not a live leaderboard filter — see omnisearch.js's header comment.
+      // onOpenPlayer/onFilterTable close over the module-level `playerPopupController`/
+      // `tableController` variables, which aren't assigned until later in this
+      // same boot() call (same pattern mountTable's onPlayerClick already uses
+      // below) — safe because these callbacks only ever run later, in response
+      // to user interaction after boot() has finished.
+      mountOmnisearch(playerSearchInputEl, playerSearchResultsEl, {
+        onOpenPlayer: (id, name) => playerPopupController.open(id, name),
+        onFilterTable: (text) => triggerTableSearch(text),
       });
 
       tableController = mountTable(tableAreaEl, store, {

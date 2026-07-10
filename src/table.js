@@ -189,19 +189,19 @@ function appendFilterToAggregates(expr, filterSql) {
  * layered SELECTs, all operating on ONE underlying scan of `view`:
  *
  *   1. `agg` — GROUP BY (id, name), WHERE scope only (bucket predicate
- *      excluded, no HAVING at all): every FILTER'd stat/condition/innings-gate
+ *      excluded, no HAVING at all): every FILTER'd stat/condition/existence-gate
  *      column, PLUS unfiltered per-(id,name) coverage PARTIAL sums. Keeping
  *      every (id, name) sub-group here — even ones that will later fail the
- *      min-innings gate — is the crux of the fix below.
+ *      bucket-existence gate — is the crux of the fix below.
  *   2. `windowed` — SUM(...) OVER (PARTITION BY id) turns each row's coverage
  *      partial into the full cross-name-variant total for that id (SUM is
  *      additive, so re-summing the partials reconstructs exactly what the
  *      old id-only GROUP BY coverageSql produced).
- *   3. final SELECT — filters `windowed` by the min-innings gate and any
+ *   3. final SELECT — filters `windowed` by the bucket-existence gate and any
  *      stat conditions, using the aliases already computed in step 1.
  *
  * Window functions run AFTER WHERE/GROUP BY/HAVING in standard SQL, so the
- * min-innings/condition filter MUST live in step 3, strictly outside the
+ * existence/condition filter MUST live in step 3, strictly outside the
  * window computed in step 2 — putting it any earlier (e.g. as a HAVING on
  * `agg` itself) would silently drop a filtered-out name-variant's rows
  * before the window could sum them, undercounting coverage for exactly the
@@ -210,21 +210,23 @@ function appendFilterToAggregates(expr, filterSql) {
  * 1 operates on `agg`'s small in-memory result, not the base table, so this
  * is still ONE physical scan of `view`.
  *
- * Row-membership argument (this MUST reproduce today's exact row set): the
- * min-innings filter in step 3 is unconditional (always present, regardless
- * of min-innings UI state) and its threshold floors at
- * `Math.max(1, minInnings) >= 1`. The `__innings_gate` column it tests —
+ * Row-membership argument (this MUST reproduce the exact bucket-membership row
+ * set): the existence filter in step 3 is unconditional (always present) and
+ * its threshold is a hard-coded `>= 1` (decision 44c removed the base
+ * minimum-innings gate — a player appears if they have any qualifying innings
+ * vs this bucket; state.minInnings is no longer consulted here). The
+ * `__innings_gate` column it tests —
  * `COUNT(DISTINCT match_id || ':' || innings_number)` FILTERed on the bucket
  * predicate — is >= 1 if and only if at least one pre-grouping row satisfied
  * the bucket predicate for that (id, name) group. That is exactly the
  * row-existence test the old query got for free from
  * `WHERE ... AND bucketClause` before GROUP BY. So dropping the bucket
  * predicate from WHERE and relying on this always-on, floor-1 filter
- * reproduces the identical row set as before — no separate "bucket-filtered
+ * reproduces the correct row set — no separate "bucket-filtered
  * balls > 0" predicate is needed (and using balls specifically would in fact
  * be WRONG: a row can satisfy the bucket predicate with balls_faced = 0, e.g.
  * a batter's only delivery in that bucket was a wide off which they were
- * stumped — that row exists and counted before, and must still count now).
+ * stumped — that row exists and must count).
  *
  * `visibleColumns` contract: the restricted picker's own selection
  * (`state.columns[ns]`) is always the base column list. Anything in the
@@ -360,10 +362,10 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     `FROM agg`,
   ].join("\n");
 
-  // Step 3 (final): the min-innings gate + stat conditions, evaluated against
-  // the already-FILTER'd alias columns from step 1 (no base-table access, no
-  // window interference — see the row-membership argument in this function's
-  // doc comment).
+  // Step 3 (final): the bucket-membership existence test + stat conditions,
+  // evaluated against the already-FILTER'd alias columns from step 1 (no
+  // base-table access, no window interference — see the row-membership argument
+  // in this function's doc comment).
   const finalSelectParts = [
     "id",
     "name",
@@ -371,7 +373,16 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     "__coverage_total",
     "__coverage_mapped",
   ];
-  const finalWhereParts = [`${inningsGateAlias} >= ${Math.max(1, Number(state.minInnings) || 1)}`];
+  // decision 44c: NO minimum-innings gate. This `>= 1` is NOT a min-innings
+  // filter — it is the bucket-existence test that reproduces the correct row
+  // set (a player appears iff they have >= 1 qualifying innings vs this bucket;
+  // see this function's doc comment for why `>= 1` here, not a balls test). It
+  // is now a hard-coded 1 rather than Math.max(1, state.minInnings) so the
+  // (now UI-removed) min-innings field no longer gates rows out here either.
+  // The coverage-preservation staging is unaffected: name-variants with 0
+  // bucket innings but non-zero balls elsewhere still contribute to the
+  // windowed coverage totals in step 2 before being dropped by this gate.
+  const finalWhereParts = [`${inningsGateAlias} >= 1`];
   const advWhere = advancedToHaving(state.advanced, ns, (cond) => condAliasMap.get(cond));
   if (advWhere) finalWhereParts.push(advWhere);
 
@@ -529,7 +540,16 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
     whereClauses.push(`${nameCol} ILIKE '%${esc(state.search.trim())}%'`);
   }
 
-  const havingParts = [`COUNT(*) >= ${Math.max(1, Number(state.minInnings) || 1)}`];
+  // decision 44c: the BASE query applies NO minimum-innings gate — a player
+  // appears if they have any qualifying innings row (equivalent to min 1). The
+  // old `COUNT(*) >= Math.max(1, minInnings)` HAVING was already a no-op at its
+  // floor (every GROUP BY group has COUNT(*) >= 1 by construction) and only
+  // ever excluded anyone when the user raised min innings, which is exactly the
+  // gate being removed. state.minInnings is retained in the state shape for
+  // compatibility until the drawer UI removal lands; the query builder now
+  // ignores it entirely. An "Innings ≥ N" requirement remains fully expressible
+  // via the advanced stat-conditions path (the "innings" metric → advancedToHaving).
+  const havingParts = [];
   const advHaving = advancedToHaving(state.advanced, discipline);
   if (advHaving) havingParts.push(advHaving);
 
@@ -547,7 +567,9 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
     `FROM ${view}`,
     `WHERE ${whereClauses.join(" AND ")}`,
     `GROUP BY ${groupBy.join(", ")}`,
-    `HAVING ${havingParts.join(" AND ")}`,
+    // No base gate anymore (decision 44c) — HAVING is emitted only when the
+    // advanced stat-conditions path contributes a predicate.
+    ...(havingParts.length ? [`HAVING ${havingParts.join(" AND ")}`] : []),
   ].join("\n");
 
   let matchesSql = null;

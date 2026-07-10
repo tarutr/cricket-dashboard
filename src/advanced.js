@@ -12,6 +12,18 @@
 // "avg = 0" would otherwise be a false positive if a zero denominator NULL were
 // coalesced anywhere — it never is, but a raw `0` numerator on a data row must
 // also be excluded, matching the client-side hasMetricData contract).
+//
+// B2R wave 2 (decision 42): the group-level "remove whole group" × beside
+// "Match All/Any of:" is gone — a group already disappears on its own once its
+// last condition is removed (see removeConditionAt below), so that button was
+// a redundant second way to do the same thing. Each condition row now has
+// exactly one remove button, pinned to the row's end via a dedicated
+// .advanced-cond__row wrapper (previously it could wrap onto its own line at
+// narrow widths, reading as a stray floating ×). The panel's own inline
+// Apply/Clear buttons are gone too — the drawer's footer ("Apply and show
+// results" / "Clear all") are the only actions now; Apply validates first
+// (see validate() below) and blocks with an inline per-row message rather than
+// silently dropping a half-filled condition.
 
 import { metricsFor, getMetric } from "./metrics.js";
 import { eligibleMetrics, effectiveNamespace } from "./state.js";
@@ -48,6 +60,13 @@ export function isConditionComplete(cond) {
   return true;
 }
 
+/** decision 42 validation rule: a metric was picked but the value is missing
+ * or invalid. A fully blank default row (no metric picked either) is not an
+ * error — it's ignored harmlessly, same as before. */
+function conditionHasError(cond) {
+  return Boolean(cond.metricKey) && !isConditionComplete(cond);
+}
+
 /** Groups (and conditions within) that are actually active, i.e. complete. */
 export function activeGroups(advanced) {
   return (advanced.groups || [])
@@ -57,6 +76,26 @@ export function activeGroups(advanced) {
 
 export function activeConditionCount(advanced) {
   return activeGroups(advanced).reduce((n, g) => n + g.conds.length, 0);
+}
+
+/**
+ * Remove condition `ci` from group `gi`, collapsing the group if it becomes
+ * empty (deleting it unless it's the sole remaining group, in which case a
+ * fresh blank row takes its place). Exported so pills.js's per-condition ×
+ * (decision 42, named pills) can remove the exact same way this panel's own
+ * remove button does — one shared code path, so the two can never diverge.
+ */
+export function removeConditionAt(store, gi, ci) {
+  const advanced = store.get().advanced;
+  const groups = advanced.groups.map((g, i) => (i === gi ? { ...g, conds: [...g.conds] } : g));
+  const group = groups[gi];
+  if (!group) return;
+  group.conds.splice(ci, 1);
+  if (group.conds.length === 0) {
+    if (groups.length > 1) groups.splice(gi, 1);
+    else group.conds.push(newCondition());
+  }
+  store.set({ advanced: { ...advanced, groups } });
 }
 
 function opWord(op) {
@@ -102,6 +141,14 @@ export function mountAdvanced(container, store, onChange) {
   // rebuilds normally, focus or not.
   let lastRenderKey = null;
 
+  // decision 42 inline validation: true once an Apply click has found at
+  // least one row with a metric but no value. Conditions are re-evaluated
+  // live off the current store (not a snapshot), so a row's error clears the
+  // moment its value becomes valid again — see the v1/v2 input handler below,
+  // which patches that one row's DOM directly rather than waiting for a full
+  // (focus-destroying) rebuild.
+  let showErrors = false;
+
   function structuralKey(state, metrics) {
     const advanced = state.advanced;
     const groupsShape = (advanced.groups || [])
@@ -143,10 +190,9 @@ export function mountAdvanced(container, store, onChange) {
             <button type="button" class="segmented__btn ${group.op === "OR" ? "is-active" : ""}" data-value="OR">Any</button>
           </div>
           <span class="advanced-group__label">of:</span>
-          <button type="button" class="icon-btn" data-role="remove-group" title="Remove group">&times;</button>
         </div>
         <div class="advanced-conds">
-          ${group.conds.map((c, ci) => conditionHTML(c, ci, metrics)).join("")}
+          ${group.conds.map((c, ci) => conditionHTML(c, ci, gi, metrics)).join("")}
         </div>
         <button type="button" class="text-btn" data-role="add-cond">+ Add condition</button>
       </div>`;
@@ -159,10 +205,6 @@ export function mountAdvanced(container, store, onChange) {
       <div class="advanced-panel">
         ${groupsHTML}
         <button type="button" class="text-btn text-btn--add-group" data-role="add-group">+ Add group</button>
-        <div class="advanced-actions">
-          <button type="button" class="btn btn--primary" data-role="apply">Apply</button>
-          <button type="button" class="btn btn--ghost" data-role="clear">Clear</button>
-        </div>
       </div>`;
 
     wire();
@@ -172,7 +214,7 @@ export function mountAdvanced(container, store, onChange) {
     return `<div class="advanced-connector"><span class="advanced-connector__pill" data-role="top-op">${op}</span></div>`;
   }
 
-  function conditionHTML(cond, ci, metrics) {
+  function conditionHTML(cond, ci, gi, metrics) {
     // A condition authored in a DIFFERENT namespace (e.g. a matchup-only
     // metric while now viewing the plain table) won't be in `metrics` — render
     // its saved key as a disabled placeholder option instead of silently
@@ -187,24 +229,30 @@ export function mountAdvanced(container, store, onChange) {
             return `<option value="${cond.metricKey}" selected>${label} (not available in this view)</option>`;
           })()
         : "";
+    const hasError = showErrors && conditionHasError(cond);
     return `
-      <div class="advanced-cond" data-ci="${ci}">
-        <select class="select" data-role="metric">
-          <option value="">Metric…</option>
-          ${unknownOptionHTML}
-          ${metrics.map((m) => `<option value="${m.key}" ${cond.metricKey === m.key ? "selected" : ""}>${m.label}</option>`).join("")}
-        </select>
-        <select class="select" data-role="operator">
-          ${OPERATORS.map((o) => `<option value="${o.key}" ${cond.operator === o.key ? "selected" : ""}>${o.label}</option>`).join("")}
-        </select>
-        ${
-          cond.operator === "between"
-            ? `<input type="number" class="input" data-role="v1" value="${cond.v1}" placeholder="min" />
-               <span class="advanced-cond__and">and</span>
-               <input type="number" class="input" data-role="v2" value="${cond.v2}" placeholder="max" />`
-            : `<input type="number" class="input" data-role="v1" value="${cond.v1}" placeholder="value" />`
-        }
-        <button type="button" class="icon-btn" data-role="remove-cond" title="Remove condition">&times;</button>
+      <div class="advanced-cond ${hasError ? "advanced-cond--error" : ""}" data-ci="${ci}">
+        <div class="advanced-cond__row">
+          <div class="advanced-cond__fields">
+            <select class="select" data-role="metric">
+              <option value="">Metric…</option>
+              ${unknownOptionHTML}
+              ${metrics.map((m) => `<option value="${m.key}" ${cond.metricKey === m.key ? "selected" : ""}>${m.label}</option>`).join("")}
+            </select>
+            <select class="select" data-role="operator">
+              ${OPERATORS.map((o) => `<option value="${o.key}" ${cond.operator === o.key ? "selected" : ""}>${o.label}</option>`).join("")}
+            </select>
+            ${
+              cond.operator === "between"
+                ? `<input type="number" class="input" data-role="v1" value="${cond.v1}" placeholder="min" />
+                   <span class="advanced-cond__and">and</span>
+                   <input type="number" class="input" data-role="v2" value="${cond.v2}" placeholder="max" />`
+                : `<input type="number" class="input" data-role="v1" value="${cond.v1}" placeholder="value" />`
+            }
+          </div>
+          <button type="button" class="icon-btn advanced-cond__remove" data-role="remove-cond" title="Remove condition">&times;</button>
+        </div>
+        ${hasError ? `<p class="advanced-cond__error" data-role="cond-error">Enter a value or remove this condition</p>` : ""}
       </div>`;
   }
 
@@ -241,16 +289,6 @@ export function mountAdvanced(container, store, onChange) {
           render();
         });
       });
-
-      const removeGroupBtn = groupEl.querySelector('[data-role="remove-group"]');
-      if (removeGroupBtn) {
-        removeGroupBtn.addEventListener("click", () => {
-          advanced.groups.splice(gi, 1);
-          if (advanced.groups.length === 0) advanced.groups.push(newGroup());
-          store.set({ advanced: { ...advanced } });
-          render();
-        });
-      }
 
       const addCondBtn = groupEl.querySelector('[data-role="add-cond"]');
       if (addCondBtn) {
@@ -296,6 +334,15 @@ export function mountAdvanced(container, store, onChange) {
           input.addEventListener("input", () => {
             cond[input.dataset.role] = input.value;
             store.set({ advanced: { ...advanced } });
+            // Live-clear this row's validation error the instant it's fixed
+            // (decision 42) — without waiting for the next Apply click and
+            // without a full render() rebuild, which would drop focus/caret
+            // mid-keystroke (same reasoning as the structuralKey skip above).
+            if (showErrors && !conditionHasError(cond)) {
+              condEl.classList.remove("advanced-cond--error");
+              const msg = condEl.querySelector('[data-role="cond-error"]');
+              if (msg) msg.remove();
+            }
           });
           input.addEventListener("change", () => {
             onChange();
@@ -305,31 +352,35 @@ export function mountAdvanced(container, store, onChange) {
         const removeCondBtn = condEl.querySelector('[data-role="remove-cond"]');
         if (removeCondBtn) {
           removeCondBtn.addEventListener("click", () => {
-            group.conds.splice(ci, 1);
-            if (group.conds.length === 0) {
-              if (advanced.groups.length > 1) advanced.groups.splice(gi, 1);
-              else group.conds.push(newCondition());
-            }
-            store.set({ advanced: { ...advanced } });
+            removeConditionAt(store, gi, ci);
             render();
           });
         }
       });
     });
+  }
 
-    const applyBtn = container.querySelector('[data-role="apply"]');
-    if (applyBtn) applyBtn.addEventListener("click", () => onChange());
-
-    const clearBtn = container.querySelector('[data-role="clear"]');
-    if (clearBtn) {
-      clearBtn.addEventListener("click", () => {
-        store.set({ advanced: { op: "AND", groups: [newGroup()] } });
-        render();
-        onChange();
-      });
-    }
+  /**
+   * decision 42: called by the drawer's footer "Apply and show results"
+   * button before it does anything else. Returns true (and does nothing
+   * visible) when every condition that has a metric picked also has a valid
+   * value. Returns false — and forces a rebuild that shows an inline
+   * "Enter a value or remove this condition" message on every offending row,
+   * plus focuses the first one — when it doesn't, so a half-filled condition
+   * is never silently dropped from the query.
+   */
+  function validate() {
+    const state = store.get();
+    const hasErrors = (state.advanced.groups || []).some((g) => g.conds.some(conditionHasError));
+    showErrors = hasErrors;
+    if (!hasErrors) return true;
+    lastRenderKey = null; // force the rebuild below regardless of structural key
+    render();
+    const firstBad = container.querySelector(".advanced-cond--error [data-role=\"v1\"]");
+    if (firstBad) firstBad.focus();
+    return false;
   }
 
   render();
-  return { render };
+  return { render, validate };
 }

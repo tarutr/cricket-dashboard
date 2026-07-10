@@ -23,7 +23,7 @@
 // match_type values — "T20" here means the T20-bucket (T20 + IT20), matching the
 // Phase 2 brief's owner decision that Cricsheet mislabels internationals.
 
-import { metricsFor, matchupBucketLabel } from "./metrics.js";
+import { metricsFor, matchupBucketLabel, getMetric } from "./metrics.js";
 
 /** The five format buckets surfaced in the UI, and the match_type values each expands to. */
 export const FORMAT_BUCKETS = [
@@ -214,6 +214,34 @@ export function effectiveNamespace(state) {
 /** True if the opposition filter is currently narrowing the innings set. */
 export function oppositionFilterActive(state) {
   return state.teamType === "international" && Array.isArray(state.opposition) && state.opposition.length > 0;
+}
+
+// ── Stat-condition subtitle tokens (B2R wave 2, decision 42) ─────────────────
+// describeScope() joins the active advanced conditions into the honest scope
+// sentence ("…, Runs ≥ 300") replacing the old "min N innings" phrase (min
+// innings is now just an "Innings ≥ N" condition like any other). DUPLICATED
+// on purpose from pills.js's near-identical conditionPillLabel/OP_SYMBOLS/
+// isConditionComplete — pills.js and advanced.js both import FROM this
+// module, so either one importing back here would create a module cycle.
+// Keep the two phrasings in sync by hand if either ever changes.
+const CONDITION_OP_SYMBOLS = { gte: "≥", lte: "≤", eq: "=" };
+
+function conditionIsComplete(c) {
+  if (!c.metricKey) return false;
+  if (c.v1 === "" || c.v1 === null || c.v1 === undefined || Number.isNaN(parseFloat(c.v1))) return false;
+  if (c.operator === "between") {
+    if (c.v2 === "" || c.v2 === null || c.v2 === undefined || Number.isNaN(parseFloat(c.v2))) return false;
+  }
+  return true;
+}
+
+function conditionScopeLabel(c, state) {
+  const ns = effectiveNamespace(state);
+  const inNs = metricsFor(ns).find((m) => m.key === c.metricKey);
+  const metric = inNs || getMetric(c.metricKey);
+  const label = metric ? metric.label : c.metricKey;
+  if (c.operator === "between") return `${label} ${c.v1}–${c.v2}`;
+  return `${label} ${CONDITION_OP_SYMBOLS[c.operator] ?? c.operator} ${c.v1}`;
 }
 
 /** Expand the selected format bucket keys into the raw match_type values for SQL IN (...). */
@@ -554,8 +582,19 @@ export function createStore(initial) {
       }
     }
 
-    if (s.minInnings && s.minInnings > 1) {
-      parts.push(`min ${s.minInnings} innings`);
+    // Stat conditions (decision 42): up to two list out in full, symbol-style
+    // (matching the pills); beyond that the subtitle collapses to a count
+    // ("3 stat conditions") rather than growing unbounded (flagged threshold).
+    const activeConds = [];
+    for (const g of s.advanced.groups || []) {
+      for (const c of g.conds) {
+        if (conditionIsComplete(c)) activeConds.push(c);
+      }
+    }
+    if (activeConds.length > 0 && activeConds.length <= 2) {
+      for (const c of activeConds) parts.push(conditionScopeLabel(c, s));
+    } else if (activeConds.length > 2) {
+      parts.push(`${activeConds.length} stat conditions`);
     }
 
     for (const token of profileScopeTokens(s)) parts.push(token);
