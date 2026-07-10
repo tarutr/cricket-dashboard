@@ -6,10 +6,13 @@
 #   botocore  -- pipeline/state_store.py (direct `import botocore` for exception types)
 #   requests  -- pipeline/sheet_fetch.py, pipeline/ingest.py
 #   tqdm      -- pipeline/ingest.py
-# numpy was removed: grepped the whole repo and it is not imported by any
-# pipeline file or export_parquet.py.
+#   numpy     -- NOT imported anywhere, but REQUIRED at runtime by duckdb's
+#                con.create_function() (Python UDFs, used in build_profiles.py's
+#                norm_alnum). Removing it as "unused" broke the 2026-07-10 CI run
+#                with: "'numpy' is required for this operation". Do not remove.
 duckdb==1.5.3
 boto3==1.43.27
 botocore==1.43.27
 requests==2.34.2
 tqdm==4.68.2
+numpy==2.4.6
