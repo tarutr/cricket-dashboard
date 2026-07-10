@@ -691,9 +691,12 @@ function dataCellHTML(metric, row) {
   if (isMutableKind(metric) && hasMetricData(metric, value)) {
     const unit = sampleUnitFor(metric);
     const floor = unit ? SAMPLE_FLOORS[unit] : null;
-    const sample = row[`${metric.key}__sample`];
-    if (floor != null && typeof sample === "number" && sample < floor) {
-      const title = `Based on ${sample.toLocaleString()} ${unit}`;
+    // Number() coercion matters: DuckDB-WASM returns integer SUMs (e.g. a
+    // dismissals sample) as BigInt, which would silently fail a typeof
+    // "number" check and leave thin integer-sampled rates unmuted.
+    const sample = Number(row[`${metric.key}__sample`]);
+    if (floor != null && Number.isFinite(sample) && sample < floor) {
+      const title = `Based on ${sample.toLocaleString()} ${sample === 1 ? unit.replace(/s$/, "") : unit}`;
       return `<td class="data-table__td data-table__td--thin-sample" title="${escAttr(title)}">${text}</td>`;
     }
   }

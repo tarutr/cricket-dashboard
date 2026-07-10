@@ -137,6 +137,21 @@ export function autoTitle(config) {
     const base = `${config.metric.label} — vs ${config.labelA} vs ${config.labelB}`;
     return rankedCountPhrase(base, config.playerCount, config.roster, config.metric.key);
   }
+  if (type === "benchmark") {
+    // B8b (decision 44e): "<Anchor> vs the field" — no roster-count phrasing
+    // at all (task brief: "the roster count phrasing does NOT apply"). Every
+    // other branch above states how many players are drawn because each of
+    // THEM draws one mark per player; Benchmark draws one row per METRIC
+    // against a field the anchor is compared to, not a roster of marks, so
+    // "top N"/"N players" would describe something this chart doesn't show.
+    // No short-name concept exists for players anywhere in this codebase
+    // (only metrics carry a `shortLabel` distinct from `label`) — the
+    // anchor's plain `name` is used here exactly as it is in the bar
+    // captions (benchmarkChart.js), flagged per the task brief's "full/short
+    // name" wording having no real distinction to draw on.
+    if (!config.anchorName) return "Choose an anchor player";
+    return `${config.anchorName} vs the field`;
+  }
   return "Untitled chart";
 }
 
@@ -161,6 +176,12 @@ function regenKeyFor(config) {
   // invalidation — changing either side's bucket must invalidate a
   // manually-edited title exactly like a metric change does.
   if (type === "dumbbell") return JSON.stringify([type, config.metric.key, config.sideAKey, config.sideBKey]);
+  // B8b: the title text embeds ONLY the anchor's name (see autoTitle above) —
+  // so, unlike every other type here, a metric-set change should NOT
+  // invalidate a manually-edited title (the text doesn't reference metrics at
+  // all); only switching the ANCHOR does, since that's the one thing the
+  // title actually says.
+  if (type === "benchmark") return JSON.stringify([type, config.anchorId]);
   return JSON.stringify([type]);
 }
 

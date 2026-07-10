@@ -48,6 +48,17 @@ export const CHART_CAPS = {
   // at all; roomier ceiling — one connector per player is compact).
   byyear: { min: 1, max: 6 },
   dumbbell: { min: 2, max: 12 },
+  // B8b (Benchmark, decision 44e): unlike every OTHER chart type, the
+  // checked roster here does NOT bound what gets DRAWN — the chart draws one
+  // row per selected METRIC, comparing one ANCHOR player against the best of
+  // the WHOLE filtered pool (a separate, unrestricted query — see
+  // src/graph/benchmark.js's fetchBenchmarkPool). The roster's only job is to
+  // source the anchor's own candidate list (the <select> in
+  // graph.js's renderMetricControls' benchmark branch). min:1 so there's
+  // always at least one anchor choice; max:15 is simply "roomy enough for a
+  // sensible anchor shortlist" — not a chart-drawing ceiling the way every
+  // other type's max is.
+  benchmark: { min: 1, max: 15 },
 };
 
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };

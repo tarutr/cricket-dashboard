@@ -47,6 +47,15 @@ import {
   dumbbellVsOptionsHTML,
 } from "./dumbbell.js";
 import { buildDumbbellChart } from "./dumbbellChart.js";
+import {
+  benchmarkEligibleMetrics,
+  defaultBenchmarkMetricKeys,
+  fetchBenchmarkPool,
+  computeBenchmarkRows,
+  groupMetricsByKind,
+  benchmarkFloorNotes,
+} from "./benchmark.js";
+import { buildBenchmarkChart } from "./benchmarkChart.js";
 
 const CHART_TYPES = [
   { key: "bar", label: "Bar" },
@@ -58,6 +67,8 @@ const CHART_TYPES = [
   // Batch 4 wave 2 (the last two chart types).
   { key: "byyear", label: "By year" },
   { key: "dumbbell", label: "Dumbbell" },
+  // B8b (decision 44e).
+  { key: "benchmark", label: "Benchmark" },
 ];
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -310,6 +321,17 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   // that one; see dumbbell.js's file header on the Vs-vocabulary duplication).
   let dumbbellBowlingTypesCache = null;
 
+  // B8b (Benchmark, decision 44e). `benchmarkAnchorId` is the checked
+  // roster's own id (never a candidate outside it — see renderMetricControls'
+  // benchmark branch); `benchmarkMetricKeys` is the multi-select's chosen set
+  // (>=4, <=12). `benchmarkPoolCache` memoizes the last pool fetch by an
+  // identity key (scope + metric keys) so switching the ANCHOR alone
+  // re-renders without a refetch (task brief) — see renderChart()'s benchmark
+  // branch.
+  let benchmarkAnchorId = null;
+  let benchmarkMetricKeys = null;
+  let benchmarkPoolCache = null; // { key, rows } | null
+
   let seeded = false; // has the selection ever been seeded for the current discipline+scope?
   let lastSeedKey = null;
   let loadToken = 0;
@@ -349,6 +371,14 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     getCap: () => CHART_CAPS[chartType].max,
     onChange: () => {
       renderPlayerList();
+      // B8b: the Benchmark chart's ANCHOR select offers the CHECKED roster
+      // (not the full candidate pool — see renderMetricControls' benchmark
+      // branch) — a checked-set change (tick/untick/reseed/Best-Worst
+      // re-derive) can add/remove/invalidate anchor choices, so the metric
+      // controls must refresh to keep that select in sync. Every other chart
+      // type's controls don't depend on the roster shape, so this is scoped
+      // to benchmark only.
+      if (chartType === "benchmark") renderMetricControls();
       // The recommend engine's ok/disabled state and "Recommended" tag
       // (task 2) depend on selection.candidateCount() — every candidate-pool
       // change (a fresh seed landing async, a manual add/remove, a Best/
@@ -814,6 +844,150 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
           scheduleRender({ paramsChanged: true });
         });
       }
+    } else if (chartType === "benchmark") {
+      // B8b (decision 44e). Anchor picker: a plain <select> over the CHECKED
+      // roster ONLY (task brief) — unlike every other chart type, the pool
+      // this chart draws from is the WHOLE filtered set regardless of roster
+      // size (CHART_CAPS.benchmark = {min:1, max:15} — see players.js's doc
+      // comment on why the roster only sources the anchor choice here).
+      // Metric picker: a multi-select checkbox dropdown (the shared
+      // .dropdown pattern filters.js's Format/Team-type dropdowns already
+      // established), grouped by kind (Volume/Tempo/Consistency —
+      // benchmark.js's BENCHMARK_KIND_LABELS is the one source both this
+      // picker and the chart's own section headers read from).
+      const eligible = benchmarkEligibleMetrics(discipline, formats);
+
+      // Prune any no-longer-eligible keys (phase gating / discipline switch),
+      // then top back up to the floor of 4 from the discipline's defaults —
+      // same "prune ineligible, keep the rest, refill toward the floor"
+      // posture as every other metric select's own validity check in this
+      // function, generalized to a multi-select.
+      let keys = (benchmarkMetricKeys || []).filter((k) => eligible.some((m) => m.key === k));
+      if (keys.length < 4) {
+        const fill = defaultBenchmarkMetricKeys(discipline).filter((k) => !keys.includes(k));
+        keys = [...keys, ...fill].slice(0, 12);
+        // Defensive backstop only (shouldn't trigger for any real scope —
+        // every default key is a plain, non-phase-gated metric): pad with
+        // whatever else is eligible, catalogue order, if even the defaults
+        // couldn't reach 4.
+        for (const m of eligible) {
+          if (keys.length >= 4) break;
+          if (!keys.includes(m.key)) keys.push(m.key);
+        }
+      }
+      benchmarkMetricKeys = keys;
+
+      const roster = selection.get(); // CHECKED players only — see doc comment above
+      if (!benchmarkAnchorId || !roster.some((p) => p.id === benchmarkAnchorId)) {
+        benchmarkAnchorId = roster[0]?.id ?? null;
+      }
+
+      const groups = groupMetricsByKind(eligible);
+
+      els.metricControls.innerHTML = `
+        <span class="graph-control-label">Anchor</span>
+        <select class="select graph-metric-select" data-role="benchmark-anchor" ${roster.length === 0 ? "disabled" : ""}>
+          ${
+            roster.length
+              ? roster
+                  .map((p) => `<option value="${escAttr(p.id)}" ${p.id === benchmarkAnchorId ? "selected" : ""}>${escHtml(p.name)}</option>`)
+                  .join("")
+              : `<option value="">Check a player below first</option>`
+          }
+        </select>
+        <span class="graph-control-label">Metrics</span>
+        <div class="dropdown graph-benchmark-metrics" data-role="benchmark-metrics-dropdown">
+          <button type="button" class="select dropdown__toggle" data-role="benchmark-metrics-toggle" aria-haspopup="true" aria-expanded="false"></button>
+          <div class="dropdown__panel graph-benchmark-metrics__panel" data-role="benchmark-metrics-panel" hidden>
+            ${groups
+              .map(
+                (g) => `
+              <div class="graph-benchmark-metrics__group-label">${escHtml(g.label)}</div>
+              ${g.metrics
+                .map(
+                  (m) => `<label class="dropdown__item">
+                    <input type="checkbox" data-metric-key="${escAttr(m.key)}" ${keys.includes(m.key) ? "checked" : ""} />
+                    <span>${escHtml(m.label)}</span>
+                  </label>`
+                )
+                .join("")}`
+              )
+              .join("")}
+          </div>
+        </div>
+      `;
+
+      const anchorSel = els.metricControls.querySelector('[data-role="benchmark-anchor"]');
+      if (anchorSel) {
+        anchorSel.addEventListener("change", (e) => {
+          benchmarkAnchorId = e.target.value || null;
+          // "Changing anchor re-renders, no refetch" (task brief) — enforced
+          // by renderChart()'s pool cache (keyed on scope+metrics, NOT
+          // anchor), not by anything special here; scheduleRender is the
+          // same call every other control makes.
+          scheduleRender({ paramsChanged: true });
+        });
+      }
+
+      const metricsToggle = els.metricControls.querySelector('[data-role="benchmark-metrics-toggle"]');
+      const metricsPanel = els.metricControls.querySelector('[data-role="benchmark-metrics-panel"]');
+      const metricCheckboxes = () => els.metricControls.querySelectorAll('[data-role="benchmark-metrics-panel"] input[type="checkbox"]');
+
+      // Min-4/max-12 guard, same "disable the box(es) that would violate the
+      // floor/cap" idiom as filters.js's format/team-type dropdowns (there,
+      // a min-1 floor disables the sole remaining checked box; here the
+      // floor is 4, so ALL checked boxes are disabled once exactly 4 remain,
+      // and all UNchecked boxes are disabled once 12 are already checked).
+      function syncBenchmarkMetricsUI() {
+        metricsToggle.textContent = `${benchmarkMetricKeys.length} of ${eligible.length} metrics`;
+        metricCheckboxes().forEach((cb) => {
+          const checked = benchmarkMetricKeys.includes(cb.dataset.metricKey);
+          cb.checked = checked;
+          const atFloor = checked && benchmarkMetricKeys.length <= 4;
+          const atCap = !checked && benchmarkMetricKeys.length >= 12;
+          cb.disabled = atFloor || atCap;
+          cb.closest(".dropdown__item").classList.toggle("is-disabled", atFloor || atCap);
+          cb.title = atFloor ? "Pick at least 4 metrics" : atCap ? "Pick at most 12 metrics" : "";
+        });
+      }
+      syncBenchmarkMetricsUI();
+
+      metricCheckboxes().forEach((cb) => {
+        cb.addEventListener("change", () => {
+          const k = cb.dataset.metricKey;
+          const set = new Set(benchmarkMetricKeys);
+          if (cb.checked) {
+            if (set.size >= 12) {
+              cb.checked = false; // defensive: disabled should already prevent this
+              return;
+            }
+            set.add(k);
+          } else {
+            if (set.size <= 4) {
+              cb.checked = true; // defensive: disabled should already prevent this
+              return;
+            }
+            set.delete(k);
+          }
+          benchmarkMetricKeys = [...set];
+          syncBenchmarkMetricsUI();
+          scheduleRender({ paramsChanged: true });
+        });
+      });
+
+      // JUDGMENT CALL (flagged): unlike the roster dropdown (static markup,
+      // wired once), this panel is rebuilt fresh on every renderMetricControls()
+      // call while Benchmark is active (chart-type switch, scope change, or a
+      // roster change via the onChange hook above) — each rebuild calls
+      // wireDropdown() again on the FRESH toggle/panel nodes, which attaches
+      // new document-level click/Escape listeners without tearing down the
+      // previous rebuild's (now-detached) ones. Those stale listeners are
+      // inert no-ops (a detached panel can never `.contains()` a live click
+      // target) and bounded by "how many times this session rebuilds this
+      // one dropdown" — not unbounded growth, and not a correctness bug — so
+      // this is accepted rather than adding a teardown API to the shared
+      // wireDropdown() helper for one control.
+      if (metricsToggle && metricsPanel) wireDropdown(metricsToggle, metricsPanel);
     }
   }
 
@@ -1010,6 +1184,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     slope: "One stat, two date windows — who rose, who fell",
     byyear: "One stat, year by year",
     dumbbell: "One stat, two bowling types — the gap is the story",
+    benchmark: "One player against the best of the rest, stat by stat.",
   };
 
   /** The picker caption for `type` under the CURRENT state — an honest swap
@@ -1067,6 +1242,17 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     if (typeKey === "dumbbell" && dumbbellEligibleMetrics(state.formats).length === 0) {
       return { ok: false, reason: "No matchup rate/percent metric available for this scope" };
     }
+    // B8b (decision 44e): needs >=1 checked player (the anchor — covered by
+    // the generic candidateCount/capDef.min check below, since
+    // CHART_CAPS.benchmark.min is 1) AND >=4 metrics available to choose from
+    // right now. The picker itself (renderMetricControls' benchmark branch)
+    // always keeps >=4 CHOSEN whenever >=4 are eligible, so the only way this
+    // can actually fail is a scope so metric-starved fewer than 4 qualify at
+    // all — kept as an explicit, honestly-worded disabled reason rather than
+    // silently falling through to a confusing "Add at least 1 player" alone.
+    if (typeKey === "benchmark" && benchmarkEligibleMetrics(state.discipline, state.formats).length < 4) {
+      return { ok: false, reason: "Not enough eligible metrics for this scope" };
+    }
     const capDef = CHART_CAPS[typeKey];
     const candidateCount = selection.candidateCount();
     if (candidateCount < capDef.min) {
@@ -1105,7 +1291,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     if (okKeys.includes("radar") && candidateCount >= 2 && candidateCount <= CHART_CAPS.radar.max) return "radar";
     if (okKeys.includes("donut") && candidateCount <= 8) return "donut";
     if (okKeys.includes("bar")) return "bar";
-    const fallbackOrder = ["donut", "scatter", "radar", "phases", "slope", "byyear", "dumbbell"];
+    const fallbackOrder = ["donut", "scatter", "radar", "phases", "slope", "byyear", "dumbbell", "benchmark"];
     return fallbackOrder.find((k) => okKeys.includes(k)) ?? okKeys[0];
   }
 
@@ -1385,6 +1571,31 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
           }
         : null;
     }
+    if (chartType === "benchmark") {
+      // B8b: title provenance does NOT use the roster-count phrasing every
+      // other type's config carries (rankedCountPhrase's "top N"/"N players")
+      // — the title is just "<Anchor> vs the field" (card.js's autoTitle),
+      // naming the anchor, never a count. `roster`/`playerCount` are still
+      // threaded through the config for shape-consistency with every other
+      // branch (and in case a later feature wants them), but autoTitle's
+      // benchmark case never reads them. Flagged per the task brief's ask.
+      const rosterList = selection.get();
+      const anchor = rosterList.find((p) => p.id === benchmarkAnchorId) || rosterList[0] || null;
+      const keys = benchmarkMetricKeys || [];
+      const metrics = keys.map((k) => getMetric(k, discipline)).filter(Boolean);
+      return keys.length
+        ? {
+            type: "benchmark",
+            discipline,
+            anchorId: anchor?.id ?? null,
+            anchorName: anchor?.name ?? null,
+            metricKeys: keys,
+            metrics,
+            playerCount,
+            roster,
+          }
+        : null;
+    }
     return null;
   }
 
@@ -1405,6 +1616,14 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       // (§8.4) — mirrors slope's window footer above.
       if (!config.labelA || !config.labelB) return base;
       return `${base} · Side A: vs ${config.labelA} · Side B: vs ${config.labelB}`;
+    }
+    if (config && config.type === "benchmark") {
+      // B8b: "Footer states the pool honestly" (task brief) — the plain
+      // filter scope sentence, plus the sample floors actually backing the
+      // CURRENTLY selected rate/percent metrics (nothing stated if none of
+      // them are rate/percent — no floor applies to pure totals).
+      const floors = benchmarkFloorNotes(config.metrics || []);
+      return floors.length ? `${base} · rates/percents: ${floors.join(", ")}` : base;
     }
     return base;
   }
@@ -1638,6 +1857,89 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
           sideBKey: encodeVs(dumbbellSideB),
           playerCount: players.length - (result?.excluded?.length ?? 0),
           roster: (result?.excluded?.length ?? 0) > 0 ? { ...roster, dirty: true } : roster,
+        };
+        if (pendingRegenerate) {
+          card.regenerate(config, buildFooterScope(config));
+          pendingRegenerate = false;
+        } else {
+          card.updateFooterScope(buildFooterScope(config));
+        }
+        return;
+      }
+
+      // Benchmark (B8b, decision 44e): ONE pool query (benchmark.js's
+      // fetchBenchmarkPool — table.js's buildQuery(), UNWRAPPED, over the
+      // whole filtered pool, never restricted to the checked roster — see
+      // that module's file header) instead of fetchSelectedPlayerMetrics's
+      // roster-restricted query every bar/donut/scatter/radar/phases chart
+      // uses below. Ranks are computed client-side (benchmark.js's
+      // computeBenchmarkRows) from that one query's rows.
+      if (chartType === "benchmark") {
+        const eligible = benchmarkEligibleMetrics(discipline, state.formats);
+        const keys = (benchmarkMetricKeys || []).filter((k) => eligible.some((m) => m.key === k));
+        if (keys.length < 4) {
+          hideStatus();
+          if (chartRef.current) {
+            chartRef.current.destroy();
+            chartRef.current = null;
+          }
+          card.hidePlaceholder();
+          renderExclusions([], "Choose at least 4 metrics to draw this chart.");
+          return;
+        }
+        // Stable catalogue order for the actual drawn rows, regardless of the
+        // arbitrary check/uncheck order benchmarkMetricKeys may have
+        // accumulated (renderMetricControls' own picker is already stable
+        // this way — see groupMetricsByKind(eligible) there).
+        const metrics = eligible.filter((m) => keys.includes(m.key));
+
+        // `players` (set at the top of renderChart(), = selection.get()) is
+        // the CHECKED roster — anchor source only, see benchmark.js's file
+        // header on why the pool itself ignores it.
+        if (!benchmarkAnchorId || !players.some((p) => p.id === benchmarkAnchorId)) {
+          benchmarkAnchorId = players[0]?.id ?? null;
+        }
+        const anchor = players.find((p) => p.id === benchmarkAnchorId) || null;
+        if (!anchor) {
+          hideStatus();
+          if (chartRef.current) {
+            chartRef.current.destroy();
+            chartRef.current = null;
+          }
+          card.hidePlaceholder();
+          renderExclusions([], "Check a player to anchor this chart.");
+          return;
+        }
+
+        // Pool cache: keyed on scope + metric keys (NOT anchor) so switching
+        // the anchor alone re-renders without a refetch (task brief) — see
+        // the benchmarkPoolCache doc comment where it's declared.
+        const poolKey = JSON.stringify([scopeSeedKey(state), keys.slice().sort()]);
+        let pool;
+        if (benchmarkPoolCache && benchmarkPoolCache.key === poolKey) {
+          pool = benchmarkPoolCache.rows;
+        } else {
+          pool = await fetchBenchmarkPool(state, keys);
+          if (token !== loadToken) return;
+          benchmarkPoolCache = { key: poolKey, rows: pool };
+        }
+        hideStatus();
+
+        const computed = computeBenchmarkRows(pool, metrics, anchor.id);
+        const groups = groupMetricsByKind(metrics);
+        const canvas = card.getCanvas();
+        const result = buildBenchmarkChart(canvas, chartRef, { anchor, groups, rows: computed });
+        renderExclusions([], result?.note);
+
+        const config = {
+          type: "benchmark",
+          discipline,
+          anchorId: anchor.id,
+          anchorName: anchor.name,
+          metricKeys: keys,
+          metrics,
+          playerCount: players.length,
+          roster,
         };
         if (pendingRegenerate) {
           card.regenerate(config, buildFooterScope(config));

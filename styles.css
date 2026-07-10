@@ -1685,6 +1685,27 @@ a { color: var(--color-accent); }
 .graph-roster-item__remove { flex: 0 0 auto; }
 .graph-roster-item.is-disabled .graph-roster-item__name { color: var(--color-muted); }
 
+/* Benchmark chart's "Metrics…" multi-select dropdown (B8b, decision 44e) —
+   reuses the shared .dropdown/.dropdown__toggle/.dropdown__panel/
+   .dropdown__item classes (see the ".dropdown" block above); only the
+   panel's sizing (mirrors .graph-roster-panel's own width/overflow reasoning
+   — a fixed max-height plus scroll, width capped to the viewport rather than
+   forced to the sidebar's fixed width) and the kind-group labels are new. */
+.graph-benchmark-metrics__panel {
+  width: min(20rem, calc(100vw - 2rem));
+  max-height: 20rem;
+  overflow-y: auto;
+}
+.graph-benchmark-metrics__group-label {
+  font-size: var(--text-xs);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  font-weight: 600;
+  margin: var(--space-3) var(--space-2) var(--space-1);
+}
+.graph-benchmark-metrics__group-label:first-child { margin-top: var(--space-1); }
+
 .graph-player-actions { display: flex; gap: var(--space-3); }
 .graph-cap-note { font-size: var(--text-sm2); color: var(--color-accent); margin: 0; }
 
@@ -1723,6 +1744,14 @@ a { color: var(--color-accent); }
   --paper-ink: #1b2430;
   --paper-sub: #6b6f76;
   --paper-rule: #ded7c8;
+  /* B8b (Benchmark chart, decision 44e): matches charts.js's palette().accent
+     / .good exactly (the fixed-light hex equivalents of --color-accent's
+     LIGHT-theme value / --color-good's LIGHT-theme value) — same "fixed
+     regardless of site theme" posture as every other --paper-* token above,
+     see .paper-card__radar-mini's use of pal.accent/pal.good for the same
+     reasoning applied to the radar chart. */
+  --paper-accent: #9c2b2b;
+  --paper-good: #2f6b3f;
 
   background: var(--paper-bg);
   color: var(--paper-ink);
@@ -1880,6 +1909,146 @@ a { color: var(--color-accent); }
 }
 @media (max-width: 480px) {
   .paper-card__radar-grid { grid-template-columns: 1fr; }
+}
+
+/* Benchmark chart (B8b, decision 44e): DOM rows, not a Chart.js canvas — see
+   src/graph/benchmarkChart.js's file header for why (same "non-canvas
+   content inside the card, captured fine by html2canvas" precedent as the
+   radar grid above). One player row per selected metric, grouped under
+   kind-based section headers (Volume/Tempo/Consistency).
+
+   MOBILE APPROACH (flagged, no fixed breakpoint): each row is a plain flex
+   container with `flex-wrap: wrap` over two children — `__main` (label +
+   track, flex-grow) and `__meta` (the bar's caption text + the anchor's raw
+   value + its rank, flex-shrink-resistant, nowrap). At any width too narrow
+   to fit both on one line, `__meta` wraps onto its own line below `__main`
+   automatically — verified by the flex layout math (min-width floors below),
+   not visually (this batch had no browser tool available). This was chosen
+   over a fixed max-width media query so it degrades gracefully at ANY width,
+   not just a hand-picked breakpoint. */
+.paper-card__benchmark {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.paper-card__benchmark-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.paper-card__benchmark-section-title {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--paper-sub);
+}
+
+.paper-card__benchmark-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: var(--space-1);
+  column-gap: var(--space-3);
+}
+
+.paper-card__benchmark-row__label {
+  flex: 0 0 auto;
+  width: 9rem;
+  min-width: 6rem;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--paper-ink);
+}
+
+.paper-card__benchmark-row__main {
+  display: flex;
+  align-items: center;
+  flex: 1 1 220px;
+  min-width: 140px;
+}
+
+.paper-card__benchmark-track {
+  position: relative;
+  width: 100%;
+  height: 22px;
+  background: var(--paper-bg);
+  border: 1px solid var(--paper-rule);
+  border-radius: 3px;
+}
+
+.paper-card__benchmark-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-radius: 2px;
+  background: var(--paper-good);
+  transition: width 0.15s ease;
+}
+.paper-card__benchmark-bar--beaten { background: var(--paper-accent); }
+
+/* The "<Anchor> = 100%" reference mark — one per row, all at the same
+   left-offset (76.9% of the track's own 0-130% scale — see
+   benchmarkChart.js's REF_LEFT_PCT), so they read as one continuous guide
+   line down the chart even though each is technically its own row-local
+   element (every row shares the identical label-width + track-flex
+   structure above, so their tracks line up in practice). */
+.paper-card__benchmark-refline {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 0;
+  border-left: 2px solid var(--paper-ink);
+  opacity: 0.55;
+}
+
+.paper-card__benchmark-row__meta {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: var(--space-3);
+  font-size: var(--text-sm2);
+  white-space: nowrap;
+}
+
+.paper-card__benchmark-caption { color: var(--paper-sub); }
+
+.paper-card__benchmark-anchor-value {
+  font-weight: 600;
+  color: var(--paper-ink);
+  min-width: 3.5rem;
+  text-align: right;
+}
+/* Thin-sample muting (decision 44c's cell-honesty rule, reused verbatim here
+   — table.js's own ".data-table__td--thin-sample" idiom, same title-text
+   phrasing "Based on N <unit>"). */
+.paper-card__benchmark-anchor-value--thin { color: var(--paper-sub); font-style: italic; }
+
+.paper-card__benchmark-anchor-rank {
+  font-weight: 700;
+  color: var(--paper-sub);
+  min-width: 2.5rem;
+  text-align: right;
+}
+
+.paper-card__benchmark-row--no-data .paper-card__benchmark-track { visibility: hidden; }
+
+.paper-card__benchmark-refcaption {
+  margin: 0;
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--paper-rule);
+  text-align: right;
+  font-size: var(--text-sm2);
+  font-style: italic;
+  color: var(--paper-sub);
 }
 
 .paper-card__footer {
