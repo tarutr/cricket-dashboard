@@ -39,14 +39,17 @@
 //     positionsFilterActive(state) is true, which is false for plain bowling
 //     (bowling_innings has no batting_position column), so this is safe.
 //
-// Two things table.js's buildQuery does that this DELIBERATELY does NOT:
+// table.js's buildQuery differs from this query in exactly one deliberate way:
 //   • The name ILIKE search clause — irrelevant here; the graph's roster is an
 //     explicit id list, so rows are scoped by `id IN (…)` instead.
-//   • The `HAVING COUNT(*) >= minInnings` leaderboard-eligibility gate — that
-//     gates which players make the LEADERBOARD; the players here are already
-//     chosen. Applying it per-year would wrongly blank a player's thin early
-//     seasons. Per-year honesty is handled instead by the sample floor below
-//     (grey out, don't hide), so no year is ever silently dropped.
+// There is no min-innings HAVING to diverge from any more either — decision
+// 44c removed the base min-innings gate from buildQuery entirely, so both
+// queries are equally gate-free today (a player/year shows up here as long as
+// they have at least one qualifying row that year, same "row exists" logic
+// buildQuery itself now uses). Per-year honesty was always handled by the
+// sample floor below instead (grey out, don't hide, never a leaderboard-style
+// exclusion threshold), so no year is ever silently dropped — that was true
+// before this removal and remains true after it.
 
 import { getMetric } from "../metrics.js";
 import { buildScopeClauses } from "../filters.js";

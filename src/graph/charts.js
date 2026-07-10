@@ -6,8 +6,10 @@
 //
 // Data source: ONE grouped query on the selected players' ids
 // (WHERE id IN (...) AND <current scope WHERE>), same GROUP BY pattern as
-// table.js, but deliberately NO min-innings HAVING — selected players are
-// explicit, so we never re-filter them out by sample size.
+// table.js's buildQuery — which, since decision 44c removed the base
+// min-innings gate there entirely, is itself gate-free now too. Selected
+// players are explicit here regardless, so this was never about re-filtering
+// them out by sample size; it's simply the same query shape either way.
 //
 // §8.1 everywhere: a player failing hasMetricData() for a charted metric is
 // excluded from that chart, with a visible "Excluded (no data): …" note.
@@ -25,8 +27,10 @@ const TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
 
 /**
  * Query the metric values for exactly the selected player ids, honoring the
- * current scope WHERE (gender/format/date/team/team_type) but with NO
- * min-innings HAVING (selected players are explicit — SPEC §6). `metricKeys`
+ * current scope WHERE (gender/format/date/team/team_type) — table.js's
+ * buildQuery, which this shares no HAVING with either way (decision 44c
+ * removed the min-innings gate there entirely), so selected players are never
+ * re-filtered out by sample size (SPEC §6). `metricKeys`
  * is a de-duplicated list of metric keys (batting or bowling discipline).
  * Returns a Map<id, {id, name, [metricKey]: value, ...}>.
  */
@@ -73,7 +77,9 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
 /**
  * SLOPE chart data (Batch 4 part 1, decision 43): one metric value per
  * selected player for ONE date window. Reuses table.js's buildQuery
- * UNCHANGED — the exact same min-innings-gated (HAVING) query
+ * UNCHANGED — the same gate-free query (decision 44c removed the base
+ * min-innings HAVING from buildQuery entirely; today it emits a row for any
+ * player with at least one qualifying row, same as any plain GROUP BY) that
  * players.js's seedFromFilteredSet already wraps for seeding — parameterised
  * by the window's own dateFrom/dateTo instead of the live filter scope's
  * (buildScopeClauses already reads dateFrom/dateTo off the state object it's
@@ -83,13 +89,16 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
  * seedFromFilteredSet already uses for its ORDER BY/LIMIT wrapper.
  *
  * This is why a player can be genuinely ABSENT from a window's result map:
- * buildQuery's HAVING (COUNT(*) >= current min innings) is evaluated
- * independently per window, over only that window's date-filtered rows —
- * exactly the "current min-innings gate, applied independently per window"
- * the slope chart's honesty note refers to. No new SQL shape is introduced:
- * buildQuery itself is untouched, only its two existing date parameters are
- * overridden, and the outer id-restriction wrapper mirrors an idiom that
- * already exists in this codebase (players.js).
+ * buildQuery's GROUP BY only emits a row for a player with at least one
+ * qualifying row in that window's own date-filtered scope, independently per
+ * window — a player with zero such rows (e.g. they didn't play at all during
+ * Window A) simply has no row to emit there. That's the honest reason a
+ * player can be present for one window and absent for the other; it's row
+ * existence, not a sample-size threshold (there is no threshold to apply
+ * since decision 44c). No new SQL shape is introduced: buildQuery itself is
+ * untouched, only its two existing date parameters are overridden, and the
+ * outer id-restriction wrapper mirrors an idiom that already exists in this
+ * codebase (players.js).
  */
 export async function fetchWindowMetric(state, window, playerIds, metric) {
   if (playerIds.length === 0) return new Map();
@@ -622,14 +631,16 @@ export function buildPhasesChart(canvas, chartRef, { family, metrics, rowsById, 
 /**
  * SLOPE ("then vs now"): one metric, two explicit date windows (Batch 4 part
  * 1, decision 43). `rowsA`/`rowsB` are the Maps fetchWindowMetric() returned
- * for Window A / Window B respectively — already independently min-innings
- * gated per window (see that function's doc comment). A player present in
- * both maps with real data (§8.1) gets one line from their Window A value to
- * their Window B value; a player missing from either window (failed that
- * window's min-innings gate, or has NULL/0 for a rate metric there) is
- * dropped from the chart entirely — never partially drawn — with a "N of M
- * ... qualify in both windows" note the caller shows alongside the standard
- * exclusion list.
+ * for Window A / Window B respectively — each already independently
+ * evaluated over that window's own date-filtered rows (see that function's
+ * doc comment; there is no min-innings gate to apply per window any more,
+ * decision 44c — a player is present iff they have at least one qualifying
+ * row in that window). A player present in both maps with real data (§8.1)
+ * gets one line from their Window A value to their Window B value; a player
+ * missing from either window (no qualifying rows there at all, or NULL/0 for
+ * a rate metric there) is dropped from the chart entirely — never partially
+ * drawn — with a "N of M selected players have innings in both windows" note
+ * the caller shows alongside the standard exclusion list.
  *
  * Line color means IMPROVEMENT, not raw direction (orchestrator ruling over
  * the earlier raw-movement draft): green/red universally read as good/bad, so
@@ -826,7 +837,7 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
 
   const note =
     included.length < players.length
-      ? `${included.length} of ${players.length} selected players qualify in both windows.`
+      ? `${included.length} of ${players.length} selected players have innings in both windows.`
       : null;
 
   return { excluded, note };

@@ -22,6 +22,12 @@
 // typing. Choosing it (click or Enter-with-no-row-highlighted) is the caller's
 // job via the onFilterTable callback — this module only decides which row was
 // chosen.
+//
+// onFilterTable also receives the player rows this dropdown already fetched
+// for the current search term (B2R wave 3, decision 44c) — the caller (main.js's
+// triggerTableSearch) uses them to tell an honest "no rows for this scope"
+// empty table apart from a "these players aren't real" one, via a toast, without
+// this module knowing anything about the table or toasts itself.
 
 import { searchPlayers } from "./playerData.js";
 import { escHtml as esc } from "./html.js";
@@ -36,7 +42,7 @@ const MAX_ROWS = 8;
  *
  * @param {HTMLInputElement} inputEl
  * @param {HTMLElement} resultsEl - popover panel, positioned via CSS under inputEl
- * @param {{onOpenPlayer?: (id: string, name: string) => void, onFilterTable?: (text: string) => void}} callbacks
+ * @param {{onOpenPlayer?: (id: string, name: string) => void, onFilterTable?: (text: string, matches: Array<{id: string, name: string}>) => void}} callbacks
  */
 export function mountOmnisearch(inputEl, resultsEl, { onOpenPlayer, onFilterTable } = {}) {
   let debounceId = null;
@@ -104,8 +110,12 @@ export function mountOmnisearch(inputEl, resultsEl, { onOpenPlayer, onFilterTabl
       close();
       if (onOpenPlayer) onOpenPlayer(r.id, r.name);
     } else {
+      // Snapshot `rows` (this dropdown's own last-fetched matches for `term`)
+      // BEFORE close() — close() doesn't mutate `rows`, but this keeps the
+      // snapshot's provenance explicit at the call site.
+      const matches = rows.slice();
       close();
-      if (onFilterTable) onFilterTable(term);
+      if (onFilterTable) onFilterTable(term, matches);
     }
   }
 

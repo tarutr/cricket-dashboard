@@ -14,6 +14,7 @@ import { mountOmnisearch } from "./omnisearch.js";
 import { mountPlayerPopup } from "./playerPopup.js";
 import { getMetric } from "./metrics.js";
 import { mountGraph } from "./graph/graph.js";
+import { showToast } from "./toast.js";
 
 const DEFAULT_SORT_KEY = { batting: "runs", bowling: "wickets" };
 
@@ -218,11 +219,36 @@ function onFiltersChanged() {
  * Apply both use — tableController.load(). The search box only shows while
  * the table view is visible, so the view guard here just matches the
  * drawer's onApply for consistency.
+ *
+ * `matches` (B2R wave 3, decision 44c): the omnisearch dropdown's own
+ * already-fetched player rows for this exact search text (see
+ * omnisearch.js's choose()) — a gender/filter-agnostic name-history lookup
+ * across the WHOLE database, independent of the leaderboard's current scope.
+ * If the table query that follows comes back with zero rows despite `matches`
+ * being non-empty, that's an honest, nameable case: the player(s) are real,
+ * they're just excluded by the current filters (date range, format, team,
+ * min-innings-adjacent conditions, etc.) — a plain empty table doesn't say
+ * that on its own, so a toast does. This is the ONE toast this app shows;
+ * every other empty-table case (no player anywhere matches the text either)
+ * stays silent, same as before.
  */
-function triggerTableSearch(text) {
+function triggerTableSearch(text, matches) {
   store.set({ search: text });
   onFiltersChanged();
-  if (store.get().view === "table") tableController.load();
+  if (store.get().view === "table") {
+    tableController.load().then((rowCount) => {
+      if (rowCount === 0 && matches && matches.length > 0) {
+        // Judgment call: a single unambiguous match names the player; more
+        // than one (a common surname etc.) falls back to the search text
+        // rather than guessing which of several real players the user meant.
+        const message =
+          matches.length === 1
+            ? `No table rows match — ${matches[0].name}'s stats may be excluded by your current filters.`
+            : `No table rows match — players matching "${text}" may be excluded by your current filters.`;
+        showToast(message);
+      }
+    });
+  }
 }
 
 function boot() {
@@ -344,7 +370,7 @@ function boot() {
       // to user interaction after boot() has finished.
       mountOmnisearch(playerSearchInputEl, playerSearchResultsEl, {
         onOpenPlayer: (id, name) => playerPopupController.open(id, name),
-        onFilterTable: (text) => triggerTableSearch(text),
+        onFilterTable: (text, matches) => triggerTableSearch(text, matches),
       });
 
       tableController = mountTable(tableAreaEl, store, {

@@ -1009,6 +1009,16 @@ a { color: var(--color-accent); }
   font-variant-numeric: normal;
 }
 
+/* Muted sub-sample values (decision 44c): a rate/percent value backed by a
+   sample below its metric's floor (src/table.js's SAMPLE_FLOORS) — real data,
+   just thin, so only the text color changes (title carries the "Based on N
+   …" honesty note). Deliberately no other rule here so it composes cleanly
+   with the zebra background and the sticky first column, both of which set
+   background only, never color, on this same element. */
+.data-table__td--thin-sample {
+  color: var(--color-muted);
+}
+
 .data-table__sort-btn {
   font: inherit;
   font-size: inherit;
@@ -1072,6 +1082,52 @@ a { color: var(--color-accent); }
   cursor: pointer;
 }
 
+/* Dismissals section-level "Show as %" toggle + "Rare dismissals" disclosure
+   (decision 44/42 pruning, B2R wave 3) — batting only, see table.js's
+   openColumnsPopover doc comment. Same row language as .columns-popover__item
+   (font-size/gap/cursor) so it doesn't read as a different control family. */
+.columns-popover__pct-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.9rem;
+  color: var(--color-muted);
+  cursor: pointer;
+  margin: var(--space-1) 0 var(--space-3);
+}
+
+.columns-popover__disclosure {
+  margin-top: var(--space-3);
+}
+
+.columns-popover__disclosure summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--color-muted);
+  list-style: none;
+}
+
+.columns-popover__disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.columns-popover__disclosure-arrow {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.columns-popover__disclosure[open] .columns-popover__disclosure-arrow {
+  transform: rotate(90deg);
+}
+
+.columns-popover__disclosure .columns-popover__list {
+  margin-top: var(--space-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .columns-popover__disclosure-arrow { transition: none; }
+}
+
 /* Loading overlay */
 
 .table-loading-overlay {
@@ -1100,6 +1156,48 @@ a { color: var(--color-accent); }
 }
 
 .error-box .btn:hover { opacity: 0.85; }
+
+/* ── Toast (src/toast.js, B2R wave 3, decision 44c) ───────────────────────────
+   Bottom-center, one at a time, auto-dismissing — see toast.js's header
+   comment for the one honest case this is wired to. Host is pointer-events:
+   none so it never blocks clicks on whatever's underneath; the toast itself
+   re-enables them (harmless, since it carries no interactive controls, but
+   keeps text selectable). */
+
+.toast-host {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-6);
+  transform: translateX(-50%);
+  z-index: 300;
+  pointer-events: none;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  padding: 0 var(--space-4);
+}
+
+.toast {
+  pointer-events: auto;
+  background: var(--color-active-bg);
+  color: var(--color-active-fg);
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--text-md);
+  max-width: min(28rem, 100%);
+  text-align: center;
+  animation: toast-in 0.2s ease-out;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+}
 
 /* ── Footer ────────────────────────────────────────────────────────────────── */
 
@@ -1393,6 +1491,8 @@ a { color: var(--color-accent); }
   .drawer__close,
   .player-popup__close,
   .columns-popover__item,
+  .columns-popover__pct-toggle,
+  .columns-popover__disclosure summary,
   .team-dropdown__item,
   .dropdown__item {
     min-height: 40px;

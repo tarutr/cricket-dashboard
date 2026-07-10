@@ -8,7 +8,7 @@
 // advanced-filter conditions on rate/ratio metrics and to render "—" for
 // no-data cells (NULL already renders "—"; this module never coalesces ratios).
 
-import { getMetric, hasMetricData, matchupBucketLabel } from "./metrics.js";
+import { getMetric, hasMetricData, matchupBucketLabel, DISMISSAL_KINDS } from "./metrics.js";
 import { query } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
 import { activeGroups } from "./advanced.js";
@@ -36,6 +36,53 @@ const TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
 // The opposition column in each innings view (D4 Piece 3): who the player
 // batted against / bowled to.
 const OPP_COL = { batting: "bowling_team", bowling: "batting_team" };
+
+// ── Muted sub-sample values (decision 44c, B2R wave 3) ──────────────────────
+// With the min-innings base gate removed, a rate/percent leaderboard column
+// can surface a value backed by a tiny sample (e.g. a 100.00 average from one
+// dismissal). Rather than hide these rows (they're real data — §8.1 already
+// hides genuine no-data via hasMetricData/"—"), mute the cell color and add an
+// honest title="Based on N <unit>" so the number is legible but visibly thin.
+//
+// Per-metric-family floor, below which a value is muted. OWNER REVIEWS THESE
+// NUMBERS — only `balls: 30` has an existing precedent (matches the By-year
+// chart's MIN_BALLS_PER_YEAR, src/graph/timeseries.js) and `innings`/
+// `dismissals` were given as examples in the design brief (decision 44c);
+// `wickets` and `boundaries` are this file's own judgment call (no metric in
+// metrics.js uses those units for a rate/percent's minSampleComponent except
+// bowling average/SR — sample is wicket count — and balls-per-boundary —
+// sample is boundary count), sized to the same small-count-denominator
+// reasoning as `dismissals` pending owner sign-off.
+export const SAMPLE_FLOORS = {
+  balls: 30,
+  innings: 5,
+  dismissals: 3,
+  wickets: 3,
+  boundaries: 3,
+};
+
+/** Classify a metric's minSampleComponent (metrics.js's own aggregate SQL for
+ * its sample size — never re-derived here) into one of SAMPLE_FLOORS' units,
+ * purely by inspecting the expression text. Order matters: checked from most
+ * to least specific so no expression matches the wrong unit (verified against
+ * every rate/percent metric in metrics.js at authoring time). Returns null for
+ * a metric whose sample can't be classified (never muted, rather than guess). */
+function sampleUnitFor(metric) {
+  const expr = metric.minSampleComponent || "";
+  if (/balls/i.test(expr)) return "balls";
+  if (/dismissals|dismissed/i.test(expr)) return "dismissals";
+  if (/wickets/i.test(expr)) return "wickets";
+  if (/fours_hit|sixes_hit|fours_conceded|sixes_conceded/i.test(expr)) return "boundaries";
+  if (/COUNT/i.test(expr)) return "innings";
+  return null;
+}
+
+/** True for exactly the metrics muting can ever apply to — totals and peaks
+ * are raw counts/extremes, never "thin", per the owner's rule that only
+ * rate/percent metrics can be built from a tiny sample. */
+function isMutableKind(metric) {
+  return metric.kind === "rate" || metric.kind === "percent";
+}
 
 // ── Matchup mode (D4 R3, decision 33) ───────────────────────────────────────
 // "Vs" leaderboard comparison: every row recomputes against one bowling-style
@@ -309,6 +356,16 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
       aggSelectParts.push(`${appendFilterToAggregates(m.sortExpression, bucketClause)} AS ${m.key}__sort`);
     }
   }
+  // Additive display-only sample-size columns (decision 44c, muted sub-sample
+  // values — same reasoning as buildQuery's plain path above): FILTER'd by the
+  // same bucketClause as the metric itself, so the sample honestly reflects
+  // this bucket, not the player's whole career. Every select item above this
+  // is untouched; this only appends new aliases.
+  for (const m of metrics) {
+    if (isMutableKind(m) && m.minSampleComponent) {
+      aggSelectParts.push(`${appendFilterToAggregates(m.minSampleComponent, bucketClause)} AS ${m.key}__sample`);
+    }
+  }
   for (const { metric, alias } of extraAggColumns) {
     aggSelectParts.push(`${appendFilterToAggregates(metric.sqlExpression, bucketClause)} AS ${alias}`);
   }
@@ -354,6 +411,9 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     passThroughCols.push(m.key);
     if (m.sortExpression) passThroughCols.push(`${m.key}__sort`);
   }
+  for (const m of metrics) {
+    if (isMutableKind(m) && m.minSampleComponent) passThroughCols.push(`${m.key}__sample`);
+  }
   for (const { alias } of extraAggColumns) passThroughCols.push(alias);
   const windowedSql = [
     `SELECT ${passThroughCols.join(", ")},`,
@@ -370,6 +430,7 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     "id",
     "name",
     ...metrics.flatMap((m) => (m.sortExpression ? [m.key, `${m.key}__sort`] : [m.key])),
+    ...metrics.filter((m) => isMutableKind(m) && m.minSampleComponent).map((m) => `${m.key}__sample`),
     "__coverage_total",
     "__coverage_mapped",
   ];
@@ -528,6 +589,16 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
     selectParts.push(`${m.sqlExpression} AS ${m.key}`);
     if (m.sortExpression) selectParts.push(`${m.sortExpression} AS ${m.key}__sort`);
   }
+  // Additive display-only sample-size columns (decision 44c, muted sub-sample
+  // values): for rate/percent columns only, also SELECT the aggregate backing
+  // their sample size — metrics.js's own minSampleComponent, verbatim, never
+  // re-derived — so the renderer can mute thin-sample cells. Every select item
+  // above this is untouched; this only appends new aliases.
+  for (const m of inningsMetrics) {
+    if (isMutableKind(m) && m.minSampleComponent) {
+      selectParts.push(`${m.minSampleComponent} AS ${m.key}__sample`);
+    }
+  }
 
   const whereClauses = buildScopeClauses(state, {
     includeTeams: true,
@@ -605,6 +676,108 @@ export function formatValue(metric, value) {
     default:
       return String(value);
   }
+}
+
+/** Render one metric's `<td>`, muting the value (decision 44c) when it's a
+ * rate/percent column whose backing sample (the `${key}__sample` column added
+ * by buildQuery/buildMatchupQuery) is below that unit's SAMPLE_FLOORS entry.
+ * No-data cells ("—") are never muted — hasMetricData already governs that,
+ * this is strictly a further honesty layer on real values. Totals/peaks never
+ * carry a `${key}__sample` column at all (isMutableKind gates that at query
+ * time), so they always take the plain branch. */
+function dataCellHTML(metric, row) {
+  const value = row[metric.key];
+  const text = formatValue(metric, value);
+  if (isMutableKind(metric) && hasMetricData(metric, value)) {
+    const unit = sampleUnitFor(metric);
+    const floor = unit ? SAMPLE_FLOORS[unit] : null;
+    const sample = row[`${metric.key}__sample`];
+    if (floor != null && typeof sample === "number" && sample < floor) {
+      const title = `Based on ${sample.toLocaleString()} ${unit}`;
+      return `<td class="data-table__td data-table__td--thin-sample" title="${escAttr(title)}">${text}</td>`;
+    }
+  }
+  return `<td class="data-table__td">${text}</td>`;
+}
+
+// ── Dismissals column-picker pruning (decision 44/42, B2R wave 3) ───────────
+// The plain "batting" namespace is the ONLY one where metrics.js's dismissal
+// taxonomy produces a count+% pair per kind (12 kinds x 2 = 24 checkboxes,
+// see DISMISSAL_KINDS/`section: "dismissal"` in metrics.js) — bowling's wkt_*
+// metrics carry no `section` at all (so they render under Basic, unaffected
+// by any of this) and both matchup namespaces' dismissal metrics are
+// count-only (6 items each, no % sibling), so they're already a plain list
+// and keep the old rendering below untouched. This block is therefore scoped
+// to ns === "batting" only.
+//
+// Grouping metadata lives HERE, not in metrics.js — this file owns rendering
+// only, metrics.js owns the metric catalogue, and "which 6 kinds are common
+// vs rare" is a picker-layout judgment call, not a metric definition. Kind
+// strings match DISMISSAL_KINDS' own `kind` field exactly.
+const RARE_DISMISSAL_KINDS = new Set([
+  "hit wicket",
+  "retired out",
+  "obstructing the field",
+  "handled the ball",
+  "timed out",
+  "hit the ball twice",
+]);
+
+// Display labels for the picker rows — shorter than metrics.js's own `label`
+// (which is prefixed "Out …" for the count metric's own column header, not
+// needed again here since the section header already reads "Dismissals").
+const DISMISSAL_ROW_LABEL = {
+  out_caught: "Caught",
+  out_bowled: "Bowled",
+  out_lbw: "LBW",
+  out_run_out: "Run out",
+  out_stumped: "Stumped",
+  out_caught_and_bowled: "Caught & Bowled",
+  out_hit_wicket: "Hit wicket",
+  out_retired_out: "Retired out",
+  out_obstructing_the_field: "Obstructing the field",
+  out_handled_the_ball: "Handled the ball",
+  out_timed_out: "Timed out",
+  out_hit_the_ball_twice: "Hit the ball twice",
+};
+
+/** One dismissal-kind row: a single checkbox standing for EITHER the count or
+ * the % column (metrics.js's `${key}` / `${key}_pct`), whichever the
+ * section's "Show as %" toggle currently selects — checked iff either
+ * variant is present in `visible` (mixed/legacy state is read honestly here;
+ * see computeInitialShowPct's doc comment for when it gets normalised). */
+function dismissalRowHTML(d, visible) {
+  const countKey = d.key;
+  const pctKey = `${d.key}_pct`;
+  const checked = visible.has(countKey) || visible.has(pctKey);
+  const label = DISMISSAL_ROW_LABEL[countKey] ?? d.label;
+  return `<label class="columns-popover__item">
+    <input type="checkbox" data-count-key="${countKey}" data-pct-key="${pctKey}" ${checked ? "checked" : ""} />
+    <span>${escHtml(label)}</span>
+  </label>`;
+}
+
+/** Initial "Show as %" state for a freshly-opened popover, derived from the
+ * CURRENT column list rather than any stored preference (there isn't one —
+ * this is a transient picker-open computation, same lifetime as the popover
+ * itself). Majority rule across the 12 kinds' checked rows: more % columns
+ * checked than count columns -> starts on %; a tie (including "none checked
+ * at all") starts on counts, the pre-existing convention. A mixed save from
+ * before this redesign (e.g. 2 count + 1 %) is NOT silently rewritten by this
+ * computation alone — it only decides which way the toggle SHOWS initially;
+ * the actual column-list normalisation (collapsing every checked row onto one
+ * variant) happens the first time the user flips the toggle or checks/
+ * unchecks a row (see the toggle's own change handler below), never merely by
+ * opening the popover. */
+function computeInitialShowPct(cols) {
+  const visible = new Set(cols);
+  let pctCount = 0;
+  let countCount = 0;
+  for (const d of DISMISSAL_KINDS) {
+    if (visible.has(`${d.key}_pct`)) pctCount += 1;
+    else if (visible.has(d.key)) countCount += 1;
+  }
+  return pctCount > countCount;
 }
 
 /** Sort value accessor: uses the __sort shadow column when present; NULL sorts last always. */
@@ -1094,9 +1267,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
         const splitTd = splitDim
           ? `<td class="data-table__td data-table__td--split">${row.split_value == null ? "—" : escHtml(row.split_value)}</td>`
           : "";
-        const cells = cols
-          .map((m) => `<td class="data-table__td">${formatValue(m, row[m.key])}</td>`)
-          .join("");
+        const cells = cols.map((m) => dataCellHTML(m, row)).join("");
         // Player names link to the player page (R2, decision 29).
         const nameCell = onPlayerClick
           ? `<button type="button" class="player-link" data-player-id="${escAttr(row.id ?? "")}">${escHtml(row.name ?? "")}</button>`
@@ -1208,7 +1379,18 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
     const ns = effectiveDiscipline(state);
     const visible = new Set(state.columns[ns]);
     openColumnsPopoverState.el.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-      cb.checked = visible.has(cb.dataset.key);
+      // Two shapes of checkbox share this popover: the plain data-key ones
+      // (Basic/Phase, and Dismissals in every namespace except batting) and
+      // the batting Dismissals section's dual-key rows (data-count-key/
+      // data-pct-key — see dismissalRowHTML), checked iff EITHER of their two
+      // underlying columns is visible. The "Show as %" toggle itself has
+      // neither dataset key and is skipped here — its own checked state is
+      // plain UI state (not derived from `visible`) and untouched by reloads.
+      if (cb.dataset.key) {
+        cb.checked = visible.has(cb.dataset.key);
+      } else if (cb.dataset.countKey) {
+        cb.checked = visible.has(cb.dataset.countKey) || visible.has(cb.dataset.pctKey);
+      }
     });
     positionColumnsPopover(openColumnsPopoverState.el, anchor);
   }
@@ -1239,11 +1421,42 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
                .join("")}
            </div>`
         : "";
-    popover.innerHTML = section("Basic", basic) + section("Dismissals", dismissal) + section("Phase", phase);
+
+    // Dismissals: the pruned real/rare + "Show as %" layout, batting ONLY
+    // (see the RARE_DISMISSAL_KINDS doc comment for why every other namespace
+    // keeps the plain `section()` list above — they never had the 24-checkbox
+    // problem this solves).
+    let dismissalHTML;
+    if (ns === "batting") {
+      const showPct = computeInitialShowPct(state.columns[ns]);
+      const realKinds = DISMISSAL_KINDS.filter((d) => !RARE_DISMISSAL_KINDS.has(d.kind));
+      const rareKinds = DISMISSAL_KINDS.filter((d) => RARE_DISMISSAL_KINDS.has(d.kind));
+      dismissalHTML = `
+        <div class="columns-popover__section-label">Dismissals</div>
+        <label class="columns-popover__pct-toggle">
+          <input type="checkbox" data-role="dismissal-pct-toggle" ${showPct ? "checked" : ""} />
+          <span>Show as %</span>
+        </label>
+        <div class="columns-popover__list">
+          ${realKinds.map((d) => dismissalRowHTML(d, visible)).join("")}
+        </div>
+        <details class="columns-popover__disclosure">
+          <summary><span class="columns-popover__disclosure-arrow">▸</span> Rare dismissals</summary>
+          <div class="columns-popover__list">
+            ${rareKinds.map((d) => dismissalRowHTML(d, visible)).join("")}
+          </div>
+        </details>`;
+    } else {
+      dismissalHTML = section("Dismissals", dismissal);
+    }
+
+    popover.innerHTML = section("Basic", basic) + dismissalHTML + section("Phase", phase);
     document.body.appendChild(popover);
     positionColumnsPopover(popover, anchor);
 
-    popover.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    // Plain data-key checkboxes: Basic, Phase, and (outside batting)
+    // Dismissals — unchanged mechanics from before this redesign.
+    popover.querySelectorAll('input[type="checkbox"][data-key]').forEach((cb) => {
       cb.addEventListener("change", () => {
         const s = store.get();
         const curNs = effectiveDiscipline(s);
@@ -1262,6 +1475,61 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
         load();
       });
     });
+
+    // Batting Dismissals rows: each checkbox stands for whichever variant
+    // (count vs %) the toggle currently selects. Ticking a previously-unchecked
+    // row adds THAT variant; unticking removes BOTH (defensive against a
+    // legacy mixed-state save carrying the "wrong" one — see
+    // computeInitialShowPct's doc comment).
+    const toggleEl = popover.querySelector('[data-role="dismissal-pct-toggle"]');
+    popover.querySelectorAll('input[type="checkbox"][data-count-key]').forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const s = store.get();
+        const curNs = effectiveDiscipline(s); // always "batting" — this section only renders when ns === "batting"
+        const cols = s.columns[curNs].slice();
+        const countKey = cb.dataset.countKey;
+        const pctKey = cb.dataset.pctKey;
+        if (cb.checked) {
+          const activeKey = toggleEl.checked ? pctKey : countKey;
+          if (!cols.includes(activeKey)) cols.push(activeKey);
+        } else {
+          [countKey, pctKey].forEach((k) => {
+            const idx = cols.indexOf(k);
+            if (idx >= 0) cols.splice(idx, 1);
+          });
+        }
+        store.set({ columns: { ...s.columns, [curNs]: cols } });
+        load();
+      });
+    });
+
+    // Section-level "Show as %" toggle: on every flip, normalise EVERY
+    // currently-checked dismissal row onto the new variant (drop whichever
+    // key is present, push the toggle's own key) — this is the "normalise on
+    // first interaction" rule (decision 44c): opening the popover never
+    // rewrites a legacy mixed-state column list by itself, only an actual
+    // toggle flip (or a row check/uncheck, handled above) does.
+    if (toggleEl) {
+      toggleEl.addEventListener("change", () => {
+        const s = store.get();
+        const curNs = effectiveDiscipline(s);
+        const cols = s.columns[curNs].slice();
+        const showPct = toggleEl.checked;
+        for (const d of DISMISSAL_KINDS) {
+          const countKey = d.key;
+          const pctKey = `${d.key}_pct`;
+          const wasChecked = cols.includes(countKey) || cols.includes(pctKey);
+          if (!wasChecked) continue;
+          [countKey, pctKey].forEach((k) => {
+            const idx = cols.indexOf(k);
+            if (idx >= 0) cols.splice(idx, 1);
+          });
+          cols.push(showPct ? pctKey : countKey);
+        }
+        store.set({ columns: { ...s.columns, [curNs]: cols } });
+        load();
+      });
+    }
 
     const onDocClick = (e) => {
       if (popover.contains(e.target) || e.target === anchor || anchor.contains?.(e.target)) return;
@@ -1352,12 +1620,20 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
       // this reload never destroys it (Batch 3 fix 3) — re-find its anchor in
       // the freshly-rendered toolbar, reposition, and re-sync checked state.
       refreshOpenColumnsPopover();
+      // Resolved row count (B2R wave 3): the omnisearch "Filter the table"
+      // toast (main.js's triggerTableSearch) needs to know whether the query
+      // it just triggered came back empty, without table.js exposing any
+      // other internal state. Every existing caller of load() (toolbar
+      // controls, the columns popover, the prompt/drawer buttons) already
+      // ignores the resolved value, so this is purely additive.
+      return sorted.length;
     } catch (err) {
-      if (token !== loadToken) return;
+      if (token !== loadToken) return null;
       renderError(err, load);
       // No columns-btn in the error state — close honestly rather than leave
       // a popover floating over an error box with no anchor.
       refreshOpenColumnsPopover();
+      return null;
     }
   }
 
