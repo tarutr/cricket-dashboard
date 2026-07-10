@@ -473,3 +473,43 @@ change requires a new owner decision recorded here. Dates are decision dates.
     charts → B5 CSS consolidation → B6 hygiene. Each batch reviewed on
     localhost:8000; batches touching query plumbing re-verify the standing
     anchors independently (decision 39 rule).
+
+44. **DESIGN ROUND 2 APPROVED (2026-07-10):** after reviewing the built batches on
+    localhost, the owner approved the full second-round evaluation. Rulings:
+    (a) **Player popup redesign**: identity header uses the real headshots
+    already in player_profiles.parquet (1,360 flagged has_real_headshot; all
+    others get a designed monogram medallion — never a broken image; no-profile
+    players and all women keep medallion + honest note); popup becomes a
+    single-scroll layout with a **Batting | Bowling toggle** under the header,
+    each discipline a tight grid; the popup gains its **own filters drawer
+    that RE-SCOPES the whole popup** (vs type, dates, positions, opposition —
+    every section recomputes; pill row + honest scope line + reset).
+    (b) **Scope strip**: Format and Team type become **multi-select checkbox
+    dropdowns** (v1-style: summary label, checkbox rows, apply-live);
+    **"Club" renamed "Domestic" everywhere** (display only, data values
+    unchanged); "Both" options deleted (tick both boxes); Batting/Bowling
+    moves into the scope strip; header keeps only Stats/Graphs.
+    (c) **Min innings removed as a base filter** — it becomes an ordinary
+    advanced stat condition; search surfaces anyone with ≥1 innings;
+    sub-sample rate values render MUTED with a sample tooltip (via each
+    metric's minSampleComponent, same honesty language as By-year's faded
+    points); v1-style toast when a searched player is hidden by an advanced
+    condition. Anchors re-derived without the gate (decision 39 rule).
+    (d) **Graphs**: adopt v1's selection model — candidates pool (never
+    truncated) + checked subset in a "N of M selected" checkbox dropdown,
+    over-cap rows disabled with an explanatory tooltip, Manual/Best/Worst
+    auto-pick when pool > cap; adopt v1's recommend() engine (types grey out
+    with reasons + a Recommended tag); donut becomes top-7 + "Other";
+    "Back to your table" must PRESERVE the table (view switches re-render the
+    cached result; no-auto-search applies to filter changes only);
+    "Turn into graph" renamed **"Graph"**, grouped with "Columns" flush right.
+    (e) **NEW Benchmark chart** (owner's image_inspiration/graph_example.png):
+    one anchor player = 100% line; one row per metric grouped by kind; bar =
+    best other player as % of anchor with name; red where the anchor is
+    beaten; right columns = anchor's raw value + rank; pool = current filters
+    with per-metric min-sample floors stated in the footer.
+    (f) **Percent metrics approved for By-year**; dumbbell title copy stays;
+    MIN_BALLS_PER_YEAR stays 30 pending owner's reaction to the explanation.
+    Build order: B2R interaction model → B7 popup redesign → B8 graphs II;
+    owner reviews each on localhost:8000 (explicit go-ahead supersedes a
+    second wireframe round). Anchor re-verification wherever query code moves.
