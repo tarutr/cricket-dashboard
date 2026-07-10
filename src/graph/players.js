@@ -34,6 +34,12 @@ export const CHART_CAPS = {
   // floor as bar/donut, roomier ceiling since each player is just one line).
   phases: { min: 2, max: 8 },
   slope: { min: 2, max: 12 },
+  // Batch 4 wave 2: By year (a line per player — min 1 so a single player's
+  // career trend is still meaningful on its own, unlike a comparison chart)
+  // and Dumbbell (needs at least two players to make "the gap" a comparison
+  // at all; roomier ceiling — one connector per player is compact).
+  byyear: { min: 1, max: 6 },
+  dumbbell: { min: 2, max: 12 },
 };
 
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };

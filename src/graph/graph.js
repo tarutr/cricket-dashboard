@@ -10,10 +10,10 @@
 // buildScopeClauses (via charts.js/players.js), table.js's buildQuery (via
 // players.js, for seeding).
 
-import { eligibleMetrics } from "../state.js";
+import { eligibleMetrics, matchupVsActive } from "../state.js";
 import { getMetric, hasMetricData } from "../metrics.js";
 import { escHtml, escAttr } from "../html.js";
-import { getManifest } from "../db.js";
+import { getManifest, query } from "../db.js";
 import {
   CHART_CAPS,
   createSelection,
@@ -33,6 +33,20 @@ import {
 import { mountCard } from "./card.js";
 import { eligibleRadarGroups } from "./radarGroups.js";
 import { eligiblePhaseFamilies } from "./phaseFamilies.js";
+import { timeseriesSupported, buildTimeseriesQuery } from "./timeseries.js";
+import { buildTimeseriesChart } from "./timeseriesChart.js";
+import {
+  dumbbellEligibleMetrics,
+  fetchDumbbellBowlingTypes,
+  fetchDumbbellSide,
+  defaultDumbbellSides,
+  oppositeDefaultSide,
+  encodeVs,
+  decodeVs,
+  vsLabel,
+  dumbbellVsOptionsHTML,
+} from "./dumbbell.js";
+import { buildDumbbellChart } from "./dumbbellChart.js";
 
 const CHART_TYPES = [
   { key: "bar", label: "Bar" },
@@ -41,6 +55,9 @@ const CHART_TYPES = [
   { key: "radar", label: "Radar" },
   { key: "phases", label: "Phases" },
   { key: "slope", label: "Slope" },
+  // Batch 4 wave 2 (the last two chart types).
+  { key: "byyear", label: "By year" },
+  { key: "dumbbell", label: "Dumbbell" },
 ];
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -100,6 +117,33 @@ function datasetMonthBounds() {
   const maxMonth = manifest?.data?.max_match_date ? manifest.data.max_match_date.slice(0, 7) : null;
   const minMonth = manifest?.data?.min_match_date ? manifest.data.min_match_date.slice(0, 7) : null;
   return { minMonth, maxMonth };
+}
+
+/**
+ * Whether the Dumbbell chart can be used at all right now: batting discipline
+ * (see dumbbell.js's file header — matchup_bowling has no symmetric "two
+ * sides" grain to chart) AND gender === "male". The gender guard matters
+ * beyond just UI polish: matchupVsActive() (state.js) — which decides whether
+ * buildQuery() takes the matchup path at all — returns false whenever
+ * gender !== "male" (matchup "Vs" style data doesn't exist for women yet,
+ * decision 21; table.js's own "Vs" select is disabled the same way, same
+ * wording). Without this guard, a female-gender dumbbell attempt would
+ * silently fall through to buildQuery's PLAIN (non-matchup) path — several
+ * matchup_batting metric keys (average, strike_rate, dot_pct, boundary_pct, …)
+ * also exist, with a DIFFERENT sqlExpression, in the plain "batting"
+ * namespace — so the chart would draw real career-wide numbers mislabeled as
+ * "vs Pace"/"vs Spin" instead of an honest no-data state. Never assumed;
+ * caught by re-reading matchupVsActive's own gender check while wiring this up.
+ */
+function dumbbellAvailable(state) {
+  return state.discipline === "batting" && state.gender === "male";
+}
+
+/** Honest reason the Dumbbell chart isn't available right now, for whichever
+ * condition in dumbbellAvailable() is failing (checked in the same order). */
+function dumbbellUnavailableReason(state) {
+  if (state.gender !== "male") return "No bowling-style data for women's cricket yet.";
+  return "Batting view only for now.";
 }
 
 /** Metrics eligible for the donut chart: additive totals only (Batch 3 fix 4 —
@@ -208,6 +252,18 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   // silently recomputed out from under the user.
   let slopeWindowA = null;
   let slopeWindowB = null;
+  // Batch 4 wave 2 (the last two chart types).
+  let byYearMetricKey = null;
+  let dumbbellMetricKey = null;
+  // {dim, value} pairs (dumbbell.js's shape), or null until
+  // ensureDumbbellSideDefaults() first sets them — same "owner-picked, never
+  // silently recomputed" posture as the Slope windows above.
+  let dumbbellSideA = null;
+  let dumbbellSideB = null;
+  // The distinct fine "Bowling type" values, lazily fetched once and cached —
+  // same idiom as table.js's own bowlingTypesCache (this module can't import
+  // that one; see dumbbell.js's file header on the Vs-vocabulary duplication).
+  let dumbbellBowlingTypesCache = null;
 
   let seeded = false; // has the selection ever been seeded for the current discipline+scope?
   let lastSeedKey = null;
@@ -297,6 +353,30 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     slopeWindowA = { from, to: monthFromIndex(midIdx) };
     const secondFromIdx = Math.min(midIdx + (span > 0 ? 1 : 0), toIdx);
     slopeWindowB = { from: monthFromIndex(secondFromIdx), to };
+  }
+
+  /** Dumbbell's Side A/Side B defaults (task brief): Pace vs Spin, set ONCE
+   * (like the Slope windows above) then left alone until the user repicks. */
+  function ensureDumbbellSideDefaults() {
+    if (dumbbellSideA && dumbbellSideB) return;
+    const d = defaultDumbbellSides();
+    dumbbellSideA = d.sideA;
+    dumbbellSideB = d.sideB;
+  }
+
+  /** Lazily fetch + cache the fine "Bowling type" vocabulary for the Dumbbell
+   * chart's Side A/B selects (dumbbell.js's own duplicate of table.js's
+   * distinct-bowling_type lookup — see that module's file header). No-op if
+   * already cached; re-renders the metric controls once the fetch resolves
+   * IF the Dumbbell chart is still the active type (a user who clicked away
+   * before it loaded shouldn't have their current controls yanked out from
+   * under them). */
+  function ensureDumbbellBowlingTypes() {
+    if (dumbbellBowlingTypesCache) return;
+    fetchDumbbellBowlingTypes().then((types) => {
+      dumbbellBowlingTypesCache = types;
+      if (chartType === "dumbbell") renderMetricControls();
+    });
   }
 
   // ── Metric controls (rebuilt per chart type) ──────────────────────────────
@@ -469,6 +549,88 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       bindWindowSelect("slope-a-to", (v) => (slopeWindowA = { ...slopeWindowA, to: v }));
       bindWindowSelect("slope-b-from", (v) => (slopeWindowB = { ...slopeWindowB, from: v }));
       bindWindowSelect("slope-b-to", (v) => (slopeWindowB = { ...slopeWindowB, to: v }));
+    } else if (chartType === "byyear") {
+      // Batch 4 wave 2, task 1: metrics whose sqlExpression recombines
+      // cleanly per (player, year) — timeseries.js's own whitelist (kind
+      // total/rate, innings-sourced); never re-derived here (§8.2).
+      const metrics = eligibleMetrics(discipline, formats).filter((m) => timeseriesSupported(m));
+      if (!byYearMetricKey || !metrics.some((m) => m.key === byYearMetricKey)) {
+        const preferredKey = discipline === "batting" ? "strike_rate" : "economy";
+        byYearMetricKey = (metrics.find((m) => m.key === preferredKey) || metrics[0])?.key ?? null;
+      }
+      els.metricControls.innerHTML = `
+        <span class="graph-control-label">Metric</span>
+        <select class="select graph-metric-select" data-role="byyear-metric">
+          ${
+            metrics.length
+              ? metrics.map((m) => `<option value="${m.key}" ${m.key === byYearMetricKey ? "selected" : ""}>${m.label}</option>`).join("")
+              : `<option value="">No year-by-year metric available for this scope</option>`
+          }
+        </select>
+      `;
+      const sel = els.metricControls.querySelector('[data-role="byyear-metric"]');
+      if (sel) {
+        sel.addEventListener("change", (e) => {
+          byYearMetricKey = e.target.value;
+          scheduleRender({ paramsChanged: true });
+        });
+      }
+    } else if (chartType === "dumbbell") {
+      // Batch 4 wave 2, task 2: batting discipline + men's cricket only (see
+      // dumbbellAvailable() above and dumbbell.js's file header for why). The
+      // chart-type click handler / onScopeChanged already steer away from
+      // "dumbbell" whenever it's unavailable, but render an honest note
+      // defensively rather than assume that always ran first.
+      if (!dumbbellAvailable(state)) {
+        els.metricControls.innerHTML = `<p class="graph-chart-type-caption">${dumbbellUnavailableReason(state)}</p>`;
+        return;
+      }
+      const metrics = dumbbellEligibleMetrics(formats);
+      if (!dumbbellMetricKey || !metrics.some((m) => m.key === dumbbellMetricKey)) {
+        dumbbellMetricKey = (metrics.find((m) => m.key === "strike_rate") || metrics[0])?.key ?? null;
+      }
+      ensureDumbbellSideDefaults();
+      ensureDumbbellBowlingTypes(); // fire-and-forget; re-renders these controls once loaded
+      const bowlingTypes = dumbbellBowlingTypesCache || [];
+      els.metricControls.innerHTML = `
+        <span class="graph-control-label">Metric</span>
+        <select class="select graph-metric-select" data-role="dumbbell-metric">
+          ${
+            metrics.length
+              ? metrics.map((m) => `<option value="${m.key}" ${m.key === dumbbellMetricKey ? "selected" : ""}>${m.label}</option>`).join("")
+              : `<option value="">No matchup rate/percent metric available for this scope</option>`
+          }
+        </select>
+        <span class="graph-control-label">Side A</span>
+        <select class="select graph-metric-select" data-role="dumbbell-side-a" aria-label="Side A">
+          ${dumbbellVsOptionsHTML(bowlingTypes, encodeVs(dumbbellSideA))}
+        </select>
+        <span class="graph-control-label">Side B</span>
+        <select class="select graph-metric-select" data-role="dumbbell-side-b" aria-label="Side B">
+          ${dumbbellVsOptionsHTML(bowlingTypes, encodeVs(dumbbellSideB))}
+        </select>
+      `;
+      const metricSel = els.metricControls.querySelector('[data-role="dumbbell-metric"]');
+      if (metricSel) {
+        metricSel.addEventListener("change", (e) => {
+          dumbbellMetricKey = e.target.value;
+          scheduleRender({ paramsChanged: true });
+        });
+      }
+      const sideASel = els.metricControls.querySelector('[data-role="dumbbell-side-a"]');
+      if (sideASel) {
+        sideASel.addEventListener("change", (e) => {
+          dumbbellSideA = decodeVs(e.target.value);
+          scheduleRender({ paramsChanged: true });
+        });
+      }
+      const sideBSel = els.metricControls.querySelector('[data-role="dumbbell-side-b"]');
+      if (sideBSel) {
+        sideBSel.addEventListener("change", (e) => {
+          dumbbellSideB = decodeVs(e.target.value);
+          scheduleRender({ paramsChanged: true });
+        });
+      }
     }
   }
 
@@ -549,6 +711,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   // ── Chart type switching ──────────────────────────────────────────────────
 
   // Batch 3 (graphs, part 1) picker captions — decision 43, exact strings.
+  // Batch 4 wave 2 adds the last two chart types' captions.
   const CHART_TYPE_CAPTIONS = {
     bar: "Rank players on one stat",
     donut: "Share of a total — needs a countable stat",
@@ -556,13 +719,41 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     radar: "Player shape profiles, side by side",
     phases: "One stat across match phases, side by side",
     slope: "One stat, two date windows — who rose, who fell",
+    byyear: "One stat, year by year",
+    dumbbell: "One stat, two bowling types — the gap is the story",
   };
 
+  /** The picker caption for `type` under the CURRENT state — an honest swap
+   * for Dumbbell while it isn't usable (SPEC §8.4: only describe what the
+   * control can actually do right now) — see dumbbellAvailable() above. */
+  function chartTypeCaption(type, state) {
+    if (type === "dumbbell" && !dumbbellAvailable(state)) return dumbbellUnavailableReason(state);
+    return CHART_TYPE_CAPTIONS[type] || "";
+  }
+
   function syncChartTypeButtons() {
+    const state = store.get();
     els.chartType.querySelectorAll(".segmented__btn").forEach((btn) => {
       btn.classList.toggle("is-active", btn.dataset.value === chartType);
     });
-    els.chartTypeCaption.textContent = CHART_TYPE_CAPTIONS[chartType] || "";
+    els.chartTypeCaption.textContent = chartTypeCaption(chartType, state);
+  }
+
+  /** Enables/disables the Dumbbell picker button for the current state
+   * (batting discipline + men's cricket — see dumbbellAvailable() above) —
+   * the "hide/disable ... with an honest caption swap" the task brief asks
+   * for, applied as the button's own disabled+title (the same
+   * "disabled + title, never removed" idiom table.js already uses for its
+   * preset chips / Turn-into-graph button) rather than removing the button
+   * from the grid. */
+  function syncChartTypeAvailability() {
+    const state = store.get();
+    const dumbbellBtn = els.chartType.querySelector('[data-value="dumbbell"]');
+    if (dumbbellBtn) {
+      const disabled = !dumbbellAvailable(state);
+      dumbbellBtn.disabled = disabled;
+      dumbbellBtn.title = disabled ? dumbbellUnavailableReason(state) : "";
+    }
   }
 
   // "Bars ⇄ Dots" style toggle — bar chart only (lollipop rendering, same
@@ -590,9 +781,10 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
 
   els.chartType.addEventListener("click", (e) => {
     const btn = e.target.closest(".segmented__btn");
-    if (!btn || btn.dataset.value === chartType) return;
+    if (!btn || btn.disabled || btn.dataset.value === chartType) return;
     chartType = btn.dataset.value;
     syncChartTypeButtons();
+    syncChartTypeAvailability();
     syncBarStyleVisibility();
     clearCapNote();
     renderMetricControls();
@@ -739,6 +931,29 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
           }
         : null;
     }
+    if (chartType === "byyear") {
+      const metrics = eligibleMetrics(discipline, state.formats).filter((m) => timeseriesSupported(m));
+      const metric = metrics.find((m) => m.key === byYearMetricKey) || metrics[0];
+      return metric ? { type: "byyear", discipline, metric, playerCount, roster } : null;
+    }
+    if (chartType === "dumbbell") {
+      if (!dumbbellAvailable(state) || !dumbbellSideA || !dumbbellSideB) return null;
+      const metrics = dumbbellEligibleMetrics(state.formats);
+      const metric = metrics.find((m) => m.key === dumbbellMetricKey) || metrics[0];
+      return metric
+        ? {
+            type: "dumbbell",
+            discipline,
+            metric,
+            labelA: vsLabel(dumbbellSideA),
+            labelB: vsLabel(dumbbellSideB),
+            sideAKey: encodeVs(dumbbellSideA),
+            sideBKey: encodeVs(dumbbellSideB),
+            playerCount,
+            roster,
+          }
+        : null;
+    }
     return null;
   }
 
@@ -748,11 +963,19 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
    * of that chart the global scope sentence knows nothing about). */
   function buildFooterScope(config) {
     const base = store.describeScope();
-    if (!config || config.type !== "slope") return base;
-    const a = config.windowALabel ?? windowLabel(config.windowA);
-    const b = config.windowBLabel ?? windowLabel(config.windowB);
-    if (!a || !b) return base;
-    return `${base} · Window A: ${a} · Window B: ${b}`;
+    if (config && config.type === "slope") {
+      const a = config.windowALabel ?? windowLabel(config.windowA);
+      const b = config.windowBLabel ?? windowLabel(config.windowB);
+      if (!a || !b) return base;
+      return `${base} · Window A: ${a} · Window B: ${b}`;
+    }
+    if (config && config.type === "dumbbell") {
+      // Batch 4 wave 2, task 2: the footer must state both sides explicitly
+      // (§8.4) — mirrors slope's window footer above.
+      if (!config.labelA || !config.labelB) return base;
+      return `${base} · Side A: vs ${config.labelA} · Side B: vs ${config.labelB}`;
+    }
+    return base;
   }
 
   // ── Rendering ────────────────────────────────────────────────────────────
@@ -887,6 +1110,113 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
         return;
       }
 
+      // By year (Batch 4 wave 2, task 1): its own branch, same reasoning as
+      // Slope above — a dedicated query (timeseries.js's buildTimeseriesQuery,
+      // grouped by (player, year), never re-derived here per §8.2) instead of
+      // fetchSelectedPlayerMetrics's flat per-player grouping.
+      if (chartType === "byyear") {
+        const metrics = eligibleMetrics(discipline, state.formats).filter((m) => timeseriesSupported(m));
+        const metric = metrics.find((m) => m.key === byYearMetricKey) || metrics[0];
+        if (!metric) {
+          hideStatus();
+          if (chartRef.current) {
+            chartRef.current.destroy();
+            chartRef.current = null;
+          }
+          card.hidePlaceholder();
+          renderExclusions([], "No year-by-year metric available for this scope.");
+          return;
+        }
+
+        const ids = players.map((p) => p.id);
+        const sql = buildTimeseriesQuery({ discipline, metricKey: metric.key, playerIds: ids, filters: state });
+        const { rows } = await query(sql);
+        if (token !== loadToken) return;
+        hideStatus();
+
+        const canvas = card.getCanvas();
+        const result = buildTimeseriesChart(canvas, chartRef, { metric, rows, players });
+        renderExclusions(result?.excluded ?? [], result?.note);
+
+        const config = {
+          type: "byyear",
+          discipline,
+          metric,
+          playerCount: players.length - (result?.excluded?.length ?? 0),
+          roster: (result?.excluded?.length ?? 0) > 0 ? { ...roster, dirty: true } : roster,
+        };
+        if (pendingRegenerate) {
+          card.regenerate(config, buildFooterScope(config));
+          pendingRegenerate = false;
+        } else {
+          card.updateFooterScope(buildFooterScope(config));
+        }
+        return;
+      }
+
+      // Dumbbell (Batch 4 wave 2, task 2): TWO independent matchup-mode
+      // queries (one per side, via dumbbell.js's fetchDumbbellSide — the same
+      // wrap-buildQuery idiom fetchWindowMetric uses for Slope's two windows)
+      // instead of fetchSelectedPlayerMetrics's single plain-discipline query.
+      if (chartType === "dumbbell") {
+        if (!dumbbellAvailable(state)) {
+          hideStatus();
+          if (chartRef.current) {
+            chartRef.current.destroy();
+            chartRef.current = null;
+          }
+          card.hidePlaceholder();
+          renderExclusions([], dumbbellUnavailableReason(state));
+          return;
+        }
+        const metrics = dumbbellEligibleMetrics(state.formats);
+        const metric = metrics.find((m) => m.key === dumbbellMetricKey) || metrics[0];
+        ensureDumbbellSideDefaults();
+        if (!metric || !dumbbellSideA || !dumbbellSideB) {
+          hideStatus();
+          if (chartRef.current) {
+            chartRef.current.destroy();
+            chartRef.current = null;
+          }
+          card.hidePlaceholder();
+          renderExclusions([], "No matchup rate/percent metric available for this scope.");
+          return;
+        }
+
+        const ids = players.map((p) => p.id);
+        const [rowsA, rowsB] = await Promise.all([
+          fetchDumbbellSide(state, dumbbellSideA, ids, metric),
+          fetchDumbbellSide(state, dumbbellSideB, ids, metric),
+        ]);
+        if (token !== loadToken) return;
+        hideStatus();
+
+        const canvas = card.getCanvas();
+        const labelA = vsLabel(dumbbellSideA);
+        const labelB = vsLabel(dumbbellSideB);
+        const result = buildDumbbellChart(canvas, chartRef, { metric, labelA, labelB, rowsA, rowsB, players });
+        renderExclusions(result?.excluded ?? [], result?.note);
+
+        const config = {
+          type: "dumbbell",
+          discipline,
+          metric,
+          labelA,
+          labelB,
+          sideAKey: encodeVs(dumbbellSideA),
+          sideBKey: encodeVs(dumbbellSideB),
+          playerCount: players.length - (result?.excluded?.length ?? 0),
+          roster: (result?.excluded?.length ?? 0) > 0 ? { ...roster, dirty: true } : roster,
+        };
+        if (pendingRegenerate) {
+          card.regenerate(config, buildFooterScope(config));
+          pendingRegenerate = false;
+        } else {
+          card.updateFooterScope(buildFooterScope(config));
+        }
+        return;
+      }
+
       let metricKeys = [];
       let config;
 
@@ -996,6 +1326,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     bridgeFromTable = false;
     syncBridgeBackVisibility();
     syncChartTypeButtons();
+    syncChartTypeAvailability();
     syncBarStyleVisibility();
     renderMetricControls();
     await seedSelection();
@@ -1020,11 +1351,43 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   async function enterFromBridge({ preferredMetricKey } = {}) {
     bridgeFromTable = true;
     syncBridgeBackVisibility();
+    const state = store.get();
+
+    // Task 3 (matchup bridge, Batch 4 wave 2): if the table was in matchup
+    // "Vs" mode when the bridge was clicked, land on the Dumbbell chart — the
+    // one chart type that understands matchup vocabulary — instead of always
+    // forcing Bar (a bar chart has no matchup-mode column set to draw from).
+    if (state.discipline === "batting" && matchupVsActive(state)) {
+      chartType = "dumbbell";
+      syncChartTypeButtons();
+      syncChartTypeAvailability();
+      syncBarStyleVisibility();
+      clearCapNote();
+
+      // Side B = the table's own selection; Side A = the "opposite family"
+      // default (dumbbell.js's classifyBowlingFamily heuristic) — a sensible
+      // contrasting starting point the user can freely repick afterward.
+      const tableVs = state.matchupVs;
+      dumbbellSideB = tableVs;
+      dumbbellSideA = oppositeDefaultSide(tableVs);
+
+      const metrics = dumbbellEligibleMetrics(state.formats);
+      dumbbellMetricKey =
+        preferredMetricKey && metrics.some((m) => m.key === preferredMetricKey)
+          ? preferredMetricKey
+          : (metrics.find((m) => m.key === "strike_rate") || metrics[0])?.key ?? null;
+
+      renderMetricControls();
+      await seedSelection({ force: true });
+      scheduleRender({ paramsChanged: true });
+      return;
+    }
+
     chartType = "bar";
     syncChartTypeButtons();
+    syncChartTypeAvailability();
     syncBarStyleVisibility();
     clearCapNote();
-    const state = store.get();
     if (preferredMetricKey) {
       const eligible = eligibleMetrics(state.discipline, state.formats);
       if (eligible.some((m) => m.key === preferredMetricKey)) {
@@ -1061,6 +1424,19 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
 
   /** Called whenever the shared filter scope changes (discipline/format/filters). */
   function onScopeChanged() {
+    // Batch 4 wave 2: Dumbbell needs batting discipline + men's cricket (see
+    // dumbbellAvailable() above). If a scope change lands outside that while
+    // Dumbbell is the active chart type, fall back to Bar rather than leaving
+    // the picker on a now-disabled type with a stale matchup chart still drawn.
+    if (chartType === "dumbbell" && !dumbbellAvailable(store.get())) {
+      chartType = "bar";
+      syncChartTypeButtons();
+      syncBarStyleVisibility();
+      clearCapNote();
+      selection.applyCapForNewType();
+      renderPlayerList();
+    }
+    syncChartTypeAvailability();
     renderMetricControls(); // metric eligibility may have changed (phase gating)
     // Re-seed from the new filtered set — the old selection may no longer make
     // sense for a different discipline; for pure filter tweaks we still refresh

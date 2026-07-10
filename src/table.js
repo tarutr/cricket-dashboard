@@ -856,19 +856,21 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
 
     const columnsBtnHTML = `<button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>`;
 
-    // "Turn into graph" bridge (Batch 3 part 2, decision 43): seeds the Graph
-    // Builder from this exact table (current filters/sort/top-15) — see
-    // graph.js's enterFromBridge(). Matchup mode has no chart yet (arrives
-    // with the dumbbell chart, Batch 4) and an unqueried/empty table has
-    // nothing to seed from — both states disable the button with an honest
-    // title rather than removing it, same reasoning as the presets/Group-rows
-    // greying above (the toolbar's shape never changes between modes).
+    // "Turn into graph" bridge (Batch 3 part 2, decision 43; matchup mode
+    // enabled Batch 4 wave 2): seeds the Graph Builder from this exact table
+    // (current filters/sort/top-15, or — in matchup mode — the table's own
+    // Vs bucket as one side of the Dumbbell chart) — see graph.js's
+    // enterFromBridge(). An unqueried/empty table has nothing to seed from,
+    // so that's the only state that still disables the button, with an
+    // honest title rather than removing it (same reasoning as the
+    // presets/Group-rows greying above — the toolbar's shape never changes
+    // between modes).
     const noResultsForGraph = !rows || rows.length === 0;
-    const graphBtnDisabled = matchupOn || noResultsForGraph;
-    const graphBtnTitle = matchupOn
-      ? "Matchup charting isn't available yet — it arrives with the dumbbell chart (Batch 4)."
-      : noResultsForGraph
-        ? "Show results first"
+    const graphBtnDisabled = noResultsForGraph;
+    const graphBtnTitle = noResultsForGraph
+      ? "Show results first"
+      : matchupOn
+        ? "Seed the Graph Builder's Dumbbell chart from this Vs comparison"
         : "Seed the Graph Builder from this table";
     const turnIntoGraphBtnHTML = `<button type="button" class="btn btn--ghost" data-role="turn-into-graph" ${graphBtnDisabled ? "disabled" : ""} title="${escAttr(graphBtnTitle)}">Turn into graph</button>`;
 

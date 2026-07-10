@@ -118,7 +118,7 @@ function formatMetricValue(metric, value) {
   }
 }
 
-function labelForValue(metric, value) {
+export function labelForValue(metric, value) {
   if (!hasMetricData(metric, value)) return "—";
   const n = Number(value);
   switch (metric.format) {
@@ -139,7 +139,12 @@ function labelForValue(metric, value) {
 // artifact" regardless of the site theme (card.js). So chart colors are the
 // fixed paper palette — never the live theme variables, which would produce
 // light-on-light or dark-on-dark once the dark toggle ships.
-function palette() {
+// Exported (Batch 4 wave 2): the two new chart types (By year, Dumbbell) live
+// in their own files — src/graph/timeseriesChart.js / dumbbellChart.js — to
+// keep this already-large file from growing further (SPEC §8.3's ~600-line
+// guidance), but they still draw from the ONE fixed paper palette/series
+// colors/value-formatter this file already owns, rather than redefining them.
+export function palette() {
   return {
     ink: "#1b2430",
     accent: "#9c2b2b",
@@ -161,12 +166,12 @@ function palette() {
 // existing accent + a handful of desaturated variants derived from it purely
 // for series differentiation — not new "metric vocabulary" (§8.2 is about
 // metric definitions, not chart series colors).
-const SERIES_COLORS = [
+export const SERIES_COLORS = [
   "#9c2b2b", "#2f6b3f", "#3a5a9c", "#b8842f", "#6b4a9c",
   "#2f8a8a", "#9c2f6b", "#5a7a2f", "#2f4a9c", "#9c6b2f",
 ];
 
-function destroyIfExists(chartRef) {
+export function destroyIfExists(chartRef) {
   if (chartRef.current) {
     chartRef.current.destroy();
     chartRef.current = null;
@@ -518,7 +523,7 @@ export function buildScatterChart(canvas, chartRef, { metricX, metricY, rowsById
   return { excluded };
 }
 
-function shortenName(name) {
+export function shortenName(name) {
   const parts = name.trim().split(/\s+/);
   if (parts.length <= 1) return name;
   const last = parts[parts.length - 1];

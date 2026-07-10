@@ -125,6 +125,18 @@ export function autoTitle(config) {
     const base = `${config.metric.label} — ${windowsPart}`;
     return rankedCountPhrase(base, config.playerCount, config.roster, config.metric.key);
   }
+  if (type === "byyear") {
+    // Batch 4 wave 2, task 1: "<Metric> by year — <count phrasing>". The
+    // year span itself lives in the subtitle's scope sentence, not here —
+    // this module doesn't restate it.
+    return rankedCountPhrase(`${config.metric.label} by year`, config.playerCount, config.roster, config.metric.key);
+  }
+  if (type === "dumbbell") {
+    // Batch 4 wave 2, task 2: "<Metric> — vs <Side A> vs <Side B>", then the
+    // same count phrasing as bar/donut/slope.
+    const base = `${config.metric.label} — vs ${config.labelA} vs ${config.labelB}`;
+    return rankedCountPhrase(base, config.playerCount, config.roster, config.metric.key);
+  }
   return "Untitled chart";
 }
 
@@ -144,6 +156,11 @@ function regenKeyFor(config) {
   // change does — unlike bar/donut/radar, where only the roster size moves
   // and a custom title should survive that.
   if (type === "slope") return JSON.stringify([type, config.metric.key, config.windowALabel, config.windowBLabel]);
+  if (type === "byyear") return JSON.stringify([type, config.metric.key]);
+  // Dumbbell's title embeds both sides, mirroring slope's window-key
+  // invalidation — changing either side's bucket must invalidate a
+  // manually-edited title exactly like a metric change does.
+  if (type === "dumbbell") return JSON.stringify([type, config.metric.key, config.sideAKey, config.sideBKey]);
   return JSON.stringify([type]);
 }
 
