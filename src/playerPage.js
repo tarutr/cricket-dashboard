@@ -310,10 +310,17 @@ function headerHTML(current, profile) {
 /** Non-scrolling header row (popup only): pairs with .player-popup__close —
  * see styles.css's .player-page__header-row comment for how the two line up
  * without being DOM siblings. Kept as one helper so all three shells (page,
- * loading, error) stay identical here. */
-function headerRowHTML() {
+ * loading, error) stay identical here. `showGraphButton` gates "Graph this
+ * player" (task 4, decision 43): only the fully-loaded page shell passes
+ * true — the loading/error shells have a `current` player but no confirmed
+ * innings yet, so offering to chart them there would be premature. */
+function headerRowHTML({ showGraphButton = false } = {}) {
+  const graphBtnHTML = showGraphButton
+    ? `<button type="button" class="btn btn--ghost player-page__graph-btn" data-role="graph-player">Graph this player</button>`
+    : "";
   return `<div class="player-page__header-row">
       <button type="button" class="link-btn player-page__back" data-role="back">&larr; Find another player</button>
+      ${graphBtnHTML}
     </div>`;
 }
 
@@ -325,7 +332,7 @@ function pageHTML({ state, current, profile, battingSummary, battingExtra, bowli
 
   return `
     <div class="player-page">
-      ${headerRowHTML()}
+      ${headerRowHTML({ showGraphButton: true })}
       ${headerHTML(current, profile)}
       <p class="player-page__scope">${escHtml(scopeLine(state))}</p>
       ${body}
@@ -356,7 +363,7 @@ function errorShellHTML(current, err) {
 
 // ── Controller ────────────────────────────────────────────────────────────────
 
-export function mountPlayerPage(container, store) {
+export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
   let current = null; // { id, name } | null
   let scopeKey = null; // the scope this page was last rendered/fetched for
   let loadToken = 0;
@@ -373,6 +380,16 @@ export function mountPlayerPage(container, store) {
     }
     const retryBtn = container.querySelector('[data-role="retry"]');
     if (retryBtn) retryBtn.addEventListener("click", retryFn);
+
+    // "Graph this player" (task 4, decision 43) — only present in the loaded
+    // page shell (headerRowHTML's showGraphButton), so this is a no-op on
+    // the loading/error shells.
+    const graphBtn = container.querySelector('[data-role="graph-player"]');
+    if (graphBtn) {
+      graphBtn.addEventListener("click", () => {
+        if (onGraphPlayer && current) onGraphPlayer(current.id, current.name);
+      });
+    }
   }
 
   // ---------- Search mode ----------

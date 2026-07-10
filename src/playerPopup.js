@@ -12,7 +12,7 @@
 
 import { mountPlayerPage } from "./playerPage.js";
 
-export function mountPlayerPopup(hostEl, store) {
+export function mountPlayerPopup(hostEl, store, { onGraphPlayer } = {}) {
   hostEl.innerHTML = `
     <div class="player-popup" data-role="player-popup" hidden>
       <div class="player-popup__backdrop" data-role="popup-backdrop"></div>
@@ -31,7 +31,16 @@ export function mountPlayerPopup(hostEl, store) {
     body: hostEl.querySelector('[data-role="popup-body"]'),
   };
 
-  const page = mountPlayerPage(els.body, store);
+  // "Graph this player" (task 4, decision 43): the popup closes ITSELF first
+  // — playerPage.js has no notion of "popup", it just reports which player
+  // was clicked — then forwards to the host app's callback, which handles
+  // the actual Stats→Graphs view switch and roster add.
+  const page = mountPlayerPage(els.body, store, {
+    onGraphPlayer: (id, name) => {
+      close();
+      if (onGraphPlayer) onGraphPlayer(id, name);
+    },
+  });
 
   function open(id, name) {
     page.showPlayer(id, name);

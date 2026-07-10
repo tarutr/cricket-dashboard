@@ -47,8 +47,9 @@ function donutEligibleMetrics(discipline, formats) {
   return eligibleMetrics(discipline, formats).filter((m) => m.additive === true);
 }
 
-export function mountGraph(container, store, { onRequery } = {}) {
+export function mountGraph(container, store, { onRequery, onBackToTable } = {}) {
   container.innerHTML = `
+    <button type="button" class="link-btn graph-bridge-back" data-role="bridge-back" hidden>&larr; Back to your table</button>
     <div class="graph-builder">
       <div class="graph-builder__controls">
         <div class="graph-control-group">
@@ -99,6 +100,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
   `;
 
   const els = {
+    bridgeBack: container.querySelector('[data-role="bridge-back"]'),
     chartType: container.querySelector('[data-role="chart-type"]'),
     chartTypeCaption: container.querySelector('[data-role="chart-type-caption"]'),
     barStyleGroup: container.querySelector('[data-role="bar-style"]'),
@@ -138,6 +140,21 @@ export function mountGraph(container, store, { onRequery } = {}) {
   let lastSeedKey = null;
   let loadToken = 0;
 
+  // Batch 3 part 2 (honest titles, decision 43): which metric key ranked the
+  // MOST RECENT successful seed, and under which discipline — this is what
+  // the paper-card title's "top N" / "top N by X" phrasing is built from
+  // (see resolveSeedMetric() and renderChart()'s `roster` below), rather than
+  // inferring provenance from playerCount alone.
+  let seedSortKey = null;
+  let seedSortDiscipline = null;
+
+  // "Turn into graph" bridge (decision 43): true only when the Graphs view
+  // was entered via the Stats-tab bridge button, until the user clicks the
+  // back link or leaves via an organic tab visit (onShow() resets it — see
+  // its doc comment). Never set by "Graph this player" (task 4) — that jump
+  // has no analogous "your table" to return to.
+  let bridgeFromTable = false;
+
   const selection = createSelection({
     getCap: () => CHART_CAPS[chartType].max,
     onChange: () => {
@@ -155,6 +172,16 @@ export function mountGraph(container, store, { onRequery } = {}) {
     els.capNote.hidden = true;
     els.capNote.textContent = "";
   }
+
+  function syncBridgeBackVisibility() {
+    els.bridgeBack.hidden = !bridgeFromTable;
+  }
+
+  els.bridgeBack.addEventListener("click", () => {
+    bridgeFromTable = false;
+    syncBridgeBackVisibility();
+    if (onBackToTable) onBackToTable();
+  });
 
   function showStatus(text) {
     els.status.textContent = text;
@@ -459,11 +486,66 @@ export function mountGraph(container, store, { onRequery } = {}) {
       const seedPlayers = await seedFromFilteredSet(store, cap);
       seeded = true;
       lastSeedKey = key;
+      // Record what ranked this seed (Batch 3 part 2 title honesty) — the
+      // table's/graph's active sort at the moment seedFromFilteredSet ran,
+      // tied to the discipline it ran under so a later discipline switch
+      // can't misattribute a stale key to the wrong metric namespace.
+      seedSortKey = state.sort.key;
+      seedSortDiscipline = state.discipline;
       clearCapNote();
       selection.setAll(seedPlayers);
     } catch (e) {
       showErrorStatus(e, () => seedSelection({ force: true }));
     }
+  }
+
+  /** The Metric that ranked the last successful seed, resolved for
+   * `discipline` — or null if there's been no seed yet, or the seed happened
+   * under a DIFFERENT discipline (a scope change should have already
+   * triggered a reseed via onScopeChanged; if it somehow hasn't, this falls
+   * back to "unknown provenance" rather than attributing a metric from the
+   * wrong namespace). */
+  function resolveSeedMetric(discipline) {
+    if (!seedSortKey || seedSortDiscipline !== discipline) return null;
+    return getMetric(seedSortKey, discipline) || null;
+  }
+
+  /** roster-provenance block passed to card.js on every config — see its
+   * rankedCountPhrase() doc comment for how {dirty, seedByMetric} become the
+   * title's "top N" / "top N by X" / "N players" phrasing. */
+  function currentRosterMeta(discipline) {
+    return { dirty: selection.isDirty(), seedByMetric: resolveSeedMetric(discipline) };
+  }
+
+  /** Build a title-only chart config for the CURRENT chart-type controls —
+   * used when there isn't (yet) a real chart to draw (zero players, or below
+   * the chart type's minimum) but the card must still show an honest title
+   * naming the actual roster size instead of a stale one left over from the
+   * last real chart (Batch 3 part 2, fix 3). Returns null only if the current
+   * chart type has no valid metric/group selected at all (nothing to title). */
+  function buildTitleOnlyConfig(playerCount) {
+    const state = store.get();
+    const discipline = state.discipline;
+    const roster = currentRosterMeta(discipline);
+    if (chartType === "bar") {
+      const metric = getMetric(barMetricKey, discipline);
+      return metric ? { type: "bar", discipline, metric, playerCount, roster } : null;
+    }
+    if (chartType === "donut") {
+      const metric = getMetric(donutMetricKey, discipline);
+      return metric ? { type: "donut", discipline, metric, playerCount, roster } : null;
+    }
+    if (chartType === "scatter") {
+      const metricX = getMetric(scatterXKey, discipline);
+      const metricY = getMetric(scatterYKey, discipline);
+      return metricX && metricY ? { type: "scatter", discipline, metricX, metricY, playerCount, roster } : null;
+    }
+    if (chartType === "radar") {
+      const groups = eligibleRadarGroups(discipline, state.formats);
+      const group = groups.find((g) => g.id === radarGroupId) || groups[0];
+      return group ? { type: "radar", discipline, group, playerCount, roster } : null;
+    }
+    return null;
   }
 
   // ── Rendering ────────────────────────────────────────────────────────────
@@ -496,6 +578,11 @@ export function mountGraph(container, store, { onRequery } = {}) {
         chartRef.current.destroy();
         chartRef.current = null;
       }
+      // Batch 3 part 2, fix 3 (title honesty): regenerate the title for the
+      // ACTUAL (empty) roster rather than leaving whatever a previous real
+      // chart said — the card must never claim a chart it isn't drawing.
+      const titleCfg = buildTitleOnlyConfig(0);
+      if (titleCfg) card.regenerate(titleCfg, store.describeScope());
       renderExclusions([], "No players selected. Add players or reset to the filtered set.");
       return;
     }
@@ -513,6 +600,13 @@ export function mountGraph(container, store, { onRequery } = {}) {
         chartRef.current.destroy();
         chartRef.current = null;
       }
+      // Batch 3 part 2, fix 3: same title-honesty regeneration as the
+      // zero-player branch above — previously this placeholder state kept
+      // whatever title the last real chart had (verified live: "Reliability
+      // — 6 players" over a 1-player bar placeholder), which is exactly the
+      // "claims a chart it isn't drawing" bug this batch fixes.
+      const titleCfg = buildTitleOnlyConfig(players.length);
+      if (titleCfg) card.regenerate(titleCfg, store.describeScope());
       card.showPlaceholder(`Add at least ${capDef.min} player${capDef.min === 1 ? "" : "s"} to draw this chart.`);
       renderExclusions([]);
       return;
@@ -524,12 +618,13 @@ export function mountGraph(container, store, { onRequery } = {}) {
     try {
       let metricKeys = [];
       let config;
+      const roster = currentRosterMeta(discipline);
 
       if (chartType === "bar") {
         const metric = getMetric(barMetricKey, discipline);
         if (!metric) { hideStatus(); return; }
         metricKeys = [metric.key];
-        config = { type: "bar", discipline, metric, playerCount: players.length, style: barStyle };
+        config = { type: "bar", discipline, metric, playerCount: players.length, style: barStyle, roster };
       } else if (chartType === "donut") {
         const metric = getMetric(donutMetricKey, discipline);
         if (!metric) {
@@ -538,13 +633,13 @@ export function mountGraph(container, store, { onRequery } = {}) {
           return;
         }
         metricKeys = [metric.key];
-        config = { type: "donut", discipline, metric, playerCount: players.length };
+        config = { type: "donut", discipline, metric, playerCount: players.length, roster };
       } else if (chartType === "scatter") {
         const metricX = getMetric(scatterXKey, discipline);
         const metricY = getMetric(scatterYKey, discipline);
         if (!metricX || !metricY) { hideStatus(); return; }
         metricKeys = [metricX.key, metricY.key];
-        config = { type: "scatter", discipline, metricX, metricY, playerCount: players.length };
+        config = { type: "scatter", discipline, metricX, metricY, playerCount: players.length, roster };
       } else if (chartType === "radar") {
         const groups = eligibleRadarGroups(discipline, state.formats);
         const group = groups.find((g) => g.id === radarGroupId) || groups[0];
@@ -555,7 +650,7 @@ export function mountGraph(container, store, { onRequery } = {}) {
         }
         const metrics = group.metricKeys.map((k) => getMetric(k, discipline)).filter(Boolean);
         metricKeys = metrics.map((m) => m.key);
-        config = { type: "radar", discipline, group, metrics, playerCount: players.length };
+        config = { type: "radar", discipline, group, metrics, playerCount: players.length, roster };
       }
 
       const rowsById = await fetchSelectedPlayerMetrics(state, players.map((p) => p.id), metricKeys);
@@ -599,11 +694,77 @@ export function mountGraph(container, store, { onRequery } = {}) {
   // ── Public API ───────────────────────────────────────────────────────────
 
   async function onShow() {
+    // Organic tab visit (clicking the "Graphs" tab directly) — as opposed to
+    // a bridge jump (enterFromBridge/addPlayerFromOutside, which set this
+    // themselves and do NOT call onShow before doing so). Decision 43: the
+    // back link "only appears after a bridge jump, not on organic tab
+    // visits" — resetting here is what makes that true even after a bridge
+    // jump the user didn't click the link away from (switch to Stats, then
+    // back to Graphs organically: the link should be gone).
+    bridgeFromTable = false;
+    syncBridgeBackVisibility();
     syncChartTypeButtons();
     syncBarStyleVisibility();
     renderMetricControls();
     await seedSelection();
     scheduleRender({ paramsChanged: true });
+  }
+
+  /**
+   * "Turn into graph" bridge (task 1, decision 43): called by the host app
+   * when the Stats toolbar's button is clicked. Forces the bar chart (the
+   * "top N ranked by one stat" type — the closest analogue to a sorted
+   * table, and the one whose cap the task brief's "top bar-max players"
+   * seeding explicitly names), sets its metric to the table's current sort
+   * column when that metric is graph-eligible for the live discipline/
+   * formats (otherwise the bar chart's existing metric is left alone — there
+   * may not even BE a "current" one yet if bar was never active), and force-
+   * reseeds from the CURRENT filtered set (bypassing seedSelection's
+   * unchanged-scope no-op, since this must always reflect "right now").
+   * `seedSelection` already ranks by the store's live sort key and caps at
+   * CHART_CAPS[chartType].max — which, since chartType is forced to "bar"
+   * first, is exactly the top-15 the brief describes.
+   */
+  async function enterFromBridge({ preferredMetricKey } = {}) {
+    bridgeFromTable = true;
+    syncBridgeBackVisibility();
+    chartType = "bar";
+    syncChartTypeButtons();
+    syncBarStyleVisibility();
+    clearCapNote();
+    const state = store.get();
+    if (preferredMetricKey) {
+      const eligible = eligibleMetrics(state.discipline, state.formats);
+      if (eligible.some((m) => m.key === preferredMetricKey)) {
+        barMetricKey = preferredMetricKey;
+      }
+    }
+    renderMetricControls();
+    await seedSelection({ force: true });
+    scheduleRender({ paramsChanged: true });
+  }
+
+  /**
+   * "Graph this player" (task 4, decision 43): called by the host app after
+   * it has already ensured the Graphs view is showing (normally via onShow()
+   * — see the host wiring). Adds ONE player to whatever roster already
+   * exists — no reseed, no chart-type change — marking it dirty (via
+   * players.js's createSelection.add()) so the title's "top N" phrasing
+   * correctly drops to "N players" the moment the roster stops being exactly
+   * the seeded set. Deliberately does NOT touch bridgeFromTable/the back
+   * link — there's no "table" this jump came from to link back to.
+   * Cap handling reuses the exact same note the manual player-search "add"
+   * path already shows (no new copy for the same situation).
+   */
+  function addPlayerFromOutside(id, name) {
+    const result = selection.add({ id, name });
+    if (!result.ok && result.reason === "cap") {
+      showCapNote(`Can't add — this chart type is capped at ${result.cap} players. Remove one first.`);
+    } else if (result.ok) {
+      clearCapNote();
+    }
+    // "already-selected": silent no-op — the player's already in the roster,
+    // which is exactly what the task brief asks for ("adds ... if absent").
   }
 
   /** Called whenever the shared filter scope changes (discipline/format/filters). */
@@ -619,5 +780,5 @@ export function mountGraph(container, store, { onRequery } = {}) {
     seedSelection().then(() => scheduleRender({ paramsChanged: true }));
   }
 
-  return { onShow, onScopeChanged };
+  return { onShow, onScopeChanged, enterFromBridge, addPlayerFromOutside };
 }

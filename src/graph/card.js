@@ -55,24 +55,71 @@ function slugify(text) {
 }
 
 /**
+ * Batch 3 part 2 (decision 43) — the title-honesty fix. Previously bar/donut/
+ * radar titles said "top N" (or a bare "N players") purely from playerCount,
+ * regardless of how the roster actually got to be N players — so a table
+ * sorted by average, turned into a bar chart of Runs, still read "Runs — top
+ * 15" even though the 15 shown are the top-15-BY-AVERAGE, not top-15-by-runs.
+ * `roster` (passed in on config by graph.js, sourced from the selection
+ * controller's dirty flag — players.js's createSelection — plus the metric
+ * that ranked the last seed) makes the roster's provenance explicit instead
+ * of inferred:
+ *   - clean seed, ranked by the metric actually being charted -> "top N"
+ *   - clean seed, ranked by a DIFFERENT metric -> "top N by <that metric>"
+ *   - manually edited (or provenance unknown/unresolvable) -> "N players"
+ * `displayedMetricKey` is the metric key this chart is ranking/showing (bar's
+ * metric, donut's metric); radar has no single "displayed" metric (it shows a
+ * GROUP), so it passes null and always takes the "by X" or "N players"
+ * branch — there's no metric it could coincidentally match. Scatter makes no
+ * count claim ("X vs Y") so it never calls this at all.
+ */
+function rankedCountPhrase(baseLabel, playerCount, roster, displayedMetricKey) {
+  const dirty = roster ? Boolean(roster.dirty) : true; // unknown provenance = treat as dirty, never overclaim
+  const seedByMetric = roster ? roster.seedByMetric : null;
+  if (!dirty && seedByMetric) {
+    if (displayedMetricKey && seedByMetric.key === displayedMetricKey) {
+      return `${baseLabel} — top ${playerCount}`;
+    }
+    // Lowercase the whole label for mid-sentence use ("by batting average"),
+    // preserving all-caps tokens (SR, BBI) and non-alphabetic chunks as-is.
+    const lower = seedByMetric.label
+      .split(" ")
+      .map((w) => (/^[A-Z][a-z]/.test(w) ? w.charAt(0).toLowerCase() + w.slice(1) : w))
+      .join(" ");
+    return `${baseLabel} — top ${playerCount} by ${lower}`;
+  }
+  return `${baseLabel} — ${playerCount} player${playerCount === 1 ? "" : "s"}`;
+}
+
+/**
  * Build the auto title for the current chart configuration. Honest: only
  * describes what's actually charted (§8.4).
  */
 export function autoTitle(config) {
   const { type } = config;
-  if (type === "bar") {
-    return `${config.metric.label} — top ${config.playerCount}`;
-  }
-  if (type === "donut") {
-    return `${config.metric.label} — share of total`;
+  if (type === "bar" || type === "donut") {
+    return rankedCountPhrase(config.metric.label, config.playerCount, config.roster, config.metric.key);
   }
   if (type === "scatter") {
     return `${config.metricX.label} vs ${config.metricY.label}`;
   }
   if (type === "radar") {
-    return `${config.group.label} — ${config.playerCount} player${config.playerCount === 1 ? "" : "s"}`;
+    return rankedCountPhrase(config.group.label, config.playerCount, config.roster, null);
   }
   return "Untitled chart";
+}
+
+/** Identity of the "type/metric" parameters that gate the title-edit guard
+ * below — deliberately narrower than "any chart parameter" (playerCount/
+ * roster excluded): switching chart type or metric almost certainly makes a
+ * user's custom title stale, so it's fine to overwrite; adding/removing a
+ * player does not, so a manual edit should survive that. */
+function regenKeyFor(config) {
+  const { type } = config;
+  if (type === "bar" || type === "donut") return JSON.stringify([type, config.metric.key]);
+  if (type === "scatter") return JSON.stringify([type, config.metricX.key, config.metricY.key]);
+  if (type === "radar") return JSON.stringify([type, config.group.id]);
+  return JSON.stringify([type]);
 }
 
 /** Build the auto subtitle: the scope sentence, honest and never editable-derived. */
@@ -124,6 +171,9 @@ export function mountCard(container) {
   let titleEdited = false;
   let subtitleEdited = false;
   let currentTitle = "";
+  // The [type, metric-key(s)] identity as of the last regenerate() call — see
+  // regenKeyFor()'s doc comment. null until the first regenerate().
+  let lastTitleRegenKey = null;
 
   els.title.addEventListener("input", () => {
     titleEdited = true;
@@ -140,19 +190,32 @@ export function mountCard(container) {
 
   /**
    * Regenerate title/subtitle/eyebrow/footer from the current chart config.
-   * Per v1 §25.8: a manual edit STICKS until the next regeneration call (i.e.
-   * until the caller next changes a chart parameter) — at THAT point this
-   * function overwrites the text and resets the edited flags. Callers should
-   * only invoke this when a parameter actually changed, not on every render,
-   * so in-place edits persist across re-renders that don't change params.
+   * Callers should only invoke this when a parameter actually changed, not on
+   * every render, so in-place edits persist across re-renders that don't
+   * change params (graph.js gates this on its `pendingRegenerate` flag, set
+   * whenever chart type/metric/players/filters move).
+   *
+   * TITLE guard (Batch 3 part 2, decision 43 — narrower than the subtitle's):
+   * once the user types into the title, auto-regeneration stops for THAT
+   * FIELD ONLY until the chart type or displayed metric(s) actually change
+   * (regenKeyFor() identity) — a player add/remove/roster reseed alone does
+   * NOT clear a manual title edit, since those don't make an explicit custom
+   * title wrong the way switching what's charted does. The subtitle has no
+   * such guard: it's the scope sentence, and always regenerates+resets on
+   * every regenerate() call (unchanged from before this batch).
    */
   function regenerate(config, scopeDescription) {
     els.eyebrow.textContent = eyebrowFor(config.discipline);
-    currentTitle = autoTitle(config);
-    els.title.textContent = currentTitle;
+    const newKey = regenKeyFor(config);
+    const newTitle = autoTitle(config);
+    if (!titleEdited || newKey !== lastTitleRegenKey) {
+      currentTitle = newTitle;
+      els.title.textContent = currentTitle;
+      titleEdited = false;
+    }
+    lastTitleRegenKey = newKey;
     els.subtitle.textContent = autoSubtitle(scopeDescription);
     els.footerScope.textContent = scopeDescription;
-    titleEdited = false;
     subtitleEdited = false;
   }
 

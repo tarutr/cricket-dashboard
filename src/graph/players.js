@@ -148,6 +148,15 @@ export async function searchPlayers(store, searchText, excludeIds) {
  */
 export function createSelection({ getCap, onChange, onTruncate }) {
   let players = []; // FULL ordered list — never destructively truncated
+  // Batch 3 part 2 (honest titles, decision 43): "dirty" means the roster no
+  // longer equals a fresh seed — set on manual add/remove, cleared by setAll
+  // (a fresh seed, forced or scope-triggered). graph.js reads this (plus the
+  // seed's sort key) to decide the paper-card title's phrasing ("top N" vs
+  // "top N by X" vs "N players") instead of inferring it from playerCount
+  // alone. Chart-type switches (applyCapForNewType) do NOT touch this — they
+  // only change which prefix of `players` is visible, not the roster's
+  // composition/provenance.
+  let dirty = false;
 
   function cap() {
     return getCap();
@@ -187,6 +196,7 @@ export function createSelection({ getCap, onChange, onTruncate }) {
 
   function setAll(newPlayers) {
     players = newPlayers.slice();
+    dirty = false; // a fresh seed is clean by definition, however it was triggered
     maybeNoteTruncation("The seeded set");
     if (onChange) onChange();
   }
@@ -197,6 +207,7 @@ export function createSelection({ getCap, onChange, onTruncate }) {
       return { ok: false, reason: "cap", cap: cap() };
     }
     players.push(player);
+    dirty = true;
     if (onChange) onChange();
     return { ok: true };
   }
@@ -204,7 +215,19 @@ export function createSelection({ getCap, onChange, onTruncate }) {
   function remove(id) {
     const before = players.length;
     players = players.filter((p) => p.id !== id);
-    if (players.length !== before && onChange) onChange();
+    if (players.length !== before) {
+      dirty = true;
+      if (onChange) onChange();
+    }
+  }
+
+  /** True if the roster has been manually edited (add/remove) since the last
+   * fresh seed. Reordering isn't a thing today — there's no drag/drop or
+   * explicit reorder control on the player list, only append (add) and
+   * removal, so "reorder" from the task brief has no code path to mark dirty
+   * from; noted as a non-issue rather than an omission. */
+  function isDirty() {
+    return dirty;
   }
 
   /** Re-evaluate the cap note for a NEW chart type (called on type switch).
@@ -214,5 +237,5 @@ export function createSelection({ getCap, onChange, onTruncate }) {
     maybeNoteTruncation("This chart type");
   }
 
-  return { get, getFull, has, setAll, add, remove, applyCapForNewType };
+  return { get, getFull, has, setAll, add, remove, applyCapForNewType, isDirty };
 }

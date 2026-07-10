@@ -580,7 +580,7 @@ function compareSplitRows(a, b, splitDim, dir) {
 
 // ── Table controller ─────────────────────────────────────────────────────────
 
-export function mountTable(container, store, { onPlayerClick } = {}) {
+export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } = {}) {
   let lastRows = [];
   let loadToken = 0;
   // The split dimension the CURRENT lastRows were queried with (null = no
@@ -856,6 +856,22 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
 
     const columnsBtnHTML = `<button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>`;
 
+    // "Turn into graph" bridge (Batch 3 part 2, decision 43): seeds the Graph
+    // Builder from this exact table (current filters/sort/top-15) — see
+    // graph.js's enterFromBridge(). Matchup mode has no chart yet (arrives
+    // with the dumbbell chart, Batch 4) and an unqueried/empty table has
+    // nothing to seed from — both states disable the button with an honest
+    // title rather than removing it, same reasoning as the presets/Group-rows
+    // greying above (the toolbar's shape never changes between modes).
+    const noResultsForGraph = !rows || rows.length === 0;
+    const graphBtnDisabled = matchupOn || noResultsForGraph;
+    const graphBtnTitle = matchupOn
+      ? "Matchup charting isn't available yet — it arrives with the dumbbell chart (Batch 4)."
+      : noResultsForGraph
+        ? "Show results first"
+        : "Seed the Graph Builder from this table";
+    const turnIntoGraphBtnHTML = `<button type="button" class="btn btn--ghost" data-role="turn-into-graph" ${graphBtnDisabled ? "disabled" : ""} title="${escAttr(graphBtnTitle)}">Turn into graph</button>`;
+
     // "Vs" matchup select (D4 R3, decision 33): ALWAYS rendered, both modes —
     // greyed for women (no style data yet, decision 21), presentation-mode
     // control like Group rows (changes reload directly).
@@ -871,6 +887,7 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
       <div class="table-toolbar__actions">
         ${vsSelectHTML}
         ${groupRowsHTML}
+        ${turnIntoGraphBtnHTML}
         ${columnsBtnHTML}
       </div>
     `;
@@ -914,6 +931,14 @@ export function mountTable(container, store, { onPlayerClick } = {}) {
       columnsBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         openColumnsPopover(columnsBtn);
+      });
+    }
+
+    const turnIntoGraphBtn = toolbarEl.querySelector('[data-role="turn-into-graph"]');
+    if (turnIntoGraphBtn) {
+      turnIntoGraphBtn.addEventListener("click", () => {
+        if (turnIntoGraphBtn.disabled) return;
+        if (onTurnIntoGraph) onTurnIntoGraph();
       });
     }
   }

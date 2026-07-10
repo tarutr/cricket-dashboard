@@ -129,22 +129,41 @@ function updateViewToggle() {
   });
 }
 
+/** DOM visibility only, no controller side effects — factored out of
+ * applyView() so the Batch 3 part 2 bridge callbacks (Stats→Graphs "Turn
+ * into graph" / "Graph this player", Graphs→Stats "Back to your table") can
+ * toggle the panels without necessarily invoking the SAME controller entry
+ * point applyView() would (e.g. the bridge needs graphController's
+ * enterFromBridge()/addPlayerFromOutside(), not a plain onShow()). */
+function showGraphView() {
+  tableAreaEl.hidden = true;
+  playerSearchSectionEl.hidden = true;
+  graphAreaEl.hidden = false;
+  updateViewToggle();
+}
+function showTableView() {
+  graphAreaEl.hidden = true;
+  tableAreaEl.hidden = false;
+  playerSearchSectionEl.hidden = false;
+  updateViewToggle();
+}
+
 /** Show/hide the leaderboard vs graph panels for state.view (§6: same page, no iframe).
- * Player profiles are a POP-UP over either view (owner ruling at the R2 gate), not a view. */
+ * Player profiles are a POP-UP over either view (owner ruling at the R2 gate), not a view.
+ * Returns the graph's onShow() promise (Promise.resolve() for the table branch) so bridge
+ * callbacks can sequence work after the view has actually finished showing. */
 function applyView() {
   const state = store.get();
   const view = state.view;
-  tableAreaEl.hidden = view !== "table";
-  playerSearchSectionEl.hidden = view !== "table";
-  graphAreaEl.hidden = view !== "graph";
-  updateViewToggle();
   if (view === "graph") {
-    graphController.onShow();
-  } else {
-    // Owner: no automated search — entering the table view shows the blank
-    // prompt; the query runs only when "Show results" is clicked.
-    tableController.showPrompt();
+    showGraphView();
+    return graphController.onShow();
   }
+  showTableView();
+  // Owner: no automated search — entering the table view shows the blank
+  // prompt; the query runs only when "Show results" is clicked.
+  tableController.showPrompt();
+  return Promise.resolve();
 }
 
 function onFiltersChanged() {
@@ -294,9 +313,40 @@ function boot() {
 
       tableController = mountTable(tableAreaEl, store, {
         onPlayerClick: (id, name) => playerPopupController.open(id, name),
+        // "Turn into graph" (Batch 3 part 2, decision 43): jump straight to
+        // the bar chart seeded from THIS table (current filters/sort/top-15)
+        // — graph.js's enterFromBridge() does the actual seeding/metric-pick,
+        // this just switches the visible panel and forwards the table's
+        // current sort column as the preferred graph metric.
+        onTurnIntoGraph: () => {
+          const sortKey = store.get().sort.key;
+          store.set({ view: "graph" });
+          showGraphView();
+          graphController.enterFromBridge({ preferredMetricKey: sortKey });
+        },
       });
-      playerPopupController = mountPlayerPopup(playerPopupHostEl, store);
-      graphController = mountGraph(graphAreaEl, store);
+      playerPopupController = mountPlayerPopup(playerPopupHostEl, store, {
+        // "Graph this player" (task 4, decision 43): close the popup first
+        // (playerPopup.js's wrapper does this before calling us), then show
+        // Graphs and add just this one player to whatever roster already
+        // exists there (onShow() first, in case Graphs has never been shown
+        // this session and needs its initial seed).
+        onGraphPlayer: (id, name) => {
+          store.set({ view: "graph" });
+          applyView().then(() => graphController.addPlayerFromOutside(id, name));
+        },
+      });
+      graphController = mountGraph(graphAreaEl, store, {
+        // "Back to your table" (task 5, decision 43): identical to clicking
+        // the "Stats" tab — same applyView() path, same existing prompt-on-
+        // entry safeguard against showing stale results for a scope the
+        // filters have since moved on from. The bridge doesn't add any new
+        // table-side state to preserve or clear.
+        onBackToTable: () => {
+          store.set({ view: "table" });
+          applyView();
+        },
+      });
 
       viewToggleEl.addEventListener("click", (e) => {
         const btn = e.target.closest(".segmented__btn");
