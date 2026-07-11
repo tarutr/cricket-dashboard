@@ -237,11 +237,24 @@ a { color: var(--color-accent); }
 
 /* The header input is narrower than the table-search one, but its dropdown
    still needs room for player names/meta — widen past 100% of the (narrow)
-   input rather than cramping every result. */
+   input rather than cramping every result.
+
+   Polish B1, task 4 (flagged by the previous engineer as untested at
+   narrow widths): verified empirically at 320/375/414/480px with the real
+   omnisearch results populated — .header-search is always the row's first
+   (leftmost) flex item, positioned flush against .app-header's own left
+   padding, and that padding is the SAME var(--space-4) token this max-width
+   subtracts twice (once per side), so the panel's right edge never runs
+   past the viewport at any width down to 320px; confirmed via
+   getBoundingClientRect (right edge stayed 296-343px inside the 320-480px
+   viewports tested, i.e. always a few px of margin to spare, never
+   clipped). Rewritten with min() instead of width+max-width — same
+   arithmetic, states the "never wider than X, but always at least this
+   margin from both viewport edges" intent as one rule instead of two that
+   have to be read together. */
 .header-search .omnisearch__results {
   left: 0;
-  width: 20rem;
-  max-width: calc(100vw - 2 * var(--space-4));
+  width: min(20rem, calc(100vw - 2 * var(--space-4)));
 }
 
 /* At mobile widths the box collapses to just its icon — a pure CSS
@@ -875,16 +888,42 @@ a { color: var(--color-accent); }
    The search box is player-first: typing opens .omnisearch__results, a
    dropdown listing matching players from the whole database (src/omnisearch.js).
    `position: relative` here anchors that dropdown under the input, same
-   pattern as .graph-player-search above. */
+   pattern as .graph-player-search above.
+
+   Polish B1, task 3 (owner: "basic design functionality is missing"): the
+   box used to be a fixed 22rem width with no label, sitting alone with no
+   visual relationship to anything around it — reads as an orphaned form
+   field on a wide desktop screen. Two changes: (1) the width lives on the
+   .player-search wrapper itself (not the bare input) and scales with the
+   viewport via clamp() instead of one fixed number, so it's a deliberate
+   size at every breakpoint rather than "352px, always"; (2) a small
+   uppercase caption — same visual language as .filter-label above it in the
+   scope strip — labels it "Search a player" via ::before (CSS-only content;
+   no DOM change needed, and the real a11y label already lives on the input's
+   aria-label, so this is a sighted-only affordance layered on top, never a
+   replacement for it). */
 
 .player-search {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
   position: relative;
+  width: 100%;
+  max-width: clamp(20rem, 42vw, 28rem);
+}
+
+.player-search::before {
+  content: "Search a player";
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  font-weight: 600;
 }
 
 .player-search .input {
   width: 100%;
-  max-width: 22rem;
   font-size: 0.95rem;
 }
 
@@ -893,7 +932,6 @@ a { color: var(--color-accent); }
   top: calc(100% + 6px);
   left: 0;
   width: 100%;
-  max-width: 22rem;
   max-height: 18rem;
   overflow-y: auto;
   padding: var(--space-1);
@@ -1357,11 +1395,32 @@ a { color: var(--color-accent); }
 
 /* ── Applied-filter pills (owner decision 29) ──────────────────────────────── */
 
+/* #pills-bar (pills.js's mount target) is a flex sibling of .filter-section
+   and .player-search inside .app-content's own gapped flex column — when no
+   filter is currently narrowing anything, pills.js sets its innerHTML to ""
+   (task 3 fix: previously that left a zero-height-but-still-a-flex-child
+   element in place, which STILL consumed .app-content's `gap`, doubling the
+   visible space above the search box in the common "nothing applied yet"
+   state; collapsing it out of flow entirely restores one consistent gap). */
+.pills-section:empty {
+  display: none;
+}
+
 .pills-row {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
   margin-top: var(--space-3);
+}
+
+/* The scope-strip's own pills row (inside #pills-bar) sits in
+   .app-content's gapped flex column, which already spaces it away from
+   .filter-section above — .pills-row's own margin-top (kept as-is for the
+   player-page overlay's reuse of this class, see .player-page__filter-pills
+   below) would double up with that gap here, so it's zeroed out for this
+   instance specifically rather than changed on the shared base rule. */
+.pills-section .pills-row {
+  margin-top: 0;
 }
 
 .pill {
@@ -1557,6 +1616,215 @@ a { color: var(--color-accent); }
   min-height: 32px;
 }
 
+/* ── Scope strip: mobile/tablet grid (polish B1, tasks 1-2) ─────────────────
+   Owner ruling: the old ≤480px behavior (every .filter-group full-width,
+   stacked one per row) "looks ugly" — six stacked rows ran to ~900px tall,
+   more than a full screen before the table search box was even visible.
+   Replaced with a 2-column CSS Grid, using grid-template-areas so the VISUAL
+   arrangement (Gender+Discipline paired, Format+Team type paired, Date range
+   full-width, All filters full-width) is independent of DOM/tab order — the
+   markup order stays exactly what filters.js already emits (Gender,
+   Discipline [relocated there by JS], Format, Date range, Team type, the
+   drawer-open button), so nothing about tab order or data-role wiring moves.
+   Segmented controls keep their tactile pill feel (now stretched to fill
+   their half-width column, buttons flex:1 so each option is a big 50%-wide
+   tap target) instead of degrading into another dropdown-like box.
+
+   This same 2-column SHAPE covers phones all the way up through small
+   tablets (≤899px) — task 2's "no awkward wrap state" turned out to mean
+   reusing task 1's shape rather than inventing a third layout: a 4-equal-
+   column single row (tried first) only has room for "Batting"/"Bowling" et
+   al. once each column clears roughly 180-190px, which doesn't happen until
+   somewhere around 900px wide — below that, four columns forced everything
+   below its own min-content width and the controls overlapped each other.
+   Only from 900px up (repeat-4-column block further down) is there
+   genuinely enough room for one single row.
+
+   Second-choice alternative considered (documented for the owner): a
+   single-line "Men · Batting · T20 · Jul 23–Jul 26 · Intl" summary bar that
+   expands into the full controls on tap. Not built — it needs an
+   expanded/collapsed JS state, and this task is scoped to markup/CSS only
+   (no logic in filters.js); the grid below reaches the same "not an ugly
+   stack" goal with zero new behavior. */
+@media (max-width: 899px) {
+  .filter-bar {
+    display: grid;
+    /* minmax(0, 1fr), not bare 1fr: a bare 1fr track still refuses to
+       shrink below its content's min-content width (e.g. the Discipline
+       segmented control's "Batting"/"Bowling" text, or the dropdown
+       toggle's own min-width), which was pushing the grid wider than the
+       viewport instead of letting the column-fill + ellipsis rules below
+       do their job. minmax(0, 1fr) lets the track actually shrink to the
+       fair 50/50 split. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "gender     discipline"
+      "format     teamtype"
+      "dates      dates"
+      "allfilters allfilters";
+    gap: var(--space-3);
+    align-items: stretch;
+  }
+
+  .filter-group--gender { grid-area: gender; }
+  .filter-group--discipline { grid-area: discipline; }
+  .filter-group--format { grid-area: format; }
+  .filter-group--teamtype { grid-area: teamtype; }
+  .filter-group--dates { grid-area: dates; }
+  .filter-open-btn { grid-area: allfilters; }
+
+  /* Gender/Discipline: stretch the pill control to fill its half-column and
+     split it 50/50 between the two options — big tactile buttons instead of
+     the control hugging its own text width (desktop's
+     `.filter-group .segmented { align-self: flex-start }` stays as-is for
+     the single-row layout at 900px+). flex:1 alone isn't enough — flex
+     items default to min-width:auto, which refuses to shrink below the
+     button's own text+padding min-content, so at a narrow half-column
+     "Batting"/"Bowling" would overflow past the segmented control's own
+     border (visibly clipped mid-word by its `overflow: hidden`, i.e.
+     showing "Bowlin") instead of being contained. min-width:0 + ellipsis is
+     the safety net for whenever a column gets tighter than the label
+     (phones; see the ≤640px tightening below) or a future longer label. */
+  .filter-group--gender .segmented,
+  .filter-group--discipline .segmented {
+    align-self: stretch;
+    width: 100%;
+  }
+  .filter-group--gender .segmented__btn,
+  .filter-group--discipline .segmented__btn {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Format/Team type: fill the half-column instead of the desktop min-width
+     hugging its own label text. Long team-type labels ("International +
+     Domestic") get an ellipsis rather than wrapping and growing the row. */
+  .filter-group--format .dropdown,
+  .filter-group--teamtype .dropdown,
+  .filter-group--format .dropdown__toggle,
+  .filter-group--teamtype .dropdown__toggle {
+    width: 100%;
+    min-width: 0;
+  }
+  .filter-group--format .dropdown__toggle,
+  .filter-group--teamtype .dropdown__toggle {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Date range keeps its two-select shape but spans the full row width, each
+     select taking an equal share either side of the "–" separator. */
+  .filter-group--dates .date-range { width: 100%; }
+  .filter-group--dates .date-range .select {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* "All filters" drops its desktop margin-left:auto (there's no row to push
+     against anymore) and becomes a full-width row of its own — the one
+     control that stays visually distinct from the two paired dropdown rows
+     above it, since it opens a drawer rather than a same-place panel. */
+  .filter-open-btn {
+    width: 100%;
+    justify-content: center;
+    margin-left: 0;
+  }
+}
+
+/* Phone-only tightening on top of the ≤899px shape above: claws back height
+   toward task 1's ~35%-of-an-812px-tall-viewport budget, which only matters
+   once the strip is competing with a genuinely short screen. Small tablets
+   (641-899px) keep the same 2-column shape at full comfortable spacing —
+   only phones (≤640px) get the tighter gap/padding/type. */
+@media (max-width: 640px) {
+  .filter-bar { gap: var(--space-2); }
+
+  .filter-bar .filter-group { gap: var(--space-1); }
+
+  .filter-group--gender .segmented__btn,
+  .filter-group--discipline .segmented__btn {
+    padding: var(--space-2) var(--space-1);
+    font-size: var(--text-md);
+  }
+}
+
+/* Tablet, wide end (900-1149px): the desktop single-row flex-wrap already
+   reflows reasonably at these widths, but two things read as awkward wrap
+   states rather than a deliberate layout — the compound Date range control
+   (two selects + a separator) wrapping onto its own line mid-way through a
+   group, and the "All filters" button orphaning itself alone on a trailing
+   row while margin-left:auto strands it far from the control above it.
+   Force one explicit 2-row shape instead of leaving it to chance: Gender /
+   Discipline / Format / Team type share row 1 (four equal columns finally
+   have enough room here — see the ≤899px comment above for why not
+   sooner), Date range gets its own full-width row 2, and All filters sits
+   at the end of row 2 rather than alone on a row 3.
+   Upper bound is 1149px, not the task's own "~1024px" tablet ceiling — the
+   task's own number is a description of typical tablet widths, not a hard
+   rule, and measuring the ACTUAL desktop flex-wrap showed it stays in this
+   same awkward state (Team type stranded alone on row 2, "All filters" far
+   off to its right) all the way up to ~1130px before there's finally enough
+   single-row width for all six controls; this block's own shape is a strict
+   improvement over that wrap in the whole 900-1149px window, so it's kept
+   running through it rather than handing back to the awkward wrap for a
+   ~125px-wide gap the task's number didn't quite anticipate. */
+@media (min-width: 900px) and (max-width: 1149px) {
+  .filter-bar {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-areas:
+      "gender discipline format teamtype"
+      "dates dates dates allfilters";
+    gap: var(--space-4);
+    align-items: end;
+  }
+
+  .filter-group--gender { grid-area: gender; }
+  .filter-group--discipline { grid-area: discipline; }
+  .filter-group--format { grid-area: format; }
+  .filter-group--teamtype { grid-area: teamtype; }
+  .filter-group--dates { grid-area: dates; }
+  .filter-open-btn {
+    grid-area: allfilters;
+    margin-left: 0;
+    justify-self: end;
+  }
+
+  .filter-group--format .dropdown,
+  .filter-group--format .dropdown__toggle,
+  .filter-group--teamtype .dropdown,
+  .filter-group--teamtype .dropdown__toggle {
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Same safety net as the ≤899px block above, kept here too since
+     "International + Domestic" can still just barely outrun a ~216px
+     column at the low end of this range. */
+  .filter-group--gender .segmented,
+  .filter-group--discipline .segmented {
+    align-self: stretch;
+    width: 100%;
+  }
+  .filter-group--gender .segmented__btn,
+  .filter-group--discipline .segmented__btn {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+  }
+}
+
 /* ── Mobile (~380px) ───────────────────────────────────────────────────────── */
 
 @media (max-width: 480px) {
@@ -1570,17 +1838,19 @@ a { color: var(--color-accent); }
 
   .app-main { padding: var(--space-4); }
 
-  .filter-section { padding: var(--space-4); }
+  /* Vertical padding only (var(--space-3), tighter than the space-4 used
+     everywhere else on the page) — part of task 1's ~35%-of-viewport height
+     budget for the scope strip; horizontal stays var(--space-4) to match
+     the rest of the mobile page's edge margin. Also applied at the 640px
+     breakpoint below via the same rule (kept here rather than duplicated,
+     since ≤480 is a subset of ≤640 and this file loads ≤480 after ≤640 —
+     source order, not a media-query subset, decides the cascade). */
+  .filter-section { padding: var(--space-3) var(--space-4); }
 
-  .filter-bar {
-    flex-direction: column;
-    align-items: stretch;
-    gap: var(--space-4);
-  }
-
-  .date-range {
-    flex-wrap: wrap;
-  }
+  /* .filter-bar's own layout (grid, column pairing, All-filters full-width)
+     is owned by the 640px scope-strip grid block above — this ≤480 block
+     only adds the remaining phone-specific tweaks (full-bleed dropdown
+     panels, tap targets) that still apply on top of it. */
 
   .team-dropdown__panel,
   .dropdown__panel {
@@ -1918,6 +2188,18 @@ a { color: var(--color-accent); }
   --paper-accent: #9c2b2b;
   --paper-good: #2f6b3f;
 
+  /* Canonical chart plot width (owner decision 46 — "what you see is what
+     exports"): below the 900px breakpoint the chart's plot area (canvas /
+     radar grid / benchmark rows — see .paper-card__chart-viewport below)
+     renders at this FIXED width instead of shrinking to the phone's
+     viewport, and .paper-card__chart-area becomes a horizontally-scrollable
+     window onto it. Chosen to match this card's own typical desktop-rendered
+     width (the .graph-builder stage column is fluid, so "desktop width"
+     isn't a single number, but this sits in the middle of its normal range —
+     see card.js/charts.js's PNG export, which reads this value live off the
+     rendered viewport rather than duplicating the number). */
+  --chart-canonical-w: 860px;
+
   background: var(--paper-bg);
   color: var(--paper-ink);
   border: 1px solid var(--paper-rule);
@@ -2008,7 +2290,61 @@ a { color: var(--color-accent); }
   padding: var(--space-3);
 }
 
+/* Owner decision 46 ("what you see is what exports"): below 900px,
+   .paper-card__chart-area above becomes the horizontally-scrollable
+   VIEWPORT the user pans sideways inside (media query further down), while
+   the chart's actual plot content (canvas, or the radar-grid/benchmark DOM
+   subtrees appended as its siblings — see charts.js/benchmarkChart.js, which
+   both target `canvas.parentElement` and need no changes for this) lives in
+   THIS wrapper at a FIXED --chart-canonical-w, so Chart.js (which measures
+   ITS OWN PARENT, not the scrollable viewport, to decide render size) never
+   shrinks the chart to fit a phone screen. On desktop it's a transparent
+   100%-of-parent pass-through — pixel-identical to before this wrapper
+   existed. */
+.paper-card__chart-viewport {
+  width: 100%;
+  height: 100%;
+}
+
 .paper-card__chart-area canvas { width: 100% !important; height: 100% !important; }
+
+/* Canonical-size chart pan/export (owner decision 46). Breakpoint matches
+   the graph builder's own two-column stack breakpoint below (900px), the
+   codebase's existing convention for "mobile" in this region. Height is
+   deliberately untouched here — .paper-card__chart-area's existing
+   420px/300px height rules (see the 480px rule further down) still apply
+   exactly as before; only WIDTH becomes fixed. Desktop (>900px) gets none of
+   this — .paper-card__chart-area keeps its plain default (visible overflow,
+   solid panel background), so desktop rendering is pixel-identical to
+   before this batch. */
+@media (max-width: 900px) {
+  .paper-card__chart-area {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    /* Pure-CSS scroll-edge fade (no JS scroll listener needed): two
+       "cover" gradients scroll WITH the content (background-attachment:
+       local) and paint over the two "shadow" gradients beneath them, which
+       are pinned to the viewport (background-attachment: scroll) — so a
+       shadow only shows through at an edge where there's still more
+       content to pan to, and both fade out on their own once you've
+       scrolled all the way to that edge. */
+    background-color: var(--paper-panel);
+    background-image:
+      linear-gradient(to right, var(--paper-panel), rgba(244, 240, 231, 0)),
+      linear-gradient(to left, var(--paper-panel), rgba(244, 240, 231, 0)),
+      linear-gradient(to right, rgba(27, 36, 48, 0.16), rgba(27, 36, 48, 0)),
+      linear-gradient(to left, rgba(27, 36, 48, 0.16), rgba(27, 36, 48, 0));
+    background-position: left center, right center, left center, right center;
+    background-size: 28px 100%, 28px 100%, 10px 100%, 10px 100%;
+    background-repeat: no-repeat;
+    background-attachment: local, local, scroll, scroll;
+  }
+
+  .paper-card__chart-viewport {
+    width: var(--chart-canonical-w);
+  }
+}
 
 /* Below-minimum-players state (Batch 3, decision 43): shown in place of a
    chart when the selection is under the active chart type's minimum. */
@@ -2026,11 +2362,14 @@ a { color: var(--color-accent); }
 }
 
 /* Radar small multiples (Batch 3, decision 43): one mini-radar per player,
-   built dynamically inside the chart-area (see charts.js's
-   buildRadarSmallMultiples) — lives inside .paper-card so html2canvas'
-   card-level PNG export/copy captures the whole grid. 3 cols desktop, 2
-   cols tablet, 1 col on small phones (mirrors the chart-area's own
-   breakpoints below). */
+   built dynamically inside the chart-viewport (see charts.js's
+   buildRadarSmallMultiples, which targets `canvas.parentElement`) — lives
+   inside .paper-card so html2canvas' card-level PNG export/copy captures the
+   whole grid. Always 3 columns (owner decision 46 removed the earlier
+   2-col/1-col mobile collapse — see the note further down where those rules
+   used to be — since the grid now renders at a fixed canonical width on
+   mobile too, same as desktop, rather than shrinking to the phone's
+   viewport). */
 .paper-card__radar-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -2066,15 +2405,11 @@ a { color: var(--color-accent); }
   text-align: center;
 }
 
-/* Breakpoints mirror the paper card's own existing ones below (900px is
-   where the graph builder stacks to one column; 480px is where the card's
-   own padding/chart-area height already shrink for phones). */
-@media (max-width: 900px) {
-  .paper-card__radar-grid { grid-template-columns: repeat(2, 1fr); }
-}
-@media (max-width: 480px) {
-  .paper-card__radar-grid { grid-template-columns: 1fr; }
-}
+/* No column-collapse breakpoints here any more (owner decision 46 superseded
+   the earlier 3/2/1-column shrink): .paper-card__chart-viewport (above) now
+   holds the grid at a FIXED width below 900px instead of letting it shrink
+   to the phone's viewport, so the 3-column desktop layout is what mobile
+   shows too — panning sideways, never re-flowing to fewer columns. */
 
 /* Benchmark chart (B8b, decision 44e): DOM rows, not a Chart.js canvas — see
    src/graph/benchmarkChart.js's file header for why (same "non-canvas
@@ -2090,7 +2425,13 @@ a { color: var(--color-accent); }
    automatically — verified by the flex layout math (min-width floors below),
    not visually (this batch had no browser tool available). This was chosen
    over a fixed max-width media query so it degrades gracefully at ANY width,
-   not just a hand-picked breakpoint. */
+   not just a hand-picked breakpoint.
+
+   Owner decision 46 update: below 900px this whole block now sits inside
+   .paper-card__chart-viewport at the fixed --chart-canonical-w rather than
+   the phone's own (much narrower) viewport width, so in practice the wrap
+   behavior mobile users see is whatever this width already produces on
+   desktop — not a new narrow-width code path to reason about separately. */
 .paper-card__benchmark {
   position: relative;
   width: 100%;

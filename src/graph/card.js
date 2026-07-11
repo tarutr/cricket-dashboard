@@ -211,10 +211,12 @@ export function mountCard(container) {
       <h2 class="paper-card__title" data-role="title" contenteditable="true" spellcheck="false" title="Click to edit"></h2>
       <p class="paper-card__subtitle" data-role="subtitle" contenteditable="true" spellcheck="false" title="Click to edit"></p>
       <div class="paper-card__chart-area" data-role="chart-area">
-        <canvas data-role="canvas"></canvas>
-        <p class="paper-card__placeholder" data-role="placeholder" hidden></p>
+        <div class="paper-card__chart-viewport" data-role="chart-viewport">
+          <canvas data-role="canvas"></canvas>
+          <p class="paper-card__placeholder" data-role="placeholder" hidden></p>
+        </div>
       </div>
-      <div class="paper-card__footer">
+      <div class="paper-card__footer" data-role="footer">
         <span class="paper-card__scope" data-role="footer-scope"></span>
         <span class="paper-card__watermark">cricdb</span>
       </div>
@@ -226,8 +228,14 @@ export function mountCard(container) {
     eyebrow: container.querySelector('[data-role="eyebrow"]'),
     title: container.querySelector('[data-role="title"]'),
     subtitle: container.querySelector('[data-role="subtitle"]'),
+    chartArea: container.querySelector('[data-role="chart-area"]'),
+    // Chart.js (and the radar/benchmark DOM builders, via canvas.parentElement
+    // — see charts.js/benchmarkChart.js) size themselves to THIS element, not
+    // chart-area — see styles.css's .paper-card__chart-viewport for why.
+    chartViewport: container.querySelector('[data-role="chart-viewport"]'),
     canvas: container.querySelector('[data-role="canvas"]'),
     placeholder: container.querySelector('[data-role="placeholder"]'),
+    footer: container.querySelector('[data-role="footer"]'),
     footerScope: container.querySelector('[data-role="footer-scope"]'),
   };
 
@@ -313,6 +321,88 @@ export function mountCard(container) {
     return titleEdited || subtitleEdited;
   }
 
+  /**
+   * Owner decision 46 ("what you see is what exports"): below the 900px
+   * breakpoint, .paper-card__chart-area is a horizontally-scrollable
+   * VIEWPORT onto the fixed-width .paper-card__chart-viewport (styles.css) —
+   * so at export time the user may currently be panned to any position
+   * inside it. Export/copy must always capture the FULL canonical-width
+   * chart regardless of that pan position, not whatever slice happens to be
+   * scrolled into view.
+   *
+   * html2canvas crops to the TARGET element's own box even when a
+   * descendant visually overflows it with `overflow: visible` (verified
+   * empirically against the vendored build before writing this — widening
+   * only the inner scroller had no effect; the target itself has to widen
+   * too). So this widens the clone's chart-area (matching the live
+   * chart-viewport's rendered width, with overflow neutralized) AND the
+   * card around it, wide enough that nothing needs to be cropped. Widening
+   * the card alone would also make the title/subtitle/footer re-wrap at
+   * that wider width, which is exactly the "export looks different from the
+   * screen" bug this batch exists to remove (SPEC §8.4-style honesty, plus
+   * the task's explicit "screen==export for whatever it includes" rule) —
+   * so those three are pinned to their OWN already-rendered widths first,
+   * confirmed by the same empirical check to keep the card's height/wrap
+   * identical to what's on screen.
+   *
+   * A no-op above the 900px breakpoint: desktop has no scrollable
+   * chart-area to begin with (this function's early return), so its export
+   * is byte-for-byte the same call this codebase already made.
+   */
+  function widenCloneForCanonicalExport(clonedDoc) {
+    if (!window.matchMedia("(max-width: 900px)").matches) return;
+    const clonedCard = clonedDoc.querySelector('[data-role="paper-card"]');
+    const clonedChartArea = clonedDoc.querySelector('[data-role="chart-area"]');
+    if (!clonedCard || !clonedChartArea) return;
+
+    const canonicalWidth = els.chartViewport.getBoundingClientRect().width;
+    if (!canonicalWidth) return;
+
+    const outerWidth = (el, innerWidth) => {
+      const s = window.getComputedStyle(el);
+      const extra =
+        parseFloat(s.paddingLeft || 0) +
+        parseFloat(s.paddingRight || 0) +
+        parseFloat(s.borderLeftWidth || 0) +
+        parseFloat(s.borderRightWidth || 0);
+      return innerWidth + extra;
+    };
+
+    clonedChartArea.style.overflow = "visible";
+    clonedChartArea.style.width = `${canonicalWidth}px`;
+    clonedChartArea.scrollLeft = 0;
+
+    // chart-area's own OUTER width (content + its padding/border), then the
+    // card's OUTER width around THAT — the card must be at least wide enough
+    // to contain the widened chart-area without cropping it.
+    const chartAreaOuterWidth = outerWidth(els.chartArea, canonicalWidth);
+    clonedCard.style.width = `${outerWidth(els.card, chartAreaOuterWidth)}px`;
+    clonedCard.style.maxWidth = "none";
+
+    // Pin title/subtitle/footer to their current on-screen widths so a
+    // wider card (for the chart's sake) never changes how they wrap —
+    // "screen==export for whatever it includes" (task brief).
+    for (const role of ["title", "subtitle", "footer"]) {
+      const live = els[role];
+      const cloned = clonedDoc.querySelector(`[data-role="${role}"]`);
+      if (!live || !cloned) continue;
+      const w = live.getBoundingClientRect().width;
+      cloned.style.width = `${w}px`;
+      cloned.style.maxWidth = `${w}px`;
+      cloned.style.flexShrink = "0";
+      cloned.style.boxSizing = "border-box";
+    }
+  }
+
+  function html2canvasOptions() {
+    return {
+      scale: 2,
+      backgroundColor: "#ffffff",
+      useCORS: true,
+      onclone: widenCloneForCanonicalExport,
+    };
+  }
+
   async function exportPNG(exportButton) {
     const originalText = exportButton ? exportButton.textContent : null;
     if (exportButton) {
@@ -325,11 +415,7 @@ export function mountCard(container) {
       if (document.activeElement && els.card.contains(document.activeElement)) {
         document.activeElement.blur();
       }
-      const canvas = await html2canvas(els.card, {
-        scale: 2,
-        backgroundColor: "#ffffff",
-        useCORS: true,
-      });
+      const canvas = await html2canvas(els.card, html2canvasOptions());
       const dataUrl = canvas.toDataURL("image/png");
       const titleForSlug = els.title.textContent || currentTitle || "chart";
       const filename = `cricdb-${slugify(titleForSlug)}.png`;
@@ -371,11 +457,7 @@ export function mountCard(container) {
       if (document.activeElement && els.card.contains(document.activeElement)) {
         document.activeElement.blur();
       }
-      const canvas = await html2canvas(els.card, {
-        scale: 2,
-        backgroundColor: "#ffffff",
-        useCORS: true,
-      });
+      const canvas = await html2canvas(els.card, html2canvasOptions());
       const blob = await new Promise((resolve, reject) => {
         canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Canvas produced no image data"))), "image/png");
       });
