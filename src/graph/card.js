@@ -126,10 +126,10 @@ export function autoTitle(config) {
     return rankedCountPhrase(base, config.playerCount, config.roster, config.metric.key);
   }
   if (type === "byyear") {
-    // Batch 4 wave 2, task 1: "<Metric> by year — <count phrasing>". The
-    // year span itself lives in the subtitle's scope sentence, not here —
-    // this module doesn't restate it.
-    return rankedCountPhrase(`${config.metric.label} by year`, config.playerCount, config.roster, config.metric.key);
+    // Batch 4 wave 2, task 1 (renamed to "Line" per owner follow-up):
+    // "<Metric> — Line — <count phrasing>". The year span itself lives in
+    // the subtitle's scope sentence, not here — this module doesn't restate it.
+    return rankedCountPhrase(`${config.metric.label} — Line`, config.playerCount, config.roster, config.metric.key);
   }
   if (type === "dumbbell") {
     // Batch 4 wave 2, task 2: "<Metric> — vs <Side A> vs <Side B>", then the

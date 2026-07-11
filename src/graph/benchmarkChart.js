@@ -48,11 +48,6 @@ function buildRow(r, anchorName) {
   track.className = "paper-card__benchmark-track";
   main.appendChild(track);
 
-  const refLine = document.createElement("div");
-  refLine.className = "paper-card__benchmark-refline";
-  refLine.style.left = `${REF_LEFT_PCT}%`;
-  track.appendChild(refLine);
-
   const meta = document.createElement("div");
   meta.className = "paper-card__benchmark-row__meta";
   row.appendChild(meta);
@@ -157,10 +152,48 @@ export function buildBenchmarkChart(canvas, chartRef, { anchor, groups, rows }) 
   refCaption.textContent = `${anchor.name} = 100%`;
   root.appendChild(refCaption);
 
+  // ONE continuous 100% reference line spanning every row's track (owner
+  // fix: previously each row drew its own short segment via CSS percentage
+  // positioning, which left visible gaps at every row/section boundary —
+  // this reads as a single unbroken guide instead. Every track shares the
+  // same label-width + track-flex structure (see the CSS rule this class
+  // replaces), so the first track's rect is a valid stand-in for "the
+  // track column" as a whole; height/position are measured from the
+  // actual rendered rows (not assumed), spanning first-track-top to
+  // last-track-bottom only — it does not reach into the trailing
+  // "<Anchor> = 100%" footnote below.
+  const anchorLine = document.createElement("div");
+  anchorLine.className = "paper-card__benchmark-anchorline";
+  anchorLine.hidden = true;
+  root.appendChild(anchorLine);
+
+  function positionAnchorLine() {
+    const tracks = root.querySelectorAll(".paper-card__benchmark-track");
+    if (!tracks.length) {
+      anchorLine.hidden = true;
+      return;
+    }
+    const rootRect = root.getBoundingClientRect();
+    const firstRect = tracks[0].getBoundingClientRect();
+    const lastRect = tracks[tracks.length - 1].getBoundingClientRect();
+    const top = firstRect.top - rootRect.top;
+    const bottom = lastRect.bottom - rootRect.top;
+    const left = firstRect.left - rootRect.left + firstRect.width * (REF_LEFT_PCT / 100);
+    anchorLine.hidden = false;
+    anchorLine.style.top = `${top}px`;
+    anchorLine.style.height = `${Math.max(0, bottom - top)}px`;
+    anchorLine.style.left = `${left}px`;
+  }
+
   chartArea.appendChild(root);
+  positionAnchorLine();
+  // Row/track widths are fluid (flex-basis, not a fixed px), so a resize can
+  // move the reference point — reposition rather than let it go stale.
+  window.addEventListener("resize", positionAnchorLine);
 
   chartRef.current = {
     destroy() {
+      window.removeEventListener("resize", positionAnchorLine);
       root.remove();
       canvas.hidden = false;
     },

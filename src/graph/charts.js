@@ -721,9 +721,9 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      // Room on the right for the value + name labels drawn past Window B's
-      // points by the plugin below.
-      layout: { padding: { right: 96, top: 12, bottom: 12, left: 8 } },
+      // Room on both sides for the "Name (value)" labels the plugin below
+      // draws past each endpoint.
+      layout: { padding: { right: 96, top: 12, bottom: 12, left: 24 } },
       plugins: {
         legend: { display: false }, // player identity comes from the endpoint name label, not a legend
         tooltip: {
@@ -746,31 +746,27 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
     },
     plugins: [
       {
+        // Endpoint labels (owner redesign): the standalone value numbers used
+        // to clash visually with the lines/points they sat next to, so each
+        // endpoint now carries ONE combined "Name (value)" label instead —
+        // Window A's label reads its Window A value, Window B's reads its
+        // Window B value, so a player's identity travels with both ends of
+        // their own line (no legend needed either way).
+        //
         // Label collision fix (live testing at ~800px and narrower, 11
-        // players): endpoint value labels were overprinting each other on
-        // the Window A axis, and Window B's "flip to the point's left when
-        // it doesn't fit on the right" fallback was landing player-name
-        // labels mid-chart, jammed directly against the value text with no
-        // gap ("K. Kadowaki-F109.73"). Two independent fixes below:
-        //   1. Names are ALWAYS anchored at the right endpoint (Window B),
-        //      never flipped to a mid-chart position — if the full name+value
-        //      text would overflow the canvas, its horizontal START slides
-        //      left just enough to keep its END inside chartArea (a plain
-        //      clamp, not a side-flip, so it never drifts back toward Window
-        //      A's column).
-        //   2. Value labels are dropped entirely once more than ~8 players
-        //      are drawn (§ their exact numbers still live in the tooltip and
-        //      the name label); below that they're kept, each side (A and B)
-        //      decluttered independently since they're visually separate
-        //      columns.
-        // Both label columns use the same simple vertical nudge: sort top to
-        // bottom by desired pixel y, push any label closer than MIN_GAP to
-        // its predecessor further down, then (if that ran the column past
-        // the bottom edge) walk back up from the last label enforcing the
-        // same minimum gap — keeping the whole column inside chartArea
-        // rather than letting it slide off, the same "stay inside the plot"
-        // intent as scatter's point-label clamp, just applied to a column of
-        // labels instead of a single one.
+        // players) kept from the original design: labels are ALWAYS anchored
+        // at their own endpoint, never flipped to a mid-chart position — if
+        // the full text would overflow the canvas, its horizontal start/end
+        // slides just enough to stay inside chartArea (a plain clamp, not a
+        // side-flip). The two columns (A and B) are decluttered
+        // independently since they're visually separate: sort top to bottom
+        // by desired pixel y, push any label closer than MIN_GAP to its
+        // predecessor further down, then (if that ran the column past the
+        // bottom edge) walk back up from the last label enforcing the same
+        // minimum gap — keeping the whole column inside chartArea rather
+        // than letting it slide off, the same "stay inside the plot" intent
+        // as scatter's point-label clamp, just applied to a column of labels
+        // instead of a single one.
         id: "slopeEndLabels",
         afterDatasetsDraw(chart) {
           const { ctx, chartArea } = chart;
@@ -786,7 +782,6 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
           if (rows.length === 0) return;
 
           const MIN_GAP = 12; // px between adjacent label rows in one column
-          const showValues = rows.length <= 8;
 
           function declutter(items) {
             const sorted = items.slice().sort((a, b) => a.y - b.y);
@@ -807,53 +802,31 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
 
           ctx.save();
           ctx.textBaseline = "middle";
+          ctx.font = "600 11px Inter, sans-serif";
+          ctx.fillStyle = pal.ink;
 
-          // Window A value labels — own declutter column, independent of
-          // Window B's (fixes the reported left-axis overprint).
-          if (showValues) {
-            const aItems = declutter(rows.map((row) => ({ row, y: row.pointA.y })));
-            ctx.font = "600 11px Inter, sans-serif";
-            ctx.fillStyle = pal.ink;
-            ctx.textAlign = "right";
-            for (const { row, y } of aItems) {
-              const text = labelForValue(metric, row.r.a);
-              const width = ctx.measureText(text).width;
-              // Clamp so the text's LEFT edge never runs past the plot's
-              // left edge (same clamp idiom as scatter's point labels).
-              const x = Math.max(row.pointA.x - 8, chartArea.left + width + 4);
-              ctx.fillText(text, x, y);
-            }
+          // Window A: "Name (value)" ending just left of the point.
+          const aItems = declutter(rows.map((row) => ({ row, y: row.pointA.y })));
+          ctx.textAlign = "right";
+          for (const { row, y } of aItems) {
+            const text = `${shortenName(row.r.name)} (${labelForValue(metric, row.r.a)})`;
+            const width = ctx.measureText(text).width;
+            // Clamp so the text's LEFT edge never runs past the plot's
+            // left edge (same clamp idiom as scatter's point labels).
+            const x = Math.max(row.pointA.x - 8, chartArea.left + width + 4);
+            ctx.fillText(text, x, y);
           }
 
-          // Window B: value label (only below the 8-player threshold) +
-          // player name, sharing ONE declutter column so a player's value and
-          // name always sit on the same row.
+          // Window B: "Name (value)" starting just right of the point.
           const bItems = declutter(rows.map((row) => ({ row, y: row.pointB.y })));
+          ctx.textAlign = "left";
           for (const { row, y } of bItems) {
-            const pointB = row.pointB;
-            let nameStart = pointB.x + 8;
-
-            if (showValues) {
-              ctx.font = "600 11px Inter, sans-serif";
-              const valueText = labelForValue(metric, row.r.b);
-              const valueWidth = ctx.measureText(valueText).width;
-              // Right-endpoint only: clamp the START leftward if needed to
-              // keep the END inside the canvas — never flip to the point's
-              // left (that's the mid-chart placement this fix removes).
-              const valueX = Math.min(pointB.x + 8, chartArea.right - 4 - valueWidth);
-              ctx.textAlign = "left";
-              ctx.fillStyle = pal.ink;
-              ctx.fillText(valueText, valueX, y);
-              nameStart = valueX + valueWidth + 4;
-            }
-
-            ctx.font = "11px Inter, sans-serif";
-            ctx.fillStyle = pal.muted;
-            const nameText = shortenName(row.r.name);
-            const nameWidth = ctx.measureText(nameText).width;
-            const nameX = Math.min(nameStart, chartArea.right - 4 - nameWidth);
-            ctx.textAlign = "left";
-            ctx.fillText(nameText, nameX, y);
+            const text = `${shortenName(row.r.name)} (${labelForValue(metric, row.r.b)})`;
+            const width = ctx.measureText(text).width;
+            // Right-endpoint only: clamp the START leftward if needed to
+            // keep the END inside the canvas.
+            const x = Math.min(row.pointB.x + 8, chartArea.right - 4 - width);
+            ctx.fillText(text, x, y);
           }
 
           ctx.restore();

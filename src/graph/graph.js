@@ -65,7 +65,7 @@ const CHART_TYPES = [
   { key: "phases", label: "Phases" },
   { key: "slope", label: "Slope" },
   // Batch 4 wave 2 (the last two chart types).
-  { key: "byyear", label: "By year" },
+  { key: "byyear", label: "Line" },
   { key: "dumbbell", label: "Dumbbell" },
   // B8b (decision 44e).
   { key: "benchmark", label: "Benchmark" },
@@ -210,7 +210,6 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
           <div class="segmented graph-chart-type" data-role="chart-type" role="group" aria-label="Chart type">
             ${CHART_TYPES.map((t) => `<button type="button" class="segmented__btn" data-value="${t.key}">${t.label}</button>`).join("")}
           </div>
-          <p class="graph-chart-type-caption" data-role="chart-type-caption"></p>
           <p class="graph-chart-type-reason" data-role="chart-type-reason" hidden></p>
           <div class="graph-bar-style" data-role="bar-style" hidden>
             <span class="graph-control-label">Style</span>
@@ -265,7 +264,6 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   const els = {
     bridgeBack: container.querySelector('[data-role="bridge-back"]'),
     chartType: container.querySelector('[data-role="chart-type"]'),
-    chartTypeCaption: container.querySelector('[data-role="chart-type-caption"]'),
     chartTypeReason: container.querySelector('[data-role="chart-type-reason"]'),
     barStyleGroup: container.querySelector('[data-role="bar-style"]'),
     barStyleToggle: container.querySelector('[data-role="bar-style-toggle"]'),
@@ -795,7 +793,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       // "dumbbell" whenever it's unavailable, but render an honest note
       // defensively rather than assume that always ran first.
       if (!dumbbellAvailable(state)) {
-        els.metricControls.innerHTML = `<p class="graph-chart-type-caption">${dumbbellUnavailableReason(state)}</p>`;
+        els.metricControls.innerHTML = `<p class="graph-metric-note">${dumbbellUnavailableReason(state)}</p>`;
         return;
       }
       const metrics = dumbbellEligibleMetrics(formats);
@@ -1173,28 +1171,6 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
 
   // ── Chart type switching ──────────────────────────────────────────────────
 
-  // Batch 3 (graphs, part 1) picker captions — decision 43, exact strings.
-  // Batch 4 wave 2 adds the last two chart types' captions.
-  const CHART_TYPE_CAPTIONS = {
-    bar: "Rank players on one stat",
-    donut: "Share of a total — needs a countable stat",
-    scatter: "Two stats mapped against each other",
-    radar: "Player shape profiles, side by side",
-    phases: "One stat across match phases, side by side",
-    slope: "One stat, two date windows — who rose, who fell",
-    byyear: "One stat, year by year",
-    dumbbell: "One stat, two bowling types — the gap is the story",
-    benchmark: "One player against the best of the rest, stat by stat.",
-  };
-
-  /** The picker caption for `type` under the CURRENT state — an honest swap
-   * for Dumbbell while it isn't usable (SPEC §8.4: only describe what the
-   * control can actually do right now) — see dumbbellAvailable() above. */
-  function chartTypeCaption(type, state) {
-    if (type === "dumbbell" && !dumbbellAvailable(state)) return dumbbellUnavailableReason(state);
-    return CHART_TYPE_CAPTIONS[type] || "";
-  }
-
   // ── Recommend engine (Batch 8, task 2 — v1's recommend()) ──────────────────
   //
   // v1's own recommend() ranks chart types by how many METRICS the user has
@@ -1307,15 +1283,12 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       const status = statuses[key];
       btn.classList.toggle("is-active", key === chartType);
       btn.disabled = !status.ok;
-      // Shown as the button's own title when disabled (task brief) — an ok
-      // button carries no title (the caption below already describes it for
-      // the ACTIVE type; a titled tooltip on every enabled button would be
-      // noise, matching the existing "disabled + title" idiom elsewhere).
+      // Shown as the button's own title when disabled — an ok button carries
+      // no title (a titled tooltip on every enabled button would be noise);
+      // the reason line below covers the ACTIVE type's own disabled state.
       btn.title = status.ok ? "" : status.reason || "";
       btn.innerHTML = `${type.label}${key === recommended ? '<span class="graph-chart-type-rec">Recommended</span>' : ""}`;
     });
-
-    els.chartTypeCaption.textContent = chartTypeCaption(chartType, state);
 
     // Muted inline reason under the picker — the ACTIVE type's own status
     // only, shown whenever it's currently invalid (e.g. a scope change left

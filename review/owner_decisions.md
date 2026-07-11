@@ -519,3 +519,32 @@ change requires a new owner decision recorded here. Dates are decision dates.
     mechanism explained (points from thinner years draw faded, never hidden,
     with the footnote stating the floor). No change needed — 30 was already
     the shipped default in src/graph/timeseries.js.
+
+46. **DESIGN ROUND 2 VERDICTS + FIX-ROUND RULINGS (2026-07-11):** the owner
+    reviewed all 63 checklist items (full item-by-item record:
+    review/design_round_2_decisions.md — sections A/D/K passed unchanged) and
+    ruled on the open items. Standing rulings from the follow-up Q&A:
+    (a) **Search split** — the header gains a global player search that opens
+    the popup; the search above the table ADDS the picked player to the
+    current results (removable "+ Player" pill), even if filters would
+    exclude him. (b) **"R. Pos."** — wherever the dashboard shows a player's
+    most-common batting position, label it "R. Pos." with a hover description
+    ("Regular position — where this player most often bats"); innings-slicing
+    position filters keep their behaviour, labelled clearly. The filter
+    drawer's profile section gains R. Pos. (a player-level most-common-
+    position filter); the drawer reorganizes to Team / role / batting hand /
+    R. Pos. / bowling style, with Against-opposition folded into Advanced.
+    (c) **Team filter** — one Team section with a dual dropdown: mode
+    "Current team | Historic team" + the team picker; the separate "Has ever
+    played for" filter goes away. (d) **Mobile graphs** — charts get fixed
+    canonical export sizes; on phones you pan sideways INSIDE the chart box
+    (page never scrolls sideways); screen == export. (e) **Average
+    thin-sample floor raised 3 → 5 dismissals** (averages only; other
+    dismissals-based metrics stay at 3). (f) **Graphs lose all defaults** —
+    nothing auto-fills; empty-with-guidance when no stats search was run;
+    results as pool when one was; greyed types stay clickable and explain how
+    to become usable; user choices persist; "By year" renamed "Line";
+    picker captions removed; "Graph this player" gets a chooser popup.
+    (g) **L3 v1 extras** (glossary tooltips, per-chart info, CSV export,
+    click-to-highlight, Randomise): ALL wanted — deferred to the round after
+    this fix round.

@@ -84,6 +84,31 @@ function isMutableKind(metric) {
   return metric.kind === "rate" || metric.kind === "percent";
 }
 
+// Owner ruling (task 2, Batch B1 polish): a dismissals-sampled metric that is
+// itself an AVERAGE (kind: "rate" — per the field-reference comment above,
+// "rate" IS the average/SR/economy family) must mute below 5 dismissals, not
+// the base floor of 3 — batting's `average` and `balls_per_dismissal` (an
+// average expressed as balls, not runs, per dismissal) and their
+// matchup_batting counterparts (`average`/`balls_per_dismissal` "vs style").
+// Every OTHER dismissals-sampled metric — the "Out X %" dismissal-kind
+// columns, kind: "percent", a share-of-whole rather than an average — keeps
+// the base floor of 3. Deliberately metric-aware (kind + unit), not a blanket
+// raise of SAMPLE_FLOORS.dismissals, which would also (wrongly) affect those
+// percent columns. Bowling's `average`/economy are wickets-sampled, not
+// dismissals-sampled, and are untouched by this either way.
+const DISMISSALS_AVERAGE_FLOOR = 5;
+
+/** The sample-size floor below which a metric's value renders muted, given
+ * its classified sample unit (sampleUnitFor). Single source of truth for both
+ * this file's dataCellHTML and graph/benchmark.js's computeBenchmarkRows
+ * (which duplicates the surrounding classifier functions but imports this one
+ * — see that file's header comment on why it duplicates rather than reaches
+ * into this module's other internals). */
+export function sampleFloorFor(metric, unit) {
+  if (unit === "dismissals" && metric.kind === "rate") return DISMISSALS_AVERAGE_FLOOR;
+  return unit ? SAMPLE_FLOORS[unit] : null;
+}
+
 // ── Matchup mode (D4 R3, decision 33) ───────────────────────────────────────
 // "Vs" leaderboard comparison: every row recomputes against one bowling-style
 // bucket (batting view) or batting-hand bucket (bowling view), over the
@@ -680,17 +705,19 @@ export function formatValue(metric, value) {
 
 /** Render one metric's `<td>`, muting the value (decision 44c) when it's a
  * rate/percent column whose backing sample (the `${key}__sample` column added
- * by buildQuery/buildMatchupQuery) is below that unit's SAMPLE_FLOORS entry.
- * No-data cells ("—") are never muted — hasMetricData already governs that,
- * this is strictly a further honesty layer on real values. Totals/peaks never
- * carry a `${key}__sample` column at all (isMutableKind gates that at query
- * time), so they always take the plain branch. */
+ * by buildQuery/buildMatchupQuery) is below that unit's floor (sampleFloorFor
+ * — SAMPLE_FLOORS' entry, except dismissals-sampled averages, see that
+ * function's doc comment). No-data cells ("—") are never muted — hasMetricData
+ * already governs that, this is strictly a further honesty layer on real
+ * values. Totals/peaks never carry a `${key}__sample` column at all
+ * (isMutableKind gates that at query time), so they always take the plain
+ * branch. */
 function dataCellHTML(metric, row) {
   const value = row[metric.key];
   const text = formatValue(metric, value);
   if (isMutableKind(metric) && hasMetricData(metric, value)) {
     const unit = sampleUnitFor(metric);
-    const floor = unit ? SAMPLE_FLOORS[unit] : null;
+    const floor = sampleFloorFor(metric, unit);
     // Number() coercion matters: DuckDB-WASM returns integer SUMs (e.g. a
     // dismissals sample) as BigInt, which would silently fail a typeof
     // "number" check and leave thin integer-sampled rates unmuted.

@@ -135,6 +135,31 @@ export function mountOmnisearch(inputEl, resultsEl, { onOpenPlayer, onFilterTabl
     render(term);
   }
 
+  /** Enter pressed before the debounced search has opened the dropdown (task
+   * 3 root cause, B1 polish): previously the keydown handler's `if (!isOpen)
+   * return` silently swallowed this keystroke, so a normal "type, then hit
+   * Enter" flow never reached choose()/onFilterTable at all — no query, no
+   * toast, nothing — even though the debounced search a moment later would
+   * have found the same matches. Runs the lookup immediately instead of
+   * waiting out the debounce, then acts on its result: with no dropdown ever
+   * rendered there's no row to have highlighted, so this is unambiguously the
+   * filter-table action (same convention as Enter-with-no-highlight below —
+   * rows.length is always the action row's index). Duplicates runSearch's
+   * fetch (rather than calling it) so it does NOT render/open the dropdown
+   * first, only to have choose() immediately close it again. */
+  async function flushAndChoose(term) {
+    const token = ++requestToken;
+    let result = [];
+    try {
+      result = await searchPlayers(term);
+    } catch {
+      result = [];
+    }
+    if (token !== requestToken) return; // superseded by a newer keystroke meanwhile
+    rows = result.slice(0, MAX_ROWS);
+    choose(rows.length, term);
+  }
+
   inputEl.addEventListener("input", () => {
     const term = inputEl.value.trim();
     currentTerm = term;
@@ -150,6 +175,15 @@ export function mountOmnisearch(inputEl, resultsEl, { onOpenPlayer, onFilterTabl
   inputEl.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       close();
+      return;
+    }
+    if (e.key === "Enter" && !isOpen) {
+      // See flushAndChoose's doc comment — the bug this fixes.
+      e.preventDefault();
+      const term = inputEl.value.trim();
+      if (term.length === 0) return;
+      clearTimeout(debounceId);
+      flushAndChoose(term);
       return;
     }
     if (!isOpen) return;

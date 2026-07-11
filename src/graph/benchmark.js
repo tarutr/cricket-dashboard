@@ -37,20 +37,23 @@
 // Dumbbell's OWN gender/discipline gate, for the same underlying reason: this
 // chart's vocabulary doesn't exist in the matchup namespace).
 //
-// ── Sample floors (decision 44c wave 3) ──────────────────────────────────────
-// Reuses table.js's exported SAMPLE_FLOORS verbatim (never redefined here).
-// table.js's own classifier (sampleUnitFor/isMutableKind, used by its
-// dataCellHTML for the "muted thin sample" cell styling) is NOT exported —
-// same "duplicate the ~10-line private helper rather than edit a file outside
-// this batch's ownership" precedent already established by
+// ── Sample floors (decision 44c wave 3; task 2, B1 polish) ───────────────────
+// Reuses table.js's exported SAMPLE_FLOORS AND sampleFloorFor() verbatim
+// (never redefined here) — the latter is the metric-aware override (a
+// dismissals-sampled AVERAGE floors at 5, every other dismissals-sampled
+// metric at the base 3) so this chart's muting never silently drifts from the
+// table's. table.js's own CLASSIFIER functions (sampleUnitFor/isMutableKind,
+// used by its dataCellHTML for the "muted thin sample" cell styling) are NOT
+// exported — same "duplicate the ~10-line private helper rather than edit a
+// file outside this batch's ownership" precedent already established by
 // src/graph/dumbbell.js (BOWLING_TYPE_PREFERENCE/orderBowlingTypes) and
 // src/graph/timeseries.js (per-discipline column maps). Kept byte-for-
 // semantics identical to table.js's own version (verified against table.js
-// lines 56–85 at authoring time).
+// at authoring time).
 
 import { hasMetricData } from "../metrics.js";
 import { eligibleMetrics } from "../state.js";
-import { buildQuery, SAMPLE_FLOORS } from "../table.js";
+import { buildQuery, SAMPLE_FLOORS, sampleFloorFor } from "../table.js";
 import { query } from "../db.js";
 
 // ── Duplicated from table.js (private there) — see file header. ────────────
@@ -172,17 +175,33 @@ export function groupMetricsByKind(metrics) {
  * 30 balls, min 3 dismissals"). Deterministic order (SAMPLE_FLOORS' own key
  * order); a metric with no classifiable unit (sampleUnitFor -> null, e.g. no
  * minSampleComponent at all) contributes nothing rather than a guess.
+ *
+ * Uses the same per-metric sampleFloorFor() override the muting itself uses,
+ * so a selection mixing a dismissals-sampled average (floors at 5) with a
+ * dismissals-sampled percent metric (floors at 3) reports both:
+ * "min 5 dismissals (averages), min 3 dismissals".
  */
 export function benchmarkFloorNotes(metrics) {
-  const units = new Set();
+  // unit -> Set of effective floors across the selected metrics for that unit
+  const floorsByUnit = new Map();
   for (const m of metrics) {
     if (!isMutableKind(m)) continue;
     const unit = sampleUnitFor(m);
-    if (unit) units.add(unit);
+    if (!unit) continue;
+    if (!floorsByUnit.has(unit)) floorsByUnit.set(unit, new Set());
+    floorsByUnit.get(unit).add(sampleFloorFor(m, unit));
   }
   return Object.keys(SAMPLE_FLOORS)
-    .filter((unit) => units.has(unit))
-    .map((unit) => `min ${SAMPLE_FLOORS[unit]} ${unit}`);
+    .filter((unit) => floorsByUnit.has(unit))
+    .flatMap((unit) => {
+      const floors = [...floorsByUnit.get(unit)].sort((a, b) => b - a);
+      if (floors.length === 1) return [`min ${floors[0]} ${unit}`];
+      // Today the only >base floor is the dismissals-average override, so the
+      // higher figure is honestly attributable to averages.
+      return floors.map((f) =>
+        f > SAMPLE_FLOORS[unit] ? `min ${f} ${unit} (averages)` : `min ${f} ${unit}`
+      );
+    });
 }
 
 /**
@@ -213,7 +232,12 @@ export function computeBenchmarkRows(pool, metrics, anchorId) {
     const sampleKey = `${key}__sample`;
     const mutable = isMutableKind(metric);
     const unit = mutable ? sampleUnitFor(metric) : null;
-    const floor = unit != null ? SAMPLE_FLOORS[unit] : null;
+    // sampleFloorFor (not a bare SAMPLE_FLOORS[unit] lookup): keeps this in
+    // sync with table.js's own dataCellHTML, including the task-2 override
+    // that floors dismissals-sampled AVERAGES (e.g. Batting Average,
+    // Balls per Dismissal) at 5 rather than the base dismissals floor of 3 —
+    // see sampleFloorFor's doc comment in table.js.
+    const floor = unit != null ? sampleFloorFor(metric, unit) : null;
 
     // §8.1, universal — anchor included.
     const eligible = pool.filter((r) => hasMetricData(metric, r[key]));
