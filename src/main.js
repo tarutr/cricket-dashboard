@@ -375,11 +375,12 @@ function boot() {
 
       tableController = mountTable(tableAreaEl, store, {
         onPlayerClick: (id, name) => playerPopupController.open(id, name),
-        // "Turn into graph" (Batch 3 part 2, decision 43): jump straight to
-        // the bar chart seeded from THIS table (current filters/sort/top-15)
-        // — graph.js's enterFromBridge() does the actual seeding/metric-pick,
-        // this just switches the visible panel and forwards the table's
-        // current sort column as the preferred graph metric.
+        // "Graph" toolbar button (decision 46f): navigates to Graphs exactly
+        // like clicking the tab — graph.js's enterFromBridge() picks no chart
+        // type and renders nothing by itself, EXCEPT when the table is in
+        // matchup "Vs" mode, where it lands directly on Dumbbell (the one
+        // chart type that understands matchup vocabulary) seeded from THIS
+        // table's current sort column as the preferred metric.
         onTurnIntoGraph: () => {
           const sortKey = store.get().sort.key;
           store.set({ view: "graph" });
@@ -399,15 +400,10 @@ function boot() {
         },
       });
       graphController = mountGraph(graphAreaEl, store, {
-        // "Back to your table" (task 5, decision 43): identical to clicking
-        // the "Stats" tab — same applyView() path, same existing prompt-on-
-        // entry safeguard against showing stale results for a scope the
-        // filters have since moved on from. The bridge doesn't add any new
-        // table-side state to preserve or clear.
-        onBackToTable: () => {
-          store.set({ view: "table" });
-          applyView();
-        },
+        // Decision 46f: whether the Stats tab has ever been searched — gates
+        // Graphs' own empty-state vs. seeding its player pool from the
+        // current filtered set (see graph.js's onShow()/seedSelection()).
+        hasStatsResults: () => tableController.hasResults(),
       });
 
       viewToggleEl.addEventListener("click", (e) => {

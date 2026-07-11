@@ -200,9 +200,8 @@ function donutEligibleMetrics(discipline, formats) {
   return eligibleMetrics(discipline, formats).filter((m) => m.additive === true);
 }
 
-export function mountGraph(container, store, { onRequery, onBackToTable } = {}) {
+export function mountGraph(container, store, { hasStatsResults = () => false } = {}) {
   container.innerHTML = `
-    <button type="button" class="link-btn graph-bridge-back" data-role="bridge-back" hidden>&larr; Back to your table</button>
     <div class="graph-builder">
       <div class="graph-builder__controls">
         <div class="graph-control-group">
@@ -210,7 +209,6 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
           <div class="segmented graph-chart-type" data-role="chart-type" role="group" aria-label="Chart type">
             ${CHART_TYPES.map((t) => `<button type="button" class="segmented__btn" data-value="${t.key}">${t.label}</button>`).join("")}
           </div>
-          <p class="graph-chart-type-reason" data-role="chart-type-reason" hidden></p>
           <div class="graph-bar-style" data-role="bar-style" hidden>
             <span class="graph-control-label">Style</span>
             <div class="segmented segmented--small" data-role="bar-style-toggle" role="group" aria-label="Bar style">
@@ -250,9 +248,10 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
 
       <div class="graph-builder__stage">
         <div class="graph-status" data-role="status" hidden></div>
+        <div class="graph-stage-guidance" data-role="stage-guidance" hidden></div>
         <div class="graph-card-host" data-role="card-host"></div>
         <div class="graph-exclusions" data-role="exclusions" hidden></div>
-        <div class="graph-export">
+        <div class="graph-export" data-role="export-row">
           <button type="button" class="btn btn--primary" data-role="export-png">Export PNG</button>
           <button type="button" class="btn btn--ghost" data-role="copy-png" hidden>Copy PNG</button>
           <span class="graph-export__status" data-role="export-status"></span>
@@ -262,9 +261,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   `;
 
   const els = {
-    bridgeBack: container.querySelector('[data-role="bridge-back"]'),
     chartType: container.querySelector('[data-role="chart-type"]'),
-    chartTypeReason: container.querySelector('[data-role="chart-type-reason"]'),
     barStyleGroup: container.querySelector('[data-role="bar-style"]'),
     barStyleToggle: container.querySelector('[data-role="bar-style-toggle"]'),
     metricControls: container.querySelector('[data-role="metric-controls"]'),
@@ -277,8 +274,10 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     resetPlayers: container.querySelector('[data-role="reset-players"]'),
     capNote: container.querySelector('[data-role="cap-note"]'),
     status: container.querySelector('[data-role="status"]'),
+    stageGuidance: container.querySelector('[data-role="stage-guidance"]'),
     cardHost: container.querySelector('[data-role="card-host"]'),
     exclusions: container.querySelector('[data-role="exclusions"]'),
+    exportRow: container.querySelector('[data-role="export-row"]'),
     exportBtn: container.querySelector('[data-role="export-png"]'),
     copyPngBtn: container.querySelector('[data-role="copy-png"]'),
     exportStatus: container.querySelector('[data-role="export-status"]'),
@@ -292,7 +291,11 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   if (card.canCopyPNG()) els.copyPngBtn.hidden = false;
 
   // ── Local chart config state (separate from the global filter store) ─────
-  let chartType = "bar";
+  // decision 46f: no chart type is pre-selected — the user must click one
+  // before anything renders (see renderChart()'s top guard). Persists across
+  // tab switches / chart-type re-picks for the rest of the session once set,
+  // same as every other control below.
+  let chartType = null;
   let barStyle = "bars"; // "bars" | "dots" (lollipop) — bar chart only
   let barMetricKey = null;
   let donutMetricKey = null;
@@ -358,15 +361,38 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   let lastRankMetricKey = null;
   let lastRankMetricDiscipline = null;
 
-  // "Turn into graph" bridge (decision 43): true only when the Graphs view
-  // was entered via the Stats-tab bridge button, until the user clicks the
-  // back link or leaves via an organic tab visit (onShow() resets it — see
-  // its doc comment). Never set by "Graph this player" (task 4) — that jump
-  // has no analogous "your table" to return to.
-  let bridgeFromTable = false;
+  // decision 46f: the checked-set cap before any chart type is picked (the
+  // pool seed size and the "keep the existing top-N-by-current-sort checked
+  // subset" initial roster both use this) — the classic "top 15", same
+  // number Bar's own cap always was. Once a type is picked, activeMaxCap()
+  // switches to that type's own CHART_CAPS entry.
+  const DEFAULT_PRETYPE_CAP = 15;
+  function activeMaxCap() {
+    return chartType ? CHART_CAPS[chartType].max : DEFAULT_PRETYPE_CAP;
+  }
+  /** "this chart type"/"the initial roster" — whichever the cap messages
+   * above should call the thing capped at activeMaxCap(), depending on
+   * whether a type has been picked yet. */
+  function capSubjectLabel() {
+    return chartType ? "this chart type" : "the initial roster";
+  }
+
+  /** Honest "nothing to plot" reason shared by the pre-type-selection stage
+   * guidance AND every chart type's own evaluateTypeStatus() below (decision
+   * 46f) — ONE predicate so both surfaces never disagree: null candidates
+   * because Stats has never been searched vs. null candidates despite a real
+   * search (current filters just match nobody) get different, honest wording;
+   * a non-empty pool returns null (no pool-level reason — the type's own
+   * eligibility/floor checks take over from there). */
+  function poolStatusReason() {
+    if (selection.candidateCount() > 0) return null;
+    return hasStatsResults()
+      ? "No players match your current filters — adjust them on the Stats tab and search again."
+      : "Run a search on the Stats tab first.";
+  }
 
   const selection = createSelection({
-    getCap: () => CHART_CAPS[chartType].max,
+    getCap: () => activeMaxCap(),
     onChange: () => {
       renderPlayerList();
       // B8b: the Benchmark chart's ANCHOR select offers the CHECKED roster
@@ -400,15 +426,24 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     els.capNote.textContent = "";
   }
 
-  function syncBridgeBackVisibility() {
-    els.bridgeBack.hidden = !bridgeFromTable;
+  /** Stage-level guidance shown IN PLACE OF the paper card whenever there's
+   * nothing to chart yet: no chart type picked (decision 46f — no auto-render
+   * on entry), or the picked type can't render right now for any reason
+   * evaluateTypeStatus() reports (pool empty, wrong discipline/gender, no
+   * eligible metric, below the type's own player floor). One plain-English
+   * sentence, always in the stage — never a tooltip (task brief's honesty
+   * rule for chart-type unavailability). */
+  function showStageGuidance(text) {
+    els.exportRow.hidden = true;
+    els.cardHost.hidden = true;
+    els.stageGuidance.textContent = text;
+    els.stageGuidance.hidden = false;
   }
-
-  els.bridgeBack.addEventListener("click", () => {
-    bridgeFromTable = false;
-    syncBridgeBackVisibility();
-    if (onBackToTable) onBackToTable();
-  });
+  function hideStageGuidance() {
+    els.stageGuidance.hidden = true;
+    els.cardHost.hidden = false;
+    els.exportRow.hidden = false;
+  }
 
   function showStatus(text) {
     els.status.textContent = text;
@@ -531,7 +566,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     const token = ++rankDeriveToken;
     const state = store.get();
     const pool = selection.getFull();
-    const cap = CHART_CAPS[chartType].max;
+    const cap = activeMaxCap();
     if (pool.length === 0) {
       selection.setChecked([], { dirty: false });
       lastRankMetricKey = null;
@@ -593,6 +628,11 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   // ── Metric controls (rebuilt per chart type) ──────────────────────────────
 
   function renderMetricControls() {
+    // decision 46f: nothing to show before a chart type is picked.
+    if (!chartType) {
+      els.metricControls.innerHTML = "";
+      return;
+    }
     const state = store.get();
     const discipline = state.discipline;
     const formats = state.formats;
@@ -1035,7 +1075,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     const checkedCount = selection.checkedCount();
     const candidates = selection.getFull();
     const total = candidates.length;
-    const cap = CHART_CAPS[chartType].max;
+    const cap = activeMaxCap();
     const mode = selection.getMode();
 
     els.rosterToggle.textContent = `${checkedCount} of ${total} selected`;
@@ -1056,7 +1096,11 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
           .map((p, i) => {
             const checked = selection.isChecked(p.id);
             const atCap = !checked && checkedCount >= cap;
-            const title = atCap ? `Max ${cap} for this chart type — untick one first` : checked ? "Remove from graph" : "Add to graph";
+            const title = atCap
+              ? `Max ${cap}${chartType ? " for this chart type" : " before picking a chart type"} — untick one first`
+              : checked
+                ? "Remove from graph"
+                : "Add to graph";
             return `<div class="dropdown__item graph-roster-item${atCap ? " is-disabled" : ""}" data-id="${escAttr(p.id)}">
               <input type="checkbox" data-role="roster-check" data-id="${escAttr(p.id)}" ${checked ? "checked" : ""} ${atCap ? "disabled" : ""} title="${escAttr(title)}" />
               <span class="graph-roster-item__name">${escHtml(p.name)}</span>
@@ -1143,7 +1187,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
             // silently dropped.
             const result = selection.addCandidate({ id: btn.dataset.id, name: btn.dataset.name });
             if (result.ok && !result.checked) {
-              showCapNote(`Added to your list, but this chart type is capped at ${CHART_CAPS[chartType].max} players — untick one to plot them instead.`);
+              showCapNote(`Added to your list, but ${capSubjectLabel()} is capped at ${activeMaxCap()} players — untick one to plot them instead.`);
             } else {
               clearCapNote();
             }
@@ -1197,6 +1241,11 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
    * some unchecked (players.js's cap-clamp), unlike v1 where exceeding a
    * metric-count max was a hard disqualifier. */
   function evaluateTypeStatus(typeKey, state) {
+    // decision 46f: an empty pool (never searched Stats, or a real search
+    // that matched nobody) blocks EVERY type the same honest way, before any
+    // type-specific check runs — see poolStatusReason()'s doc comment.
+    const poolReason = poolStatusReason();
+    if (poolReason) return { ok: false, reason: poolReason };
     if (typeKey === "dumbbell" && !dumbbellAvailable(state)) {
       return { ok: false, reason: dumbbellUnavailableReason(state) };
     }
@@ -1282,37 +1331,16 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       const type = CHART_TYPES.find((t) => t.key === key);
       const status = statuses[key];
       btn.classList.toggle("is-active", key === chartType);
-      btn.disabled = !status.ok;
-      // Shown as the button's own title when disabled — an ok button carries
-      // no title (a titled tooltip on every enabled button would be noise);
-      // the reason line below covers the ACTIVE type's own disabled state.
-      btn.title = status.ok ? "" : status.reason || "";
+      // decision 46f: NEVER html-disabled — every tile stays clickable.
+      // "Greyed" is a passive CSS hint only (is-unavailable, styles.css); the
+      // actual explanation is a full sentence in the STAGE, written the
+      // moment the user clicks the tile (see renderChart()'s evaluateTypeStatus
+      // guard) — never a title-only tooltip, so no reason text lives here.
+      btn.disabled = false;
+      btn.title = "";
+      btn.classList.toggle("is-unavailable", !status.ok);
       btn.innerHTML = `${type.label}${key === recommended ? '<span class="graph-chart-type-rec">Recommended</span>' : ""}`;
     });
-
-    // Muted inline reason under the picker — the ACTIVE type's own status
-    // only, shown whenever it's currently invalid (e.g. a scope change left
-    // too few candidates, or removed the only eligible metric/group/family
-    // for it) so the user immediately sees WHY nothing is drawing, beyond
-    // just the placeholder text in the chart area itself.
-    const activeStatus = statuses[chartType];
-    if (activeStatus && !activeStatus.ok && activeStatus.reason) {
-      els.chartTypeReason.textContent = activeStatus.reason;
-      els.chartTypeReason.hidden = false;
-    } else {
-      els.chartTypeReason.hidden = true;
-      els.chartTypeReason.textContent = "";
-    }
-  }
-
-  /** Legacy name kept as a thin alias — syncChartTypeButtons() now computes
-   * every type's availability (not just Dumbbell's) in one pass, so this
-   * just re-runs it; kept separate (rather than deleting every call site)
-   * since several callers already call both in sequence for other reasons
-   * (bar-style visibility, metric controls, …) and reordering those calls is
-   * unrelated to this batch's scope. */
-  function syncChartTypeAvailability() {
-    syncChartTypeButtons();
   }
 
   // "Bars ⇄ Dots" style toggle — bar chart only (lollipop rendering, same
@@ -1340,10 +1368,12 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
 
   els.chartType.addEventListener("click", (e) => {
     const btn = e.target.closest(".segmented__btn");
-    if (!btn || btn.disabled || btn.dataset.value === chartType) return;
+    // decision 46f: tiles are never disabled — clicking an unusable one still
+    // selects it (renderChart() then shows the honest stage sentence instead
+    // of a chart; see evaluateTypeStatus()).
+    if (!btn || btn.dataset.value === chartType) return;
     chartType = btn.dataset.value;
     syncChartTypeButtons();
-    syncChartTypeAvailability();
     syncBarStyleVisibility();
     clearCapNote();
     renderMetricControls();
@@ -1415,12 +1445,19 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   }
 
   async function seedSelection({ force = false } = {}) {
+    // decision 46f: never query before Stats has been searched at least once
+    // — Graphs entering the empty-state (no pool at all) must not run a query
+    // of its own; the guidance line explains why (poolStatusReason()).
+    if (!hasStatsResults()) return;
     const state = store.get();
     const key = scopeSeedKey(state);
     if (!force && seeded && key === lastSeedKey) return;
     try {
-      const cap = CHART_CAPS[chartType].max;
-      const seedPlayers = await seedFromFilteredSet(store, cap);
+      // The candidate POOL is never truncated to the active type's cap
+      // (decision 44d: "candidates pool never truncated" — Radar must show
+      // "6 of 15", not "6 of 6"): always seed at the full pre-type cap; the
+      // CHECKED subset is what deriveChecked() caps per type.
+      const seedPlayers = await seedFromFilteredSet(store, DEFAULT_PRETYPE_CAP);
       seeded = true;
       lastSeedKey = key;
       // Record what ranked this seed (Batch 3 part 2 title honesty) — the
@@ -1622,8 +1659,43 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   async function renderChart() {
     const state = store.get();
     const discipline = state.discipline;
-    const players = selection.get();
     const token = ++loadToken;
+
+    // decision 46f: no chart type picked yet — no chart, no chart-shaped
+    // placeholder either. Just the honest stage guidance (empty-state /
+    // "pick a chart type", per poolStatusReason()) in place of the whole card.
+    if (!chartType) {
+      hideStatus();
+      if (chartRef.current) {
+        chartRef.current.destroy();
+        chartRef.current = null;
+      }
+      renderExclusions([]);
+      showStageGuidance(poolStatusReason() || "Pick a chart type to get started.");
+      return;
+    }
+
+    // decision 46f: a type IS picked, but evaluateTypeStatus() says it can't
+    // render right now (pool empty, wrong discipline/gender, no eligible
+    // metric/group for this scope) — same stage-guidance treatment, one
+    // plain-English sentence, never a tooltip. This is checked BEFORE the
+    // roster's own min-cap below because it can be true even with plenty of
+    // CHECKED players (e.g. Dumbbell on women's cricket has a full roster,
+    // just the wrong discipline/gender).
+    const typeStatus = evaluateTypeStatus(chartType, state);
+    if (!typeStatus.ok) {
+      hideStatus();
+      if (chartRef.current) {
+        chartRef.current.destroy();
+        chartRef.current = null;
+      }
+      renderExclusions([]);
+      showStageGuidance(typeStatus.reason || "This chart type isn't available right now.");
+      return;
+    }
+    hideStageGuidance();
+
+    const players = selection.get();
 
     if (players.length === 0) {
       hideStatus();
@@ -2022,18 +2094,22 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
 
   // ── Public API ───────────────────────────────────────────────────────────
 
+  /**
+   * Organic entry (decision 46f): the Graphs TAB and the Stats toolbar's
+   * "Graph" button now behave identically here (see enterFromBridge below) —
+   * no chart type is pre-selected and no chart renders. If Stats has been
+   * searched at least once, its result set becomes the candidate POOL (the
+   * existing top-N-by-current-sort "best" derivation becomes the initial
+   * CHECKED roster for free — see deriveChecked()'s seed-order fallback and
+   * activeMaxCap()'s pre-type-selection default) so a type click can render
+   * immediately with no re-ticking. If Stats has never been searched,
+   * seedSelection() no-ops and renderChart() shows the empty-state guidance
+   * instead (poolStatusReason()). Chart type / metrics / roster edits from an
+   * earlier visit are never reset here — only explicit user actions change
+   * them (requirement 2's persistence rule).
+   */
   async function onShow() {
-    // Organic tab visit (clicking the "Graphs" tab directly) — as opposed to
-    // a bridge jump (enterFromBridge/addPlayerFromOutside, which set this
-    // themselves and do NOT call onShow before doing so). Decision 43: the
-    // back link "only appears after a bridge jump, not on organic tab
-    // visits" — resetting here is what makes that true even after a bridge
-    // jump the user didn't click the link away from (switch to Stats, then
-    // back to Graphs organically: the link should be gone).
-    bridgeFromTable = false;
-    syncBridgeBackVisibility();
     syncChartTypeButtons();
-    syncChartTypeAvailability();
     syncBarStyleVisibility();
     renderMetricControls();
     await seedSelection();
@@ -2041,33 +2117,23 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
   }
 
   /**
-   * "Turn into graph" bridge (task 1, decision 43): called by the host app
-   * when the Stats toolbar's button is clicked. Forces the bar chart (the
-   * "top N ranked by one stat" type — the closest analogue to a sorted
-   * table, and the one whose cap the task brief's "top bar-max players"
-   * seeding explicitly names), sets its metric to the table's current sort
-   * column when that metric is graph-eligible for the live discipline/
-   * formats (otherwise the bar chart's existing metric is left alone — there
-   * may not even BE a "current" one yet if bar was never active), and force-
-   * reseeds from the CURRENT filtered set (bypassing seedSelection's
-   * unchanged-scope no-op, since this must always reflect "right now").
-   * `seedSelection` already ranks by the store's live sort key and caps at
-   * CHART_CAPS[chartType].max — which, since chartType is forced to "bar"
-   * first, is exactly the top-15 the brief describes.
+   * Stats toolbar "Graph" button (decision 46f): navigates to Graphs exactly
+   * like the tab (onShow()) in the plain case — no forced chart type, no
+   * auto-render. The ONE exception (owner-approved, decision 46f): if the
+   * table was in matchup "Vs" mode when clicked, land directly on the
+   * Dumbbell chart — the one chart type that understands matchup vocabulary,
+   * so a bar chart would have nothing to draw from — with Side B set to the
+   * table's own "Vs" bucket and Side A defaulted to the opposite family.
+   * `preferredMetricKey` (the table's current sort column) is only used in
+   * that matchup branch; the plain branch has no pre-selected type for it to
+   * seed a metric onto anymore.
    */
   async function enterFromBridge({ preferredMetricKey } = {}) {
-    bridgeFromTable = true;
-    syncBridgeBackVisibility();
     const state = store.get();
 
-    // Task 3 (matchup bridge, Batch 4 wave 2): if the table was in matchup
-    // "Vs" mode when the bridge was clicked, land on the Dumbbell chart — the
-    // one chart type that understands matchup vocabulary — instead of always
-    // forcing Bar (a bar chart has no matchup-mode column set to draw from).
     if (state.discipline === "batting" && matchupVsActive(state)) {
       chartType = "dumbbell";
       syncChartTypeButtons();
-      syncChartTypeAvailability();
       syncBarStyleVisibility();
       clearCapNote();
 
@@ -2090,20 +2156,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
       return;
     }
 
-    chartType = "bar";
-    syncChartTypeButtons();
-    syncChartTypeAvailability();
-    syncBarStyleVisibility();
-    clearCapNote();
-    if (preferredMetricKey) {
-      const eligible = eligibleMetrics(state.discipline, state.formats);
-      if (eligible.some((m) => m.key === preferredMetricKey)) {
-        barMetricKey = preferredMetricKey;
-      }
-    }
-    renderMetricControls();
-    await seedSelection({ force: true });
-    scheduleRender({ paramsChanged: true });
+    await onShow();
   }
 
   /**
@@ -2113,10 +2166,9 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
    * exists — no reseed, no chart-type change — marking it dirty (via
    * players.js's createSelection.add()) so the title's "top N" phrasing
    * correctly drops to "N players" the moment the roster stops being exactly
-   * the seeded set. Deliberately does NOT touch bridgeFromTable/the back
-   * link — there's no "table" this jump came from to link back to.
-   * Cap handling reuses the exact same note the manual player-search "add"
-   * path already shows (no new copy for the same situation).
+   * the seeded set. Cap handling reuses the exact same note the manual
+   * player-search "add" path already shows (no new copy for the same
+   * situation).
    */
   function addPlayerFromOutside(id, name) {
     // Same "pool is never truncated, checked only if there's room" contract
@@ -2124,7 +2176,7 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     // comment for why this can no longer fail outright on a full cap.
     const result = selection.addCandidate({ id, name });
     if (result.ok && !result.checked) {
-      showCapNote(`Added to your list, but this chart type is capped at ${CHART_CAPS[chartType].max} players — untick one to plot them instead.`);
+      showCapNote(`Added to your list, but ${capSubjectLabel()} is capped at ${activeMaxCap()} players — untick one to plot them instead.`);
     } else if (result.ok) {
       clearCapNote();
     }
@@ -2134,36 +2186,19 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
 
   /** Called whenever the shared filter scope changes (discipline/format/filters). */
   function onScopeChanged() {
-    // Batch 4 wave 2: Dumbbell needs batting discipline + men's cricket (see
-    // dumbbellAvailable() above). If a scope change lands outside that while
-    // Dumbbell is the active chart type, fall back to Bar rather than leaving
-    // the picker on a now-disabled type with a stale matchup chart still drawn.
-    if (chartType === "dumbbell" && !dumbbellAvailable(store.get())) {
-      chartType = "bar";
-      syncChartTypeButtons();
-      syncBarStyleVisibility();
-      clearCapNote();
-      // Same mode-aware cap reconciliation as the chart-type click handler
-      // (this fallback can flip the cap/ranking metric just like a manual
-      // switch would, and seedSelection() below may no-op if this alone
-      // didn't change the scope key, so it can't be relied on to reconcile).
-      if (selection.getMode() === "manual") {
-        selection.clampToCap();
-      } else {
-        selection.clampToCap({ silent: true });
-        deriveChecked(selection.getMode());
-      }
-      renderPlayerList();
-    }
-    syncChartTypeAvailability();
+    // decision 46f: a scope change never silently swaps the chart type away
+    // from the user's own pick anymore (e.g. Dumbbell staying selected on a
+    // scope change into bowling/female) — evaluateTypeStatus()/renderChart()
+    // already explain, in the stage, exactly why it can't render right now;
+    // that's more honest than quietly jumping to Bar underneath the user.
+    syncChartTypeButtons();
     renderMetricControls(); // metric eligibility may have changed (phase gating)
     // Re-seed from the new filtered set — the old selection may no longer make
     // sense for a different discipline; for pure filter tweaks we still refresh
-    // to keep the "reset to filtered set" meaningful, but we only auto-reseed
-    // (rather than just re-querying) when the discipline changed or nothing has
-    // been manually customized yet in this scope. To keep behavior predictable
-    // and honest, we re-seed whenever the underlying filtered set's identity key
-    // changes; seedSelection() itself no-ops if nothing changed.
+    // to keep the "reset to filtered set" meaningful. seedSelection() itself
+    // no-ops both if Stats has never been searched (still no query — the
+    // empty-state stays honest) and if the filtered set's identity key hasn't
+    // actually changed.
     seedSelection().then(() => scheduleRender({ paramsChanged: true }));
   }
 

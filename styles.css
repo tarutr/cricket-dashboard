@@ -1511,16 +1511,6 @@ a { color: var(--color-accent); }
 
 .graph-section { min-height: 24rem; }
 
-/* "Back to your table" bridge link (Batch 3 part 2, decision 43) — shown
-   only after "Turn into graph" jumps here from the Stats toolbar (graph.js
-   owns the show/hide via bridgeFromTable); absent on any organic visit to
-   the Graphs tab, and disappears the moment it's clicked. Sits above the
-   sidebar column, left-aligned like the sidebar's own controls. */
-.graph-bridge-back {
-  display: inline-block;
-  margin-bottom: var(--space-3);
-}
-
 .graph-builder {
   display: grid;
   grid-template-columns: 300px 1fr;
@@ -1724,8 +1714,7 @@ a { color: var(--color-accent); }
 .graph-cap-note { font-size: var(--text-sm2); color: var(--color-accent); margin: 0; }
 
 /* Recommend engine (Batch 8, task 2 — v1's recommend()): a small tag on the
-   single best-fit chart type button, and a muted inline reason under the
-   picker naming why the ACTIVE type is currently unusable. */
+   single best-fit chart type button. */
 .graph-chart-type-rec {
   display: block;
   font-size: 0.58rem;
@@ -1739,11 +1728,42 @@ a { color: var(--color-accent); }
   word-break: keep-all;
   white-space: nowrap;
 }
-.graph-chart-type-reason { font-size: var(--text-sm); color: var(--color-muted); margin: 0; }
+
+/* Unusable/unrecommended chart-type tiles (decision 46f) — greyed as a
+   PASSIVE hint only. Unlike the shared `:disabled` recolor rule above
+   (styles.css's "One disabled language" block), these tiles are never
+   HTML-disabled: they stay clickable, and clicking one writes a full
+   plain-English sentence into the stage guidance below instead of doing
+   nothing — so this class carries the same muted recolor minus
+   cursor:not-allowed. */
+.graph-chart-type .segmented__btn.is-unavailable {
+  background: var(--color-panel);
+  color: var(--color-muted);
+  border-color: var(--color-line);
+}
+.graph-chart-type .segmented__btn.is-unavailable.is-active {
+  background: color-mix(in srgb, var(--color-active-bg) 45%, var(--color-panel));
+  color: color-mix(in srgb, var(--color-active-fg) 65%, var(--color-muted));
+  border-color: var(--color-active-bg);
+}
 
 .graph-builder__stage { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
 
 .graph-status { font-style: italic; }
+
+/* Stage guidance (decision 46f) — shown IN PLACE OF the paper card whenever
+   there's nothing to chart yet: no chart type picked, the empty-state ("run
+   a search on Stats first"), or the picked type's own honest "can't render
+   right now" sentence (see graph.js's showStageGuidance()). A plain quiet
+   note, not an error box — this is an expected, normal state, not a failure. */
+.graph-stage-guidance {
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--color-muted);
+  font-size: 1rem;
+  border: 1px dashed var(--color-line);
+  border-radius: var(--radius-md);
+}
 
 .graph-exclusions {
   font-size: var(--text-md);

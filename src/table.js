@@ -1148,14 +1148,15 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
 
     // "Graph" bridge button (Batch 3 part 2, decision 43; matchup mode enabled
     // Batch 4 wave 2; relabeled "Turn into graph" -> "Graph" and grouped with
-    // Columns as the toolbar's right-most cluster, decision 44d): seeds the
-    // Graph Builder from this exact table (current filters/sort/top-15, or —
-    // in matchup mode — the table's own Vs bucket as one side of the Dumbbell
-    // chart) — see graph.js's enterFromBridge(). An unqueried/empty table has
-    // nothing to seed from, so that's the only state that still disables the
-    // button, with an honest title rather than removing it (same reasoning as
-    // the presets/Group-rows greying above — the toolbar's shape never
-    // changes between modes).
+    // Columns as the toolbar's right-most cluster, decision 44d; decision 46f:
+    // no longer force-renders anything — just navigates to Graphs, seeding its
+    // player pool from this exact table's current filters/sort/top-15, or —
+    // in matchup mode only — landing directly on the Dumbbell chart with the
+    // table's own Vs bucket as one side) — see graph.js's enterFromBridge().
+    // An unqueried/empty table has nothing to seed from, so that's the only
+    // state that still disables the button, with an honest title rather than
+    // removing it (same reasoning as the presets/Group-rows greying above —
+    // the toolbar's shape never changes between modes).
     const noResultsForGraph = !rows || rows.length === 0;
     const graphBtnDisabled = noResultsForGraph;
     const graphBtnTitle = noResultsForGraph
@@ -1668,5 +1669,16 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
     }
   }
 
-  return { load, showPrompt: renderPrompt, enterView };
+  // Graph-button/bridge handler (decision 46f): "has the Stats tab been
+  // searched at least once, ever" — true the instant load() first succeeds,
+  // regardless of whether the scope has since moved on (unlike enterView()'s
+  // own exact-state-match cache check above). This is what lets the Graphs
+  // view decide between its empty-state ("run a search on Stats first") and
+  // seeding its player pool from the current filtered set — see graph.js's
+  // onShow()/seedSelection() and main.js's mountGraph() wiring.
+  function hasResults() {
+    return lastQueryStateKey !== null;
+  }
+
+  return { load, showPrompt: renderPrompt, enterView, hasResults };
 }
