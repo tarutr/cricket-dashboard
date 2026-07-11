@@ -1,31 +1,37 @@
 // src/drawer.js
 //
 // The "All filters" drawer (owner decision 29): a right-side panel holding
-// everything beyond the slim scope strip (src/filters.js) — Team, Player
-// profile, Innings (batting position — see src/drawerInnings.js), and
-// Advanced (opposition, career teams, and stat conditions — src/advanced.js).
-// Opened via the "All filters" button in the scope strip; main.js owns
-// wiring that button plus the count badge (this module exposes
-// `activeCount()` for it).
+// everything beyond the slim scope strip (src/filters.js). Three sections
+// after owner decision 46:
+//   1. Team — a dual control: a mode dropdown ("Current team" | "Historic
+//      team") + one team picker. Current = today's team filter (state.teams);
+//      Historic = the old "Has ever played for (career)" filter (profile.teams,
+//      absorbed here from Advanced). Exactly one is active at a time.
+//   2. Player profile — Role, Batting hand, R. Pos. (regular batting position —
+//      see src/drawerInnings.js), Bowling style. In matchup mode the R. Pos.
+//      slot is replaced by the striker/own batting-position filter
+//      (state.positions), which self-hides in plain mode.
+//   3. Advanced — Against (opposition) + Stat conditions (src/advanced.js).
+// Opened via the "All filters" button in the scope strip; main.js owns wiring
+// that button plus the count badge (this module exposes `activeCount()`).
 //
-// B2R wave 2 (decision 44b/42) reorganized the sections: "Team" dropped its
-// Min-innings input (min innings is now an "Innings ≥ N" advanced condition;
-// table.js already ignores state.minInnings, decision 44c). "Innings" holds
-// ONLY Batting position now (multi-select dropdown, replacing the 1-12 chip
-// row). "Advanced" (renamed from "Stat conditions") gained "Against
-// (opposition)" (was Innings' Opposition) and "Has ever played for (career)"
-// (was Player profile's Teams played for), alongside the condition builder.
+// R. Pos. (decision 46) filters to players whose MOST COMMON batting position
+// within scope is in the selection; the modal-position semi-join lives in
+// filters.js's buildScopeClauses (state.regularPositions). It is innings-derived
+// (not the men-only profile sheet), so it stays live on the Women view — where
+// the profile-sheet dropdowns (Role/Batting hand/Bowling style) and the
+// Historic-team mode are removed entirely (men-only, decision 21).
 //
 // This module renders/wires the DOM and calls store.set(...); it queries the
 // database only for the team option-list lookup below (the opposition lookup
 // lives in drawerInnings.js). It never queries for anything else — table.js
 // and graph/*.js own re-querying on state change.
 
-import { emptyProfile, positionsFilterActive, oppositionFilterActive } from "./state.js";
+import { emptyProfile, positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive } from "./state.js";
 import { query } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
 import { mountAdvanced, activeConditionCount } from "./advanced.js";
-import { mountBattingPosition, mountOpposition } from "./drawerInnings.js";
+import { mountBattingPosition, mountRegularPositions, mountOpposition } from "./drawerInnings.js";
 import { escHtml, escAttr } from "./html.js";
 
 // Display order for the profile-filter option lists. Options are always
@@ -85,8 +91,15 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
           <section class="filter-drawer__section" data-role="section-team">
             <h3 class="filter-drawer__section-title">Team</h3>
             <div class="filter-bar">
-              <div class="filter-group filter-group--team">
+              <div class="filter-group filter-group--teammode" data-role="teammode-group">
                 <span class="filter-label">Team</span>
+                <select class="select" data-role="team-mode" aria-label="Team mode">
+                  <option value="current">Current team</option>
+                  <option value="historic">Historic team</option>
+                </select>
+              </div>
+
+              <div class="filter-group filter-group--team" data-role="team-current-group">
                 <div class="team-dropdown" data-role="team-dropdown">
                   <button type="button" class="team-dropdown__toggle" data-role="team-toggle" aria-haspopup="true" aria-expanded="false">
                     All teams
@@ -96,6 +109,21 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
                     <div class="team-dropdown__list" data-role="team-list"></div>
                     <div class="team-dropdown__actions">
                       <button type="button" class="link-btn" data-role="team-clear">Clear</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="filter-group filter-group--profteams" data-role="team-historic-group">
+                <div class="team-dropdown" data-role="profteam-dropdown">
+                  <button type="button" class="team-dropdown__toggle" data-role="profteam-toggle" aria-haspopup="true" aria-expanded="false">
+                    Any team
+                  </button>
+                  <div class="team-dropdown__panel" data-role="profteam-panel" hidden>
+                    <input type="text" class="team-dropdown__search" data-role="profteam-search" placeholder="Search teams…" />
+                    <div class="team-dropdown__list" data-role="profteam-list"></div>
+                    <div class="team-dropdown__actions">
+                      <button type="button" class="link-btn" data-role="profteam-clear">Clear</button>
                     </div>
                   </div>
                 </div>
@@ -111,7 +139,7 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
                 <span class="profile-note" data-role="profile-load-error" hidden>Couldn't load profile filter options — reopen the drawer to retry.</span>
               </div>
 
-              <div class="filter-group filter-group--role">
+              <div class="filter-group filter-group--role" data-role="prof-role-group">
                 <label class="filter-label" for="drawer-prof-roleGroup">Role</label>
                 <div class="profile-role">
                   <select class="select" id="drawer-prof-roleGroup" data-role="prof-roleGroup" aria-label="Playing role"></select>
@@ -119,42 +147,28 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
                 </div>
               </div>
 
-              <div class="filter-group filter-group--hand">
+              <div class="filter-group filter-group--hand" data-role="prof-hand-group">
                 <label class="filter-label" for="drawer-prof-battingHand">Batting hand</label>
                 <select class="select" id="drawer-prof-battingHand" data-role="prof-battingHand" aria-label="Batting hand"></select>
               </div>
 
-              <div class="filter-group filter-group--bowling">
-                <label class="filter-label" for="drawer-prof-bowlingType">Bowling</label>
-                <select class="select" id="drawer-prof-bowlingType" data-role="prof-bowlingType" aria-label="Bowling type"></select>
+              <!-- R. Pos. (plain mode) and the matchup striker-position filter
+                   (matchup mode) share this slot; each self-hides in the other
+                   mode (see drawerInnings.js). -->
+              <div data-role="rpos-host"></div>
+              <div data-role="matchup-positions-host"></div>
+
+              <div class="filter-group filter-group--bowling" data-role="prof-bowling-group">
+                <label class="filter-label" for="drawer-prof-bowlingType">Bowling style</label>
+                <select class="select" id="drawer-prof-bowlingType" data-role="prof-bowlingType" aria-label="Bowling style"></select>
               </div>
             </div>
-          </section>
-
-          <section class="filter-drawer__section" data-role="section-innings">
-            <h3 class="filter-drawer__section-title">Innings</h3>
-            <div class="filter-bar" data-role="innings-host"></div>
           </section>
 
           <section class="filter-drawer__section" data-role="section-advanced">
             <h3 class="filter-drawer__section-title">Advanced</h3>
             <div class="filter-bar" data-role="advanced-teams-bar">
               <div data-role="opposition-host"></div>
-              <div class="filter-group filter-group--profteams">
-                <span class="filter-label">Has ever played for (career)</span>
-                <div class="team-dropdown" data-role="profteam-dropdown">
-                  <button type="button" class="team-dropdown__toggle" data-role="profteam-toggle" aria-haspopup="true" aria-expanded="false">
-                    Any team
-                  </button>
-                  <div class="team-dropdown__panel" data-role="profteam-panel" hidden>
-                    <input type="text" class="team-dropdown__search" data-role="profteam-search" placeholder="Search teams…" />
-                    <div class="team-dropdown__list" data-role="profteam-list"></div>
-                    <div class="team-dropdown__actions">
-                      <button type="button" class="link-btn" data-role="profteam-clear">Clear</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
 
             <div class="filter-group filter-group--conditions">
@@ -180,6 +194,10 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     applyBtn: hostEl.querySelector('[data-role="drawer-apply"]'),
     clearBtn: hostEl.querySelector('[data-role="drawer-clear"]'),
 
+    teamModeGroup: hostEl.querySelector('[data-role="teammode-group"]'),
+    teamMode: hostEl.querySelector('[data-role="team-mode"]'),
+    teamCurrentGroup: hostEl.querySelector('[data-role="team-current-group"]'),
+    teamHistoricGroup: hostEl.querySelector('[data-role="team-historic-group"]'),
     teamToggle: hostEl.querySelector('[data-role="team-toggle"]'),
     teamPanel: hostEl.querySelector('[data-role="team-panel"]'),
     teamSearch: hostEl.querySelector('[data-role="team-search"]'),
@@ -189,6 +207,9 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     profileBar: hostEl.querySelector('[data-role="profile-bar"]'),
     profileNote: hostEl.querySelector('[data-role="profile-note"]'),
     profileLoadError: hostEl.querySelector('[data-role="profile-load-error"]'),
+    roleFilterGroup: hostEl.querySelector('[data-role="prof-role-group"]'),
+    handFilterGroup: hostEl.querySelector('[data-role="prof-hand-group"]'),
+    bowlingFilterGroup: hostEl.querySelector('[data-role="prof-bowling-group"]'),
     roleGroup: hostEl.querySelector('[data-role="prof-roleGroup"]'),
     roleSub: hostEl.querySelector('[data-role="prof-roleSub"]'),
     battingHand: hostEl.querySelector('[data-role="prof-battingHand"]'),
@@ -199,7 +220,8 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     profTeamList: hostEl.querySelector('[data-role="profteam-list"]'),
     profTeamClear: hostEl.querySelector('[data-role="profteam-clear"]'),
 
-    inningsHost: hostEl.querySelector('[data-role="innings-host"]'),
+    rposHost: hostEl.querySelector('[data-role="rpos-host"]'),
+    matchupPositionsHost: hostEl.querySelector('[data-role="matchup-positions-host"]'),
     oppositionHost: hostEl.querySelector('[data-role="opposition-host"]'),
     advancedHost: hostEl.querySelector('[data-role="advanced-host"]'),
   };
@@ -307,6 +329,52 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     onChange();
   });
 
+  // ── Team mode (owner decision 46) ──────────────────────────────────────────
+  // The Team section is a dual control: a mode dropdown ("Current team" |
+  // "Historic team") plus the picker. "Current team" is today's team filter
+  // (innings actually played FOR that team, state.teams). "Historic team" is
+  // the old "Has ever played for (career)" filter (profile.teams — the same
+  // teams_played_for semi-join, decision 46 absorbed it here). Exactly one is
+  // active at a time: switching mode clears the other field so there's never a
+  // second, hidden team filter. `teamMode` is UI-only (not persisted in the
+  // store); on open it's derived from whichever field currently holds a value.
+  //
+  // "Historic team" is profile-sheet-derived → men-only (decision 21). On the
+  // Women view we hide the mode dropdown and the historic picker entirely and
+  // force Current mode, so women get a live Team filter with no inert option.
+  let teamMode = deriveTeamMode();
+
+  function deriveTeamMode() {
+    const s = store.get();
+    return s.gender !== "female" && (s.profile.teams || []).length > 0 && (s.teams || []).length === 0
+      ? "historic"
+      : "current";
+  }
+
+  function applyTeamMode() {
+    const isWomen = store.get().gender === "female";
+    if (isWomen) teamMode = "current";
+    els.teamModeGroup.hidden = isWomen; // women: no mode choice (historic is men-only)
+    els.teamMode.value = teamMode;
+    els.teamCurrentGroup.hidden = teamMode !== "current";
+    els.teamHistoricGroup.hidden = isWomen || teamMode !== "historic";
+  }
+
+  els.teamMode.addEventListener("change", () => {
+    const next = els.teamMode.value === "historic" ? "historic" : "current";
+    if (next === teamMode) return;
+    teamMode = next;
+    // Clear the OTHER mode's selection so only one team filter is ever active.
+    if (teamMode === "historic") store.set({ teams: [] });
+    else setProfile({ teams: [] });
+    applyTeamMode();
+    updateTeamToggleLabel();
+    renderTeamList(els.teamSearch.value);
+    updateProfTeamLabel();
+    renderProfTeamList(els.profTeamSearch.value);
+    onChange();
+  });
+
   // ── Profile filters (D4.2) ──────────────────────────────────────────────────
   // Option lists come from player_profiles (only values that have matched
   // players — so no dead options). Loaded once; the semi-join lives in
@@ -379,18 +447,18 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     store.set({ profile: { ...store.get().profile, ...patch } });
   }
 
-  /** Grey the whole profile section out for women (profiles are men-only, decision 21). */
+  /** Profiles are men-only (decision 21). On the Women view the profile-sheet
+   * dropdowns (Role, Batting hand, Bowling style) don't exist at all, so we
+   * REMOVE them (hide, not grey — owner decision 46) and show the honest
+   * disclaimer. R. Pos. is innings-derived, not profile-derived, so it stays
+   * live for women (handled by its own controller). The historic-team picker
+   * (also profile-derived) is hidden on women by applyTeamMode(). */
   function syncProfileEnabled() {
-    const disabled = store.get().gender === "female";
-    els.profileBar.classList.toggle("is-disabled", disabled);
-    els.profileNote.hidden = !disabled;
-    [els.roleGroup, els.roleSub, els.battingHand, els.bowlingType, els.profTeamToggle].forEach((el) => {
-      el.disabled = disabled;
-    });
-    if (disabled) {
-      els.profTeamPanel.hidden = true;
-      els.profTeamToggle.setAttribute("aria-expanded", "false");
-    }
+    const isWomen = store.get().gender === "female";
+    els.profileNote.hidden = !isWomen;
+    els.roleFilterGroup.hidden = isWomen;
+    els.handFilterGroup.hidden = isWomen;
+    els.bowlingFilterGroup.hidden = isWomen;
   }
 
   async function loadProfileOptions() {
@@ -490,9 +558,14 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     onChange();
   });
 
-  // ── Innings (position) / Advanced (opposition + stat conditions) ───────────
-  // extracted, see src/drawerInnings.js and src/advanced.js
-  const positionController = mountBattingPosition(els.inningsHost, store, onChange);
+  // ── Position filters / Advanced (opposition + stat conditions) ─────────────
+  // extracted, see src/drawerInnings.js and src/advanced.js. Two position
+  // controls share the Player-profile slot and self-hide by mode (decision 46):
+  //   regularPositionController — R. Pos. (state.regularPositions), plain mode.
+  //   positionController        — striker/own batting position (state.positions),
+  //                               matchup mode only.
+  const regularPositionController = mountRegularPositions(els.rposHost, store, onChange);
+  const positionController = mountBattingPosition(els.matchupPositionsHost, store, onChange);
   const oppositionController = mountOpposition(els.oppositionHost, store, onChange);
   const advancedController = mountAdvanced(els.advancedHost, store, onChange);
 
@@ -510,11 +583,14 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
       teams: [],
       profile: emptyProfile(),
       positions: [],
+      regularPositions: [],
       opposition: [],
       advanced: { op: "AND", groups: [] },
     });
+    teamMode = deriveTeamMode();
     renderControls();
     advancedController.render();
+    regularPositionController.sync();
     positionController.sync();
     oppositionController.sync();
     onChange();
@@ -534,6 +610,9 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   function open() {
     els.drawer.hidden = false;
     els.panel.focus();
+    // Re-derive the (UI-only) team mode from current state each time the drawer
+    // opens, so it reflects any team/profile/gender change made while closed.
+    teamMode = deriveTeamMode();
     advancedSnapshotAtOpen = JSON.stringify(store.get().advanced);
     // Retry any option-fetches that previously failed — matches the inline
     // error copy's "reopen the drawer to retry" (Batch 2 review). sync() and
@@ -562,6 +641,7 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
    * no network. */
   function renderControls() {
     updateTeamToggleLabel();
+    applyTeamMode();
     renderRoleSelects();
     renderProfSelects();
     updateProfTeamLabel();
@@ -574,6 +654,7 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   function sync() {
     renderControls();
     refreshTeamOptions();
+    regularPositionController.sync();
     positionController.sync();
     oppositionController.sync();
     // The condition builder's metric dropdowns must re-gate when the
@@ -598,6 +679,7 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
       if (p.teams && p.teams.length > 0) n++;
     }
     if (positionsFilterActive(s)) n++;
+    if (regularPositionsFilterActive(s)) n++;
     if (oppositionFilterActive(s)) n++;
     n += activeConditionCount(s.advanced);
     return n;

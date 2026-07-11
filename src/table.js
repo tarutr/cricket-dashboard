@@ -164,6 +164,7 @@ function serializeQueryState(state) {
     minInnings: state.minInnings,
     profile: state.profile,
     positions: state.positions,
+    regularPositions: state.regularPositions,
     opposition: state.opposition,
     splitBy: state.splitBy,
     matchupVs: state.matchupVs,

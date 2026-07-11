@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, oppositionFilterActive, hasActiveProfileFilter, matchupVsActive, effectiveNamespace } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, hasActiveProfileFilter, matchupVsActive, effectiveNamespace } from "./state.js";
 import { isConditionComplete, removeConditionAt } from "./advanced.js";
 import { metricsFor, getMetric } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
@@ -52,9 +52,12 @@ export function mountPills(container, store, onChange) {
     const s = store.get();
     const pills = []; // { label, remove() }
 
+    // "Current team" mode (owner decision 46): one removable pill per team,
+    // prefixed "Team:" to distinguish it from the "Historic team" (Ever played
+    // for) pill below.
     for (const t of s.teams || []) {
       pills.push({
-        label: t,
+        label: `Team: ${t}`,
         remove: () => store.set({ teams: store.get().teams.filter((x) => x !== t) }),
       });
     }
@@ -76,7 +79,10 @@ export function mountPills(container, store, onChange) {
         pills.push({ label: p.bowlingType, remove: () => store.set({ profile: { ...store.get().profile, bowlingType: null } }) });
       }
       if (p.teams && p.teams.length > 0) {
-        const label = p.teams.length <= 2 ? p.teams.join(", ") : `${p.teams.length} teams played for`;
+        // "Historic team" mode (owner decision 46): the old "Has ever played
+        // for (career)" filter, now labelled to say which team sense it is.
+        const label =
+          p.teams.length <= 2 ? `Ever played for: ${p.teams.join(", ")}` : `Ever played for: ${p.teams.length} teams`;
         pills.push({ label, remove: () => store.set({ profile: { ...store.get().profile, teams: [] } }) });
       }
     }
@@ -88,6 +94,13 @@ export function mountPills(container, store, onChange) {
       const bowlingMatchup = s.discipline === "bowling" && matchupVsActive(s);
       const label = bowlingMatchup ? `To batters at ${sorted.join(", ")}` : `Batting at ${sorted.join(", ")}`;
       pills.push({ label, remove: () => store.set({ positions: [] }) });
+    }
+
+    // R. Pos. (owner decision 46) — plain-mode filter on a player's most common
+    // batting position within scope.
+    if (regularPositionsFilterActive(s)) {
+      const sorted = [...s.regularPositions].sort((a, b) => a - b);
+      pills.push({ label: `R. Pos. ${sorted.join(", ")}`, remove: () => store.set({ regularPositions: [] }) });
     }
 
     if (oppositionFilterActive(s)) {

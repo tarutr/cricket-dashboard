@@ -1409,7 +1409,8 @@ export function mountGraph(container, store, { onRequery, onBackToTable } = {}) 
     return JSON.stringify([
       state.discipline, state.gender, state.formats, state.dateFrom, state.dateTo,
       state.teams, state.teamType, state.minInnings, state.advanced, state.sort,
-      state.search, state.positions, state.opposition, state.profile, state.matchupVs,
+      state.search, state.positions, state.regularPositions, state.opposition,
+      state.profile, state.matchupVs,
     ]);
   }
 

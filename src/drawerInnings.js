@@ -1,11 +1,19 @@
 // src/drawerInnings.js
 //
-// Two independent innings-level filter controls, each mounted into its own
-// host element by drawer.js:
-//   mountBattingPosition — the "Innings" section's Batting position filter.
-//   mountOpposition      — the "Advanced" section's "Against (opposition)"
-//                          filter (B2R wave 2, decision 42: relocated out of
-//                          Innings and renamed exactly as specified).
+// Three independent filter controls, each mounted into its own host element by
+// drawer.js:
+//   mountBattingPosition  — the MATCHUP-ONLY batting-position filter
+//                           (state.positions; striker/own position). Owner
+//                           decision 46 retired its plain-mode role, so it now
+//                           self-hides outside matchup mode.
+//   mountRegularPositions — the "R. Pos." filter (state.regularPositions, owner
+//                           decision 46): plain-mode filter on a player's most
+//                           common batting position within scope (the modal
+//                           semi-join itself lives in filters.js). Lives in the
+//                           Player-profile section; works for both disciplines
+//                           and both genders (innings-derived, not profile).
+//   mountOpposition       — the "Advanced" section's "Against (opposition)"
+//                           filter (B2R wave 2, decision 42).
 //
 // This is the position/opposition half of the old src/splitControls.js,
 // carried forward through the D4-era src/drawerInnings.js; the "Split by"
@@ -123,21 +131,24 @@ export function mountBattingPosition(container, store, onChange) {
     if (e.key === "Escape" && !els.panel.hidden) closePanel();
   });
 
-  /** True if the batting-position filter has anything to apply to right now
-   * (D4-R4: both matchup views carry batting_position, so the filter is live
-   * whenever batting is in play — plain batting, matchup batting, AND
-   * bowling WITH an active Vs selection; plain bowling with no Vs is the only
-   * case left with no position concept). */
+  /** MATCHUP-ONLY now (owner decision 46): this striker/own batting-position
+   * filter (`state.positions`) is live only while a matchup "Vs" selection is
+   * active — in matchup_batting it's the batter's own position, in
+   * matchup_bowling the position of the striker faced (anchor: Bumrah vs RHB
+   * positions 1–2). Plain mode's position filter is now R. Pos.
+   * (mountRegularPositions), so this control hides entirely outside matchup
+   * mode rather than sitting greyed. */
   function sync() {
     const state = store.get();
     const matchupOn = matchupVsActive(state);
-    const enabled = state.discipline === "batting" || (state.discipline === "bowling" && matchupOn);
-    const disabled = !enabled;
-    els.group.classList.toggle("is-disabled", disabled);
-    els.note.hidden = !disabled;
-    els.note.textContent = "Batting view only — or use Vs in the bowling view";
-    els.toggle.disabled = disabled;
-    if (disabled) closePanel();
+    els.group.hidden = !matchupOn;
+    if (!matchupOn) {
+      closePanel();
+      return;
+    }
+    els.group.classList.remove("is-disabled");
+    els.note.hidden = true;
+    els.toggle.disabled = false;
     updateToggleLabel();
     const selected = new Set(state.positions);
     els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
@@ -149,6 +160,107 @@ export function mountBattingPosition(container, store, onChange) {
     // as "position bowled from".
     const bowlingMatchupHint = state.discipline === "bowling" && matchupOn;
     els.hint.hidden = !bowlingMatchupHint;
+  }
+
+  sync();
+  return { sync };
+}
+
+const REGULAR_POSITIONS = Array.from({ length: 11 }, (_, i) => i + 1);
+
+/**
+ * Mount the "R. Pos." (regular position) multi-select dropdown into `container`
+ * (the Player profile section, owner decision 46). Binds to
+ * `state.regularPositions` — a player matches when their MOST COMMON batting
+ * position within the current gender/format/date/team-type scope is in the
+ * selection (the modal-position semi-join lives in filters.js's
+ * buildScopeClauses). PLAIN-MODE only: hides entirely in matchup mode, where
+ * the striker-position filter (mountBattingPosition, `state.positions`) takes
+ * over. Works for BOTH disciplines and BOTH genders (it's computed from
+ * innings, not the men-only profile sheet). Calls `onChange()` after any state
+ * mutation. Returns `{ sync }`.
+ */
+export function mountRegularPositions(container, store, onChange) {
+  const DESC = "Regular position — where this player most often bats";
+  container.innerHTML = `
+    <div class="filter-group filter-group--rpos" data-role="rpos-group">
+      <span class="filter-label" title="${escAttr(DESC)}">R. Pos.</span>
+      <div class="dropdown" data-role="rpos-dropdown">
+        <button type="button" class="select dropdown__toggle" data-role="rpos-toggle" aria-haspopup="true" aria-expanded="false" title="${escAttr(DESC)}">Any position</button>
+        <div class="dropdown__panel" data-role="rpos-panel" hidden>
+          <div class="dropdown__list" data-role="rpos-list">
+            ${REGULAR_POSITIONS.map(
+              (p) => `<label class="dropdown__item">
+                <input type="checkbox" data-position="${p}" />
+                <span>${p}</span>
+              </label>`
+            ).join("")}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const els = {
+    group: container.querySelector('[data-role="rpos-group"]'),
+    toggle: container.querySelector('[data-role="rpos-toggle"]'),
+    panel: container.querySelector('[data-role="rpos-panel"]'),
+    list: container.querySelector('[data-role="rpos-list"]'),
+  };
+
+  function updateToggleLabel() {
+    els.toggle.textContent = positionsSummaryLabel(store.get().regularPositions);
+  }
+
+  function closePanel() {
+    els.panel.hidden = true;
+    els.toggle.setAttribute("aria-expanded", "false");
+  }
+
+  els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const value = Number(cb.dataset.position);
+      const current = new Set(store.get().regularPositions);
+      if (cb.checked) current.add(value);
+      else current.delete(value);
+      store.set({ regularPositions: [...current] });
+      updateToggleLabel();
+      onChange();
+    });
+  });
+
+  els.toggle.addEventListener("click", () => {
+    if (els.toggle.disabled) return;
+    const isOpen = !els.panel.hidden;
+    if (isOpen) closePanel();
+    else {
+      els.panel.hidden = false;
+      els.toggle.setAttribute("aria-expanded", "true");
+    }
+  });
+  document.addEventListener("click", (e) => {
+    if (els.panel.hidden) return;
+    if (container.contains(e.target) && e.target.closest('[data-role="rpos-dropdown"]')) return;
+    closePanel();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !els.panel.hidden) closePanel();
+  });
+
+  function sync() {
+    const state = store.get();
+    // Plain-mode only — matchup mode uses the striker `positions` filter, so
+    // hide R. Pos. entirely there (keeps them mutually exclusive and honest).
+    els.group.hidden = matchupVsActive(state);
+    if (matchupVsActive(state)) {
+      closePanel();
+      return;
+    }
+    updateToggleLabel();
+    const selected = new Set(state.regularPositions);
+    els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.checked = selected.has(Number(cb.dataset.position));
+    });
   }
 
   sync();

@@ -18,6 +18,7 @@ import {
   profileSemiJoinSql,
   oppositionFilterActive,
   positionsFilterActive,
+  regularPositionsFilterActive,
   escSql as esc,
 } from "./state.js";
 
@@ -103,6 +104,32 @@ export function buildScopeClauses(
   if (idColumn) {
     const profileClause = profileSemiJoinSql(state, idColumn);
     if (profileClause) clauses.push(profileClause);
+  }
+
+  // R. Pos. (owner decision 46): restrict to players whose MOST COMMON batting
+  // position within the current gender/format/date/team-type scope is in the
+  // selection (ties break to the LOWEST position number). This is an ADDITIVE
+  // per-player semi-join — parallel to the profile semi-join above — that never
+  // touches the metric aggregates, so with the filter unset the query is
+  // byte-identical to today. Modal position is ALWAYS derived from the batting
+  // innings view (a batting-order concept), gated to plain mode by
+  // regularPositionsFilterActive (matchup mode keeps its own striker-position
+  // filter on `positions`, untouched). The inner scope reuses THIS builder with
+  // includeTeams:false and NO idColumn, so it carries exactly the four scope
+  // dims (gender/format/date/team_type) — team, opposition, profile and
+  // regularPositions itself are all excluded — and it cannot recurse.
+  if (idColumn && regularPositionsFilterActive(state)) {
+    const nums = state.regularPositions.map(Number).filter(Number.isInteger);
+    if (nums.length > 0) {
+      const innerScope = buildScopeClauses(state, { includeTeams: false }).join(" AND ");
+      clauses.push(
+        `${idColumn} IN (SELECT player_id FROM (` +
+          `SELECT batter_id AS player_id, batting_position AS pos, ` +
+          `ROW_NUMBER() OVER (PARTITION BY batter_id ORDER BY COUNT(*) DESC, batting_position ASC) AS rn ` +
+          `FROM batting WHERE ${innerScope} AND batting_position IS NOT NULL ` +
+          `GROUP BY batter_id, batting_position) WHERE rn = 1 AND pos IN (${nums.join(", ")}))`
+      );
+    }
   }
 
   return clauses;
