@@ -40,23 +40,17 @@ function monthOptionsHTML(minMonth, maxMonth, selected) {
   return opts.join("");
 }
 
-/** Shared WHERE-clause builder for gender/format/date/team_type/(team) — used by
- * both the drawer's team/opposition-options lookups and src/table.js's main
- * query. Exported so table.js, drawer.js, and graph builders all build an
- * identical scope.
- *
- * D4 Piece 3 opt-ins (both default OFF because some callers query views that
- * lack the columns, e.g. player_matches):
- *   oppositionColumn — the view's opposition column (bowling_team for batting,
- *     batting_team for bowling). The opposition filter applies ONLY while
- *     teamType === "international" (decision 20; the controls grey out
- *     elsewhere, so an inert selection must never filter silently).
- *   includePositions — apply the batting-position filter (batting innings
- *     views only; positions are a batting concept, inert in bowling). */
-export function buildScopeClauses(
-  state,
-  { includeTeams = true, teamColumn, idColumn, oppositionColumn, includePositions = false, includeGender = true } = {}
-) {
+/** The four filters that make up EVERY query's inescapable "core scope" —
+ * gender / format / date window / team type — factored out of
+ * buildScopeClauses (owner decision 46, task 3) so table.js's additive
+ * pinned-player union (buildQuery) can compute "core scope only, still
+ * applies even to a pinned player" without duplicating this logic or
+ * depending on buildScopeClauses' internal clause ordering by inspection.
+ * buildScopeClauses below ALWAYS starts its clause list with exactly this
+ * function's output (same options, same order) before appending its own
+ * caller-specific extras — table.js relies on that invariant to slice the
+ * "leaderboard-only" remainder off a full buildScopeClauses() call. */
+export function buildCoreScopeClauses(state, { includeGender = true } = {}) {
   const clauses = [];
   // Player-page queries (R2) filter by a specific player_id, so gender is
   // redundant there — every other caller keeps the gender clause.
@@ -81,6 +75,27 @@ export function buildScopeClauses(
   if (state.teamType === "international") clauses.push(`team_type = 'international'`);
   else if (state.teamType === "club") clauses.push(`team_type = 'club'`);
   // "both" -> no predicate
+  return clauses;
+}
+
+/** Shared WHERE-clause builder for gender/format/date/team_type/(team) — used by
+ * both the drawer's team/opposition-options lookups and src/table.js's main
+ * query. Exported so table.js, drawer.js, and graph builders all build an
+ * identical scope.
+ *
+ * D4 Piece 3 opt-ins (both default OFF because some callers query views that
+ * lack the columns, e.g. player_matches):
+ *   oppositionColumn — the view's opposition column (bowling_team for batting,
+ *     batting_team for bowling). The opposition filter applies ONLY while
+ *     teamType === "international" (decision 20; the controls grey out
+ *     elsewhere, so an inert selection must never filter silently).
+ *   includePositions — apply the batting-position filter (batting innings
+ *     views only; positions are a batting concept, inert in bowling). */
+export function buildScopeClauses(
+  state,
+  { includeTeams = true, teamColumn, idColumn, oppositionColumn, includePositions = false, includeGender = true } = {}
+) {
+  const clauses = buildCoreScopeClauses(state, { includeGender });
 
   if (includeTeams && state.teams && state.teams.length > 0 && teamColumn) {
     clauses.push(`${teamColumn} IN (${state.teams.map((t) => `'${esc(t)}'`).join(", ")})`);

@@ -19,6 +19,36 @@
         <p class="app-header__scope" id="scope-sentence" aria-live="polite"></p>
       </div>
       <div class="app-header__controls">
+        <!-- Header search (task 3a, owner decision 46): a compact player
+             search visible on BOTH Stats and Graphs (this element is never
+             toggled hidden by the view switch) — the same omnisearch
+             component as the table-search box below, mounted separately in
+             main.js so picking a player here always opens their popup. -->
+        <div class="header-search" id="header-search-section">
+          <svg class="header-search__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+          </svg>
+          <input
+            type="text"
+            id="header-search-input"
+            class="input header-search__input"
+            placeholder="Search players…"
+            aria-label="Search players"
+            autocomplete="off"
+            role="combobox"
+            aria-expanded="false"
+            aria-controls="header-search-results"
+            aria-autocomplete="list"
+          />
+          <div
+            class="omnisearch__results"
+            id="header-search-results"
+            role="listbox"
+            aria-label="Player search results"
+            hidden
+          ></div>
+        </div>
         <div class="segmented" data-role="view" role="group" aria-label="View">
           <button type="button" class="segmented__btn is-active" data-value="table">Stats</button>
           <button type="button" class="segmented__btn" data-value="graph">Graphs</button>

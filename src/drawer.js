@@ -586,6 +586,8 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
       regularPositions: [],
       opposition: [],
       advanced: { op: "AND", groups: [] },
+      // Task 3b (owner decision 46): "Clear all" also clears pins.
+      pinnedPlayers: [],
     });
     teamMode = deriveTeamMode();
     renderControls();

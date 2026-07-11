@@ -193,10 +193,75 @@ a { color: var(--color-accent); }
   max-width: 34rem;
 }
 
-/* The header now holds only the Stats/Graphs view switcher — Discipline
-   moved into the scope strip (decision 44b, src/filters.js). */
+/* The header now holds the header search (task 3a) plus the Stats/Graphs
+   view switcher — Discipline moved into the scope strip (decision 44b,
+   src/filters.js). */
 .app-header__controls {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+/* ── Header search (task 3a, B1 polish) ───────────────────────────────────────
+   Compact player search visible on both Stats and Graphs — visually quiet
+   (small, icon-led) so it never competes with the Stats/Graphs tabs next to
+   it. Reuses .omnisearch__results/.omnisearch__item etc. (src/omnisearch.js
+   itself doesn't care which input/results pair it's wired to). */
+.header-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.header-search__icon {
+  position: absolute;
+  left: var(--space-3);
+  width: 1rem;
+  height: 1rem;
+  color: var(--color-muted);
+  pointer-events: none;
+}
+
+/* `.header-search .header-search__input` (not just the bare class): needs to
+   out-specificity the later `.input` shorthand rule's `padding` (which would
+   otherwise reset padding-left back to var(--space-3) regardless of source
+   order, since a bare-class selector ties with `.input` on specificity). */
+.header-search .header-search__input {
+  width: 12rem;
+  padding-left: calc(var(--space-3) + 1.25rem);
+  font-size: var(--text-sm2);
+  transition: width 0.15s ease;
+}
+
+/* The header input is narrower than the table-search one, but its dropdown
+   still needs room for player names/meta — widen past 100% of the (narrow)
+   input rather than cramping every result. */
+.header-search .omnisearch__results {
+  left: 0;
+  width: 20rem;
+  max-width: calc(100vw - 2 * var(--space-4));
+}
+
+/* At mobile widths the box collapses to just its icon — a pure CSS
+   affordance (no JS toggle state): the input's own text goes transparent and
+   its width shrinks to a square icon-button footprint, then both reverse the
+   moment it's focused. Typing is always possible; you just have to tap/focus
+   first, same as any icon-triggered search. */
+@media (max-width: 480px) {
+  .header-search .header-search__input {
+    width: 2.25rem;
+    color: transparent;
+    cursor: pointer;
+  }
+  .header-search .header-search__input::placeholder { color: transparent; }
+  .header-search .header-search__input:focus {
+    width: 9rem;
+    color: inherit;
+    cursor: text;
+  }
+  .header-search .header-search__input:focus::placeholder { color: var(--color-muted); }
 }
 
 /* ── Main / layout ─────────────────────────────────────────────────────────── */
@@ -954,16 +1019,52 @@ a { color: var(--color-accent); }
   background: var(--color-panel);
 }
 
+/* Thin sticky Player column (task 1, B1 polish): capped width + ellipsis so
+   this column never eats the viewport on tablet/mobile — the name stays
+   sticky/clickable/sortable exactly as before, just visually truncated (the
+   name cell's own `title` attribute, set in table.js, carries the full name
+   on hover/focus; table.js's own truncateName() also pre-shortens the
+   rendered text as a belt-and-suspenders measure — see its doc comment).
+   Critically this is `width` (a definite size), NOT just `max-width`: per
+   the CSS2.1 auto table-layout algorithm, a column only counts as
+   "constrained" (opts out of receiving a share of the table's `width: 100%`
+   surplus-space distribution) when a cell in it has a specified `width` —
+   `max-width` alone doesn't count, so the very first version of this rule
+   (max-width only) was silently overridden back out to ~260px by that
+   surplus redistribution despite every other diagnostic (computed style,
+   the inner button's own width) looking correct. `max-width` is kept
+   alongside as a floor for when --sticky-col-w is asked to be even smaller
+   than some other constraint. */
 .data-table__th--sticky,
 .data-table__td--sticky {
   position: sticky;
   left: 0;
   background: var(--color-bg-raised);
   z-index: 1;
+  --sticky-col-w: 10rem;
+  width: var(--sticky-col-w);
+  max-width: var(--sticky-col-w);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.data-table__td--sticky .player-link,
+.data-table__td--sticky span {
+  display: block;
+  width: var(--sticky-col-w);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .data-table tbody tr:nth-child(even) .data-table__td--sticky {
   background: var(--color-panel);
+}
+
+@media (max-width: 768px) {
+  .data-table__th--sticky,
+  .data-table__td--sticky { --sticky-col-w: 7rem; }
 }
 
 /* Shared header-cell language (task 3): uppercase, muted, semibold column
@@ -1042,6 +1143,21 @@ a { color: var(--color-accent); }
 .data-table__th.is-sorted .data-table__sort-btn { color: var(--color-accent); }
 
 .data-table__th.is-sorted .data-table__sort-btn:hover { color: var(--color-accent-strong); }
+
+/* Drag-to-reorder columns (task 2, B1 polish): mouse/pen only (see table.js's
+   wireColumnDrag doc comment) — every OTHER metric header shows a grab
+   cursor as the drag affordance; the header currently being dragged dims;
+   the header the pointer is over gets a thin accent-colored edge marking
+   which side it'll be inserted on. None of this touches the sticky Player
+   header or the structural split/coverage headers, which never get the
+   --draggable class. */
+.data-table__th--draggable { cursor: grab; }
+.data-table__th--draggable:active { cursor: grabbing; }
+
+.data-table__th--dragging { opacity: 0.4; }
+
+.data-table__th--drop-before { box-shadow: inset 3px 0 0 0 var(--color-accent); }
+.data-table__th--drop-after { box-shadow: inset -3px 0 0 0 var(--color-accent); }
 
 /* Columns popover */
 
@@ -1261,6 +1377,14 @@ a { color: var(--color-accent); }
   color: var(--color-fg);
 }
 
+/* Pinned-player pill, inert in matchup "Vs" mode (task 3b) — greyed but
+   still fully removable (its × always un-pins); the `title` set in pills.js
+   explains why it isn't currently narrowing anything. */
+.pill--inert {
+  opacity: 0.55;
+  border-style: dashed;
+}
+
 .pill__x {
   position: relative;
   font: inherit;
@@ -1474,6 +1598,9 @@ a { color: var(--color-accent); }
 
   .data-table__th,
   .data-table__td { padding: var(--space-2) var(--space-3); }
+
+  .data-table__th--sticky,
+  .data-table__td--sticky { --sticky-col-w: 6rem; }
 
   .data-table__sort-btn {
     min-height: 40px;
@@ -2909,4 +3036,84 @@ a { color: var(--color-accent); }
   .select--compact {
     max-width: 9rem;
   }
+}
+
+/* ── "Graph this player" chooser (owner decision 46) ─────────────────────────
+   A small modal OVER the player popup (src/playerGraphChooser.js) — same
+   fixed/backdrop/centered-panel shape as .player-popup, one step further
+   above .player-filters-drawer (110) since it can be opened while that
+   popup is showing. The chart-type grid inside reuses .graph-chart-type/
+   .segmented__btn/.is-unavailable/.is-active verbatim (graph.js's own
+   styles, further up) — no second copy of the "greyed tile" language here. */
+.player-graph-chooser {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+}
+
+.player-graph-chooser__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(27, 36, 48, 0.45);
+}
+
+[data-theme="dark"] .player-graph-chooser__backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.player-graph-chooser__panel {
+  position: relative;
+  margin: 8vh auto;
+  width: min(28rem, 92vw);
+  max-height: 82vh;
+  overflow-y: auto;
+  background: var(--color-bg);
+  box-shadow: var(--shadow-popover);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+}
+
+.player-graph-chooser__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-line);
+  position: sticky;
+  top: 0;
+  background: var(--color-bg);
+  z-index: 1;
+}
+
+.player-graph-chooser__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.15rem;
+}
+
+.player-graph-chooser__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+}
+
+.player-graph-chooser__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--color-line);
+  position: sticky;
+  bottom: 0;
+  background: var(--color-bg);
+}
+
+@media (max-width: 480px) {
+  .player-graph-chooser__panel { width: 94vw; margin: 6vh auto; }
+  .player-graph-chooser__footer { flex-direction: column-reverse; align-items: stretch; }
+  .player-graph-chooser__footer .btn { width: 100%; }
 }

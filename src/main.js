@@ -30,6 +30,8 @@ const drawerHostEl = document.getElementById("filter-drawer-host");
 const playerSearchSectionEl = document.getElementById("player-search-section");
 const playerSearchInputEl = document.getElementById("player-search-input");
 const playerSearchResultsEl = document.getElementById("player-search-results");
+const headerSearchInputEl = document.getElementById("header-search-input");
+const headerSearchResultsEl = document.getElementById("header-search-results");
 const tableAreaEl = document.getElementById("table-area");
 const playerPopupHostEl = document.getElementById("player-popup-host");
 const graphAreaEl = document.getElementById("graph-area");
@@ -175,7 +177,18 @@ function applyView() {
   return Promise.resolve();
 }
 
-function onFiltersChanged() {
+/**
+ * `requery` (task 3b, owner decision 46): pinning/unpinning a player is
+ * explicitly NOT a "no automated search" filter change — the owner's ruling
+ * is "removing one un-pins and re-queries" (and, symmetrically, adding one
+ * shows immediately, same as the omnisearch "Filter the table" action
+ * already does). Every other caller of this function is a genuine filter
+ * change and keeps the default (revert to the blank prompt / wait for
+ * "Show results"). Returns the table branch's promise (tableController.load()
+ * or a resolved null) so a pin-add can chain off its resolved
+ * {rowCount, missingPinnedIds} to detect a pin with no innings in scope.
+ */
+function onFiltersChanged({ requery = false } = {}) {
   // Drop columns/conditions orphaned by the new scope BEFORE anything renders,
   // so the drawer, badge, pills, and query all agree (§8.4 honesty).
   pruneIneligibleState(store);
@@ -198,14 +211,17 @@ function onFiltersChanged() {
   updateDrawerBadge();
   // Only the visible view re-queries; the other refreshes when switched to.
   // Table view: filter changes revert to the blank prompt (no automated search);
-  // the query runs on "Show results" / the drawer's "Apply and show results".
+  // the query runs on "Show results" / the drawer's "Apply and show results" —
+  // UNLESS `requery` says otherwise (pin add/remove only, see above).
   // (The player popup blocks the filters while open; it refetches on reopen if
   // the scope moved, via its own cache key.)
   if (store.get().view === "graph") {
     graphController.onScopeChanged();
-  } else {
-    tableController.showPrompt();
+    return Promise.resolve(null);
   }
+  if (requery) return tableController.load();
+  tableController.showPrompt();
+  return Promise.resolve(null);
 }
 
 /**
@@ -236,7 +252,8 @@ function triggerTableSearch(text, matches) {
   store.set({ search: text });
   onFiltersChanged();
   if (store.get().view === "table") {
-    tableController.load().then((rowCount) => {
+    tableController.load().then((result) => {
+      const rowCount = result ? result.rowCount : null;
       if (rowCount === 0 && matches && matches.length > 0) {
         // Judgment call: a single unambiguous match names the player; more
         // than one (a common surname etc.) falls back to the search text
@@ -249,6 +266,55 @@ function triggerTableSearch(text, matches) {
       }
     });
   }
+}
+
+/**
+ * Pin a player from the table-search dropdown (task 3b, owner decision 46):
+ * unlike triggerTableSearch's "Filter the table" action (which narrows the
+ * result set to name matches), picking a SUGGESTED PLAYER row here instead
+ * ADDS them to the current result set regardless of the other leaderboard
+ * filters — a removable "+ name" pill (pills.js), backed by
+ * state.pinnedPlayers and an additive WHERE/HAVING OR in table.js's
+ * buildQuery. Their core scope (gender/format/date window/team type) still
+ * applies — only the OTHER, leaderboard-only filters (team/opposition/
+ * position/profile/R. Pos./search/stat conditions) are bypassed for their
+ * row alone. Plain mode only (see pills.js/table.js) — matchup mode leaves
+ * the pin inert rather than touching buildMatchupQuery.
+ *
+ * If the player genuinely has no innings even in the CORE scope, no bypass
+ * could have produced a row for them either — load()'s missingPinnedIds
+ * return value tells us that, and per the owner's ruling the optimistic pin
+ * is rolled all the way back (no pill at all, not even a greyed one) with
+ * the one toast this app shows for an honest "real player, wrong scope" case
+ * (mirrors triggerTableSearch's own toast above).
+ */
+function pinPlayer(id, name) {
+  const state = store.get();
+  if ((state.pinnedPlayers || []).some((p) => p.id === id)) return; // already pinned
+  store.set({ pinnedPlayers: [...(state.pinnedPlayers || []), { id, name }] });
+  onFiltersChanged({ requery: true }).then((result) => {
+    const missing = result && result.missingPinnedIds ? result.missingPinnedIds : [];
+    if (missing.includes(id)) {
+      store.set({ pinnedPlayers: (store.get().pinnedPlayers || []).filter((p) => p.id !== id) });
+      if (pillsController) pillsController.render();
+      showToast(`${name} has no innings in this scope.`);
+    }
+  });
+}
+
+/**
+ * The HEADER search's own "Filter the table to names matching…" fallback
+ * (task 3a): the header box is visible on both Stats/Graphs, so choosing
+ * this row first switches to the Stats tab (the leaderboard it's about to
+ * filter) before running the exact same triggerTableSearch flow the
+ * table-search box's own fallback row uses.
+ */
+function triggerHeaderFilterTable(text, matches) {
+  if (store.get().view !== "table") {
+    store.set({ view: "table" });
+    applyView();
+  }
+  triggerTableSearch(text, matches);
 }
 
 function boot() {
@@ -323,9 +389,18 @@ function boot() {
       });
       drawerController.sync();
 
-      pillsController = mountPills(pillsBarEl, store, () => {
-        onFiltersChanged();
-      });
+      pillsController = mountPills(
+        pillsBarEl,
+        store,
+        () => {
+          onFiltersChanged();
+        },
+        () => {
+          // Pin pills only (task 3b): "removing one un-pins and re-queries",
+          // not the standard revert-to-blank-prompt filter-change path.
+          onFiltersChanged({ requery: true });
+        }
+      );
       pillsController.render();
 
       const openDrawerBtn = filterBarEl.querySelector('[data-role="open-drawer"]');
@@ -361,15 +436,32 @@ function boot() {
         if (drawerController && drawerController.isOpen()) drawerController.sync();
       });
 
-      // B2R wave 2 (decisions 42/44): the search box is player-first omnisearch
-      // now, not a live leaderboard filter — see omnisearch.js's header comment.
-      // onOpenPlayer/onFilterTable close over the module-level `playerPopupController`/
-      // `tableController` variables, which aren't assigned until later in this
-      // same boot() call (same pattern mountTable's onPlayerClick already uses
-      // below) — safe because these callbacks only ever run later, in response
-      // to user interaction after boot() has finished.
-      mountOmnisearch(playerSearchInputEl, playerSearchResultsEl, {
+      // Two omnisearch mounts (task 3, owner decision 46 search split) — same
+      // component, different mount-site behaviour (see omnisearch.js's header
+      // comment). Both close over module-level `playerPopupController`/
+      // `tableController`/`pillsController`, which aren't assigned until
+      // later in this same boot() call (same pattern mountTable's
+      // onPlayerClick already uses below) — safe because these callbacks
+      // only ever run later, in response to user interaction after boot()
+      // has finished.
+      //
+      // Header search (task 3a): visible on both Stats/Graphs (it lives in
+      // the persistent app-header, never toggled hidden by
+      // showTableView/showGraphView) — picking a player opens their popup,
+      // exactly like the table-search box used to do everywhere before this
+      // task split it in two.
+      mountOmnisearch(headerSearchInputEl, headerSearchResultsEl, {
         onOpenPlayer: (id, name) => playerPopupController.open(id, name),
+        onFilterTable: (text, matches) => triggerHeaderFilterTable(text, matches),
+      });
+
+      // Table search (task 3b): Stats-view-only box above the table. Picking
+      // a player row now PINS them into the result set (pinPlayer) instead of
+      // opening the popup — the popup is reachable via the header search or
+      // by clicking the player's own row once it's showing. The trailing
+      // "Filter the table to names matching…" fallback row is UNCHANGED.
+      mountOmnisearch(playerSearchInputEl, playerSearchResultsEl, {
+        onOpenPlayer: (id, name) => pinPlayer(id, name),
         onFilterTable: (text, matches) => triggerTableSearch(text, matches),
       });
 

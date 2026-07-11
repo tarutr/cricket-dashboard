@@ -46,11 +46,19 @@ function conditionPillLabel(cond, state) {
  * mutates the store; the caller (main.js) re-renders downstream views (and
  * is expected to call `render()` again as part of that same pipeline, the
  * same way it re-syncs the drawer and advanced-filter count elsewhere).
+ *
+ * `onPinChange` (task 3b, owner decision 46) is called instead of `onChange`
+ * when a PINNED-PLAYER pill's × is clicked — every other pill removal is a
+ * filter change (reverts to the blank prompt per the no-automated-search
+ * rule, onFiltersChanged's default path), but "removing one un-pins and
+ * re-queries" immediately per the owner's ruling, so main.js wires this to
+ * its requery variant instead. Defaults to `onChange` so a caller that never
+ * pins anything doesn't need to pass a second callback.
  */
-export function mountPills(container, store, onChange) {
+export function mountPills(container, store, onChange, onPinChange = onChange) {
   function render() {
     const s = store.get();
-    const pills = []; // { label, remove() }
+    const pills = []; // { label, remove(), requery? }
 
     // "Current team" mode (owner decision 46): one removable pill per team,
     // prefixed "Team:" to distinguish it from the "Historic team" (Ever played
@@ -118,6 +126,23 @@ export function mountPills(container, store, onChange) {
       pills.push({ label: `matching "${term}"`, remove: () => store.set({ search: "" }) });
     }
 
+    // Pinned players (task 3b): one removable "+ name" pill per pin. Inert
+    // (greyed, with an explaining title) while matchup "Vs" mode is active —
+    // pins only apply in plain mode (buildMatchupQuery is left completely
+    // untouched, per decision 39's byte-identical-SQL rule) — but the × still
+    // works either way, since un-pinning is always a valid, honest action.
+    const matchupInert = matchupVsActive(s);
+    for (const p of s.pinnedPlayers || []) {
+      pills.push({
+        label: `+ ${p.name}`,
+        inert: matchupInert,
+        title: matchupInert ? "Pinned players don't apply in matchup (Vs) mode" : null,
+        requery: true,
+        remove: () =>
+          store.set({ pinnedPlayers: (store.get().pinnedPlayers || []).filter((x) => x.id !== p.id) }),
+      });
+    }
+
     // Stat conditions (decision 42): one pill per ACTIVE condition (metric +
     // valid value), reading the condition itself. Iterates the raw
     // state.advanced.groups (not advanced.js's activeGroups()) so gi/ci here
@@ -142,15 +167,17 @@ export function mountPills(container, store, onChange) {
     container.innerHTML = `<div class="pills-row">${pills
       .map(
         (p, i) =>
-          `<span class="pill">${esc(p.label)} <button type="button" class="pill__x" data-idx="${i}" aria-label="Remove filter">&times;</button></span>`
+          `<span class="pill${p.inert ? " pill--inert" : ""}"${p.title ? ` title="${esc(p.title)}"` : ""}>${esc(p.label)} <button type="button" class="pill__x" data-idx="${i}" aria-label="Remove filter">&times;</button></span>`
       )
       .join("")}</div>`;
 
     container.querySelectorAll(".pill__x").forEach((btn) => {
       btn.addEventListener("click", () => {
         const idx = Number(btn.dataset.idx);
-        pills[idx].remove();
-        onChange();
+        const p = pills[idx];
+        p.remove();
+        if (p.requery) onPinChange();
+        else onChange();
       });
     });
   }

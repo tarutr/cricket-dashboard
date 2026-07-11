@@ -10,7 +10,7 @@
 
 import { getMetric, hasMetricData, matchupBucketLabel, DISMISSAL_KINDS } from "./metrics.js";
 import { query } from "./db.js";
-import { buildScopeClauses } from "./filters.js";
+import { buildScopeClauses, buildCoreScopeClauses } from "./filters.js";
 import { activeGroups } from "./advanced.js";
 import { escHtml, escAttr } from "./html.js";
 import {
@@ -168,6 +168,7 @@ function serializeQueryState(state) {
     opposition: state.opposition,
     splitBy: state.splitBy,
     matchupVs: state.matchupVs,
+    pinnedPlayers: state.pinnedPlayers,
     search: state.search,
     sort: state.sort,
     columns: state.columns[ns],
@@ -637,6 +638,30 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
     whereClauses.push(`${nameCol} ILIKE '%${esc(state.search.trim())}%'`);
   }
 
+  // Pinned players (task 3b, owner decision 46): additive OR, plain mode
+  // only (matchupVsActive already routed to buildMatchupQuery above, which
+  // this pinning logic never touches — see that function's own doc comment
+  // on why matchup mode leaves pins inert). buildCoreScopeClauses is
+  // guaranteed to be the exact prefix `whereClauses` above already starts
+  // with (same state, same includeGender default), so slicing it off isolates
+  // precisely the "leaderboard-only" remainder — team/opposition/position/
+  // profile/R. Pos./search — without recomputing or duplicating any of that
+  // filter logic. A pinned player's CORE scope (gender/format/date window/
+  // team type) still applies unconditionally; only the leaderboard-only part
+  // is bypassed, for exactly their id.
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  const pinnedIdList = pins.map((p) => `'${esc(p.id)}'`).join(", ");
+  let whereSql;
+  if (pins.length > 0) {
+    const core = buildCoreScopeClauses(state);
+    const extra = whereClauses.slice(core.length);
+    const corePart = core.join(" AND ");
+    const extraPart = extra.length ? `(${extra.join(" AND ")})` : "TRUE";
+    whereSql = `${corePart} AND (${extraPart} OR ${idCol} IN (${pinnedIdList}))`;
+  } else {
+    whereSql = whereClauses.join(" AND ");
+  }
+
   // decision 44c: the BASE query applies NO minimum-innings gate — a player
   // appears if they have any qualifying innings row (equivalent to min 1). The
   // old `COUNT(*) >= Math.max(1, minInnings)` HAVING was already a no-op at its
@@ -649,6 +674,16 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
   const havingParts = [];
   const advHaving = advancedToHaving(state.advanced, discipline);
   if (advHaving) havingParts.push(advHaving);
+  // Pinned players are exempt from every HAVING/stat-condition predicate too
+  // (task 3b: "HAVING/stat-condition post-filters must not drop pinned
+  // rows") — idCol is the raw GROUP BY column (not the `id` alias), always
+  // valid to reference directly in HAVING.
+  const havingSql =
+    havingParts.length === 0
+      ? null
+      : pins.length > 0
+        ? `(${havingParts.join(" AND ")}) OR ${idCol} IN (${pinnedIdList})`
+        : havingParts.join(" AND ");
 
   const wantsMatches = visibleColumns.includes("matches");
   const inningsLevel = positionsFilterActive(state) || oppositionFilterActive(state) || Boolean(splitDim);
@@ -662,27 +697,57 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
   const sql = [
     `SELECT ${selectParts.join(", ")}`,
     `FROM ${view}`,
-    `WHERE ${whereClauses.join(" AND ")}`,
+    `WHERE ${whereSql}`,
     `GROUP BY ${groupBy.join(", ")}`,
     // No base gate anymore (decision 44c) — HAVING is emitted only when the
     // advanced stat-conditions path contributes a predicate.
-    ...(havingParts.length ? [`HAVING ${havingParts.join(" AND ")}`] : []),
+    ...(havingSql ? [`HAVING ${havingSql}`] : []),
   ].join("\n");
 
   let matchesSql = null;
   if (wantsMatches && !inningsLevel) {
-    const pmWhere = buildScopeClauses(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" }).join(" AND ");
-    const pmNameFilter =
-      state.search && state.search.trim() ? ` AND player_name ILIKE '%${esc(state.search.trim())}%'` : "";
+    const pmFull = buildScopeClauses(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
+    const pmExtra = pmFull.slice(buildCoreScopeClauses(state).length);
+    if (state.search && state.search.trim()) {
+      pmExtra.push(`player_name ILIKE '%${esc(state.search.trim())}%'`);
+    }
+    let pmWhereSql;
+    if (pins.length > 0) {
+      const pmCore = buildCoreScopeClauses(state).join(" AND ");
+      const pmExtraPart = pmExtra.length ? `(${pmExtra.join(" AND ")})` : "TRUE";
+      pmWhereSql = `${pmCore} AND (${pmExtraPart} OR player_id IN (${pinnedIdList}))`;
+    } else {
+      pmWhereSql = [...buildCoreScopeClauses(state), ...pmExtra].join(" AND ");
+    }
     matchesSql = [
       `SELECT player_id AS id, COUNT(DISTINCT match_id) AS matches`,
       `FROM player_matches`,
-      `WHERE ${pmWhere}${pmNameFilter}`,
+      `WHERE ${pmWhereSql}`,
       `GROUP BY player_id`,
     ].join("\n");
   }
 
   return { sql, matchesSql, splitDim };
+}
+
+// Thin sticky Player column (task 1, B1 polish): the CSS width cap on
+// .data-table__td--sticky (styles.css) alone isn't enough — browsers size an
+// auto-layout `<table>`'s columns from a cell's underlying (nowrap) TEXT
+// content, not the specified width of a nested block element, so a single
+// long name anywhere in a 2,000+ row result set (e.g. "Nelson Jesus
+// Navarrete Aburto") still stretches the whole column well past the CSS cap.
+// Truncating the rendered text itself, here, sidesteps that entirely — the
+// browser never sees text long enough to want a wider column in the first
+// place. NAME_TRUNCATE_CHARS is picked to sit safely under the narrowest CSS
+// cap (6rem/480px); CSS's own overflow/ellipsis (styles.css) is kept as a
+// backstop for the rare remaining case, not the primary mechanism. The
+// title="" attribute (set at both call sites below) always carries the FULL,
+// untruncated name regardless of this.
+const NAME_TRUNCATE_CHARS = 16;
+
+function truncateName(name) {
+  const s = name ?? "";
+  return s.length > NAME_TRUNCATE_CHARS ? `${s.slice(0, NAME_TRUNCATE_CHARS - 1)}…` : s;
 }
 
 /** Shared display formatter for metric values ("—" for no-data per §8.1). Also used by the player page. */
@@ -863,6 +928,10 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
   // (not just a local DOM query) so load() can find and refresh it after
   // every reload — see openColumnsPopover()'s doc comment.
   let openColumnsPopoverState = null;
+  // In-progress column drag (task 2), or null. Tracked at this scope (not
+  // inside wireColumnDrag's own closure) purely so onUp() can read where the
+  // pointer last was over — see wireColumnDrag's doc comment.
+  let dragState = null;
 
   // Persistent table-mode skeleton (Batch 1 mechanical fix, decision 42/43):
   // the toolbar and table shell are built ONCE per entry into "table mode"
@@ -954,6 +1023,12 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
    * never shows numbers for a scope the filters no longer describe, §8.4).
    */
   function renderPrompt() {
+    // Invalidate any in-flight load: without this, a query started just before
+    // the filters changed resolves AFTER the prompt renders and paints a stale
+    // (often 0-row) table over it — reproduced by removing two pills in quick
+    // succession; also the likely cause of the once-seen "leaderboard reset to
+    // empty after drawer close" from the 2026-07 design review.
+    loadToken++;
     closeColumnsPopover(); // no columns-btn here either — same reasoning.
     teardownSkeleton();
     container.innerHTML = `
@@ -1005,7 +1080,11 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
     const isSorted = state.sort.key === metric.key;
     const dir = isSorted ? state.sort.dir : null;
     const arrow = isSorted ? (dir === "asc" ? " ▲" : " ▼") : "";
-    return `<th data-key="${metric.key}" class="data-table__th ${isSorted ? "is-sorted" : ""}" scope="col">
+    // `data-table__th--draggable` (task 2): every metric column can be
+    // reordered via drag — see wireColumnDrag. The sticky Player column and
+    // the structural split/coverage columns (rendered elsewhere in
+    // renderLoaded, never through this function) never get this class.
+    return `<th data-key="${metric.key}" class="data-table__th data-table__th--draggable ${isSorted ? "is-sorted" : ""}" scope="col">
       <button type="button" class="data-table__sort-btn">${metric.shortLabel}${arrow}</button>
     </th>`;
   }
@@ -1069,6 +1148,128 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
     return splitDim
       ? `${rows.length.toLocaleString()} row${rows.length === 1 ? "" : "s"} (split by ${splitDim.label.toLowerCase()})`
       : `${rows.length.toLocaleString()} player${rows.length === 1 ? "" : "s"}`;
+  }
+
+  // ── Column drag-to-reorder (task 2, owner decision 46) ────────────────────
+  // Dragging a metric column header left/right reorders state.columns[ns] —
+  // a VIEW change only: it must never trigger a requery (the column picker's
+  // checked set is unchanged), so this re-renders the already-cached
+  // `lastRows` in place instead of calling load(). The sticky Player column
+  // and the structural split/coverage columns are never wired (see
+  // renderLoaded's call site below — only `.data-table__th--draggable`
+  // headers, which excludes the "__split" key too).
+
+  /** Reorder `ns`'s column-key array: pull `fromKey` out and reinsert it
+   * immediately before/after `overKey` (or at the end when `overKey` is
+   * null — dropped past the last draggable column). Pure array surgery over
+   * state.columns[ns]; never touches the query itself. */
+  function reorderColumns(ns, fromKey, overKey, side) {
+    const state = store.get();
+    const cols = state.columns[ns].slice();
+    const fromIdx = cols.indexOf(fromKey);
+    if (fromIdx === -1) return;
+    cols.splice(fromIdx, 1);
+    let toIdx;
+    if (overKey == null) {
+      toIdx = cols.length;
+    } else {
+      toIdx = cols.indexOf(overKey);
+      if (toIdx === -1) toIdx = cols.length;
+      else if (side === "after") toIdx += 1;
+    }
+    cols.splice(toIdx, 0, fromKey);
+    store.set({ columns: { ...state.columns, [ns]: cols } });
+    // Keep enterView()'s cache key (decision 44d) in step with this view-only
+    // change, so a later tab-away/back still restores the reordered table
+    // instantly instead of falling back to the blank prompt.
+    lastQueryStateKey = serializeQueryState(store.get());
+  }
+
+  function clearDragIndicators() {
+    theadEl.querySelectorAll(".data-table__th--drop-before, .data-table__th--drop-after").forEach((el) => {
+      el.classList.remove("data-table__th--drop-before", "data-table__th--drop-after");
+    });
+  }
+
+  /** Wire drag-to-reorder onto one metric column header. Touch policy (task
+   * 2, this session's call): MOUSE/PEN ONLY, gated on `event.pointerType` —
+   * a touch pointerdown never starts a drag, so horizontal scrolling of
+   * `.table-scroll` on mobile is completely untouched, with no long-press
+   * escape hatch. Chosen over a long-press timer for simplicity: this table
+   * already depends on native horizontal touch-scroll to be usable at
+   * ~380px (§8.8), and a long-press-then-drag gesture risks fighting that
+   * scroll on exactly the devices §8.8 cares about, for a feature (column
+   * reordering) that has no touch-specific ask in the brief. */
+  function wireColumnDrag(th, ns) {
+    const key = th.dataset.key;
+    let startX = null;
+    let dragging = false;
+    let moved = false;
+
+    function onMove(e) {
+      if (startX === null) return;
+      if (!dragging && Math.abs(e.clientX - startX) > 4) {
+        dragging = true;
+        moved = true;
+        th.classList.add("data-table__th--dragging");
+      }
+      if (!dragging) return;
+      clearDragIndicators();
+      const others = [...theadEl.querySelectorAll(".data-table__th--draggable")].filter((el) => el !== th);
+      let target = null;
+      let side = "before";
+      for (const el of others) {
+        const rect = el.getBoundingClientRect();
+        if (e.clientX >= rect.left && e.clientX <= rect.right) {
+          target = el;
+          side = e.clientX < rect.left + rect.width / 2 ? "before" : "after";
+          break;
+        }
+      }
+      if (target) {
+        target.classList.add(side === "before" ? "data-table__th--drop-before" : "data-table__th--drop-after");
+        dragState = { key, ns, overKey: target.dataset.key, side };
+      } else {
+        dragState = { key, ns, overKey: null, side: null };
+      }
+    }
+
+    function onUp() {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      clearDragIndicators();
+      th.classList.remove("data-table__th--dragging");
+      if (dragging && dragState && dragState.key === key) {
+        reorderColumns(ns, key, dragState.overKey, dragState.side);
+        renderLoaded(lastRows, store.get(), lastBowlingTypes);
+      }
+      dragState = null;
+      startX = null;
+      if (moved) {
+        // Swallow the click the browser fires right after this pointerup so
+        // a real drag never ALSO re-sorts by this column — capturing means
+        // this runs before the plain (bubbling) click-to-sort listener bound
+        // on the same `th` below.
+        const suppressClick = (ev) => {
+          ev.stopPropagation();
+          ev.preventDefault();
+          th.removeEventListener("click", suppressClick, true);
+        };
+        th.addEventListener("click", suppressClick, true);
+      }
+      dragging = false;
+      moved = false;
+    }
+
+    th.addEventListener("pointerdown", (e) => {
+      // Mouse/pen only (see doc comment above) — a touch pointerdown just
+      // falls through to native scrolling.
+      if (e.pointerType !== "mouse" && e.pointerType !== "pen") return;
+      if (e.button !== 0) return;
+      startX = e.clientX;
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+    });
   }
 
   /**
@@ -1300,10 +1501,17 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
           ? `<td class="data-table__td data-table__td--split">${row.split_value == null ? "—" : escHtml(row.split_value)}</td>`
           : "";
         const cells = cols.map((m) => dataCellHTML(m, row)).join("");
-        // Player names link to the player page (R2, decision 29).
+        // Player names link to the player page (R2, decision 29). `title`
+        // (task 1) carries the FULL name (never truncated) so it's still
+        // readable on hover/focus; the visible text is pre-truncated in JS
+        // (truncateName — see its doc comment for why CSS ellipsis alone
+        // isn't enough) — the sticky/click/sort behaviour itself is
+        // otherwise untouched.
+        const fullName = row.name ?? "";
+        const shownName = truncateName(fullName);
         const nameCell = onPlayerClick
-          ? `<button type="button" class="player-link" data-player-id="${escAttr(row.id ?? "")}">${escHtml(row.name ?? "")}</button>`
-          : escHtml(row.name ?? "");
+          ? `<button type="button" class="player-link" data-player-id="${escAttr(row.id ?? "")}" title="${escAttr(fullName)}">${escHtml(shownName)}</button>`
+          : `<span title="${escAttr(fullName)}">${escHtml(shownName)}</span>`;
         return `<tr><td class="data-table__td data-table__td--sticky">${nameCell}</td>${coverageTd}${splitTd}${cells}</tr>`;
       })
       .join("");
@@ -1342,6 +1550,15 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
         });
       });
     }
+
+    // Column drag-to-reorder (task 2): every metric header (never the
+    // sticky Player column, split, or coverage columns — those don't get
+    // the --draggable class) can be dragged left/right to reorder
+    // state.columns[ns]. Rebound on every renderLoaded call, same as the
+    // sort click handler just above.
+    theadEl.querySelectorAll(".data-table__th--draggable").forEach((th) => {
+      wireColumnDrag(th, ns);
+    });
   }
 
   /**
@@ -1652,13 +1869,25 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
       // this reload never destroys it (Batch 3 fix 3) — re-find its anchor in
       // the freshly-rendered toolbar, reposition, and re-sync checked state.
       refreshOpenColumnsPopover();
+      // Pinned players with zero rows in this result set (task 3b): only
+      // meaningful in plain mode — matchup mode never applies the pin bypass
+      // (buildMatchupQuery is untouched), so every id would spuriously read
+      // "missing" there. main.js's pinPlayer() uses this to roll back an
+      // optimistic pin that turned out to have no innings in the core scope
+      // at all (no bypass could have produced a row for it either).
+      const missingPinnedIds = matchupVsActive(state)
+        ? []
+        : (state.pinnedPlayers || [])
+            .filter((p) => p && p.id && !sorted.some((r) => String(r.id) === String(p.id)))
+            .map((p) => p.id);
       // Resolved row count (B2R wave 3): the omnisearch "Filter the table"
       // toast (main.js's triggerTableSearch) needs to know whether the query
       // it just triggered came back empty, without table.js exposing any
       // other internal state. Every existing caller of load() (toolbar
       // controls, the columns popover, the prompt/drawer buttons) already
-      // ignores the resolved value, so this is purely additive.
-      return sorted.length;
+      // ignores the resolved value, so this shape (an object rather than the
+      // former bare number) is purely additive for them too.
+      return { rowCount: sorted.length, missingPinnedIds };
     } catch (err) {
       if (token !== loadToken) return null;
       renderError(err, load);

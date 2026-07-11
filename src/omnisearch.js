@@ -1,12 +1,17 @@
 // src/omnisearch.js
 //
-// Player-first omnisearch (B2R wave 2, decisions 42/44): the main search box
-// stops being a leaderboard filter-as-you-type box. Typing (300ms debounce)
-// opens a dropdown UNDER the input listing up to 8 matching players from the
-// WHOLE database, regardless of the current leaderboard filters — clicking
-// one opens that player's popup directly (main.js wires this to
-// playerPopupController.open). The table underneath is NEVER touched by
-// typing.
+// Player-first omnisearch (B2R wave 2, decisions 42/44; task 3 search split,
+// owner decision 46): typing (300ms debounce) opens a dropdown UNDER the
+// input listing up to 8 matching players from the WHOLE database, regardless
+// of the current leaderboard filters. The table underneath is NEVER touched
+// by typing. This ONE component is now mounted TWICE (main.js): once on the
+// compact header search (both Stats/Graphs views), where picking a player
+// row opens that player's popup, and once on the search box above the table
+// (Stats view only), where picking a player row instead PINS them into the
+// current result set (main.js's pinPlayer — see state.js's pinnedPlayers and
+// table.js's buildQuery). Either behaviour is just whatever the mount site
+// passes as `onOpenPlayer` — this module doesn't know or care which; it only
+// decides WHICH row was chosen.
 //
 // The name-matching query is src/playerData.js's searchPlayers(), the same
 // helper the player-popup search already uses: it matches every name a
@@ -135,18 +140,17 @@ export function mountOmnisearch(inputEl, resultsEl, { onOpenPlayer, onFilterTabl
     render(term);
   }
 
-  /** Enter pressed before the debounced search has opened the dropdown (task
-   * 3 root cause, B1 polish): previously the keydown handler's `if (!isOpen)
-   * return` silently swallowed this keystroke, so a normal "type, then hit
-   * Enter" flow never reached choose()/onFilterTable at all — no query, no
-   * toast, nothing — even though the debounced search a moment later would
-   * have found the same matches. Runs the lookup immediately instead of
-   * waiting out the debounce, then acts on its result: with no dropdown ever
-   * rendered there's no row to have highlighted, so this is unambiguously the
-   * filter-table action (same convention as Enter-with-no-highlight below —
-   * rows.length is always the action row's index). Duplicates runSearch's
-   * fetch (rather than calling it) so it does NOT render/open the dropdown
-   * first, only to have choose() immediately close it again. */
+  /** Enter pressed with the dropdown closed (no highlighted row to defer to)
+   * — whether because the debounced search hasn't fired yet, or the dropdown
+   * was dismissed (Escape / outside click) while text remains in the box
+   * (task 3c, B1 polish — the keydown handler above routes every such case
+   * here now). Runs the lookup immediately rather than waiting out/trusting
+   * a debounce, then acts on its OWN fresh result: with no row highlighted,
+   * this is unambiguously the filter-table action (same convention as
+   * Enter-with-no-highlight — rows.length is always the action row's index).
+   * Duplicates runSearch's fetch (rather than calling it) so it does NOT
+   * render/open the dropdown first, only to have choose() immediately close
+   * it again. */
   async function flushAndChoose(term) {
     const token = ++requestToken;
     let result = [];
@@ -177,11 +181,28 @@ export function mountOmnisearch(inputEl, resultsEl, { onOpenPlayer, onFilterTabl
       close();
       return;
     }
-    if (e.key === "Enter" && !isOpen) {
-      // See flushAndChoose's doc comment — the bug this fixes.
+    if (e.key === "Enter") {
+      // Task 3c (B1 polish): Enter must always flush-and-act whenever the box
+      // has text, regardless of isOpen/debounce state — the earlier fix only
+      // covered the "debounce still pending, dropdown never opened" case
+      // (flushAndChoose below). The remaining gap was every OTHER way the
+      // dropdown can be closed with text still in the box (Escape, an
+      // outside click, or simply never having reopened since the last
+      // choice) — previously Enter there fell through to `if (!isOpen)
+      // return;` and did nothing at all. The one case that still defers to
+      // the dropdown's own state is an actual highlighted row (arrowed to),
+      // which must still choose THAT row, not re-run the lookup.
       e.preventDefault();
       const term = inputEl.value.trim();
       if (term.length === 0) return;
+      if (isOpen && activeIndex !== -1) {
+        choose(activeIndex, currentTerm);
+        return;
+      }
+      // Closed dropdown, or open with nothing highlighted: always flush any
+      // pending/stale debounce and re-run the lookup fresh so Enter reflects
+      // exactly what's in the box right now (also covers Enter-with-no-
+      // highlight -> the filter-table action, same convention as before).
       clearTimeout(debounceId);
       flushAndChoose(term);
       return;
@@ -196,12 +217,6 @@ export function mountOmnisearch(inputEl, resultsEl, { onOpenPlayer, onFilterTabl
       e.preventDefault();
       activeIndex = activeIndex > 0 ? activeIndex - 1 : total - 1;
       render(currentTerm);
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      // No row highlighted -> the filter-table action (task 5: "Enter with no
-      // highlight = the filter-table action").
-      const idx = activeIndex === -1 ? rows.length : activeIndex;
-      choose(idx, currentTerm);
     }
   });
 

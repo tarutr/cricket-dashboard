@@ -314,6 +314,13 @@ export function createInitialState(maxMonth) {
     opposition: [], // opposition team names; [] = no predicate. International only (decision 20).
     splitBy: null, // null | "position" | "opposition" | "dismissal" — table-only breakdown
     matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)
+    pinnedPlayers: [], // [{id, name}] — owner decision 46 task 3b: players ADDED to the table's
+                   // result set regardless of the other leaderboard-only filters (team/opposition/
+                   // position/profile/R. Pos./search/stat conditions). Their CORE scope
+                   // (gender/format/date window/team type) still applies — see table.js's
+                   // buildQuery for the additive WHERE/HAVING union. Plain mode only: matchup
+                   // ("Vs") mode leaves buildMatchupQuery completely untouched (decision 39's
+                   // byte-identical-SQL rule) and shows the pin pill greyed/inert instead.
     search: "",
     sort: { key: "runs", dir: "desc" },
     columns: {
