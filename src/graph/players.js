@@ -142,7 +142,9 @@ export async function searchPlayers(store, searchText, excludeIds) {
     teamColumn: teamCol,
     idColumn: idCol,
     oppositionColumn: discipline === "batting" ? "bowling_team" : "batting_team",
-    includePositions: true,
+    // Plain bowling view has no batting_position column; the striker-position
+    // filter is matchup-only — see charts.js's fetchSelectedPlayerMetrics.
+    includePositions: discipline === "batting",
   });
   const term = (searchText || "").trim();
   if (term) whereClauses.push(`${nameCol} ILIKE '%${esc(term)}%'`);

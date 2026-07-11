@@ -9,8 +9,24 @@
 // "Find another player" search mode. Scope semantics are unchanged too: the
 // popup reads Format + Date + Team type at open time (its cache key refetches
 // on reopen if the scope moved while it was closed).
+//
+// "Graph this player" (owner decision 46): playerPage.js's Graph button now
+// opens src/playerGraphChooser.js — a chooser modal OVER this popup — instead
+// of jumping straight to Graphs (see that module's header for why). Only on
+// the chooser's Confirm do we actually close the popup, switch to Graphs, and
+// hand the choice to src/graph/graph.js's enterWithChoice(). main.js's own
+// `onGraphPlayer` prop (a bare `(id, name) => {...}` that does its own store/
+// view-switch + a plain roster add) is no longer this popup's path to Graphs
+// — this module can't change main.js's callback contract (out of scope for
+// this task), and that plain contract has no room for a chart type/metric
+// anyway, so the switch below duplicates its ~6-line view-flip instead (see
+// switchToGraphsView()) and calls graph.js's own richer entry point directly.
+// `onGraphPlayer` is still accepted (main.js still passes it) but unused —
+// kept only so this module's call signature doesn't have to change either.
 
 import { mountPlayerPage } from "./playerPage.js";
+import { mountPlayerGraphChooser } from "./playerGraphChooser.js";
+import { enterWithChoice } from "./graph/graph.js";
 
 export function mountPlayerPopup(hostEl, store, { onGraphPlayer } = {}) {
   hostEl.innerHTML = `
@@ -31,18 +47,59 @@ export function mountPlayerPopup(hostEl, store, { onGraphPlayer } = {}) {
     body: hostEl.querySelector('[data-role="popup-body"]'),
   };
 
-  // "Graph this player" (task 4, decision 43): the popup closes ITSELF first
-  // — playerPage.js has no notion of "popup", it just reports which player
-  // was clicked — then forwards to the host app's callback, which handles
-  // the actual Stats→Graphs view switch and roster add.
-  const page = mountPlayerPage(els.body, store, {
-    onGraphPlayer: (id, name) => {
-      close();
-      if (onGraphPlayer) onGraphPlayer(id, name);
+  // Chooser modal (owner decision 46) — mounted as a sibling of this popup at
+  // document.body, same "escape the popup's own scroll container" precedent
+  // as playerFilters.js's drawer (see that module's own comment); its CSS
+  // (.player-graph-chooser*, styles.css) sits at a higher z-index than
+  // .player-popup so it visually sits OVER it, same idiom as
+  // .player-filters-drawer already does.
+  const chooserHost = document.createElement("div");
+  document.body.appendChild(chooserHost);
+  const chooser = mountPlayerGraphChooser(chooserHost, {
+    onConfirm: ({ chartType, metricKey, player }) => {
+      close(); // the player popup itself — task 2's "close the chooser and the player popup"
+      switchToGraphsView();
+      enterWithChoice({ chartType, metricKey, player });
     },
   });
 
+  // "Graph this player" (owner decision 46, superseding task 4/decision 43):
+  // playerPage.js has no notion of "popup" or "chooser" — it just reports
+  // which player was clicked. Opens the chooser OVER this still-open popup;
+  // the popup itself only closes on the chooser's Confirm (see onConfirm
+  // above) — Cancel/Escape on the chooser leaves the popup exactly as it was
+  // (task 3).
+  const page = mountPlayerPage(els.body, store, {
+    onGraphPlayer: (id, name) => {
+      chooser.open({ id, name });
+    },
+  });
+
+  /**
+   * Flip Stats->Graphs the same way main.js's own applyView()/showGraphView()
+   * do — duplicated here (not imported: those are main.js-private and this
+   * task's brief doesn't touch main.js) rather than left undone, since
+   * store.set() alone doesn't move these `hidden` attributes (main.js only
+   * does that from its own explicit call sites, never reactively). Every
+   * OTHER piece of chrome (scope sentence, pills, drawer badge) already
+   * reacts to store.set({view}) on its own via main.js's store.subscribe(),
+   * so only the imperative bits below need replicating.
+   */
+  function switchToGraphsView() {
+    store.set({ view: "graph" });
+    const tableArea = document.getElementById("table-area");
+    const searchSection = document.getElementById("player-search-section");
+    const graphArea = document.getElementById("graph-area");
+    if (tableArea) tableArea.hidden = true;
+    if (searchSection) searchSection.hidden = true;
+    if (graphArea) graphArea.hidden = false;
+    document.querySelectorAll('[data-role="view"] .segmented__btn').forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.value === "graph");
+    });
+  }
+
   function open(id, name) {
+    chooser.close(); // defensive: a stale chooser shouldn't survive a reopen for a different player
     page.showPlayer(id, name);
     els.popup.hidden = false;
     els.body.scrollTop = 0;
@@ -50,12 +107,17 @@ export function mountPlayerPopup(hostEl, store, { onGraphPlayer } = {}) {
   }
 
   function close() {
+    chooser.close(); // defensive: never leave the chooser orphaned over a closed popup
     els.popup.hidden = true;
   }
 
   els.closeBtn.addEventListener("click", close);
   els.backdrop.addEventListener("click", close);
   document.addEventListener("keydown", (e) => {
+    // The chooser (mounted above, so its OWN Escape listener is registered
+    // first) already stopImmediatePropagation()s and closes itself when it's
+    // open — this only fires at all when the chooser was closed already, in
+    // which case Escape does what it always did: close the popup.
     if (e.key === "Escape" && !els.popup.hidden) close();
   });
 

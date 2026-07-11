@@ -200,6 +200,16 @@ function donutEligibleMetrics(discipline, formats) {
   return eligibleMetrics(discipline, formats).filter((m) => m.additive === true);
 }
 
+// Owner decision 46 ("Graph this player" chooser, src/playerGraphChooser.js):
+// mountGraph() is only ever called once per page load (one Graphs panel), so
+// a module-level pointer to the live instance lets OTHER modules — the
+// chooser, mounted from src/playerPopup.js, which has no reference to the
+// controller object main.js holds — reach the two read/write entry points
+// below (evaluateChartTypesForPlayer/enterWithChoice) as plain imports,
+// without main.js needing to thread anything new through. Set at the bottom
+// of mountGraph(), read by the two exported wrappers just below it.
+let currentInstance = null;
+
 export function mountGraph(container, store, { hasStatsResults = () => false } = {}) {
   container.innerHTML = `
     <div class="graph-builder">
@@ -1240,11 +1250,17 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
    * over-supply of candidates never disables a type here, it just leaves
    * some unchecked (players.js's cap-clamp), unlike v1 where exceeding a
    * metric-count max was a hard disqualifier. */
-  function evaluateTypeStatus(typeKey, state) {
+  function evaluateTypeStatus(typeKey, state, { candidateCountOverride, poolReasonOverride } = {}) {
     // decision 46f: an empty pool (never searched Stats, or a real search
     // that matched nobody) blocks EVERY type the same honest way, before any
     // type-specific check runs — see poolStatusReason()'s doc comment.
-    const poolReason = poolStatusReason();
+    // `poolReasonOverride`/`candidateCountOverride` (owner decision 46, the
+    // "Graph this player" chooser) let a caller ask "would this type work if
+    // `player` were already in the pool?" without touching the real
+    // selection — see evaluateChartTypesForPlayerImpl() below, the chooser's
+    // one reuse point for this exact predicate (never a second copy of these
+    // reasons/strings).
+    const poolReason = poolReasonOverride !== undefined ? poolReasonOverride : poolStatusReason();
     if (poolReason) return { ok: false, reason: poolReason };
     if (typeKey === "dumbbell" && !dumbbellAvailable(state)) {
       return { ok: false, reason: dumbbellUnavailableReason(state) };
@@ -1279,7 +1295,7 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
       return { ok: false, reason: "Not enough eligible metrics for this scope" };
     }
     const capDef = CHART_CAPS[typeKey];
-    const candidateCount = selection.candidateCount();
+    const candidateCount = candidateCountOverride !== undefined ? candidateCountOverride : selection.candidateCount();
     if (candidateCount < capDef.min) {
       return { ok: false, reason: `Add at least ${capDef.min} player${capDef.min === 1 ? "" : "s"}` };
     }
@@ -2184,6 +2200,160 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
     // which is exactly what the task brief asks for ("adds ... if absent").
   }
 
+  // ── "Graph this player" chooser (owner decision 46) ─────────────────────────
+  // src/playerGraphChooser.js is a small modal over the player popup that asks
+  // chart type + metric BEFORE jumping to Graphs, so the user never lands on
+  // the bare "Pick a chart type to get started" stage (decision 46f) after
+  // clicking "Graph this player". Two entry points below are this module's
+  // only surface for that chooser: one read-only (what can this player be
+  // charted as, right now?) and one write (make it so). Neither duplicates
+  // any eligibility reason or metric list — both reuse exactly what
+  // evaluateTypeStatus()/renderMetricControls() already derive.
+
+  /** The metric field the chooser should show for `typeKey`, mirroring
+   * renderMetricControls()'s own per-type shape WITHOUT mutating any of this
+   * module's live metric-key variables (the chooser is a preview — nothing is
+   * committed until Confirm, see enterWithChoiceImpl()). Multi-metric types
+   * (radar/phases/benchmark) need no single pick — renderMetricControls()
+   * already fills in their own sensible defaults (group/family/anchor+keys)
+   * once enterWithChoiceImpl() sets chartType, so the chooser just says so. */
+  function metricFieldFor(typeKey, state) {
+    const { discipline, formats } = state;
+    const single = (metrics) => ({
+      kind: "single",
+      options: metrics.map((m) => ({ key: m.key, label: m.label })),
+      defaultKey: metrics[0]?.key ?? null,
+    });
+    switch (typeKey) {
+      case "bar":
+        return single(eligibleMetrics(discipline, formats));
+      case "donut":
+        return single(donutEligibleMetrics(discipline, formats));
+      case "slope":
+        return single(eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent"));
+      case "byyear":
+        return single(eligibleMetrics(discipline, formats).filter((m) => timeseriesSupported(m)));
+      case "dumbbell": {
+        if (!dumbbellAvailable(state)) return { kind: "none", note: dumbbellUnavailableReason(state) };
+        return single(dumbbellEligibleMetrics(formats));
+      }
+      case "scatter": {
+        const metrics = eligibleMetrics(discipline, formats);
+        const options = metrics.map((m) => ({ key: m.key, label: m.label }));
+        return { kind: "xy", xOptions: options, yOptions: options, defaultX: metrics[0]?.key ?? null, defaultY: (metrics[1] || metrics[0])?.key ?? null };
+      }
+      case "radar":
+        return { kind: "none", note: "Radar compares a whole metric group at once — no single metric to pick." };
+      case "phases":
+        return { kind: "none", note: "Phases compares a whole metric family at once — no single metric to pick." };
+      case "benchmark":
+        return { kind: "none", note: "Benchmark compares several metrics against the field at once — no single metric to pick." };
+      default:
+        return { kind: "none", note: "" };
+    }
+  }
+
+  /** ok/reason for every chart type AS IF `player` were already added to the
+   * candidate pool (it isn't yet — the chooser is still deciding) — reuses
+   * evaluateTypeStatus() exactly, just with the pool-emptiness gate forced
+   * open (this player is a real, guaranteed candidate; "run a search on
+   * Stats first" would be dishonest here) and the min-player floor counted
+   * against pool-size-plus-this-one. */
+  function evaluateChartTypesForPlayerImpl(player) {
+    const state = store.get();
+    const candidateCount = selection.has(player.id) ? selection.candidateCount() : selection.candidateCount() + 1;
+    return CHART_TYPES.map((t) => {
+      const status = evaluateTypeStatus(t.key, state, { candidateCountOverride: candidateCount, poolReasonOverride: null });
+      return { key: t.key, label: t.label, ok: status.ok, reason: status.reason, metricField: metricFieldFor(t.key, state) };
+    });
+  }
+
+  /** Ensure `player` is both a CANDIDATE and CHECKED under the currently
+   * active chart type's cap — an explicit chooser confirm is a deliberate,
+   * single-player pick, so (unlike addPlayerFromOutside(), which leaves an
+   * over-cap add unticked with a note) it must actually land on the chart.
+   * If the cap is already full, the LAST checked player (candidate order —
+   * see players.js's get()) is unticked to make room. Returns true iff a
+   * replacement happened, so the caller can say so once. */
+  function ensureCheckedWithReplacement(player) {
+    if (!selection.has(player.id)) {
+      const result = selection.addCandidate(player, { autoCheck: true });
+      if (result.checked) return false; // room existed under the cap already
+    } else if (selection.isChecked(player.id)) {
+      return false; // already on the chart — nothing to do
+    }
+    let replaced = false;
+    if (selection.checkedCount() >= activeMaxCap()) {
+      const checkedNow = selection.get();
+      const last = checkedNow[checkedNow.length - 1];
+      if (last) {
+        selection.toggleChecked(last.id);
+        replaced = true;
+      }
+    }
+    selection.toggleChecked(player.id);
+    return replaced;
+  }
+
+  /**
+   * The chooser's Confirm entry (owner decision 46) — the ONE programmatic
+   * path into an explicit type+metric+player choice made OUTSIDE the Graph
+   * Builder's own controls. Goes through the exact same state/selection
+   * calls a manual pick would (chartType assignment, selection.addCandidate/
+   * toggleChecked, the per-type metric variable), so everything downstream —
+   * persistence across tab switches, cap notes, roster rendering — behaves
+   * identically to a user who'd clicked through the controls by hand.
+   *
+   * Never reseeds/wipes the existing candidate pool itself (`player` is
+   * ADDED to whatever's already there) — the one `await seedSelection()`
+   * below is the SAME no-op-if-already-seeded call onShow() already makes
+   * (see its own doc comment); it only actually queries the first time
+   * Graphs is shown this session (or after a scope change), exactly as it
+   * would have anyway had the user opened Graphs first. This must run BEFORE
+   * chartType/the player are touched: seedSelection() replaces the whole
+   * candidate pool wholesale when it does run, which would silently wipe
+   * this player right back out if we'd already added them.
+   *
+   * `metricKey` is a single metric key for every type except scatter (which
+   * needs both an X and a Y — pass `{ x, y }`) and radar/phases/benchmark
+   * (which need none — see metricFieldFor()'s "none" kind); omitted/invalid
+   * values are simply left for renderMetricControls()'s own defaulting.
+   */
+  async function enterWithChoiceImpl({ chartType: newType, metricKey, player } = {}) {
+    if (!newType || !player) return;
+    await seedSelection();
+
+    chartType = newType;
+    clearCapNote();
+    selection.clampToCap(); // shrink an oversized checked set inherited from a roomier previous chart type
+
+    const replaced = ensureCheckedWithReplacement(player);
+
+    if (newType === "scatter") {
+      if (metricKey && typeof metricKey === "object") {
+        if (metricKey.x) scatterXKey = metricKey.x;
+        if (metricKey.y) scatterYKey = metricKey.y;
+      }
+    } else if (typeof metricKey === "string" && metricKey) {
+      if (newType === "bar") barMetricKey = metricKey;
+      else if (newType === "donut") donutMetricKey = metricKey;
+      else if (newType === "slope") slopeMetricKey = metricKey;
+      else if (newType === "byyear") byYearMetricKey = metricKey;
+      else if (newType === "dumbbell") dumbbellMetricKey = metricKey;
+      // radar/phases/benchmark: no single metric — renderMetricControls()
+      // below fills in the usual defaults (group/family/anchor+keys) itself.
+    }
+
+    syncChartTypeButtons();
+    syncBarStyleVisibility();
+    renderMetricControls();
+    renderPlayerList();
+    if (replaced) {
+      showCapNote(`${capSubjectLabel()} is capped at ${activeMaxCap()} players — ${player.name} replaced the last one on the chart.`);
+    }
+    scheduleRender({ paramsChanged: true });
+  }
+
   /** Called whenever the shared filter scope changes (discipline/format/filters). */
   function onScopeChanged() {
     // decision 46f: a scope change never silently swaps the chart type away
@@ -2202,5 +2372,28 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
     seedSelection().then(() => scheduleRender({ paramsChanged: true }));
   }
 
-  return { onShow, onScopeChanged, enterFromBridge, addPlayerFromOutside };
+  const controller = {
+    onShow,
+    onScopeChanged,
+    enterFromBridge,
+    addPlayerFromOutside,
+    evaluateChartTypesForPlayer: evaluateChartTypesForPlayerImpl,
+    enterWithChoice: enterWithChoiceImpl,
+  };
+  currentInstance = controller;
+  return controller;
+}
+
+/** Read-only: the "Graph this player" chooser's per-type ok/reason + metric
+ * field for `{id, name}`, as if it were already in the candidate pool. See
+ * evaluateChartTypesForPlayerImpl() above for what this actually reuses. */
+export function evaluateChartTypesForPlayer(player) {
+  return currentInstance ? currentInstance.evaluateChartTypesForPlayer(player) : [];
+}
+
+/** Write: the chooser's Confirm action — `{ chartType, metricKey, player }`.
+ * See enterWithChoiceImpl() above. A no-op before mountGraph() has ever run
+ * (shouldn't happen — the chooser only exists once the app has booted). */
+export function enterWithChoice(opts) {
+  return currentInstance ? currentInstance.enterWithChoice(opts) : undefined;
 }

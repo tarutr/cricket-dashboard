@@ -53,11 +53,17 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
 
   // Opposition + batting-position filters (D4 Piece 3) apply here too — the
   // card's scope line describes them, so the charted numbers must honor them.
+  // includePositions only for batting: the striker-position filter is
+  // matchup-only (positionsFilterActive), and this fetch always queries the
+  // PLAIN view — plain bowling_innings has no batting_position column, so
+  // emitting the clause there is a binder error (hit via the chooser in
+  // matchup-bowling mode with a position filter). Plain batting keeps it: the
+  // column exists and means the batter's own position.
   const whereClauses = buildScopeClauses(state, {
     includeTeams: true,
     teamColumn: teamCol,
     oppositionColumn: discipline === "batting" ? "bowling_team" : "batting_team",
-    includePositions: true,
+    includePositions: discipline === "batting",
   });
   whereClauses.push(`${idCol} IN (${playerIds.map((id) => `'${esc(id)}'`).join(", ")})`);
 

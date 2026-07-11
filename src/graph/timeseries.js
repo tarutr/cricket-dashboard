@@ -222,12 +222,15 @@ export function buildTimeseriesQuery({ discipline, metricKey, playerIds, filters
   const oppCol = OPP_COL[discipline];
 
   // WHERE: identical to table.js buildQuery's innings-view scope (see header).
+  // includePositions only for batting — plain bowling_innings has no
+  // batting_position column and the striker-position filter is matchup-only;
+  // see charts.js's fetchSelectedPlayerMetrics for the full reasoning.
   const whereClauses = buildScopeClauses(state, {
     includeTeams: true,
     teamColumn: teamCol,
     idColumn: idCol,
     oppositionColumn: oppCol,
-    includePositions: true,
+    includePositions: discipline === "batting",
   });
 
   // Restrict to the explicitly-selected roster (the graph's player list). Empty
