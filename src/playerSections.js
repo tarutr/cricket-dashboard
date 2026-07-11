@@ -197,16 +197,34 @@ export function positionsTableHTML(rows) {
   return miniTableHTML(["Pos", "Inns", "Runs", "Avg", "SR"], body);
 }
 
-/** "Vs opposition" is international-only (decision 20); `rows` is null when not fetched. */
-export function oppositionSectionHTML(state, discipline, rows) {
+/** Owner decision 46 (column rebalance): the "Vs opposition" table used to
+ * run on for every opponent ever faced, making the right column of the
+ * popup's two-col grid far longer than the left column (position table +
+ * wicket-type bars + progression cards). Trimmed here, in JS, over rows the
+ * query already fetched — no SQL change. Capped BY INNINGS (not by the
+ * table's own runs/wickets sort) since "opponents faced most often" is the
+ * honest criterion for "top", independent of which metric the columns show.
+ * N=8 balances the right column against the left column's ~3 sections at the
+ * popup's ~920px desktop width (owner's "around 8-10" range). */
+export const OPPOSITION_CAP = 8;
+
+/** "Vs opposition" is international-only (decision 20); `rows` is null when
+ * not fetched. `cap`, when given, trims to the top `cap` opponents by
+ * innings and appends an honest "Top N of M" note (SPEC §8.4) — omitted
+ * entirely when the fetched rows already fit within the cap. */
+export function oppositionSectionHTML(state, discipline, rows, cap = null) {
   if (state.teamType !== "international") {
     return `<p class="player-page__note player-page__note--muted">Opposition splits are international-only for now.</p>`;
   }
   const keys = discipline === "batting" ? ["innings", "runs", "average", "strike_rate"] : ["innings", "wickets", "average", "economy"];
   const headers = discipline === "batting" ? ["Team", "Inns", "Runs", "Avg", "SR"] : ["Team", "Inns", "Wkts", "Avg", "Econ"];
   const metrics = keys.map((k) => getMetric(k, discipline));
-  const body = (rows || []).map((r) => [escHtml(r.team), ...metrics.map((m) => escHtml(formatValue(m, r[m.key])))]);
-  return miniTableHTML(headers, body);
+  const all = rows || [];
+  const isTrimmed = Boolean(cap) && all.length > cap;
+  const shown = isTrimmed ? [...all].sort((a, b) => (Number(b.innings) || 0) - (Number(a.innings) || 0)).slice(0, cap) : all;
+  const body = shown.map((r) => [escHtml(r.team), ...metrics.map((m) => escHtml(formatValue(m, r[m.key])))]);
+  const capNoteHTML = isTrimmed ? `<p class="player-page__footnote">Top ${cap} of ${all.length} opponents by innings</p>` : "";
+  return `${miniTableHTML(headers, body)}${capNoteHTML}`;
 }
 
 /** A mini-table with its own small label above it, for grouping two tables under one section. */
@@ -419,30 +437,54 @@ export function battingGridHTML(state, coreNorm, extra) {
     ]);
   }
 
-  const twoColA = `<div class="player-page__two-col">
-    ${sectionOrUnsupported("By batting position", extra.positions, positionsTableHTML)}
-    ${sectionOrUnsupported("Vs opposition", extra.opposition, (rows) => oppositionSectionHTML(state, "batting", rows))}
-  </div>`;
-
+  // "Wicket Type" (renamed from "How out", owner decision 46). Under a Vs
+  // bucket this is the ONLY per-section content besides the tiles above that
+  // can still split by Vs (it switches source to matchup_batting — see
+  // fetchBattingCoreVs) — its title adopts the vs label too, so the honesty
+  // the bars' own footnote already states ("Bowler-credited dismissals vs X")
+  // is visible in the section heading, not just the caption underneath.
+  const wicketTypeTitle = isVs ? `Wicket Type — bowler-credited vs ${coreNorm.vs}` : "Wicket Type";
   const howOutBody = isVs ? howOutVsHTML(coreNorm.howout, coreNorm.vs) : howOutHTML(coreNorm.howout);
-  const progression = coreNorm.progression;
-  const progressionBody =
-    progression && Array.isArray(progression.unsupported)
-      ? unsupportedNoteHTML("Scoring by balls faced", progression.unsupported)
-      : statCardsHTML([
-          ["SR, balls 1–10", getMetric("sr_first10", "batting"), progression.sr_first10],
-          ["SR, balls 11–20", getMetric("sr_11_20", "batting"), progression.sr_11_20],
-          ["SR, balls 21+", getMetric("sr_21plus", "batting"), progression.sr_21plus],
-        ]);
 
-  const twoColB = `<div class="player-page__two-col">
-    ${sectionHTML("How out", howOutBody)}
-    ${sectionHTML("Scoring by balls faced", progressionBody)}
-  </div>`;
+  let bodyHTML;
+  if (isVs) {
+    // Position / opposition / progression can't split by Vs at all (see
+    // PLAYER_SECTION_SUPPORT — all three are `false` for the `vs` dim) —
+    // owner decision 46 hides them outright instead of greying them out with
+    // "Can't split X by Vs here", so only what's actually splittable renders:
+    // the tiles above, and Wicket Type here. No two-col grid, no dead gap
+    // where the hidden sections used to be.
+    bodyHTML = sectionHTML(wicketTypeTitle, howOutBody);
+  } else {
+    // "Progressive Scoring" (renamed from "Scoring by balls faced", decision
+    // 46). Only reached when !isVs, where coreNorm.progression is always the
+    // plain core row (never the `{unsupported}` shape — that only exists on
+    // the isVs branch of fetchBattingCoreVs, handled above instead) — no
+    // refusal check needed here.
+    const progressionBody = statCardsHTML([
+      ["SR, balls 1–10", getMetric("sr_first10", "batting"), coreNorm.progression.sr_first10],
+      ["SR, balls 11–20", getMetric("sr_11_20", "batting"), coreNorm.progression.sr_11_20],
+      ["SR, balls 21+", getMetric("sr_21plus", "batting"), coreNorm.progression.sr_21plus],
+    ]);
+    // Column rebalance (decision 46): LEFT = position table, Wicket Type,
+    // Progressive Scoring stacked top-to-bottom; RIGHT = Vs opposition alone
+    // (capped — see OPPOSITION_CAP) so it doesn't run past the left column's
+    // length. Matchups (below, outside this grid) is unchanged.
+    const leftColHTML = `${sectionOrUnsupported("By batting position", extra.positions, positionsTableHTML)}
+      ${sectionHTML(wicketTypeTitle, howOutBody)}
+      ${sectionHTML("Progressive Scoring", progressionBody)}`;
+    const rightColHTML = sectionOrUnsupported("Vs opposition", extra.opposition, (rows) =>
+      oppositionSectionHTML(state, "batting", rows, OPPOSITION_CAP)
+    );
+    bodyHTML = `<div class="player-page__two-col">
+      <div class="player-page__col">${leftColHTML}</div>
+      <div class="player-page__col">${rightColHTML}</div>
+    </div>`;
+  }
 
   const matchupsHTML = sectionOrUnsupported("Matchups", extra.matchups, battingMatchupsHTML);
 
-  return `${heroCardsHTML}${coverageHTML}${twoColA}${twoColB}${matchupsHTML}`;
+  return `${heroCardsHTML}${coverageHTML}${bodyHTML}${matchupsHTML}`;
 }
 
 /** Bowling's tight grid has one fewer row than batting's — bowling has no
@@ -464,9 +506,16 @@ export function bowlingGridHTML(state, core, extra) {
     ["SR", getMetric("strike_rate", "bowling"), core.strike_rate],
     ["BBI", getMetric("best", "bowling"), core.best],
   ]);
+  // Same cap as batting's Vs-opposition table (decision 46) — same helper,
+  // same reason (a long opponent list shouldn't stretch this column past its
+  // neighbour); bowling's own column only ever holds the one section, so
+  // there's no length mismatch to balance, but the honest "Top N of M" note
+  // and clipping fix apply identically here.
   const twoColA = `<div class="player-page__two-col">
-    ${sectionHTML("Wicket types", wicketTypesHTML(core))}
-    ${sectionOrUnsupported("Vs opposition", extra.opposition, (rows) => oppositionSectionHTML(state, "bowling", rows))}
+    <div class="player-page__col">${sectionHTML("Wicket types", wicketTypesHTML(core))}</div>
+    <div class="player-page__col">${sectionOrUnsupported("Vs opposition", extra.opposition, (rows) =>
+      oppositionSectionHTML(state, "bowling", rows, OPPOSITION_CAP)
+    )}</div>
   </div>`;
   const matchupsHTML = sectionOrUnsupported("Matchups", extra.matchups, bowlingMatchupsHTML);
   return `${heroCardsHTML}${twoColA}${matchupsHTML}`;

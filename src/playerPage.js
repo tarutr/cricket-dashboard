@@ -405,10 +405,22 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
       if (!coreNorm?.summary || Number(coreNorm.summary.innings) === 0) {
         return { core: coreNorm, positions: [], opposition: null, matchups: { coverage: null, coarse: [], fine: [] } };
       }
+      // Owner decision 46: while a Vs bucket is active, playerSections.js's
+      // battingGridHTML hides the position and opposition sections outright
+      // (neither can split by Vs — PLAYER_SECTION_SUPPORT says so for both),
+      // so skip fetching data nobody will see. Matchups is DIFFERENT: it
+      // can't honor `vs` either (it IS the by-bowling-type breakdown; a
+      // section can't pre-filter to the one bucket it exists to break out),
+      // but it stays VISIBLE under Vs — so strip `vs` from its own overlay
+      // rather than let it come back refused. This is a no-op when `vs`
+      // isn't set (same object reference), so the byte-identical fast path
+      // for an empty overlay is untouched.
+      const isVs = coreNorm.source === "matchup_batting";
+      const matchupsOverlay = ov && ov.vs ? { ...ov, vs: null } : ov;
       const [positions, opposition, matchups] = await Promise.all([
-        fetchBattingPositions(playerId, state, ov),
-        state.teamType === "international" ? fetchBattingOpposition(playerId, state, ov) : Promise.resolve(null),
-        fetchBattingMatchups(playerId, state, ov),
+        isVs ? Promise.resolve([]) : fetchBattingPositions(playerId, state, ov),
+        isVs || state.teamType !== "international" ? Promise.resolve(null) : fetchBattingOpposition(playerId, state, ov),
+        fetchBattingMatchups(playerId, state, matchupsOverlay),
       ]);
       return { core: coreNorm, positions, opposition, matchups };
     }

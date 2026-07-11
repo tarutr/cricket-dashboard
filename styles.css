@@ -2498,6 +2498,19 @@ a { color: var(--color-accent); }
   gap: var(--space-5);
 }
 
+/* Column rebalance (owner decision 46): each grid item is now a STACK of
+   sections (left = position table + Wicket Type + Progressive Scoring;
+   right = Vs opposition alone), not one bare .player-page__section per
+   column like before — this wrapper gives each stack the same vertical
+   rhythm (.player-page__discipline-body's own --space-4 gap) between its own
+   sections, independent of the grid gap between the two columns. */
+.player-page__col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
 /* Stat cards */
 
 .player-stat-cards {
@@ -2641,7 +2654,18 @@ a { color: var(--color-accent); }
   font-weight: 600;
 }
 
-@media (max-width: 640px) {
+/* Responsive pass (owner decision 46, task 3): the popup panel is
+   `width: min(920px, 94vw)` (see .player-popup__panel) — at a ~768px tablet
+   viewport that's ~722px, and each grid column would drop to ~300px, well
+   below what the 5-column mini-tables need even after the padding/font
+   tightening below (the .mini-table comment further down documents that fix
+   was sized for a ~418px column at the popup's 920px desktop width). Rather
+   than let a narrow-but-not-mobile column clip again, collapse to a single
+   full-width column well before that point — 900px viewport keeps ordinary
+   desktop widths (panel pinned at 920px past ~979px viewport) on two
+   columns, while tablet (~768px) and mobile (~375px, already full-screen
+   below 640px) both get one column with the full panel width to work with. */
+@media (max-width: 900px) {
   .player-page__two-col {
     grid-template-columns: 1fr;
   }
