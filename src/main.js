@@ -26,7 +26,6 @@ const disciplineToggleEl = document.querySelector('[data-role="discipline"]');
 const viewToggleEl = document.querySelector('[data-role="view"]');
 const filterBarEl = document.getElementById("filter-bar");
 const pillsBarEl = document.getElementById("pills-bar");
-const drawerHostEl = document.getElementById("filter-drawer-host");
 const playerSearchSectionEl = document.getElementById("player-search-section");
 const playerSearchInputEl = document.getElementById("player-search-input");
 const playerSearchResultsEl = document.getElementById("player-search-results");
@@ -83,6 +82,42 @@ let graphController;
 let drawerController;
 let pillsController;
 let playerPopupController;
+let filtersPopup = null; // { open, close, isOpen } — the Filters popup controller (F1a), assigned in boot()
+let maxMonth = null; // manifest max match month "YYYY-MM" — hoisted so clearAll() can rebuild the initial state
+let minMonth = null; // manifest min match month "YYYY-MM"
+
+/** Open the Filters popup (F1a). Exported for the table's empty-state prompt
+ * button (via onOpenFilters) and F2's toolbar "Filters" button. No-op until
+ * boot() wires the popup controller. */
+export function openFiltersPopup() {
+  if (filtersPopup) filtersPopup.open();
+}
+
+/** Reset everything (F1a step 5): wipe the table back to the initial "Open
+ * filters" prompt, reset ALL scope/filter controls to createInitialState
+ * defaults, and clear pinned players. F2 wires the red toolbar button here. */
+export function clearAll() {
+  if (!store) return;
+  const fresh = createInitialState(maxMonth);
+  store.set(fresh); // full replace — createInitialState returns every key
+  lastAppliedDefaults.batting = [...fresh.columns.batting];
+  lastAppliedDefaults.bowling = [...fresh.columns.bowling];
+  // Re-render every control from the fresh defaults (the store.subscribe hook
+  // refreshes pills/subtitle/badge; the controls need an explicit re-render).
+  updateDisciplineToggle();
+  updateViewToggle();
+  if (filterController) {
+    filterController.render();
+    filterController.setDateBounds(minMonth, maxMonth); // re-selects the default date options
+  }
+  if (drawerController) drawerController.sync();
+  if (pillsController) pillsController.render();
+  updateScopeSentence();
+  updateDrawerBadge();
+  // Empty the table back to the initial prompt, in the table view.
+  showTableView();
+  tableController.showPrompt();
+}
 
 // Tracks the columns array we last auto-applied as a "default preset" per
 // discipline, so we can tell whether the user has since customized columns
@@ -168,25 +203,25 @@ function applyView() {
   // Decision 44d: a plain view switch must never wipe an already-computed
   // result set. enterView() restores the cached rows instantly if the
   // filters/scope haven't moved on since that query, and falls back to the
-  // blank prompt (today's behavior) otherwise. Filter CHANGES still revert to
-  // the blank prompt immediately via onFiltersChanged() (see below), which
-  // calls tableController.showPrompt() directly whenever the table view is
-  // active — the no-automated-search rule is unchanged; only bare tab
-  // switches / the graph's "Back to your table" bridge benefit here.
+  // blank prompt otherwise. Under the F1a interaction model a plain filter
+  // change no longer blanks the table at all (onFiltersChanged just refreshes
+  // pills/subtitle); the table re-queries only from the popup's "Search". This
+  // enterView() cache path just makes bare tab switches / the graph's "Back to
+  // your table" bridge instant.
   tableController.enterView();
   return Promise.resolve();
 }
 
 /**
  * `requery` (task 3b, owner decision 46): pinning/unpinning a player is
- * explicitly NOT a "no automated search" filter change — the owner's ruling
- * is "removing one un-pins and re-queries" (and, symmetrically, adding one
- * shows immediately, same as the omnisearch "Filter the table" action
- * already does). Every other caller of this function is a genuine filter
- * change and keeps the default (revert to the blank prompt / wait for
- * "Show results"). Returns the table branch's promise (tableController.load()
- * or a resolved null) so a pin-add can chain off its resolved
- * {rowCount, missingPinnedIds} to detect a pin with no innings in scope.
+ * explicitly NOT a plain filter change — the owner's ruling is "removing one
+ * un-pins and re-queries" (and, symmetrically, adding one shows immediately,
+ * same as the omnisearch "Filter the table" action already does). Every other
+ * caller of this function is a plain filter change and keeps the default: the
+ * table PERSISTS as-is (F1a — no more revert-to-blank-prompt), re-querying only
+ * on the popup's "Search". Returns the table branch's promise
+ * (tableController.load() or a resolved null) so a pin-add can chain off its
+ * resolved {rowCount, missingPinnedIds} to detect a pin with no innings in scope.
  */
 function onFiltersChanged({ requery = false } = {}) {
   // Drop columns/conditions orphaned by the new scope BEFORE anything renders,
@@ -199,28 +234,24 @@ function onFiltersChanged({ requery = false } = {}) {
   if (s.splitBy && !splitAllowed(s, s.splitBy)) {
     store.set({ splitBy: null });
   }
-  // Only sync the drawer while it's actually visible (Batch 3 fix 2) — syncing
-  // a hidden drawer is wasted work, and (before this fix) was the path by
-  // which typing in the advanced panel's value inputs or the main search box
-  // triggered a full advanced-panel innerHTML rebuild on every keystroke via
-  // the store.subscribe hook below, killing focus/cursor. open() still calls
-  // sync() directly, so the drawer is always current the moment it's shown.
-  if (drawerController && drawerController.isOpen()) drawerController.sync();
+  // Sync the popup's filter content only while the popup is VISIBLE (Batch 3
+  // fix 2): syncing hidden content is wasted work, and syncing while open used
+  // to rebuild the advanced panel's innerHTML on each keystroke, killing focus.
+  // onShow() syncs directly on open.
+  if (drawerController && filtersPopup && filtersPopup.isOpen()) drawerController.sync();
   if (pillsController) pillsController.render();
   updateScopeSentence();
   updateDrawerBadge();
-  // Only the visible view re-queries; the other refreshes when switched to.
-  // Table view: filter changes revert to the blank prompt (no automated search);
-  // the query runs on "Show results" / the drawer's "Apply and show results" —
-  // UNLESS `requery` says otherwise (pin add/remove only, see above).
-  // (The player popup blocks the filters while open; it refetches on reopen if
-  // the scope moved, via its own cache key.)
+  // NEW INTERACTION MODEL (F1a): touching a control NEVER blanks the table — in
+  // table view the table persists as-is. The query re-runs ONLY via the popup's
+  // "Search" (runSearch), the pin add/remove `requery` path below, and toolbar
+  // presentation controls (which bypass this function). Graph view still
+  // follows scope changes live.
   if (store.get().view === "graph") {
     graphController.onScopeChanged();
     return Promise.resolve(null);
   }
   if (requery) return tableController.load();
-  tableController.showPrompt();
   return Promise.resolve(null);
 }
 
@@ -229,12 +260,12 @@ function onFiltersChanged({ requery = false } = {}) {
  * row (B2R wave 2, decision 44): the ONE place typing in the search box still
  * reaches the leaderboard, and only when the user deliberately picks this
  * row/hits Enter with nothing highlighted — never as a side effect of typing.
- * Mirrors exactly what used to happen on every keystroke (store.set the
- * search text, then run onFiltersChanged's honest revert-to-prompt) followed
- * by the same "Show results" trigger the prompt's button and the drawer's
- * Apply both use — tableController.load(). The search box only shows while
- * the table view is visible, so the view guard here just matches the
- * drawer's onApply for consistency.
+ * Sets the search text, refreshes pills/subtitle via onFiltersChanged (which
+ * no longer blanks the table — F1a), then explicitly runs the query with
+ * tableController.load(), the same query trigger the popup's "Search" button
+ * uses. This "Filter the table" row is a deliberate search action, so — unlike
+ * a plain filter change — it DOES re-query. The search box only shows while the
+ * table view is visible, so the view guard here just matches that.
  *
  * `matches` (B2R wave 3, decision 44c): the omnisearch dropdown's own
  * already-fetched player rows for this exact search text (see
@@ -322,8 +353,8 @@ function boot() {
   initDB((progress) => renderInitLoading(progress))
     .then(() => {
       const manifest = getManifest();
-      const maxMonth = manifest?.data?.max_match_date ? manifest.data.max_match_date.slice(0, 7) : null;
-      const minMonth = manifest?.data?.min_match_date ? manifest.data.min_match_date.slice(0, 7) : null;
+      maxMonth = manifest?.data?.max_match_date ? manifest.data.max_match_date.slice(0, 7) : null;
+      minMonth = manifest?.data?.min_match_date ? manifest.data.min_match_date.slice(0, 7) : null;
 
       store = createStore(createInitialState(maxMonth));
       const initial = store.get();
@@ -376,18 +407,79 @@ function boot() {
       );
       filterController.setDateBounds(minMonth, maxMonth);
 
-      drawerController = mountFilterDrawer(drawerHostEl, store, {
-        onChange: () => {
-          onFiltersChanged();
+      // Filters content: Team + Player profile → the popup's Player section
+      // host; opposition + stat conditions → its Advanced Filters section host.
+      // onChange refreshes pills/subtitle (never blanks the table); the popup's
+      // "Search" button below is the one query trigger.
+      drawerController = mountFilterDrawer(
+        {
+          playerHost: document.getElementById("popup-player-host"),
+          advancedHost: document.getElementById("popup-advanced-host"),
         },
-        onApply: () => {
-          drawerController.close();
-          // Apply = the one query trigger (no automated search, decision 25).
-          // The graph already follows scope changes live via onFiltersChanged.
-          if (store.get().view === "table") tableController.load();
-        },
+        store,
+        {
+          onChange: () => {
+            onFiltersChanged();
+          },
+        }
+      );
+
+      // ── Filters popup shell wiring (F1a) ─────────────────────────────────
+      // main.js owns show/hide, ×, backdrop, Escape, the collapsible section
+      // toggles, and the single "Search" query trigger. Closing NEVER queries.
+      const filtersPopupEl = document.getElementById("filters-popup");
+      const fpopPanelEl = filtersPopupEl.querySelector('[data-role="fpop-panel"]');
+      const fpopBackdropEl = filtersPopupEl.querySelector('[data-role="fpop-backdrop"]');
+      const fpopCloseEl = filtersPopupEl.querySelector('[data-role="fpop-close"]');
+      const fpopSearchEl = filtersPopupEl.querySelector('[data-role="fpop-search"]');
+
+      function fpopSetSection(bodyId, expanded) {
+        const body = document.getElementById(bodyId);
+        const toggle = filtersPopupEl.querySelector(
+          `[data-role="fpop-section-toggle"][aria-controls="${bodyId}"]`
+        );
+        if (body) body.hidden = !expanded;
+        if (toggle) toggle.setAttribute("aria-expanded", String(expanded));
+      }
+      filtersPopupEl.querySelectorAll('[data-role="fpop-section-toggle"]').forEach((toggle) => {
+        toggle.addEventListener("click", () => {
+          const bodyId = toggle.getAttribute("aria-controls");
+          const expanded = toggle.getAttribute("aria-expanded") === "true";
+          fpopSetSection(bodyId, !expanded);
+        });
       });
-      drawerController.sync();
+
+      function openPopup() {
+        filtersPopupEl.hidden = false;
+        drawerController.onShow(); // re-derive team mode, snapshot advanced, refresh option lists
+        fpopPanelEl.focus();
+      }
+      function closePopup() {
+        // Closing NEVER runs a query (owner interaction model). onHide() only
+        // re-syncs pills/subtitle for any mid-typed advanced condition.
+        filtersPopupEl.hidden = true;
+        drawerController.onHide();
+      }
+      function runSearch() {
+        // The ONE query trigger from the popup: validate the advanced
+        // conditions, then close and (in table view) load. Graphs already
+        // follow scope changes live via onFiltersChanged → onScopeChanged.
+        if (!drawerController.validate()) {
+          fpopSetSection("fpop-body-advanced", true); // surface the inline error
+          return;
+        }
+        closePopup();
+        if (store.get().view === "table") tableController.load();
+      }
+
+      filtersPopup = { open: openPopup, close: closePopup, isOpen: () => !filtersPopupEl.hidden };
+
+      fpopCloseEl.addEventListener("click", closePopup);
+      fpopBackdropEl.addEventListener("click", closePopup);
+      fpopSearchEl.addEventListener("click", runSearch);
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && filtersPopup.isOpen()) closePopup();
+      });
 
       pillsController = mountPills(
         pillsBarEl,
@@ -397,14 +489,11 @@ function boot() {
         },
         () => {
           // Pin pills only (task 3b): "removing one un-pins and re-queries",
-          // not the standard revert-to-blank-prompt filter-change path.
+          // not the standard persist-the-table filter-change path.
           onFiltersChanged({ requery: true });
         }
       );
       pillsController.render();
-
-      const openDrawerBtn = filterBarEl.querySelector('[data-role="open-drawer"]');
-      if (openDrawerBtn) openDrawerBtn.addEventListener("click", () => drawerController.open());
 
       // Presentation controls in the table toolbar (presets, Group rows, Vs)
       // set state and reload directly without onFiltersChanged — keep the
@@ -415,25 +504,15 @@ function boot() {
         updateScopeSentence();
         if (pillsController) pillsController.render();
         updateDrawerBadge();
-        // The drawer too: toolbar presentation controls (Vs, Group rows,
-        // presets) bypass onFiltersChanged, but since D4-R4 the drawer's
-        // position-chip enablement and the condition builder's metric
-        // vocabulary DEPEND on the Vs selection. drawer.sync() is cheap and
-        // scope-key-cached internally, so calling it on every state change is
-        // safe (its option-list refetches no-op unless the scope moved) — but
-        // ONLY while the drawer is actually visible (Batch 3 fix 2): every
-        // store.set() fires this subscriber, including every keystroke in
-        // the advanced panel's own value inputs (the main player-search box
-        // no longer store.sets on keystroke at all since B2R wave 2 — typing
-        // there only drives the omnisearch dropdown; store.search only
-        // changes on its explicit "Filter the table" action), so syncing a
-        // HIDDEN drawer
-        // here was pure wasted work — and syncing while the drawer IS open
-        // used to rebuild the advanced panel's innerHTML on every keystroke,
-        // destroying the input the user was typing into. open() calls sync()
-        // directly, so the drawer is still always current the moment it's
-        // shown.
-        if (drawerController && drawerController.isOpen()) drawerController.sync();
+        // The popup's filter content too: toolbar presentation controls (Vs,
+        // Group rows, presets) bypass onFiltersChanged, but the position-chip
+        // enablement and condition-builder vocabulary depend on the Vs
+        // selection. sync() is scope-key-cached (option refetches no-op unless
+        // scope moved), but is gated to the popup being VISIBLE (Batch 3 fix 2):
+        // syncing hidden content is wasted work, and syncing while open used to
+        // rebuild the advanced panel's innerHTML on each keystroke, destroying
+        // the input being typed into. onShow() syncs directly on open.
+        if (drawerController && filtersPopup && filtersPopup.isOpen()) drawerController.sync();
       });
 
       // Two omnisearch mounts (task 3, owner decision 46 search split) — same
@@ -479,6 +558,9 @@ function boot() {
           showGraphView();
           graphController.enterFromBridge({ preferredMetricKey: sortKey });
         },
+        // F1a: the empty-state prompt's "Open filters" button opens the Filters
+        // popup (the query then runs from the popup's "Search").
+        onOpenFilters: () => openFiltersPopup(),
       });
       playerPopupController = mountPlayerPopup(playerPopupHostEl, store, {
         // "Graph this player" (task 4, decision 43): close the popup first

@@ -34,7 +34,7 @@
 // queries nothing — its vocabulary is the fixed 1-12).
 
 import { query } from "./db.js";
-import { buildScopeClauses } from "./filters.js";
+import { buildScopeClauses, wirePortalDropdown } from "./filters.js";
 import { matchupVsActive } from "./state.js";
 import { escHtml, escAttr } from "./html.js";
 
@@ -96,10 +96,9 @@ export function mountBattingPosition(container, store, onChange) {
     els.toggle.textContent = positionsSummaryLabel(store.get().positions);
   }
 
-  function closePanel() {
-    els.panel.hidden = true;
-    els.toggle.setAttribute("aria-expanded", "false");
-  }
+  // Portaled to <body> while open so the popup body's overflow:auto can't clip
+  // it (team_dropdown.png fix — same helper every in-popup dropdown uses).
+  const dropdown = wirePortalDropdown(els.toggle, els.panel);
 
   els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
     cb.addEventListener("change", () => {
@@ -111,24 +110,6 @@ export function mountBattingPosition(container, store, onChange) {
       updateToggleLabel();
       onChange();
     });
-  });
-
-  els.toggle.addEventListener("click", () => {
-    if (els.toggle.disabled) return;
-    const isOpen = !els.panel.hidden;
-    if (isOpen) closePanel();
-    else {
-      els.panel.hidden = false;
-      els.toggle.setAttribute("aria-expanded", "true");
-    }
-  });
-  document.addEventListener("click", (e) => {
-    if (els.panel.hidden) return;
-    if (container.contains(e.target) && e.target.closest('[data-role="positions-dropdown"]')) return;
-    closePanel();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !els.panel.hidden) closePanel();
   });
 
   /** MATCHUP-ONLY now (owner decision 46): this striker/own batting-position
@@ -143,7 +124,7 @@ export function mountBattingPosition(container, store, onChange) {
     const matchupOn = matchupVsActive(state);
     els.group.hidden = !matchupOn;
     if (!matchupOn) {
-      closePanel();
+      dropdown.close();
       return;
     }
     els.group.classList.remove("is-disabled");
@@ -212,10 +193,8 @@ export function mountRegularPositions(container, store, onChange) {
     els.toggle.textContent = positionsSummaryLabel(store.get().regularPositions);
   }
 
-  function closePanel() {
-    els.panel.hidden = true;
-    els.toggle.setAttribute("aria-expanded", "false");
-  }
+  // Portaled to <body> while open (team_dropdown.png fix — shared helper).
+  const dropdown = wirePortalDropdown(els.toggle, els.panel);
 
   els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
     cb.addEventListener("change", () => {
@@ -229,31 +208,13 @@ export function mountRegularPositions(container, store, onChange) {
     });
   });
 
-  els.toggle.addEventListener("click", () => {
-    if (els.toggle.disabled) return;
-    const isOpen = !els.panel.hidden;
-    if (isOpen) closePanel();
-    else {
-      els.panel.hidden = false;
-      els.toggle.setAttribute("aria-expanded", "true");
-    }
-  });
-  document.addEventListener("click", (e) => {
-    if (els.panel.hidden) return;
-    if (container.contains(e.target) && e.target.closest('[data-role="rpos-dropdown"]')) return;
-    closePanel();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !els.panel.hidden) closePanel();
-  });
-
   function sync() {
     const state = store.get();
     // Plain-mode only — matchup mode uses the striker `positions` filter, so
     // hide R. Pos. entirely there (keeps them mutually exclusive and honest).
     els.group.hidden = matchupVsActive(state);
     if (matchupVsActive(state)) {
-      closePanel();
+      dropdown.close();
       return;
     }
     updateToggleLabel();
@@ -291,10 +252,14 @@ async function fetchOppositionOptions(state) {
  * Returns `{ sync }` so drawer.js can re-sync the enabled/greyed state and the
  * option list after every filter change elsewhere in the app.
  */
-export function mountOpposition(container, store, onChange) {
+export function mountOpposition(container, store, onChange, { embedded = false } = {}) {
+  // `embedded` (F1b): rendered as a row INSIDE the Advanced-Filters unified
+  // condition builder, where the row's "Against opposition" type select already
+  // labels it — so the standalone "Against (opposition)" filter-label is
+  // suppressed to avoid a redundant double label.
   container.innerHTML = `
-    <div class="filter-group filter-group--opposition" data-role="opposition-group">
-      <span class="filter-label">Against (opposition)</span>
+    <div class="filter-group filter-group--opposition ${embedded ? "filter-group--opp-embedded" : ""}" data-role="opposition-group">
+      ${embedded ? "" : `<span class="filter-label">Against (opposition)</span>`}
       <div class="team-dropdown" data-role="opp-dropdown">
         <button type="button" class="team-dropdown__toggle" data-role="opp-toggle" aria-haspopup="true" aria-expanded="false">
           Any opposition
@@ -400,42 +365,28 @@ export function mountOpposition(container, store, onChange) {
     if (dropped) onChange();
   }
 
+  // Portaled to <body> while open so the popup body's overflow:auto can't clip
+  // it (team_dropdown.png fix — shared helper). onOpen resets/focuses the
+  // search box, exactly as the old bespoke toggle handler did.
+  const dropdown = wirePortalDropdown(els.toggle, els.panel, {
+    onOpen: () => {
+      els.search.value = "";
+      renderList("");
+      els.search.focus();
+    },
+  });
+
   function sync() {
     const state = store.get();
     const disabled = state.teamType !== "international";
     els.group.classList.toggle("is-disabled", disabled);
     els.note.hidden = !disabled;
     els.toggle.disabled = disabled;
-    if (disabled) {
-      els.panel.hidden = true;
-      els.toggle.setAttribute("aria-expanded", "false");
-    }
+    if (disabled) dropdown.close();
     updateToggleLabel();
     refreshOptions();
   }
 
-  els.toggle.addEventListener("click", () => {
-    if (els.toggle.disabled) return;
-    const isOpen = !els.panel.hidden;
-    els.panel.hidden = isOpen;
-    els.toggle.setAttribute("aria-expanded", String(!isOpen));
-    if (!isOpen) {
-      els.search.value = "";
-      renderList("");
-      els.search.focus();
-    }
-  });
-  document.addEventListener("click", (e) => {
-    if (!container.contains(e.target)) return;
-    if (e.target.closest('[data-role="opp-dropdown"]')) return;
-    els.panel.hidden = true;
-    els.toggle.setAttribute("aria-expanded", "false");
-  });
-  document.addEventListener("click", (e) => {
-    if (container.contains(e.target)) return;
-    els.panel.hidden = true;
-    els.toggle.setAttribute("aria-expanded", "false");
-  });
   els.search.addEventListener("input", () => renderList(els.search.value));
   els.clear.addEventListener("click", () => {
     store.set({ opposition: [] });

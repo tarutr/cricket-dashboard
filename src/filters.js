@@ -193,48 +193,132 @@ function formatSummaryLabel(formats) {
   return `${ordered[0]} +${ordered.length - 1}`;
 }
 
-/** Shared open/close/outside-click/Escape wiring for the two checkbox-panel
- * dropdowns below (Format, Team type). Mirrors the drawer's team-dropdown
- * mechanics (src/drawer.js) — a bordered toggle + absolute panel — but as a
- * self-contained helper since both new dropdowns need the identical behavior
- * and this module owns neither drawer.js nor table.js's popover. */
-function wireDropdown(toggleEl, panelEl) {
-  function close() {
-    panelEl.hidden = true;
-    toggleEl.setAttribute("aria-expanded", "false");
+/**
+ * Portal-aware dropdown wiring (F1b, team_dropdown.png fix). Shared by every
+ * dropdown opened INSIDE the Filters popup body — Format + Team type here,
+ * Current/Historic team (drawer.js), R. Pos. + Batting position + Against
+ * opposition (drawerInnings.js). The popup body scrolls (overflow:auto), which
+ * CLIPS any absolutely-positioned panel opened within it; this helper moves the
+ * panel to <body> with position:fixed while open so it escapes that clipping
+ * ancestor, positions it under `toggleEl`, and repositions on popup-body scroll
+ * + window resize. Mirrors the technique table.js uses for its columns popover
+ * (getBoundingClientRect placement + a CAPTURING scroll listener so it also
+ * catches scrolls on nested scrollable ancestors like the popup body) but is a
+ * self-contained local helper — table.js is untouched.
+ *
+ * Open/close semantics (toggle click, outside-click, Escape, aria-expanded, the
+ * `hidden` attribute) are handled here so every in-popup dropdown behaves
+ * identically. `onOpen`/`onClose` run after the panel is shown/hidden (e.g. the
+ * team dropdowns reset+focus their search box on open). Exported so drawer.js
+ * and drawerInnings.js reuse the one implementation. Returns
+ * `{ open, close, isOpen, reposition }`.
+ */
+export function wirePortalDropdown(toggleEl, panelEl, { onOpen, onClose } = {}) {
+  // Remember the panel's original slot so close() can restore it in place —
+  // then its closed-state CSS (position:absolute inside .dropdown/.team-dropdown)
+  // and any parent-relative logic keep holding while it's not floating.
+  const home = { parent: panelEl.parentNode, next: panelEl.nextSibling };
+  let opened = false;
+
+  function position() {
+    const r = toggleEl.getBoundingClientRect();
+    const margin = 8;
+    panelEl.style.position = "fixed";
+    panelEl.style.zIndex = "1000"; // above the modal panel (.filters-popup is z-index:100)
+    // Override .dropdown__panel's min-width:100% — on <body> that resolves to
+    // the viewport width. Pin it to the toggle's width instead.
+    panelEl.style.minWidth = `${Math.round(r.width)}px`;
+    panelEl.style.top = `${Math.round(r.bottom + 6)}px`;
+    const width = panelEl.offsetWidth || Math.round(r.width);
+    let left = Math.min(r.left, window.innerWidth - width - margin);
+    left = Math.max(margin, left);
+    panelEl.style.left = `${Math.round(left)}px`;
+    panelEl.style.right = "auto";
+    // Never taller than the space below the toggle — a long list scrolls within.
+    const maxH = Math.max(140, Math.round(window.innerHeight - (r.bottom + 6) - margin));
+    panelEl.style.maxHeight = `${maxH}px`;
+    panelEl.style.overflowY = "auto";
   }
+
+  const onScroll = () => {
+    if (opened) position();
+  };
+  const onResize = () => {
+    if (opened) position();
+  };
+
   function open() {
+    if (opened || toggleEl.disabled) return;
+    opened = true;
     panelEl.hidden = false;
+    document.body.appendChild(panelEl);
+    position();
     toggleEl.setAttribute("aria-expanded", "true");
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+    if (onOpen) onOpen();
   }
-  toggleEl.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (panelEl.hidden) open();
-    else close();
+
+  function close() {
+    if (!opened) return;
+    opened = false;
+    window.removeEventListener("scroll", onScroll, true);
+    window.removeEventListener("resize", onResize);
+    panelEl.hidden = true;
+    // Clear the inline portal styles so the CSS layout resumes when restored.
+    for (const p of ["position", "zIndex", "minWidth", "top", "left", "right", "maxHeight", "overflowY"]) {
+      panelEl.style[p] = "";
+    }
+    if (home.next && home.next.parentNode === home.parent) home.parent.insertBefore(panelEl, home.next);
+    else home.parent.appendChild(panelEl);
+    toggleEl.setAttribute("aria-expanded", "false");
+    if (onClose) onClose();
+  }
+
+  toggleEl.addEventListener("click", () => {
+    if (opened) close();
+    else open();
   });
-  document.addEventListener("click", (e) => {
-    if (panelEl.hidden) return;
-    if (panelEl.contains(e.target) || e.target === toggleEl) return;
-    close();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !panelEl.hidden) close();
-  });
+  // Capture-phase so it also fires for clicks on nested scroll ancestors and
+  // runs before the toggle's own listener (which then toggles): on the opening
+  // click `opened` is still false here, so this no-ops and the toggle opens.
+  document.addEventListener(
+    "click",
+    (e) => {
+      if (!opened) return;
+      if (panelEl.contains(e.target) || toggleEl === e.target || toggleEl.contains(e.target)) return;
+      close();
+    },
+    true
+  );
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "Escape" && opened) {
+        close();
+        e.stopPropagation(); // don't also close the Filters popup on the same Escape
+      }
+    },
+    true
+  );
+
+  return { open, close, isOpen: () => opened, reposition: position };
 }
 
 /**
- * Mount the scope strip into `container`. Calls `onChange()` after any state
- * mutation so the caller (main.js) can re-render the table. The "All filters"
- * button itself (open-drawer) is rendered here but left unwired — main.js
- * owns opening src/drawer.js and keeping its count badge in sync.
+ * Mount the "Conditions" controls (Gender, Discipline, Format, Date range,
+ * Team type) into `container` — the Filters popup's Conditions section body
+ * (F1a). Calls `onChange()` after any state mutation so main.js can update the
+ * pills/subtitle/badge (it no longer blanks the table — only the popup's
+ * "Search" button re-queries). Store keys/values are unchanged.
  */
 export function mountFilters(container, store, onChange, onFormatsChanged) {
   container.innerHTML = `
     <div class="filter-group filter-group--gender">
       <span class="filter-label">Gender</span>
       <div class="segmented" data-role="gender" role="group" aria-label="Gender">
-        <button type="button" class="segmented__btn" data-value="female">Women</button>
         <button type="button" class="segmented__btn" data-value="male">Men</button>
+        <button type="button" class="segmented__btn" data-value="female">Women</button>
       </div>
     </div>
 
@@ -280,20 +364,17 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
         </div>
       </div>
     </div>
-
-    <button type="button" class="btn btn--ghost filter-open-btn" data-role="open-drawer" aria-haspopup="dialog">
-      All filters <span class="filter-open-btn__count" data-role="open-drawer-count" hidden></span>
-    </button>
   `;
 
   // Discipline (decision 44b) relocation: the segmented control is static
   // markup in index.html (main.js's module-level
   // `document.querySelector('[data-role="discipline"]')` binds to it at
-  // script-load time, before this function has ever run — see index.html's
-  // comment above the filter-section). We move the EXISTING node into its
-  // visual slot, second, right after Gender, rather than re-rendering it:
-  // moving a DOM node doesn't invalidate main.js's reference or its event
-  // listener, so its wiring keeps working untouched wherever the node lives.
+  // script-load time, before this function has ever run — it now lives in the
+  // Filters popup's Conditions section, as a sibling of this #filter-bar
+  // container). We move the EXISTING node into its visual slot, second, right
+  // after Gender, rather than re-rendering it: moving a DOM node doesn't
+  // invalidate main.js's reference or its event listener, so its wiring keeps
+  // working untouched wherever the node lives.
   const disciplineGroup = container.parentElement?.querySelector(".filter-group--discipline");
   const genderGroup = container.querySelector(".filter-group--gender");
   if (disciplineGroup && genderGroup) {
@@ -360,7 +441,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
       onChange();
     });
   });
-  wireDropdown(els.formatToggle, els.formatPanel);
+  wirePortalDropdown(els.formatToggle, els.formatPanel);
 
   // ---- Team type dropdown (exactly two checkboxes, min-one guard) ----
   function syncTeamTypeDropdown() {
@@ -395,7 +476,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
       onChange();
     });
   });
-  wireDropdown(els.teamtypeToggle, els.teamtypePanel);
+  wirePortalDropdown(els.teamtypeToggle, els.teamtypePanel);
 
   function render() {
     const state = store.get();

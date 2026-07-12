@@ -27,6 +27,7 @@
 
 import { metricsFor, getMetric } from "./metrics.js";
 import { eligibleMetrics, effectiveNamespace } from "./state.js";
+import { mountOpposition } from "./drawerInnings.js";
 
 const OPERATORS = [
   { key: "gte", label: "at least (≥)" },
@@ -149,39 +150,76 @@ export function mountAdvanced(container, store, onChange) {
   // (focus-destroying) rebuild.
   let showErrors = false;
 
+  // ── Opposition-as-condition (F1b) ──────────────────────────────────────────
+  // "Against opposition" is one selectable condition TYPE in the same +Add
+  // list as the numeric metrics, but its value lives in state.opposition (NOT
+  // state.advanced), so buildScopeClauses is completely untouched. There is at
+  // most ONE opposition row; it's a SINGLETON rendered OUTSIDE the AND/OR
+  // numeric groups (opposition is a pre-aggregation WHERE filter, not a HAVING
+  // that participates in the groups' All/Any logic). Picking "Against
+  // opposition" in a numeric row's type dropdown converts that row into this
+  // singleton; the singleton's own type dropdown can morph it back to numeric.
+  const OPP_KEY = "__opposition__"; // sentinel type value; never stored in state.advanced
+  let oppRowVisible = false;
+  let sessionAddedOpp = false; // user explicitly added the opposition row this popup session
+
+  // Stable skeleton, built ONCE: the singleton opposition row + a numeric
+  // sub-area that render() rebuilds. Keeping the opposition control OUTSIDE the
+  // rebuilt area is what lets its team-dropdown (option cache, wiring, portal)
+  // survive every numeric rebuild.
+  container.innerHTML = `
+    <div class="advanced-panel">
+      <div class="advanced-cond advanced-cond--opp" data-role="adv-opp-row" hidden>
+        <div class="advanced-cond__row">
+          <div class="advanced-cond__fields">
+            <select class="select advanced-cond__type" data-role="opp-type" aria-label="Condition type"></select>
+            <div class="advanced-cond__opp-value" data-role="opp-value-host"></div>
+          </div>
+          <button type="button" class="icon-btn advanced-cond__remove" data-role="opp-remove" title="Remove condition">&times;</button>
+        </div>
+      </div>
+      <div class="advanced-numeric" data-role="adv-numeric"></div>
+    </div>`;
+
+  const oppWrapEl = container.querySelector('[data-role="adv-opp-row"]');
+  const oppTypeEl = container.querySelector('[data-role="opp-type"]');
+  const oppValueHostEl = container.querySelector('[data-role="opp-value-host"]');
+  const oppRemoveEl = container.querySelector('[data-role="opp-remove"]');
+  const numericEl = container.querySelector('[data-role="adv-numeric"]');
+
+  // The opposition control (reads/writes state.opposition, international-only
+  // gating, option fetching) is the existing drawerInnings control, embedded
+  // here so its own label is suppressed (the type dropdown already names it).
+  const oppositionController = mountOpposition(oppValueHostEl, store, onChange, { embedded: true });
+
   function structuralKey(state, metrics) {
     const advanced = state.advanced;
     const groupsShape = (advanced.groups || [])
       .map((g) => `${g.op}:${g.conds.map((c) => `${c.metricKey}|${c.operator}`).join(",")}`)
       .join(";");
-    return JSON.stringify({ top: advanced.op, groups: groupsShape, vocab: metrics.map((m) => m.key) });
+    // oppRowVisible is in the key so numeric rows' "Against opposition" option
+    // re-renders enabled/disabled as the singleton row comes and goes.
+    return JSON.stringify({ top: advanced.op, groups: groupsShape, vocab: metrics.map((m) => m.key), opp: oppRowVisible });
   }
 
-  function render() {
-    ensureAdvanced(store);
-    const state = store.get();
-    const advanced = state.advanced;
-    // Metrics eligible under the current format scope (SPEC §8.9) — e.g.
-    // T20-phase metrics only when formats is exactly the T20 bucket — AND in
-    // the ACTIVE mode's vocabulary: matchup_batting/matchup_bowling while a
-    // "Vs" selection is active, so conditions are authored in the same
-    // namespace the query will resolve them against (D4 R3/R4).
-    const ns = effectiveNamespace(state);
-    const metrics = eligibleMetrics(ns, state.formats);
+  /** Reconcile the singleton opposition row from state — cheap, no focus
+   * impact, so it runs on EVERY render() even when the numeric rebuild is
+   * skipped. Also refreshes the type dropdown's metric vocabulary. */
+  function reconcileOppRow(metrics) {
+    // Visible iff opposition is actually set OR the user added the row this
+    // session. An empty, never-filled row is INACTIVE (no pill, no filter) but
+    // stays put for editing until removed via its × or a fresh popup open.
+    oppRowVisible = (store.get().opposition || []).length > 0 || sessionAddedOpp;
+    oppWrapEl.hidden = !oppRowVisible;
+    oppTypeEl.innerHTML =
+      `<option value="${OPP_KEY}" selected>Against opposition</option>` +
+      metrics.map((m) => `<option value="${m.key}">${m.label}</option>`).join("");
+    oppTypeEl.value = OPP_KEY;
+    if (oppRowVisible) oppositionController.sync();
+  }
 
-    const key = structuralKey(state, metrics);
-    if (key === lastRenderKey) {
-      // Nothing structural changed since the last rebuild (e.g. this call was
-      // triggered by a value-input keystroke elsewhere in the store, or by an
-      // unrelated drawer control's sync() while this panel wasn't touched at
-      // all) — skip the rebuild. In particular this means we never rebuild
-      // while focus is inside this panel unless the key actually changed, so
-      // focus/caret survive typing into a condition's value input.
-      return;
-    }
-    lastRenderKey = key;
-
-    const groupHTML = (group, gi) => `
+  function groupHTML(group, gi, metrics) {
+    return `
       <div class="advanced-group" data-gi="${gi}">
         <div class="advanced-group__head">
           <span class="advanced-group__label">Match</span>
@@ -196,16 +234,38 @@ export function mountAdvanced(container, store, onChange) {
         </div>
         <button type="button" class="text-btn" data-role="add-cond">+ Add condition</button>
       </div>`;
+  }
+
+  function render() {
+    ensureAdvanced(store);
+    const state = store.get();
+    const advanced = state.advanced;
+    // Metrics eligible under the current format scope (SPEC §8.9) — e.g.
+    // T20-phase metrics only when formats is exactly the T20 bucket — AND in
+    // the ACTIVE mode's vocabulary: matchup_batting/matchup_bowling while a
+    // "Vs" selection is active, so conditions are authored in the same
+    // namespace the query will resolve them against (D4 R3/R4).
+    const ns = effectiveNamespace(state);
+    const metrics = eligibleMetrics(ns, state.formats);
+
+    // Opposition row first (cheap; must run even when the numeric rebuild below
+    // is skipped for focus preservation).
+    reconcileOppRow(metrics);
+
+    const key = structuralKey(state, metrics);
+    if (key === lastRenderKey) {
+      // Nothing structural changed since the last rebuild (e.g. a value-input
+      // keystroke, or an unrelated control's sync()) — skip the rebuild so
+      // focus/caret survive typing into a condition's value input.
+      return;
+    }
+    lastRenderKey = key;
 
     const groupsHTML = advanced.groups
-      .map((g, gi) => (gi > 0 ? topConnectorHTML(advanced.op) : "") + groupHTML(g, gi))
+      .map((g, gi) => (gi > 0 ? topConnectorHTML(advanced.op) : "") + groupHTML(g, gi, metrics))
       .join("");
 
-    container.innerHTML = `
-      <div class="advanced-panel">
-        ${groupsHTML}
-        <button type="button" class="text-btn text-btn--add-group" data-role="add-group">+ Add group</button>
-      </div>`;
+    numericEl.innerHTML = `${groupsHTML}<button type="button" class="text-btn text-btn--add-group" data-role="add-group">+ Add group</button>`;
 
     wire();
   }
@@ -236,6 +296,7 @@ export function mountAdvanced(container, store, onChange) {
           <div class="advanced-cond__fields">
             <select class="select" data-role="metric">
               <option value="">Metric…</option>
+              <option value="${OPP_KEY}"${oppRowVisible ? " disabled" : ""}>Against opposition</option>
               ${unknownOptionHTML}
               ${metrics.map((m) => `<option value="${m.key}" ${cond.metricKey === m.key ? "selected" : ""}>${m.label}</option>`).join("")}
             </select>
@@ -260,7 +321,7 @@ export function mountAdvanced(container, store, onChange) {
     const state = store.get();
     const advanced = state.advanced;
 
-    container.querySelectorAll('[data-role="top-op"]').forEach((el) => {
+    numericEl.querySelectorAll('[data-role="top-op"]').forEach((el) => {
       el.addEventListener("click", () => {
         advanced.op = advanced.op === "AND" ? "OR" : "AND";
         store.set({ advanced: { ...advanced } });
@@ -268,7 +329,7 @@ export function mountAdvanced(container, store, onChange) {
       });
     });
 
-    const addGroupBtn = container.querySelector('[data-role="add-group"]');
+    const addGroupBtn = numericEl.querySelector('[data-role="add-group"]');
     if (addGroupBtn) {
       addGroupBtn.addEventListener("click", () => {
         advanced.groups.push(newGroup());
@@ -277,7 +338,7 @@ export function mountAdvanced(container, store, onChange) {
       });
     }
 
-    container.querySelectorAll(".advanced-group").forEach((groupEl) => {
+    numericEl.querySelectorAll(".advanced-group").forEach((groupEl) => {
       const gi = Number(groupEl.dataset.gi);
       const group = advanced.groups[gi];
       if (!group) return;
@@ -316,6 +377,17 @@ export function mountAdvanced(container, store, onChange) {
         // half-typed number never triggers a graph re-query mid-keystroke.
         const metricSel = condEl.querySelector('[data-role="metric"]');
         metricSel.addEventListener("change", () => {
+          if (metricSel.value === OPP_KEY) {
+            // Convert this row into the singleton opposition row. Its value
+            // lives in state.opposition, so drop this numeric placeholder from
+            // state.advanced (removeConditionAt keeps ≥1 editable numeric row).
+            removeConditionAt(store, gi, ci);
+            sessionAddedOpp = true;
+            lastRenderKey = null; // force the rebuild (OPP option now disabled elsewhere)
+            render();
+            onChange();
+            return;
+          }
           cond.metricKey = metricSel.value;
           store.set({ advanced: { ...advanced } });
           onChange();
@@ -376,11 +448,53 @@ export function mountAdvanced(container, store, onChange) {
     if (!hasErrors) return true;
     lastRenderKey = null; // force the rebuild below regardless of structural key
     render();
-    const firstBad = container.querySelector(".advanced-cond--error [data-role=\"v1\"]");
+    const firstBad = numericEl.querySelector(".advanced-cond--error [data-role=\"v1\"]");
     if (firstBad) firstBad.focus();
     return false;
   }
 
+  // ── Opposition row: remove (×) + type morph ────────────────────────────────
+  // Removing clears state.opposition and drops the row (no pill, no filter).
+  oppRemoveEl.addEventListener("click", () => {
+    sessionAddedOpp = false;
+    if ((store.get().opposition || []).length) store.set({ opposition: [] });
+    lastRenderKey = null; // re-enable the "Against opposition" option in numeric rows
+    render();
+    onChange();
+  });
+  // Changing the type away from "Against opposition" morphs the singleton back
+  // into a numeric condition of the chosen metric (opposition cleared).
+  oppTypeEl.addEventListener("change", () => {
+    if (oppTypeEl.value === OPP_KEY) return; // still opposition — nothing to do
+    const chosen = oppTypeEl.value;
+    sessionAddedOpp = false;
+    if ((store.get().opposition || []).length) store.set({ opposition: [] });
+    ensureAdvanced(store);
+    const adv = store.get().advanced;
+    const groups = adv.groups.map((g, i) =>
+      i === 0 ? { ...g, conds: [...g.conds, { metricKey: chosen, operator: "gte", v1: "", v2: "" }] } : g
+    );
+    store.set({ advanced: { ...adv, groups } });
+    lastRenderKey = null;
+    render();
+    onChange();
+  });
+
+  /** main.js/drawer.js call this after any filter change (while the popup is
+   * visible): re-gate the metric vocabulary (§8.9 phase gating) and re-sync the
+   * embedded opposition option list — the same refresh render() used to do when
+   * this panel lived on the page. */
+  function sync() {
+    render();
+  }
+
+  /** Called by drawer.js when the popup OPENS: a never-filled opposition row
+   * from a previous session shouldn't linger, so drop the session flag and let
+   * reconcileOppRow re-derive visibility purely from state.opposition. */
+  function onPopupShow() {
+    sessionAddedOpp = false;
+  }
+
   render();
-  return { render, validate };
+  return { render, validate, sync, onPopupShow };
 }

@@ -1,19 +1,26 @@
 // src/drawer.js
 //
-// The "All filters" drawer (owner decision 29): a right-side panel holding
-// everything beyond the slim scope strip (src/filters.js). Three sections
-// after owner decision 46:
-//   1. Team — a dual control: a mode dropdown ("Current team" | "Historic
-//      team") + one team picker. Current = today's team filter (state.teams);
-//      Historic = the old "Has ever played for (career)" filter (profile.teams,
-//      absorbed here from Advanced). Exactly one is active at a time.
-//   2. Player profile — Role, Batting hand, R. Pos. (regular batting position —
-//      see src/drawerInnings.js), Bowling style. In matchup mode the R. Pos.
-//      slot is replaced by the striker/own batting-position filter
-//      (state.positions), which self-hides in plain mode.
-//   3. Advanced — Against (opposition) + Stat conditions (src/advanced.js).
-// Opened via the "All filters" button in the scope strip; main.js owns wiring
-// that button plus the count badge (this module exposes `activeCount()`).
+// The "Player" + "Advanced Filters" content of the Filters popup (F1a — this
+// used to be a right-side "All filters" drawer; the shell is gone and the
+// content now renders straight into the popup's section bodies). Renders into
+// two hosts passed by main.js:
+//   Player host (compact block — F1b, no inner "Player profile" sub-header):
+//     1. Team — a dual control: a mode dropdown ("Current team" | "Historic
+//        team") + one team picker. Current = today's team filter (state.teams);
+//        Historic = the old "Has ever played for (career)" filter (profile.teams,
+//        absorbed here from Advanced). Exactly one is active at a time.
+//     2. Profile grid — Role, Batting hand, R. Pos. (regular batting position —
+//        see src/drawerInnings.js), Bowling style, in a tight aligned grid. In
+//        matchup mode the R. Pos. slot is replaced by the striker/own
+//        batting-position filter (state.positions), which self-hides in plain mode.
+//   Advanced host:
+//     3. One unified condition builder (src/advanced.js). "Against opposition"
+//        is a condition TYPE inside it (still reads/writes state.opposition);
+//        numeric stat-conditions write state.advanced. No inner sub-headers.
+// The popup owns its own open/close/×/backdrop/Escape (main.js); this module
+// exposes onShow()/onHide() hooks (called when the popup opens/closes),
+// sync(), activeCount() (for the count badge), and validate() (the popup's
+// "Search" button calls it before running the query).
 //
 // R. Pos. (decision 46) filters to players whose MOST COMMON batting position
 // within scope is in the selection; the modal-position semi-join lives in
@@ -27,11 +34,11 @@
 // lives in drawerInnings.js). It never queries for anything else — table.js
 // and graph/*.js own re-querying on state change.
 
-import { emptyProfile, positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive } from "./state.js";
 import { query } from "./db.js";
-import { buildScopeClauses } from "./filters.js";
+import { buildScopeClauses, wirePortalDropdown } from "./filters.js";
 import { mountAdvanced, activeConditionCount } from "./advanced.js";
-import { mountBattingPosition, mountRegularPositions, mountOpposition } from "./drawerInnings.js";
+import { mountBattingPosition, mountRegularPositions } from "./drawerInnings.js";
 import { escHtml, escAttr } from "./html.js";
 
 // Display order for the profile-filter option lists. Options are always
@@ -71,159 +78,139 @@ async function fetchTeamOptions(state) {
 }
 
 /**
- * Mount the "All filters" drawer into `hostEl` (hidden by default). Calls
- * `onChange()` after any state mutation so the caller (main.js) can re-render
- * the table/graph; calls `onApply()` when the footer's primary button is
- * clicked (main.js decides what "apply" means — e.g. running the table
- * query). Returns `{ open, close, sync, activeCount }`.
+ * Render the Filters popup's "Player" (Team + Player profile) and "Advanced
+ * Filters" content into the two hosts main.js passes (`{ playerHost,
+ * advancedHost }` — both live inside the popup panel). Calls `onChange()` after
+ * any state mutation so main.js can update the pills/subtitle/badge (it no
+ * longer blanks the table). The popup owns open/close; this module exposes
+ * onShow()/onHide() (open/close hooks), sync(), activeCount(), and validate().
+ * Returns `{ onShow, onHide, sync, activeCount, validate }`.
  */
-export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
-  hostEl.innerHTML = `
-    <div class="filter-drawer" data-role="filter-drawer" hidden>
-      <div class="filter-drawer__backdrop" data-role="drawer-backdrop"></div>
-      <div class="filter-drawer__panel" role="dialog" aria-modal="true" aria-label="All filters" tabindex="-1" data-role="drawer-panel">
-        <div class="filter-drawer__header">
-          <h2 class="filter-drawer__title">All filters</h2>
-          <button type="button" class="drawer__close" data-role="drawer-close" aria-label="Close">&times;</button>
+export function mountFilterDrawer({ playerHost, advancedHost }, store, { onChange }) {
+  // Compact Player section (F1b — fixes player_profile.png): Team dual-control
+  // on top, then Role / Batting hand / R. Pos. / Bowling style in a tight,
+  // aligned grid (no control stranded beside dead space). The old inner
+  // "Player profile" sub-header is gone — the collapsible section is already
+  // titled "Player"; one "Team" sub-label remains.
+  playerHost.innerHTML = `
+    <div class="player-filters">
+      <div class="player-filters__team">
+        <span class="filter-label">Team</span>
+        <div class="player-filters__team-row">
+          <div class="filter-group filter-group--teammode" data-role="teammode-group">
+            <select class="select" data-role="team-mode" aria-label="Team mode">
+              <option value="current">Current team</option>
+              <option value="historic">Historic team</option>
+            </select>
+          </div>
+
+          <div class="filter-group filter-group--team" data-role="team-current-group">
+            <div class="team-dropdown" data-role="team-dropdown">
+              <button type="button" class="team-dropdown__toggle" data-role="team-toggle" aria-haspopup="true" aria-expanded="false">
+                All teams
+              </button>
+              <div class="team-dropdown__panel" data-role="team-panel" hidden>
+                <input type="text" class="team-dropdown__search" data-role="team-search" placeholder="Search teams…" />
+                <div class="team-dropdown__list" data-role="team-list"></div>
+                <div class="team-dropdown__actions">
+                  <button type="button" class="link-btn" data-role="team-clear">Clear</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="filter-group filter-group--profteams" data-role="team-historic-group">
+            <div class="team-dropdown" data-role="profteam-dropdown">
+              <button type="button" class="team-dropdown__toggle" data-role="profteam-toggle" aria-haspopup="true" aria-expanded="false">
+                Any team
+              </button>
+              <div class="team-dropdown__panel" data-role="profteam-panel" hidden>
+                <input type="text" class="team-dropdown__search" data-role="profteam-search" placeholder="Search teams…" />
+                <div class="team-dropdown__list" data-role="profteam-list"></div>
+                <div class="team-dropdown__actions">
+                  <button type="button" class="link-btn" data-role="profteam-clear">Clear</button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
+      </div>
 
-        <div class="filter-drawer__body">
-          <section class="filter-drawer__section" data-role="section-team">
-            <h3 class="filter-drawer__section-title">Team</h3>
-            <div class="filter-bar">
-              <div class="filter-group filter-group--teammode" data-role="teammode-group">
-                <span class="filter-label">Team</span>
-                <select class="select" data-role="team-mode" aria-label="Team mode">
-                  <option value="current">Current team</option>
-                  <option value="historic">Historic team</option>
-                </select>
-              </div>
+      <div class="player-filters__profile">
+        <p class="profile-note" data-role="profile-note" hidden>No bowling type data for Women available yet.</p>
+        <p class="profile-note" data-role="profile-load-error" hidden>Couldn't load profile filter options — reopen the filters to retry.</p>
 
-              <div class="filter-group filter-group--team" data-role="team-current-group">
-                <div class="team-dropdown" data-role="team-dropdown">
-                  <button type="button" class="team-dropdown__toggle" data-role="team-toggle" aria-haspopup="true" aria-expanded="false">
-                    All teams
-                  </button>
-                  <div class="team-dropdown__panel" data-role="team-panel" hidden>
-                    <input type="text" class="team-dropdown__search" data-role="team-search" placeholder="Search teams…" />
-                    <div class="team-dropdown__list" data-role="team-list"></div>
-                    <div class="team-dropdown__actions">
-                      <button type="button" class="link-btn" data-role="team-clear">Clear</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="filter-group filter-group--profteams" data-role="team-historic-group">
-                <div class="team-dropdown" data-role="profteam-dropdown">
-                  <button type="button" class="team-dropdown__toggle" data-role="profteam-toggle" aria-haspopup="true" aria-expanded="false">
-                    Any team
-                  </button>
-                  <div class="team-dropdown__panel" data-role="profteam-panel" hidden>
-                    <input type="text" class="team-dropdown__search" data-role="profteam-search" placeholder="Search teams…" />
-                    <div class="team-dropdown__list" data-role="profteam-list"></div>
-                    <div class="team-dropdown__actions">
-                      <button type="button" class="link-btn" data-role="profteam-clear">Clear</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
+        <div class="profile-grid" data-role="profile-bar">
+          <div class="filter-group filter-group--role" data-role="prof-role-group">
+            <label class="filter-label" for="drawer-prof-roleGroup">Role</label>
+            <div class="profile-role">
+              <select class="select" id="drawer-prof-roleGroup" data-role="prof-roleGroup" aria-label="Playing role"></select>
+              <select class="select" data-role="prof-roleSub" aria-label="Detailed role" hidden></select>
             </div>
-          </section>
+          </div>
 
-          <section class="filter-drawer__section" data-role="section-profile">
-            <h3 class="filter-drawer__section-title">Player profile</h3>
-            <div class="filter-bar filter-bar--profile" data-role="profile-bar">
-              <div class="filter-group filter-group--profile-head">
-                <span class="profile-note" data-role="profile-note" hidden>We don't have profile data on Women yet.</span>
-                <span class="profile-note" data-role="profile-load-error" hidden>Couldn't load profile filter options — reopen the drawer to retry.</span>
-              </div>
+          <div class="filter-group filter-group--hand" data-role="prof-hand-group">
+            <label class="filter-label" for="drawer-prof-battingHand">Batting hand</label>
+            <select class="select" id="drawer-prof-battingHand" data-role="prof-battingHand" aria-label="Batting hand"></select>
+          </div>
 
-              <div class="filter-group filter-group--role" data-role="prof-role-group">
-                <label class="filter-label" for="drawer-prof-roleGroup">Role</label>
-                <div class="profile-role">
-                  <select class="select" id="drawer-prof-roleGroup" data-role="prof-roleGroup" aria-label="Playing role"></select>
-                  <select class="select" data-role="prof-roleSub" aria-label="Detailed role" hidden></select>
-                </div>
-              </div>
+          <!-- R. Pos. (plain mode) and the matchup striker-position filter
+               (matchup mode) share this slot; each self-hides in the other
+               mode (see drawerInnings.js). display:contents on the hosts (CSS)
+               promotes the inner control to a grid cell so a hidden one leaves
+               no empty cell. -->
+          <div data-role="rpos-host"></div>
+          <div data-role="matchup-positions-host"></div>
 
-              <div class="filter-group filter-group--hand" data-role="prof-hand-group">
-                <label class="filter-label" for="drawer-prof-battingHand">Batting hand</label>
-                <select class="select" id="drawer-prof-battingHand" data-role="prof-battingHand" aria-label="Batting hand"></select>
-              </div>
-
-              <!-- R. Pos. (plain mode) and the matchup striker-position filter
-                   (matchup mode) share this slot; each self-hides in the other
-                   mode (see drawerInnings.js). -->
-              <div data-role="rpos-host"></div>
-              <div data-role="matchup-positions-host"></div>
-
-              <div class="filter-group filter-group--bowling" data-role="prof-bowling-group">
-                <label class="filter-label" for="drawer-prof-bowlingType">Bowling style</label>
-                <select class="select" id="drawer-prof-bowlingType" data-role="prof-bowlingType" aria-label="Bowling style"></select>
-              </div>
-            </div>
-          </section>
-
-          <section class="filter-drawer__section" data-role="section-advanced">
-            <h3 class="filter-drawer__section-title">Advanced</h3>
-            <div class="filter-bar" data-role="advanced-teams-bar">
-              <div data-role="opposition-host"></div>
-            </div>
-
-            <div class="filter-group filter-group--conditions">
-              <h4 class="filter-drawer__subsection-title">Stat conditions</h4>
-              <div data-role="advanced-host"></div>
-            </div>
-          </section>
-        </div>
-
-        <div class="filter-drawer__footer">
-          <button type="button" class="btn btn--ghost" data-role="drawer-clear">Clear all</button>
-          <button type="button" class="btn btn--primary" data-role="drawer-apply">Apply and show results</button>
+          <div class="filter-group filter-group--bowling" data-role="prof-bowling-group">
+            <label class="filter-label" for="drawer-prof-bowlingType">Bowling style</label>
+            <select class="select" id="drawer-prof-bowlingType" data-role="prof-bowlingType" aria-label="Bowling style"></select>
+          </div>
         </div>
       </div>
     </div>
   `;
 
+  // Advanced Filters section (F1b): just the section title (from index.html) +
+  // ONE unified condition builder (advanced.js). Opposition is now a condition
+  // TYPE inside that builder (reads/writes state.opposition), so the old inner
+  // "Advanced" sub-header, the standalone opposition picker, and the "Stat
+  // conditions" sub-header are all gone.
+  advancedHost.innerHTML = `<div data-role="advanced-host"></div>`;
+
   const els = {
-    drawer: hostEl.querySelector('[data-role="filter-drawer"]'),
-    backdrop: hostEl.querySelector('[data-role="drawer-backdrop"]'),
-    panel: hostEl.querySelector('[data-role="drawer-panel"]'),
-    closeBtn: hostEl.querySelector('[data-role="drawer-close"]'),
-    applyBtn: hostEl.querySelector('[data-role="drawer-apply"]'),
-    clearBtn: hostEl.querySelector('[data-role="drawer-clear"]'),
+    // Team + Player profile (playerHost)
+    teamModeGroup: playerHost.querySelector('[data-role="teammode-group"]'),
+    teamMode: playerHost.querySelector('[data-role="team-mode"]'),
+    teamCurrentGroup: playerHost.querySelector('[data-role="team-current-group"]'),
+    teamHistoricGroup: playerHost.querySelector('[data-role="team-historic-group"]'),
+    teamToggle: playerHost.querySelector('[data-role="team-toggle"]'),
+    teamPanel: playerHost.querySelector('[data-role="team-panel"]'),
+    teamSearch: playerHost.querySelector('[data-role="team-search"]'),
+    teamList: playerHost.querySelector('[data-role="team-list"]'),
+    teamClear: playerHost.querySelector('[data-role="team-clear"]'),
 
-    teamModeGroup: hostEl.querySelector('[data-role="teammode-group"]'),
-    teamMode: hostEl.querySelector('[data-role="team-mode"]'),
-    teamCurrentGroup: hostEl.querySelector('[data-role="team-current-group"]'),
-    teamHistoricGroup: hostEl.querySelector('[data-role="team-historic-group"]'),
-    teamToggle: hostEl.querySelector('[data-role="team-toggle"]'),
-    teamPanel: hostEl.querySelector('[data-role="team-panel"]'),
-    teamSearch: hostEl.querySelector('[data-role="team-search"]'),
-    teamList: hostEl.querySelector('[data-role="team-list"]'),
-    teamClear: hostEl.querySelector('[data-role="team-clear"]'),
+    profileBar: playerHost.querySelector('[data-role="profile-bar"]'),
+    profileNote: playerHost.querySelector('[data-role="profile-note"]'),
+    profileLoadError: playerHost.querySelector('[data-role="profile-load-error"]'),
+    roleFilterGroup: playerHost.querySelector('[data-role="prof-role-group"]'),
+    handFilterGroup: playerHost.querySelector('[data-role="prof-hand-group"]'),
+    bowlingFilterGroup: playerHost.querySelector('[data-role="prof-bowling-group"]'),
+    roleGroup: playerHost.querySelector('[data-role="prof-roleGroup"]'),
+    roleSub: playerHost.querySelector('[data-role="prof-roleSub"]'),
+    battingHand: playerHost.querySelector('[data-role="prof-battingHand"]'),
+    bowlingType: playerHost.querySelector('[data-role="prof-bowlingType"]'),
+    profTeamToggle: playerHost.querySelector('[data-role="profteam-toggle"]'),
+    profTeamPanel: playerHost.querySelector('[data-role="profteam-panel"]'),
+    profTeamSearch: playerHost.querySelector('[data-role="profteam-search"]'),
+    profTeamList: playerHost.querySelector('[data-role="profteam-list"]'),
+    profTeamClear: playerHost.querySelector('[data-role="profteam-clear"]'),
 
-    profileBar: hostEl.querySelector('[data-role="profile-bar"]'),
-    profileNote: hostEl.querySelector('[data-role="profile-note"]'),
-    profileLoadError: hostEl.querySelector('[data-role="profile-load-error"]'),
-    roleFilterGroup: hostEl.querySelector('[data-role="prof-role-group"]'),
-    handFilterGroup: hostEl.querySelector('[data-role="prof-hand-group"]'),
-    bowlingFilterGroup: hostEl.querySelector('[data-role="prof-bowling-group"]'),
-    roleGroup: hostEl.querySelector('[data-role="prof-roleGroup"]'),
-    roleSub: hostEl.querySelector('[data-role="prof-roleSub"]'),
-    battingHand: hostEl.querySelector('[data-role="prof-battingHand"]'),
-    bowlingType: hostEl.querySelector('[data-role="prof-bowlingType"]'),
-    profTeamToggle: hostEl.querySelector('[data-role="profteam-toggle"]'),
-    profTeamPanel: hostEl.querySelector('[data-role="profteam-panel"]'),
-    profTeamSearch: hostEl.querySelector('[data-role="profteam-search"]'),
-    profTeamList: hostEl.querySelector('[data-role="profteam-list"]'),
-    profTeamClear: hostEl.querySelector('[data-role="profteam-clear"]'),
+    rposHost: playerHost.querySelector('[data-role="rpos-host"]'),
+    matchupPositionsHost: playerHost.querySelector('[data-role="matchup-positions-host"]'),
 
-    rposHost: hostEl.querySelector('[data-role="rpos-host"]'),
-    matchupPositionsHost: hostEl.querySelector('[data-role="matchup-positions-host"]'),
-    oppositionHost: hostEl.querySelector('[data-role="opposition-host"]'),
-    advancedHost: hostEl.querySelector('[data-role="advanced-host"]'),
+    // Advanced Filters (advancedHost) — one unified condition builder
+    advancedHost: advancedHost.querySelector('[data-role="advanced-host"]'),
   };
 
   // ── Team dropdown ────────────────────────────────────────────────────────
@@ -300,26 +287,15 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     updateTeamToggleLabel();
   }
 
-  els.teamToggle.addEventListener("click", () => {
-    const isOpen = !els.teamPanel.hidden;
-    els.teamPanel.hidden = isOpen;
-    els.teamToggle.setAttribute("aria-expanded", String(!isOpen));
-    if (!isOpen) {
+  // Portaled to <body> while open so the popup body's overflow:auto can't clip
+  // it (team_dropdown.png fix — shared helper, replaces the old bespoke toggle
+  // + two outside-click document handlers). onOpen resets/focuses the search.
+  wirePortalDropdown(els.teamToggle, els.teamPanel, {
+    onOpen: () => {
       els.teamSearch.value = "";
       renderTeamList("");
       els.teamSearch.focus();
-    }
-  });
-  document.addEventListener("click", (e) => {
-    if (!hostEl.contains(e.target)) return;
-    if (e.target.closest('[data-role="team-dropdown"]')) return;
-    els.teamPanel.hidden = true;
-    els.teamToggle.setAttribute("aria-expanded", "false");
-  });
-  document.addEventListener("click", (e) => {
-    if (hostEl.contains(e.target)) return;
-    els.teamPanel.hidden = true;
-    els.teamToggle.setAttribute("aria-expanded", "false");
+    },
   });
   els.teamSearch.addEventListener("input", () => renderTeamList(els.teamSearch.value));
   els.teamClear.addEventListener("click", () => {
@@ -534,21 +510,13 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
     onChange();
   });
 
-  els.profTeamToggle.addEventListener("click", () => {
-    if (els.profTeamToggle.disabled) return;
-    const isOpen = !els.profTeamPanel.hidden;
-    els.profTeamPanel.hidden = isOpen;
-    els.profTeamToggle.setAttribute("aria-expanded", String(!isOpen));
-    if (!isOpen) {
+  // Portaled to <body> while open (team_dropdown.png fix — shared helper).
+  wirePortalDropdown(els.profTeamToggle, els.profTeamPanel, {
+    onOpen: () => {
       els.profTeamSearch.value = "";
       renderProfTeamList("");
       els.profTeamSearch.focus();
-    }
-  });
-  document.addEventListener("click", (e) => {
-    if (hostEl.contains(e.target) && e.target.closest('[data-role="profteam-dropdown"]')) return;
-    els.profTeamPanel.hidden = true;
-    els.profTeamToggle.setAttribute("aria-expanded", "false");
+    },
   });
   els.profTeamSearch.addEventListener("input", () => renderProfTeamList(els.profTeamSearch.value));
   els.profTeamClear.addEventListener("click", () => {
@@ -566,77 +534,53 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   //                               matchup mode only.
   const regularPositionController = mountRegularPositions(els.rposHost, store, onChange);
   const positionController = mountBattingPosition(els.matchupPositionsHost, store, onChange);
-  const oppositionController = mountOpposition(els.oppositionHost, store, onChange);
+  // Opposition is now a condition TYPE inside the unified builder (advanced.js
+  // mounts it internally, embedded); it still reads/writes state.opposition.
   const advancedController = mountAdvanced(els.advancedHost, store, onChange);
 
-  // ── Footer ───────────────────────────────────────────────────────────────────
-  els.applyBtn.addEventListener("click", () => {
-    // decision 42: a condition with a metric but no value blocks Apply with
-    // an inline row message (validate() shows it, focuses the row, returns
-    // false) rather than being silently dropped.
-    if (!advancedController.validate()) return;
-    onApply();
-  });
+  // ── Validation (popup "Search" button) ────────────────────────────────────
+  // The popup's Search button (main.js) calls this before running the query:
+  // decision 42 — a condition with a metric but no value blocks the search with
+  // an inline row message (advancedController.validate() shows it, focuses the
+  // row, returns false) rather than being silently dropped.
+  function validate() {
+    return advancedController.validate();
+  }
 
-  els.clearBtn.addEventListener("click", () => {
-    store.set({
-      teams: [],
-      profile: emptyProfile(),
-      positions: [],
-      regularPositions: [],
-      opposition: [],
-      advanced: { op: "AND", groups: [] },
-      // Task 3b (owner decision 46): "Clear all" also clears pins.
-      pinnedPlayers: [],
-    });
-    teamMode = deriveTeamMode();
-    renderControls();
-    advancedController.render();
-    regularPositionController.sync();
-    positionController.sync();
-    oppositionController.sync();
-    onChange();
-  });
-
-  // ── Open / close ─────────────────────────────────────────────────────────────
-  // Batch 3 fix 1 safety net: a snapshot of state.advanced taken at open() time.
+  // ── Popup open/close hooks ─────────────────────────────────────────────────
+  // Batch 3 fix 1 safety net: a snapshot of state.advanced taken at open time.
   // Stat-condition selects/value-changes already call onChange() themselves on
   // every committed edit (advanced.js), but a value mid-typed (store updated on
   // "input", no "change" yet because the field never blurred) would otherwise
-  // reach a drawer-close (Escape/backdrop/×) without ever telling main.js — the
-  // table/graph would silently keep showing the PRE-edit scope while the pill
-  // already reads the new value. Comparing at close() and firing onChange()
-  // once if it moved closes that gap regardless of which close route was used.
+  // reach a popup-close (Escape/backdrop/×) without ever telling main.js — the
+  // pills/subtitle would silently keep reading the PRE-edit scope. Comparing at
+  // onHide() and firing onChange() once if it moved closes that gap regardless
+  // of which close route was used. (main.js owns the popup's actual show/hide,
+  // ×, backdrop and Escape; these are just the hooks it calls on each.)
   let advancedSnapshotAtOpen = null;
 
-  function open() {
-    els.drawer.hidden = false;
-    els.panel.focus();
-    // Re-derive the (UI-only) team mode from current state each time the drawer
+  function onShow() {
+    // Re-derive the (UI-only) team mode from current state each time the popup
     // opens, so it reflects any team/profile/gender change made while closed.
     teamMode = deriveTeamMode();
     advancedSnapshotAtOpen = JSON.stringify(store.get().advanced);
+    // Drop a never-filled opposition row from a previous popup session before
+    // syncing, so its visibility is re-derived purely from state.opposition.
+    advancedController.onPopupShow();
     // Retry any option-fetches that previously failed — matches the inline
-    // error copy's "reopen the drawer to retry" (Batch 2 review). sync() and
+    // error copy's "reopen the filters to retry" (Batch 2 review). sync() and
     // loadProfileOptions() no-op cheaply when nothing needs refetching.
     sync();
     if (profileOptionsErrored) loadProfileOptions();
   }
 
-  function close() {
-    els.drawer.hidden = true;
+  function onHide() {
     if (advancedSnapshotAtOpen !== null) {
       const changed = JSON.stringify(store.get().advanced) !== advancedSnapshotAtOpen;
       advancedSnapshotAtOpen = null;
       if (changed) onChange();
     }
   }
-
-  els.closeBtn.addEventListener("click", close);
-  els.backdrop.addEventListener("click", close);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !els.drawer.hidden) close();
-  });
 
   // ── render / sync ────────────────────────────────────────────────────────────
   /** Re-render every control's value/disabled state from the store — cheap,
@@ -651,18 +595,17 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   }
 
   /** Called by main.js after every filter change: re-sync control states plus
-   * the option lists (team, opposition) — each refetches only when its
-   * own scope key actually changed, so repeated calls are cheap. */
+   * the option lists (team) — each refetches only when its own scope key
+   * actually changed, so repeated calls are cheap. */
   function sync() {
     renderControls();
     refreshTeamOptions();
     regularPositionController.sync();
     positionController.sync();
-    oppositionController.sync();
-    // The condition builder's metric dropdowns must re-gate when the
-    // discipline/format scope changes (§8.9 phase-metric gating) — the same
+    // The unified condition builder re-gates its metric dropdowns (§8.9 phase
+    // gating) and re-syncs the embedded opposition option list — the same
     // re-render main.js used to trigger when the panel lived on the page.
-    advancedController.render();
+    advancedController.sync();
   }
 
   /** Badge count for the "All filters" button: only filters ACTUALLY applied
@@ -690,12 +633,11 @@ export function mountFilterDrawer(hostEl, store, { onChange, onApply }) {
   loadProfileOptions();
   renderControls();
 
-  // isOpen(): so callers (main.js) can gate sync() to only run while the
-  // drawer is actually visible (Batch 3 fix 2) — the drawer must always be
-  // fully current whenever VISIBLE (open() calls sync() directly; the
-  // store.subscribe hook calls it too, but only while open), never while
-  // hidden, where it would just be wasted rebuild work (and, before this
-  // fix, the reason typing in the advanced panel or the main search box lost
-  // focus/cursor on every keystroke).
-  return { open, close, sync, activeCount, isOpen: () => !els.drawer.hidden };
+  // main.js gates sync() to only run while the popup is actually visible
+  // (Batch 3 fix 2): the content must be fully current whenever VISIBLE
+  // (onShow() calls sync() directly; the store.subscribe hook calls it too,
+  // but only while the popup is open), never while hidden, where it would just
+  // be wasted rebuild work (and, before this fix, the reason typing in the
+  // advanced panel or the main search box lost focus/cursor on every keystroke).
+  return { onShow, onHide, sync, activeCount, validate };
 }

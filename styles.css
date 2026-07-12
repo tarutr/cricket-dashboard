@@ -644,6 +644,70 @@ a { color: var(--color-accent); }
 
 .profile-role { display: flex; gap: var(--space-2); }
 
+/* ── Player section: compact layout (F1b — fixes player_profile.png) ──────────
+   The Player popup section rebuilt as a tidy block: Team dual-control on top,
+   then Role / Batting hand / R. Pos. / Bowling style in an aligned 2-column
+   grid (1-column on narrow phones). New classnames deliberately AVOID reusing
+   `.filter-bar` so the scope strip's mobile grid-template-areas (which target
+   `.filter-bar`) can never bleed onto these controls. */
+.player-filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.player-filters__team {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.player-filters__team-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+.player-filters__team-row .filter-group { min-width: 0; }
+.player-filters__team-row .filter-group--teammode { flex: 0 0 auto; }
+.player-filters__team-row .filter-group--team,
+.player-filters__team-row .filter-group--profteams { flex: 1 1 12rem; }
+.player-filters__team-row .team-dropdown,
+.player-filters__team-row .team-dropdown__toggle { width: 100%; }
+
+.player-filters__profile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px dashed var(--color-line);
+}
+.player-filters__profile .profile-note { margin: 0; }
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-4);
+  align-items: start;
+}
+/* R. Pos. / matchup-position hosts are plain wrappers; display:contents
+   promotes their single inner .filter-group to a direct grid cell, so a hidden
+   one (via [hidden]) leaves NO empty cell — nothing stranded beside dead
+   space (the player_profile.png complaint). */
+.profile-grid [data-role="rpos-host"],
+.profile-grid [data-role="matchup-positions-host"] { display: contents; }
+
+.profile-grid .filter-group { min-width: 0; }
+.profile-grid .select,
+.profile-grid .dropdown,
+.profile-grid .dropdown__toggle { width: 100%; }
+.profile-grid .profile-role { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.profile-grid .profile-role .select { flex: 1 1 7rem; min-width: 0; }
+
+@media (max-width: 560px) {
+  .profile-grid { grid-template-columns: 1fr; }
+}
+
 /* Disabled section state lives entirely on the individual controls inside
    (see the unified :disabled rules below) — no wrapper-level opacity here,
    so it can't stack with a control's own disabled styling. */
@@ -870,6 +934,22 @@ a { color: var(--color-accent); }
 .advanced-cond--error .input {
   border-color: var(--color-bad);
 }
+
+/* Unified condition builder (F1b): the numeric AND/OR groups live in
+   .advanced-numeric; the SINGLETON "Against opposition" row (.advanced-cond--opp)
+   sits above them, reusing the .advanced-cond row/fields/remove layout so it
+   reads as just another condition row. Its value control is the embedded
+   opposition team-multiselect (state.opposition; buildScopeClauses untouched). */
+.advanced-numeric {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.advanced-cond__type { flex: 0 0 auto; }
+.advanced-cond__opp-value { flex: 1 1 12rem; min-width: 0; }
+.advanced-cond--opp .filter-group--opp-embedded { gap: var(--space-1); }
+.advanced-cond--opp .team-dropdown,
+.advanced-cond--opp .team-dropdown__toggle { width: 100%; }
 
 /* ── Advanced section sub-heading (B2R wave 2) ────────────────────────────────
    "Stat conditions" now sits inside the wider "Advanced" section alongside
@@ -1483,21 +1563,24 @@ a { color: var(--color-accent); }
    and playerPopup.js only ever toggle the `hidden` attribute on these
    elements, never a class, so this is a pure CSS de-duplication. */
 .filter-drawer,
-.player-popup {
+.player-popup,
+.filters-popup {
   position: fixed;
   inset: 0;
   z-index: 100;
 }
 
 .filter-drawer__backdrop,
-.player-popup__backdrop {
+.player-popup__backdrop,
+.filters-popup__backdrop {
   position: absolute;
   inset: 0;
   background: rgba(27, 36, 48, 0.45);
 }
 
 [data-theme="dark"] .filter-drawer__backdrop,
-[data-theme="dark"] .player-popup__backdrop {
+[data-theme="dark"] .player-popup__backdrop,
+[data-theme="dark"] .filters-popup__backdrop {
   background: rgba(0, 0, 0, 0.6);
 }
 
@@ -2648,6 +2731,123 @@ a { color: var(--color-accent); }
     max-height: none;
     border-radius: 0;
   }
+}
+
+/* ── Filters popup (F1a) — centered modal home for every filter ─────────────── */
+/* Reuses the shared overlay base above (.filters-popup was added to the
+   fixed/inset/backdrop rules). Centered panel like the player popup, full-screen
+   on small viewports; sticky-feeling header + footer with only the body
+   scrolling. Three collapsible sections (Conditions / Player / Advanced Filters).
+   F1b beautifies the section CONTENTS (Player-profile compaction, team-popover
+   overflow, opposition-as-condition, Men-left order); this is the shell only. */
+.filters-popup__panel {
+  position: relative;
+  margin: 4vh auto;
+  width: min(680px, 94vw);
+  max-height: 88vh;
+  background: var(--color-bg);
+  box-shadow: var(--shadow-popover);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.filters-popup__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-line);
+}
+
+.filters-popup__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.3rem;
+}
+
+.filters-popup__close {
+  font: inherit;
+  font-size: 1.4rem;
+  line-height: 1;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-muted);
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+}
+.filters-popup__close:hover { color: var(--color-bad); background: var(--color-bad-bg); }
+
+.filters-popup__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--space-5);
+}
+
+.filters-popup__section {
+  border-bottom: 1px solid var(--color-line);
+}
+.filters-popup__section:last-child { border-bottom: none; }
+
+.filters-popup__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  color: var(--color-fg);
+  text-align: left;
+}
+
+.filters-popup__section-name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+.filters-popup__chevron {
+  color: var(--color-muted);
+  transition: transform 0.15s ease;
+}
+.filters-popup__section-header[aria-expanded="false"] .filters-popup__chevron {
+  transform: rotate(-90deg);
+}
+
+.filters-popup__section-body {
+  padding-bottom: var(--space-5);
+}
+.filters-popup__section-body[hidden] { display: none; }
+
+.filters-popup__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--color-line);
+  background: var(--color-bg);
+}
+
+@media (max-width: 640px) {
+  .filters-popup__panel {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    width: auto;
+    max-height: none;
+    border-radius: 0;
+  }
+  .filters-popup__footer .btn { width: 100%; }
 }
 
 .player-link {

@@ -907,7 +907,7 @@ function compareSplitRows(a, b, splitDim, dir) {
 
 // ── Table controller ─────────────────────────────────────────────────────────
 
-export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } = {}) {
+export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, onOpenFilters } = {}) {
   let lastRows = [];
   let loadToken = 0;
   // Snapshot (serializeQueryState) of the state that produced lastRows, or
@@ -1033,12 +1033,15 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph } 
     teardownSkeleton();
     container.innerHTML = `
       <div class="table-prompt">
-        <p class="table-prompt__text">Choose your filters, then show the results.</p>
-        <button type="button" class="btn btn--primary" data-role="show-results">Show results</button>
+        <p class="table-prompt__text">Set your filters, then search.</p>
+        <button type="button" class="btn btn--primary" data-role="open-filters">Open filters</button>
       </div>
     `;
-    const btn = container.querySelector('[data-role="show-results"]');
-    if (btn) btn.addEventListener("click", () => load());
+    // F1a: the empty-state button opens the Filters popup (main.js passes
+    // onOpenFilters) rather than running the query directly — the query now
+    // runs only from the popup's "Search" button.
+    const btn = container.querySelector('[data-role="open-filters"]');
+    if (btn) btn.addEventListener("click", () => { if (onOpenFilters) onOpenFilters(); });
   }
 
   /** Called when the table view is (re-)entered — clicking the Stats tab, or
