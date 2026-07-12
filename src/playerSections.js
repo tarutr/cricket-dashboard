@@ -256,6 +256,78 @@ const BATTING_MATCHUP_HEADERS = ["Bucket", "Inns", "Balls", "Runs", "SR", "Avg",
 // Coarse buckets always read Pace before Spin, regardless of which has more balls.
 const COARSE_ORDER = { Pace: 0, Spin: 1 };
 
+// Fine-breakdown bowling_type -> coarse group, for the "vs bowling type"
+// table (owner note 11, fix round: group Pace then Spin with subheadings).
+// The fine query has no per-row bowling_group column to key off of (see
+// playerData.js's fetchBattingMatchups — fineSql selects `bowling_type AS
+// bucket` only, unlike coarseSql's `bowling_group AS bucket`), so this is a
+// static label map, not data-driven. Same 9 named styles + same pace/spin
+// split as table.js's BOWLING_TYPE_PREFERENCE / drawer.js's BOWLING_TYPE_ORDER
+// (kept in sync by hand — those two live in files outside this task's scope,
+// same "duplicated on purpose" precedent as this file's own monthOptionsHTML
+// comment above).
+const FINE_BOWLING_GROUP = {
+  Fast: "Pace",
+  "Fast-medium": "Pace",
+  "Medium-fast": "Pace",
+  Medium: "Pace",
+  "Slow-medium": "Pace",
+  "Off-spin": "Spin",
+  "Leg-spin": "Spin",
+  "Slow left-arm orthodox": "Spin",
+  "Left-arm wrist-spin": "Spin",
+};
+
+/** Coarse group for one fine bowling_type value. Bare/unspecified bowlers
+ * already carry the literal bucket "Pace"/"Spin" (decision 24 — see
+ * matchupBucketLabel above) and pass straight through. Anything genuinely
+ * unrecognised (shouldn't occur: the vocabulary above is closed, same
+ * assumption table.js's own bowling-type ordering makes) falls back to a
+ * name-based guess rather than silently dropping out of both groups. */
+function fineBowlingGroup(bucket) {
+  if (bucket === "Pace" || bucket === "Spin") return bucket;
+  if (FINE_BOWLING_GROUP[bucket]) return FINE_BOWLING_GROUP[bucket];
+  return /spin|orthodox|wrist/i.test(bucket) ? "Spin" : "Pace";
+}
+
+/** Subheading row spanning every column — marks the start of a group WITHIN
+ * one table body (owner note 11: Pace then Spin inside the SAME "vs bowling
+ * type" table, not two separate tables). */
+function groupHeadingRowHTML(label, colCount) {
+  return `<tr class="mini-table__group-row"><td colspan="${colCount}">${escHtml(label)}</td></tr>`;
+}
+
+/** Same title-then-table shape as subTableHTML, but for the fine "vs bowling
+ * type" breakdown specifically: rows are grouped ALL-pace-then-ALL-spin with
+ * a subheading row before each non-empty group (owner note 11, fix round).
+ * Order WITHIN a group is untouched (balls DESC, from the SQL — Array#filter
+ * is stable, so partitioning by group never reorders rows within it). A
+ * group with no rows in this scope gets no heading (§8.4: never state a
+ * heading over zero rows). `entries`: [{bucket, cells}] — `bucket` is the RAW
+ * fine value (for classification), `cells` the already-escaped/formatted row
+ * (for display, label already run through matchupBucketLabel by the caller). */
+function fineBowlingTypeSectionHTML(title, headers, entries) {
+  if (entries.length === 0) {
+    return `<div class="matchup__subtable">
+      <p class="matchup__subtable-title">${escHtml(title)}</p>
+      ${miniTableHTML(headers, [])}
+    </div>`;
+  }
+  const pace = entries.filter((e) => fineBowlingGroup(e.bucket) === "Pace");
+  const spin = entries.filter((e) => fineBowlingGroup(e.bucket) === "Spin");
+  const colCount = headers.length;
+  const rowsHTML = (list) => list.map((e) => `<tr>${e.cells.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("");
+  const groupHTML = (label, list) => (list.length ? groupHeadingRowHTML(label, colCount) + rowsHTML(list) : "");
+  const bodyHTML = `${groupHTML("Pace", pace)}${groupHTML("Spin", spin)}`;
+  return `<div class="matchup__subtable">
+    <p class="matchup__subtable-title">${escHtml(title)}</p>
+    <div class="mini-table-wrap"><table class="mini-table">
+      <thead><tr>${headers.map((h) => `<th>${escHtml(h)}</th>`).join("")}</tr></thead>
+      <tbody>${bodyHTML}</tbody>
+    </table></div>
+  </div>`;
+}
+
 export function battingMatchupsHTML(matchups) {
   const coverageHTML = matchupCoverageLine("Style data", "faced", matchups.coverage);
   if (!coverageHTML) {
@@ -266,12 +338,12 @@ export function battingMatchupsHTML(matchups) {
 
   const coarse = [...matchups.coarse].sort((a, b) => (COARSE_ORDER[a.bucket] ?? 2) - (COARSE_ORDER[b.bucket] ?? 2));
   const coarseRows = coarse.map((r) => rowFor(r.bucket, r));
-  const fineRows = matchups.fine.map((r) => rowFor(matchupBucketLabel(r.bucket), r));
+  const fineEntries = matchups.fine.map((r) => ({ bucket: r.bucket, cells: rowFor(matchupBucketLabel(r.bucket), r) }));
 
-  return `${coverageHTML}${subTableHTML("Vs pace and spin", BATTING_MATCHUP_HEADERS, coarseRows)}${subTableHTML(
+  return `${coverageHTML}${subTableHTML("Vs pace and spin", BATTING_MATCHUP_HEADERS, coarseRows)}${fineBowlingTypeSectionHTML(
     "Vs bowling type",
     BATTING_MATCHUP_HEADERS,
-    fineRows
+    fineEntries
   )}`;
 }
 

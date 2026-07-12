@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, hasActiveProfileFilter, matchupVsActive, effectiveNamespace } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, hasActiveProfileFilter, matchupVsActive, effectiveNamespace } from "./state.js";
 import { isConditionComplete, removeConditionAt } from "./advanced.js";
 import { metricsFor, getMetric } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
@@ -86,13 +86,9 @@ export function mountPills(container, store, onChange, onPinChange = onChange) {
       if (p.bowlingType) {
         pills.push({ label: p.bowlingType, remove: () => store.set({ profile: { ...store.get().profile, bowlingType: null } }) });
       }
-      if (p.teams && p.teams.length > 0) {
-        // "Historic team" mode (owner decision 46): the old "Has ever played
-        // for (career)" filter, now labelled to say which team sense it is.
-        const label =
-          p.teams.length <= 2 ? `Ever played for: ${p.teams.join(", ")}` : `Ever played for: ${p.teams.length} teams`;
-        pills.push({ label, remove: () => store.set({ profile: { ...store.get().profile, teams: [] } }) });
-      }
+      // The "Historic team" (Ever played for) pill is gone — owner 1B-2 removed
+      // the Current/Historic distinction; profile.teams is no longer set by any
+      // UI, so there is nothing to render here.
     }
 
     if (positionsFilterActive(s)) {
@@ -114,6 +110,19 @@ export function mountPills(container, store, onChange, onPinChange = onChange) {
     if (oppositionFilterActive(s)) {
       const label = s.opposition.length === 1 ? `vs ${s.opposition[0]}` : `vs ${s.opposition.length} opponents`;
       pills.push({ label, remove: () => store.set({ opposition: [] }) });
+    }
+
+    // Event / Venue (Batch 1B): one removable pill per selected value, prefixed
+    // so the honest scope reads plainly. Both are gender-scoped match filters.
+    if (eventFilterActive(s)) {
+      for (const e of s.event) {
+        pills.push({ label: `Event: ${e}`, remove: () => store.set({ event: store.get().event.filter((x) => x !== e) }) });
+      }
+    }
+    if (venueFilterActive(s)) {
+      for (const v of s.venue) {
+        pills.push({ label: `Venue: ${v}`, remove: () => store.set({ venue: store.get().venue.filter((x) => x !== v) }) });
+      }
     }
 
     // Free-text player-name search (omnisearch's explicit "Filter the table

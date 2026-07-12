@@ -440,6 +440,7 @@ a { color: var(--color-accent); }
 .date-range {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -963,6 +964,88 @@ a { color: var(--color-accent); }
   font-size: var(--text-md);
   color: var(--color-muted);
 }
+
+/* ── Condition builder (Advanced Filters, owner task 1B-2) ────────────────────
+   The ONE grouped condition builder. Singleton rows (Role/Hand/Bowling/R.Pos/
+   Team/Opposition/Event/Venue) and numeric metric rows share the .cond-row
+   layout: a type label + inline value editor + remove ×; numeric rows add an
+   operator select, value input(s), and an inline error line. Rows are added via
+   the grouped "+ Add condition" <select>. */
+.cond-builder { display: flex; flex-direction: column; gap: var(--space-4); }
+
+.cond-builder__rows,
+.cond-builder__numeric { display: flex; flex-direction: column; gap: var(--space-3); }
+
+.cond-row { display: flex; flex-direction: column; gap: var(--space-1); }
+
+.cond-row__line { display: flex; align-items: flex-start; gap: var(--space-2); }
+
+.cond-row__main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+}
+
+.cond-row__type { font-weight: 600; flex: 0 0 auto; min-width: 6.5rem; }
+
+.cond-row__value { flex: 1 1 12rem; min-width: 0; }
+
+/* The R. Pos. row hosts two position controls in display:contents sub-hosts so
+   whichever is visible (plain vs matchup) becomes the direct flex child. */
+.cond-row__value [data-role="rpos-plain"],
+.cond-row__value [data-role="rpos-matchup"] { display: contents; }
+
+.cond-row__value .filter-group { width: 100%; min-width: 0; }
+.cond-row__value > .select,
+.cond-row__value .dropdown,
+.cond-row__value .dropdown__toggle,
+.cond-row__value .team-dropdown,
+.cond-row__value .team-dropdown__toggle,
+.cond-row__value .profile-role { width: 100%; }
+.cond-row__value .profile-role { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.cond-row__value .profile-role .select { flex: 1 1 7rem; min-width: 0; width: auto; }
+
+.cond-row__remove { flex-shrink: 0; }
+
+.cond-row__and { color: var(--color-muted); font-size: var(--text-md); }
+
+.cond-row__error { margin: 0; color: var(--color-bad); font-size: var(--text-sm2); }
+.cond-row--error .select,
+.cond-row--error .input { border-color: var(--color-bad); }
+
+.cond-builder__add { display: flex; flex-direction: column; gap: var(--space-2); }
+.cond-builder__add-select { align-self: flex-start; min-width: 14rem; max-width: 100%; }
+
+.cond-builder__empty,
+.cond-builder__note { margin: 0; }
+
+/* Games-count meta beside a team/event/venue option name. */
+.team-dropdown__meta { color: var(--color-muted); font-size: var(--text-sm2); }
+
+/* ── Date presets + required note (task 1B-2) ───────────────────────────────── */
+.date-range__input { min-height: 40px; flex: 1 1 8.5rem; min-width: 0; }
+.cond-row__value-input { flex: 0 1 6rem; min-width: 4rem; }
+
+.date-presets { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+
+.date-preset {
+  font: inherit;
+  font-size: var(--text-sm2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-raised);
+  color: var(--color-fg);
+  cursor: pointer;
+  min-height: 34px;
+}
+.date-preset:hover { border-color: var(--color-fg); }
+.date-preset:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.date-required-note { margin: var(--space-2) 0 0; color: var(--color-bad); font-style: normal; }
 
 /* ── Player search (omnisearch, B2R wave 2) ───────────────────────────────────
    The search box is player-first: typing opens .omnisearch__results, a
@@ -3060,7 +3143,15 @@ a { color: var(--color-accent); }
  * below). Compact horizontal padding, not the standard .btn--ghost space-5,
  * so both controls fit together at ~380px without wrapping; height keeps the
  * standard .btn 40px tap target (decision 42) since only min-height/padding-x
- * are overridden. */
+ * are overridden.
+ *
+ * Made INERT (owner note 17, fix round): the button stays visible but does
+ * nothing (feature deferred to a later design phase) — playerPopup.js's
+ * graphBtnObserver sets the native `disabled` attribute on it (re-applied
+ * every time playerPage.js recreates the button), so the shared, one-
+ * disabled-language-everywhere `.btn:disabled` rule (base buttons block,
+ * above) already supplies the muted look with no extra CSS needed here; a
+ * "Coming soon" tooltip (same JS) is the other half of the affordance. */
 .player-page__graph-btn {
   padding: var(--space-2) var(--space-3);
   white-space: nowrap;
@@ -3439,6 +3530,28 @@ a { color: var(--color-accent); }
   text-transform: uppercase;
   color: var(--color-muted);
   font-weight: 600;
+}
+
+/* Sub-group heading row INSIDE the "vs bowling type" mini-table (owner note
+   11, fix round): marks "Pace" then "Spin" as one continuous table instead of
+   splitting into two — a spanning cell (colspan, see playerSections.js's
+   groupHeadingRowHTML) rather than a real <th>, since it doesn't repeat per
+   column. Same type recipe as .matchup__subtable-title just above (so the
+   two read as one family of "this is a label, not data") plus a panel-tint
+   background so it still reads as a divider at a glance. The selector is
+   deliberately as specific as the shared zebra rule (.mini-table tbody
+   tr:nth-child(even) td, in the shared table-base block far above) and
+   placed after it in the cascade, so this background always wins regardless
+   of whether the heading row lands on an odd or even position — without
+   that, a same-specificity tie earlier in the file could let the zebra
+   stripe's identical color "win" by accident on some rows and not others. */
+.mini-table tbody tr.mini-table__group-row td {
+  background: var(--color-panel);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
 }
 
 /* Responsive pass (owner decision 46, task 3): the popup panel is

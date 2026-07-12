@@ -84,8 +84,8 @@ let drawerController;
 let pillsController;
 let playerPopupController;
 let filtersPopup = null; // { open, close, isOpen } — the Filters popup controller (F1a), assigned in boot()
-let maxMonth = null; // manifest max match month "YYYY-MM" — hoisted so clearAll() can rebuild the initial state
-let minMonth = null; // manifest min match month "YYYY-MM"
+let maxDate = null; // manifest max match date "YYYY-MM-DD" — reference for date presets + input max (1B-2)
+let minDate = null; // manifest min match date "YYYY-MM-DD" — input min bound
 
 /** Open the Filters popup (F1a). Exported for the table's empty-state prompt
  * button (via onOpenFilters) and F2's toolbar "Filters" button. No-op until
@@ -99,7 +99,9 @@ export function openFiltersPopup() {
  * defaults, and clear pinned players. F2 wires the red toolbar button here. */
 export function clearAll() {
   if (!store) return;
-  const fresh = createInitialState(maxMonth);
+  // Owner 1B-2: Clear returns to the initial state with the date UNSET (null) —
+  // there is no default window; the user must pick one (or a preset) again.
+  const fresh = createInitialState(null);
   store.set(fresh); // full replace — createInitialState returns every key
   lastAppliedDefaults.batting = [...fresh.columns.batting];
   lastAppliedDefaults.bowling = [...fresh.columns.bowling];
@@ -109,7 +111,7 @@ export function clearAll() {
   updateViewToggle();
   if (filterController) {
     filterController.render();
-    filterController.setDateBounds(minMonth, maxMonth); // re-selects the default date options
+    filterController.setDateBounds(minDate, maxDate); // re-applies input bounds; inputs re-sync to the (now empty) date
   }
   if (drawerController) drawerController.sync();
   if (pillsController) pillsController.render();
@@ -394,10 +396,13 @@ function boot() {
   initDB((progress) => renderInitLoading(progress))
     .then(() => {
       const manifest = getManifest();
-      maxMonth = manifest?.data?.max_match_date ? manifest.data.max_match_date.slice(0, 7) : null;
-      minMonth = manifest?.data?.min_match_date ? manifest.data.min_match_date.slice(0, 7) : null;
+      maxDate = manifest?.data?.max_match_date || null;
+      minDate = manifest?.data?.min_match_date || null;
 
-      store = createStore(createInitialState(maxMonth));
+      // Owner 1B-2: the date filter starts UNSET (no default window) and is
+      // REQUIRED before Search — so seed the store with null dates rather than
+      // createInitialState's legacy 36-month default.
+      store = createStore(createInitialState(null));
       const initial = store.get();
       lastAppliedDefaults.batting = [...initial.columns.batting];
       lastAppliedDefaults.bowling = [...initial.columns.bowling];
@@ -446,17 +451,14 @@ function boot() {
           reapplyDefaultColumnsIfUnmodified();
         }
       );
-      filterController.setDateBounds(minMonth, maxMonth);
+      filterController.setDateBounds(minDate, maxDate);
 
-      // Filters content: Team + Player profile → the popup's Player section
-      // host; opposition + stat conditions → its Advanced Filters section host.
-      // onChange refreshes pills/subtitle (never blanks the table); the popup's
-      // "Search" button below is the one query trigger.
+      // Filters content: the ONE grouped condition builder (owner 1B-2) mounts
+      // into the Advanced Filters section host. onChange refreshes pills/subtitle
+      // (never blanks the table); the popup's "Search" button is the one query
+      // trigger.
       drawerController = mountFilterDrawer(
-        {
-          playerHost: document.getElementById("popup-player-host"),
-          advancedHost: document.getElementById("popup-advanced-host"),
-        },
+        { advancedHost: document.getElementById("popup-advanced-host") },
         store,
         {
           onChange: () => {
@@ -502,9 +504,15 @@ function boot() {
         drawerController.onHide();
       }
       function runSearch() {
-        // The ONE query trigger from the popup: validate the advanced
-        // conditions, then close and (in table view) load. Graphs already
-        // follow scope changes live via onFiltersChanged → onScopeChanged.
+        // The ONE query trigger from the popup. Date is REQUIRED (owner 1B-2):
+        // block first and surface the inline message in Search Conditions if it
+        // isn't set; then validate the advanced numeric conditions. Only when
+        // both pass do we close and (in table view) load. Graphs already follow
+        // scope changes live via onFiltersChanged → onScopeChanged.
+        if (!filterController.validateDate()) {
+          fpopSetSection("fpop-body-conditions", true); // expand + show the date-required note
+          return;
+        }
         if (!drawerController.validate()) {
           fpopSetSection("fpop-body-advanced", true); // surface the inline error
           return;

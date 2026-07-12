@@ -16,8 +16,9 @@
        on-page scope strip + right-side drawer). Static shell so main.js's
        module-level lookups for the discipline toggle and #filter-bar resolve at
        load time; opened via openFiltersPopup(), closed via ×/backdrop/Escape.
-       Closing NEVER runs a query — only the footer "Search" button does. Three
-       collapsible sections: Conditions, Player, Advanced Filters. -->
+       Closing NEVER runs a query — only the footer "Search" button does. Two
+       collapsible sections: Search Conditions + Advanced Filters (owner 1B-2 —
+       the old "Player" section folded into Advanced Filters as condition types). -->
   <div class="filters-popup" id="filters-popup" data-role="filters-popup" hidden>
     <div class="filters-popup__backdrop" data-role="fpop-backdrop"></div>
     <div class="filters-popup__panel" role="dialog" aria-modal="true" aria-label="Filters" tabindex="-1" data-role="fpop-panel">
@@ -27,12 +28,12 @@
       </div>
 
       <div class="filters-popup__body">
-        <!-- Section 1: Conditions (was the scope strip) — holds the static
+        <!-- Section 1: Search Conditions (was "Conditions") — holds the static
              Discipline toggle (main.js binds it at module load) and #filter-bar,
              which src/filters.js populates + relocates Discipline into. -->
         <section class="filters-popup__section">
           <button type="button" class="filters-popup__section-header" data-role="fpop-section-toggle" aria-expanded="true" aria-controls="fpop-body-conditions">
-            <span class="filters-popup__section-name">Conditions</span>
+            <span class="filters-popup__section-name">Search Conditions</span>
             <span class="filters-popup__chevron" aria-hidden="true">▾</span>
           </button>
           <div class="filters-popup__section-body" id="fpop-body-conditions">
@@ -47,20 +48,11 @@
           </div>
         </section>
 
-        <!-- Section 2: Player (was the drawer's Team + Player profile) — mounted
-             by src/drawer.js's mountFilterDrawer into #popup-player-host. -->
-        <section class="filters-popup__section">
-          <button type="button" class="filters-popup__section-header" data-role="fpop-section-toggle" aria-expanded="true" aria-controls="fpop-body-player">
-            <span class="filters-popup__section-name">Player</span>
-            <span class="filters-popup__chevron" aria-hidden="true">▾</span>
-          </button>
-          <div class="filters-popup__section-body" id="fpop-body-player">
-            <div id="popup-player-host"></div>
-          </div>
-        </section>
-
-        <!-- Section 3: Advanced Filters (was the drawer's Advanced — opposition +
-             stat conditions) — mounted into #popup-advanced-host. -->
+        <!-- Section 2: Advanced Filters — the ONE grouped condition builder
+             (owner 1B-2). The old standalone "Player" section is gone; Role /
+             Batting hand / Bowling style / R. Pos. now live here as condition
+             types alongside Team, Match, and the numeric metric conditions.
+             Mounted by src/drawer.js's mountFilterDrawer into #popup-advanced-host. -->
         <section class="filters-popup__section">
           <button type="button" class="filters-popup__section-header" data-role="fpop-section-toggle" aria-expanded="true" aria-controls="fpop-body-advanced">
             <span class="filters-popup__section-name">Advanced Filters</span>

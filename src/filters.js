@@ -24,22 +24,37 @@ import {
   escSql as esc,
 } from "./state.js";
 
-const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// ── Day-level date helpers (Batch 1B, task 1B-2) ─────────────────────────────
+// Native <input type="date"> yields "YYYY-MM-DD" (which buildScopeClauses
+// accepts); presets compute off the DATA's max match date (via setDateBounds),
+// not the wall clock — all UTC arithmetic (no DST drift), like state.js/monthsAgo.
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const pad2 = (n) => String(n).padStart(2, "0");
+const ymd = (y, m, d) => `${y}-${pad2(m)}-${pad2(d)}`;
 
-function monthOptionsHTML(minMonth, maxMonth, selected) {
-  if (!minMonth || !maxMonth) return "";
-  const [minY, minM] = minMonth.split("-").map(Number);
-  const [maxY, maxM] = maxMonth.split("-").map(Number);
-  const opts = [];
-  for (let y = maxY; y >= minY; y--) {
-    const mFrom = y === maxY ? maxM : 12;
-    const mTo = y === minY ? minM : 1;
-    for (let m = mFrom; m >= mTo; m--) {
-      const val = `${y}-${String(m).padStart(2, "0")}`;
-      opts.push(`<option value="${val}" ${val === selected ? "selected" : ""}>${MONTH_NAMES[m - 1]} ${y}</option>`);
-    }
-  }
-  return opts.join("");
+/** Coerce a stored date into a valid <input type="date"> value ("" if unset;
+ * a legacy month-shaped "YYYY-MM" pads to the 1st so it still displays). */
+function toInputValue(v) {
+  if (!v) return "";
+  if (DAY_RE.test(v)) return v;
+  if (/^\d{4}-\d{2}$/.test(v)) return `${v}-01`;
+  return "";
+}
+/** N months before "YYYY-MM-DD", day-of-month clamped to the target month. */
+function subMonths(dateStr, n) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1 - n, 1));
+  const ty = t.getUTCFullYear();
+  const tm = t.getUTCMonth() + 1;
+  const lastDay = new Date(Date.UTC(ty, tm, 0)).getUTCDate();
+  return ymd(ty, tm, Math.min(d, lastDay));
+}
+/** Clamp "YYYY-MM-DD" into [lo, hi] (either bound may be null). */
+function clampDate(dateStr, lo, hi) {
+  let s = dateStr;
+  if (lo && s < lo) s = lo;
+  if (hi && s > hi) s = hi;
+  return s;
 }
 
 // ── Day-level dates (Batch 1B, task 1B-1) ───────────────────────────────────
@@ -421,10 +436,17 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
     <div class="filter-group filter-group--dates">
       <span class="filter-label">Date range</span>
       <div class="date-range">
-        <select class="select" data-role="dateFrom" aria-label="From"></select>
+        <input type="date" class="input date-range__input" data-role="dateFrom" aria-label="From date" />
         <span class="date-range__sep">–</span>
-        <select class="select" data-role="dateTo" aria-label="To"></select>
+        <input type="date" class="input date-range__input" data-role="dateTo" aria-label="To date" />
       </div>
+      <div class="date-presets" data-role="date-presets">
+        <button type="button" class="date-preset" data-preset="last-month">Last month</button>
+        <button type="button" class="date-preset" data-preset="last-12">Last 12 months</button>
+        <button type="button" class="date-preset" data-preset="ytd">Year to date</button>
+        <button type="button" class="date-preset" data-preset="last-year">Last calendar year</button>
+      </div>
+      <p class="profile-note date-required-note" data-role="date-required" hidden>Choose a start and end date to search.</p>
     </div>
 
     <div class="filter-group filter-group--teamtype">
@@ -464,6 +486,8 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
     gender: container.querySelector('[data-role="gender"]'),
     dateFrom: container.querySelector('[data-role="dateFrom"]'),
     dateTo: container.querySelector('[data-role="dateTo"]'),
+    datePresets: container.querySelector('[data-role="date-presets"]'),
+    dateRequired: container.querySelector('[data-role="date-required"]'),
     formatToggle: container.querySelector('[data-role="format-toggle"]'),
     formatPanel: container.querySelector('[data-role="format-panel"]'),
     formatList: container.querySelector('[data-role="format-list"]'),
@@ -472,15 +496,21 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
     teamtypeList: container.querySelector('[data-role="teamtype-list"]'),
   };
 
+  // Data date bounds (from the manifest, via setDateBounds) used for the input
+  // min/max and the preset math. maxDate = the reference "now" for presets.
+  let minDate = null;
+  let maxDate = null;
+
   function syncSegmented(el, value) {
     el.querySelectorAll(".segmented__btn").forEach((btn) => {
       btn.classList.toggle("is-active", btn.dataset.value === value);
     });
   }
 
-  function syncDateOptions(minMonth, maxMonth, state) {
-    els.dateFrom.innerHTML = monthOptionsHTML(minMonth, maxMonth, state.dateFrom);
-    els.dateTo.innerHTML = monthOptionsHTML(minMonth, maxMonth, state.dateTo);
+  function syncDateInputs() {
+    const state = store.get();
+    els.dateFrom.value = toInputValue(state.dateFrom);
+    els.dateTo.value = toInputValue(state.dateTo);
   }
 
   // ---- Format dropdown (multi-select, apply-live, min-one guard) ----
@@ -562,35 +592,107 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
     syncSegmented(els.gender, state.gender);
     syncFormatDropdown();
     syncTeamTypeDropdown();
+    syncDateInputs();
+  }
+
+  /** Date is REQUIRED (owner 1B-2 — the data isn't all-time, so an unbounded
+   * search would be dishonest). Search is blocked until BOTH a start and end
+   * date are set; the four presets set both at once. Shows/hides the inline
+   * note and returns whether the date is valid. */
+  function validateDate() {
+    const s = store.get();
+    const ok = Boolean(s.dateFrom) && Boolean(s.dateTo);
+    els.dateRequired.hidden = ok;
+    return ok;
+  }
+
+  function applyPreset(preset) {
+    if (!maxDate) return; // no data date known yet — presets inert
+    const [maxY] = maxDate.split("-").map(Number);
+    let from;
+    let to;
+    if (preset === "last-month") {
+      from = subMonths(maxDate, 1);
+      to = maxDate;
+    } else if (preset === "last-12") {
+      from = subMonths(maxDate, 12);
+      to = maxDate;
+    } else if (preset === "ytd") {
+      from = ymd(maxY, 1, 1);
+      to = maxDate;
+    } else if (preset === "last-year") {
+      from = ymd(maxY - 1, 1, 1);
+      to = ymd(maxY - 1, 12, 31);
+    } else {
+      return;
+    }
+    // Never let a preset stray outside the data's own [min, max] window.
+    from = clampDate(from, minDate, maxDate);
+    to = clampDate(to, minDate, maxDate);
+    if (from > to) from = to;
+    store.set({ dateFrom: from, dateTo: to });
+    syncDateInputs();
+    validateDate();
+    onChange();
   }
 
   // ---- wire remaining events ----
   els.gender.addEventListener("click", (e) => {
     const btn = e.target.closest(".segmented__btn");
     if (!btn) return;
-    // Switching gender clears team + profile filters: teams differ by gender, and
-    // profile filters are men-only (cleared so the women's view is never silently
-    // empty — the drawer's profile controls also grey out, decision 21).
-    store.set({ gender: btn.dataset.value, teams: [], profile: emptyProfile() });
+    // Switching gender clears the gender-specific selections: teams differ by
+    // gender; profile filters are men-only (decision 21); and Team/Event/Venue/
+    // opposition are gender-scoped vocabularies, so a stale pick would silently
+    // match nothing on the other gender — clear them so the option lists (which
+    // re-scope by gender) and any selection stay honest.
+    store.set({
+      gender: btn.dataset.value,
+      teams: [],
+      profile: emptyProfile(),
+      event: [],
+      venue: [],
+      opposition: [],
+    });
     render();
     onChange();
   });
 
   els.dateFrom.addEventListener("change", () => {
-    store.set({ dateFrom: els.dateFrom.value });
+    store.set({ dateFrom: els.dateFrom.value || null });
+    validateDate();
     onChange();
   });
   els.dateTo.addEventListener("change", () => {
-    store.set({ dateTo: els.dateTo.value });
+    store.set({ dateTo: els.dateTo.value || null });
+    validateDate();
     onChange();
+  });
+  els.datePresets.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-preset]");
+    if (btn) applyPreset(btn.dataset.preset);
   });
 
   render();
 
   return {
     render,
-    setDateBounds(minMonth, maxMonth) {
-      syncDateOptions(minMonth, maxMonth, store.get());
+    validateDate,
+    setDateBounds(minD, maxD) {
+      // Full "YYYY-MM-DD" data bounds from the manifest. Set the input min/max
+      // and stash them for the preset math; then re-sync the inputs from state.
+      minDate = minD || null;
+      maxDate = maxD || null;
+      if (minDate) {
+        els.dateFrom.min = minDate;
+        els.dateTo.min = minDate;
+      }
+      if (maxDate) {
+        els.dateFrom.max = maxDate;
+        els.dateTo.max = maxDate;
+      }
+      const presetsUnavailable = !maxDate;
+      els.datePresets.querySelectorAll("[data-preset]").forEach((b) => (b.disabled = presetsUnavailable));
+      syncDateInputs();
     },
   };
 }

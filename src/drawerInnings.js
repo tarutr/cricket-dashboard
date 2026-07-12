@@ -1,52 +1,44 @@
 // src/drawerInnings.js
 //
-// Three independent filter controls, each mounted into its own host element by
-// drawer.js:
-//   mountBattingPosition  — the MATCHUP-ONLY batting-position filter
-//                           (state.positions; striker/own position). Owner
-//                           decision 46 retired its plain-mode role, so it now
-//                           self-hides outside matchup mode.
-//   mountRegularPositions — the "R. Pos." filter (state.regularPositions, owner
-//                           decision 46): plain-mode filter on a player's most
-//                           common batting position within scope (the modal
-//                           semi-join itself lives in filters.js). Lives in the
-//                           Player-profile section; works for both disciplines
-//                           and both genders (innings-derived, not profile).
-//   mountOpposition       — the "Advanced" section's "Against (opposition)"
-//                           filter (B2R wave 2, decision 42).
+// The individual filter-editor controls mounted into the condition builder's
+// rows (src/drawer.js). Each is a self-contained `{ sync }` controller that
+// renders/wires its own DOM and calls store.set(...); drawer.js mounts them
+// once and just shows/hides their row by presence, so they survive the numeric
+// builder's rebuilds (their option caches + portal wiring never get torn down).
 //
-// This is the position/opposition half of the old src/splitControls.js,
-// carried forward through the D4-era src/drawerInnings.js; the "Split by"
-// select from that module is NOT here — it lives in the table toolbar
-// (src/table.js owns it now). Selections that are currently inert (position
-// filter while bowling; opposition filter outside international) are kept in
-// state and their controls greyed out — the query layer (buildScopeClauses)
-// already ignores them (decision-21 treatment, same as the profile filters).
+//   mountBattingPosition  — MATCHUP-ONLY striker/own batting-position filter
+//                           (state.positions); self-hides outside matchup mode.
+//   mountRegularPositions — "R. Pos." (state.regularPositions, decision 46):
+//                           plain-mode filter on a player's most common batting
+//                           position within scope (modal semi-join lives in
+//                           filters.js). Both disciplines + both genders.
+//   mountOpposition       — "Against opposition" (state.opposition); INTERNATIONAL
+//                           only (decision 20), so it greys out otherwise.
+//   mountTeam             — "Played for" (state.teams); single gender-scoped team
+//                           picker (owner 1B-2 removed the Current/Historic split).
+//   mountEvent            — "Event" (state.event, Batch 1B); gender-scoped.
+//   mountVenue            — "Venue" (state.venue, Batch 1B); gender-scoped.
 //
-// B2R wave 2 (decision 44b/42): Batting position is now a MULTI-SELECT
-// DROPDOWN (the owner rejected the old 1-12 chip row) built on the same
-// shared .dropdown checkbox-panel component filters.js introduced for the
-// Format/Team-type scope-strip dropdowns — no search box, no clear button,
-// over a short fixed vocabulary, exactly like those two.
-//
-// These modules render/wire the DOM and call store.set(...); mountOpposition
-// queries the database to populate its option list (mountBattingPosition
-// queries nothing — its vocabulary is the fixed 1-12).
+// Team/Event/Venue share mountSearchMultiselect(): a relevance-ranked,
+// gender-scoped multiselect backed by playerData.js's searchTeams/searchEvents/
+// searchVenues loaders. Those loaders are called ONCE per gender with term=""
+// (the full gender-scoped list, ordered games-desc — events also recency-desc);
+// the search box then filters that cached list client-side, so within any typed
+// substring the games-desc order is preserved (typing "India" surfaces the
+// full national team — most games — first). Re-fetches when the gender changes.
 
 import { query } from "./db.js";
 import { buildScopeClauses, wirePortalDropdown } from "./filters.js";
 import { matchupVsActive } from "./state.js";
+import { searchTeams, searchEvents, searchVenues } from "./playerData.js";
 import { escHtml, escAttr } from "./html.js";
 
 const POSITIONS = Array.from({ length: 12 }, (_, i) => i + 1);
 
 /**
- * Live summary label for the position dropdown's toggle button. Up to three
+ * Live summary label for a position dropdown's toggle button. Up to three
  * picked positions list out in full ("1, 2, 3"); four or more collapse to a
- * count ("4 selected") so the toggle never grows past a short phrase — same
- * "+N" instinct as filters.js's format-dropdown summary label, just with a
- * literal count since there's no natural "lead" position to keep. Threshold
- * (3 vs 4+) is a flagged choice, matching the worked examples in the brief.
+ * count ("4 selected") so the toggle never grows past a short phrase.
  */
 function positionsSummaryLabel(positions) {
   if (!positions || positions.length === 0) return "Any position";
@@ -56,15 +48,13 @@ function positionsSummaryLabel(positions) {
 }
 
 /**
- * Mount the Batting position multi-select dropdown into `container` (the
- * "Innings" section's body). Calls `onChange()` after any state mutation.
- * Returns `{ sync }` so drawer.js can re-sync its enabled/greyed state and
- * label after every filter change elsewhere in the app.
+ * Mount the MATCHUP-ONLY Batting position multi-select. `embedded` suppresses
+ * the outer filter-label (the condition row already names it). Returns `{ sync }`.
  */
-export function mountBattingPosition(container, store, onChange) {
+export function mountBattingPosition(container, store, onChange, { embedded = false } = {}) {
   container.innerHTML = `
     <div class="filter-group filter-group--positions" data-role="positions-group">
-      <span class="filter-label">Batting position</span>
+      ${embedded ? "" : `<span class="filter-label">Batting position</span>`}
       <div class="dropdown" data-role="positions-dropdown">
         <button type="button" class="select dropdown__toggle" data-role="positions-toggle" aria-haspopup="true" aria-expanded="false">Any position</button>
         <div class="dropdown__panel" data-role="positions-panel" hidden>
@@ -78,7 +68,6 @@ export function mountBattingPosition(container, store, onChange) {
           </div>
         </div>
       </div>
-      <span class="profile-note" data-role="positions-note" hidden>Batting view only</span>
       <span class="profile-note" data-role="positions-hint" hidden>Filters the position of the batters faced</span>
     </div>
   `;
@@ -88,7 +77,6 @@ export function mountBattingPosition(container, store, onChange) {
     toggle: container.querySelector('[data-role="positions-toggle"]'),
     panel: container.querySelector('[data-role="positions-panel"]'),
     list: container.querySelector('[data-role="positions-list"]'),
-    note: container.querySelector('[data-role="positions-note"]'),
     hint: container.querySelector('[data-role="positions-hint"]'),
   };
 
@@ -96,8 +84,6 @@ export function mountBattingPosition(container, store, onChange) {
     els.toggle.textContent = positionsSummaryLabel(store.get().positions);
   }
 
-  // Portaled to <body> while open so the popup body's overflow:auto can't clip
-  // it (team_dropdown.png fix — same helper every in-popup dropdown uses).
   const dropdown = wirePortalDropdown(els.toggle, els.panel);
 
   els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
@@ -112,13 +98,10 @@ export function mountBattingPosition(container, store, onChange) {
     });
   });
 
-  /** MATCHUP-ONLY now (owner decision 46): this striker/own batting-position
-   * filter (`state.positions`) is live only while a matchup "Vs" selection is
+  /** MATCHUP-ONLY (decision 46): live only while a matchup "Vs" selection is
    * active — in matchup_batting it's the batter's own position, in
-   * matchup_bowling the position of the striker faced (anchor: Bumrah vs RHB
-   * positions 1–2). Plain mode's position filter is now R. Pos.
-   * (mountRegularPositions), so this control hides entirely outside matchup
-   * mode rather than sitting greyed. */
+   * matchup_bowling the position of the striker faced. Plain mode uses R. Pos.
+   * instead, so this hides entirely outside matchup mode. */
   function sync() {
     const state = store.get();
     const matchupOn = matchupVsActive(state);
@@ -127,20 +110,15 @@ export function mountBattingPosition(container, store, onChange) {
       dropdown.close();
       return;
     }
-    els.group.classList.remove("is-disabled");
-    els.note.hidden = true;
     els.toggle.disabled = false;
     updateToggleLabel();
     const selected = new Set(state.positions);
     els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
       cb.checked = selected.has(Number(cb.dataset.position));
     });
-
     // Bowling-matchup hint: this filter narrows the BATTERS faced, not the
-    // bowler's own (nonexistent) position — say so plainly so it doesn't read
-    // as "position bowled from".
-    const bowlingMatchupHint = state.discipline === "bowling" && matchupOn;
-    els.hint.hidden = !bowlingMatchupHint;
+    // bowler's own (nonexistent) position — say so plainly.
+    els.hint.hidden = !(state.discipline === "bowling" && matchupOn);
   }
 
   sync();
@@ -150,22 +128,17 @@ export function mountBattingPosition(container, store, onChange) {
 const REGULAR_POSITIONS = Array.from({ length: 11 }, (_, i) => i + 1);
 
 /**
- * Mount the "R. Pos." (regular position) multi-select dropdown into `container`
- * (the Player profile section, owner decision 46). Binds to
+ * Mount the "R. Pos." (regular position) multi-select (decision 46). Binds to
  * `state.regularPositions` — a player matches when their MOST COMMON batting
- * position within the current gender/format/date/team-type scope is in the
- * selection (the modal-position semi-join lives in filters.js's
- * buildScopeClauses). PLAIN-MODE only: hides entirely in matchup mode, where
- * the striker-position filter (mountBattingPosition, `state.positions`) takes
- * over. Works for BOTH disciplines and BOTH genders (it's computed from
- * innings, not the men-only profile sheet). Calls `onChange()` after any state
- * mutation. Returns `{ sync }`.
+ * position within scope is in the selection (the semi-join lives in filters.js).
+ * PLAIN-MODE only (hides in matchup mode). Both disciplines + both genders.
+ * `embedded` suppresses the outer filter-label. Returns `{ sync }`.
  */
-export function mountRegularPositions(container, store, onChange) {
+export function mountRegularPositions(container, store, onChange, { embedded = false } = {}) {
   const DESC = "Regular position — where this player most often bats";
   container.innerHTML = `
     <div class="filter-group filter-group--rpos" data-role="rpos-group">
-      <span class="filter-label" title="${escAttr(DESC)}">R. Pos.</span>
+      ${embedded ? "" : `<span class="filter-label" title="${escAttr(DESC)}">R. Pos.</span>`}
       <div class="dropdown" data-role="rpos-dropdown">
         <button type="button" class="select dropdown__toggle" data-role="rpos-toggle" aria-haspopup="true" aria-expanded="false" title="${escAttr(DESC)}">Any position</button>
         <div class="dropdown__panel" data-role="rpos-panel" hidden>
@@ -193,7 +166,6 @@ export function mountRegularPositions(container, store, onChange) {
     els.toggle.textContent = positionsSummaryLabel(store.get().regularPositions);
   }
 
-  // Portaled to <body> while open (team_dropdown.png fix — shared helper).
   const dropdown = wirePortalDropdown(els.toggle, els.panel);
 
   els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
@@ -210,9 +182,7 @@ export function mountRegularPositions(container, store, onChange) {
 
   function sync() {
     const state = store.get();
-    // Plain-mode only — matchup mode uses the striker `positions` filter, so
-    // hide R. Pos. entirely there (keeps them mutually exclusive and honest).
-    els.group.hidden = matchupVsActive(state);
+    els.group.hidden = matchupVsActive(state); // plain-mode only
     if (matchupVsActive(state)) {
       dropdown.close();
       return;
@@ -229,9 +199,9 @@ export function mountRegularPositions(container, store, onChange) {
 }
 
 /**
- * Distinct opposition team names under the current scope. The opposition
- * filter never narrows its own option list (buildScopeClauses is called
- * without oppositionColumn here), mirroring fetchTeamOptions in drawer.js.
+ * Distinct opposition team names under the current scope. The opposition filter
+ * never narrows its own option list (buildScopeClauses called without
+ * oppositionColumn here).
  */
 async function fetchOppositionOptions(state) {
   const view = state.discipline === "batting" ? "batting" : "bowling";
@@ -246,17 +216,12 @@ async function fetchOppositionOptions(state) {
 }
 
 /**
- * Mount the "Against (opposition)" team-multi-select into `container` (the
- * "Advanced" section's body, B2R wave 2 relocation — was "Opposition" in the
- * old "Innings" section). Calls `onChange()` after any state mutation.
- * Returns `{ sync }` so drawer.js can re-sync the enabled/greyed state and the
- * option list after every filter change elsewhere in the app.
+ * Mount the "Against opposition" team-multiselect (state.opposition). Embedded
+ * inside a condition row (the row's type label names it), so its own label is
+ * suppressed. INTERNATIONAL-only (decision 20): greys + closes otherwise, and
+ * oppositionFilterActive() keeps the pill/subtitle honest. Returns `{ sync }`.
  */
 export function mountOpposition(container, store, onChange, { embedded = false } = {}) {
-  // `embedded` (F1b): rendered as a row INSIDE the Advanced-Filters unified
-  // condition builder, where the row's "Against opposition" type select already
-  // labels it — so the standalone "Against (opposition)" filter-label is
-  // suppressed to avoid a redundant double label.
   container.innerHTML = `
     <div class="filter-group filter-group--opposition ${embedded ? "filter-group--opp-embedded" : ""}" data-role="opposition-group">
       ${embedded ? "" : `<span class="filter-label">Against (opposition)</span>`}
@@ -302,7 +267,7 @@ export function mountOpposition(container, store, onChange, { embedded = false }
 
   function renderList(filterText) {
     if (oppOptionsErrored) {
-      els.list.innerHTML = `<p class="team-dropdown__empty">Couldn't load teams — reopen the drawer to retry.</p>`;
+      els.list.innerHTML = `<p class="team-dropdown__empty">Couldn't load teams — reopen the filters to retry.</p>`;
       return;
     }
     const q = (filterText || "").trim().toLowerCase();
@@ -330,8 +295,6 @@ export function mountOpposition(container, store, onChange, { embedded = false }
     });
   }
 
-  /** Refetch the opposition option list only when the scope actually changed, and
-   * only while the filter is eligible (international team type). */
   async function refreshOptions() {
     const state = store.get();
     if (state.teamType !== "international") return;
@@ -340,15 +303,12 @@ export function mountOpposition(container, store, onChange, { embedded = false }
     const token = ++oppOptionsLoadToken;
     try {
       const fetched = await fetchOppositionOptions(state);
-      if (token !== oppOptionsLoadToken) return; // a newer request superseded this one
+      if (token !== oppOptionsLoadToken) return;
       oppOptionsCache = fetched;
       oppOptionsErrored = false;
       lastScopeKey = key;
     } catch (e) {
       if (token !== oppOptionsLoadToken) return;
-      // Don't set lastScopeKey on failure — it stays stale so the next sync()
-      // (drawer reopen / filter change) retries instead of silently sticking
-      // with a dishonest "No teams match." empty state.
       oppOptionsErrored = true;
       renderList(els.search.value);
       updateToggleLabel();
@@ -360,14 +320,9 @@ export function mountOpposition(container, store, onChange, { embedded = false }
     if (dropped) store.set({ opposition: stillValid });
     renderList(els.search.value);
     updateToggleLabel();
-    // A dropped selection changes the honest scope sentence (§8.4) — refresh
-    // downstream views even though this resolves after sync() already returned.
     if (dropped) onChange();
   }
 
-  // Portaled to <body> while open so the popup body's overflow:auto can't clip
-  // it (team_dropdown.png fix — shared helper). onOpen resets/focuses the
-  // search box, exactly as the old bespoke toggle handler did.
   const dropdown = wirePortalDropdown(els.toggle, els.panel, {
     onOpen: () => {
       els.search.value = "";
@@ -397,4 +352,184 @@ export function mountOpposition(container, store, onChange, { embedded = false }
 
   sync();
   return { sync };
+}
+
+/**
+ * Shared gender-scoped, relevance-ranked multiselect for Team / Event / Venue
+ * (task 1B-2). `config`:
+ *   { get(state)->string[], set(store,arr), loader(gender)->Promise<opts>,
+ *     emptyLabel, countLabel(n)->string, searchPlaceholder, itemMeta(opt)->string }
+ * Options are loaded once per gender (loader gets the full gender-scoped list);
+ * the search box filters that cache client-side. Returns `{ sync }`.
+ */
+function mountSearchMultiselect(container, store, onChange, config) {
+  container.innerHTML = `
+    <div class="filter-group filter-group--opp-embedded" data-role="ms-group">
+      <div class="team-dropdown" data-role="ms-dropdown">
+        <button type="button" class="team-dropdown__toggle" data-role="ms-toggle" aria-haspopup="true" aria-expanded="false">
+          ${escHtml(config.emptyLabel)}
+        </button>
+        <div class="team-dropdown__panel" data-role="ms-panel" hidden>
+          <input type="text" class="team-dropdown__search" data-role="ms-search" placeholder="${escAttr(config.searchPlaceholder)}" />
+          <div class="team-dropdown__list" data-role="ms-list"></div>
+          <div class="team-dropdown__actions">
+            <button type="button" class="link-btn" data-role="ms-clear">Clear</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const els = {
+    toggle: container.querySelector('[data-role="ms-toggle"]'),
+    panel: container.querySelector('[data-role="ms-panel"]'),
+    search: container.querySelector('[data-role="ms-search"]'),
+    list: container.querySelector('[data-role="ms-list"]'),
+    clear: container.querySelector('[data-role="ms-clear"]'),
+  };
+
+  let optionsCache = []; // [{value,label,games,...}] for loadedGender
+  let loadedGender = null; // gender the cache was loaded for
+  let loadToken = 0;
+  let loading = false;
+  let errored = false;
+
+  function selected() {
+    return new Set(config.get(store.get()));
+  }
+
+  function updateToggleLabel() {
+    const arr = config.get(store.get());
+    els.toggle.textContent = arr.length === 0 ? config.emptyLabel : arr.length === 1 ? arr[0] : config.countLabel(arr.length);
+  }
+
+  function renderList(filterText) {
+    if (loading) {
+      els.list.innerHTML = `<p class="team-dropdown__empty">Loading…</p>`;
+      return;
+    }
+    if (errored) {
+      els.list.innerHTML = `<p class="team-dropdown__empty">Couldn't load options — reopen the filters to retry.</p>`;
+      return;
+    }
+    const q = (filterText || "").trim().toLowerCase();
+    const sel = selected();
+    const filtered = optionsCache.filter((o) => o.label.toLowerCase().includes(q));
+    els.list.innerHTML =
+      filtered
+        .map((o) => {
+          const meta = config.itemMeta ? config.itemMeta(o) : "";
+          return `<label class="team-dropdown__item">
+            <input type="checkbox" data-value="${escAttr(o.value)}" ${sel.has(o.value) ? "checked" : ""} />
+            <span>${escHtml(o.label)}${meta ? ` <span class="team-dropdown__meta">${escHtml(meta)}</span>` : ""}</span>
+          </label>`;
+        })
+        .join("") || `<p class="team-dropdown__empty">No matches.</p>`;
+
+    els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const cur = new Set(config.get(store.get()));
+        if (cb.checked) cur.add(cb.dataset.value);
+        else cur.delete(cb.dataset.value);
+        config.set(store, [...cur]);
+        updateToggleLabel();
+        onChange();
+      });
+    });
+  }
+
+  async function ensureLoaded() {
+    const gender = store.get().gender;
+    if (loadedGender === gender && !errored) {
+      renderList(els.search.value); // already cached for this gender — show it
+      return;
+    }
+    loading = true;
+    errored = false;
+    renderList(els.search.value); // "Loading…"
+    const token = ++loadToken;
+    try {
+      const rows = await config.loader(gender);
+      if (token !== loadToken) return;
+      optionsCache = rows || [];
+      loadedGender = gender;
+      loading = false;
+    } catch (e) {
+      if (token !== loadToken) return;
+      loading = false;
+      errored = true;
+      renderList(els.search.value);
+      return;
+    }
+    renderList(els.search.value);
+  }
+
+  const dropdown = wirePortalDropdown(els.toggle, els.panel, {
+    onOpen: () => {
+      els.search.value = "";
+      els.search.focus();
+      ensureLoaded();
+    },
+  });
+
+  els.search.addEventListener("input", () => renderList(els.search.value));
+  els.clear.addEventListener("click", () => {
+    config.set(store, []);
+    renderList(els.search.value);
+    updateToggleLabel();
+    onChange();
+  });
+
+  function sync() {
+    // Gender changed since the cache loaded → drop it so the next open reloads
+    // for the new gender (selections are cleared by the gender handler).
+    if (loadedGender !== null && loadedGender !== store.get().gender) {
+      loadedGender = null;
+      optionsCache = [];
+      dropdown.close();
+    }
+    updateToggleLabel();
+  }
+
+  sync();
+  return { sync };
+}
+
+/** "Played for" — single gender-scoped team picker (state.teams). */
+export function mountTeam(container, store, onChange) {
+  return mountSearchMultiselect(container, store, onChange, {
+    get: (s) => s.teams || [],
+    set: (st, arr) => st.set({ teams: arr }),
+    loader: (gender) => searchTeams("", gender),
+    emptyLabel: "All teams",
+    countLabel: (n) => `${n} teams`,
+    searchPlaceholder: "Search teams…",
+    itemMeta: (o) => (o.games != null ? `${Number(o.games)}` : ""),
+  });
+}
+
+/** "Event" — gender-scoped competition/series picker (state.event). */
+export function mountEvent(container, store, onChange) {
+  return mountSearchMultiselect(container, store, onChange, {
+    get: (s) => s.event || [],
+    set: (st, arr) => st.set({ event: arr }),
+    loader: (gender) => searchEvents("", gender),
+    emptyLabel: "Any event",
+    countLabel: (n) => `${n} events`,
+    searchPlaceholder: "Search events…",
+    itemMeta: (o) => (o.games != null ? `${Number(o.games)}` : ""),
+  });
+}
+
+/** "Venue" — gender-scoped ground picker (state.venue). */
+export function mountVenue(container, store, onChange) {
+  return mountSearchMultiselect(container, store, onChange, {
+    get: (s) => s.venue || [],
+    set: (st, arr) => st.set({ venue: arr }),
+    loader: (gender) => searchVenues("", gender),
+    emptyLabel: "Any venue",
+    countLabel: (n) => `${n} venues`,
+    searchPlaceholder: "Search venues…",
+    itemMeta: (o) => (o.games != null ? `${Number(o.games)}` : ""),
+  });
 }
