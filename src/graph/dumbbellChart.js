@@ -1,12 +1,14 @@
 // src/graph/dumbbellChart.js
 //
-// Chart.js renderer for the DUMBBELL chart (Batch 4 wave 2, task 2): one
-// horizontal row per player, two dots (Side A hollow, Side B filled) joined
-// by a muted connector, sorted by Side B's value. Data comes from
-// dumbbell.js's fetchDumbbellSide (two independent calls, one per side) —
-// this module only draws it. Kept in its own file for the same reason
-// timeseriesChart.js is (charts.js is already well past the ~600-line
-// guidance; see that file's header).
+// Chart.js renderer for the DUMBBELL chart. Owner correction: this is a
+// TIME-WINDOW chart, NOT a Pace-vs-Spin chart — it draws Slope's exact data
+// (one rate/percent metric across Window A vs Window B) as one horizontal row
+// per player: two dots (Window A hollow, Window B filled) joined by a muted
+// connector, sorted by Window B's value. Data comes from charts.js's
+// fetchWindowMetric (two independent calls, one per window — the same Maps
+// Slope consumes), so this module only draws it. Kept in its own file for the
+// same reason timeseriesChart.js is (charts.js is already well past the
+// ~600-line guidance; see that file's header).
 //
 // Rendering technique: ONE real Chart.js dataset — a horizontal FLOATING bar
 // per player (data = [min(a,b), max(a,b)]), thin and muted, which doubles as
@@ -28,11 +30,11 @@ import { palette, labelForValue, destroyIfExists } from "./charts.js";
  * @param {HTMLCanvasElement} canvas
  * @param {{current: any}} chartRef
  * @param {object} params
- * @param {object} params.metric a metrics.js metric (matchup_batting namespace)
- * @param {string} params.labelA human label for Side A (e.g. "Pace")
- * @param {string} params.labelB human label for Side B (e.g. "Spin")
- * @param {Map<string, object>} params.rowsA dumbbell.js's fetchDumbbellSide result, Side A
- * @param {Map<string, object>} params.rowsB dumbbell.js's fetchDumbbellSide result, Side B
+ * @param {object} params.metric a metrics.js metric (rate/percent, batting or bowling)
+ * @param {string} params.labelA human label for Window A (e.g. "Jul 2023–Jan 2025")
+ * @param {string} params.labelB human label for Window B (e.g. "Feb 2025–Jul 2026")
+ * @param {Map<string, object>} params.rowsA charts.js's fetchWindowMetric result, Window A
+ * @param {Map<string, object>} params.rowsB charts.js's fetchWindowMetric result, Window B
  * @param {Array<{id, name}>} params.players the selected roster
  * @returns {{excluded: string[], note: string|null}}
  */
@@ -46,27 +48,23 @@ export function buildDumbbellChart(canvas, chartRef, { metric, labelA, labelB, r
     const rowB = rowsB.get(p.id);
     const rawA = rowA ? rowA[metric.key] : null;
     const rawB = rowB ? rowB[metric.key] : null;
+    // Same both-windows rule as Slope: a player needs real data in BOTH
+    // windows to form a dumbbell (a value in only one window is not a
+    // comparison). Missing either → excluded (visible note).
     if (rowA && rowB && hasMetricData(metric, rawA) && hasMetricData(metric, rawB)) {
-      included.push({
-        id: p.id,
-        name: p.name,
-        a: Number(rawA),
-        b: Number(rawB),
-        // Per-side "share of total balls" figures (see dumbbell.js's file
-        // header on why this isn't table.js's Coverage column) — each side's
-        // own FILTER'd "balls" count over the (bucket-independent) grand
-        // total. The grand total is identical either side computes it from;
-        // fall back to whichever side actually has it if one is missing.
-        ballsA: Number(rowA.balls ?? 0),
-        ballsB: Number(rowB.balls ?? 0),
-        totalBalls: Number(rowA.__coverage_total ?? rowB.__coverage_total ?? 0),
-      });
+      included.push({ id: p.id, name: p.name, a: Number(rawA), b: Number(rawB) });
     } else {
       excluded.push(p.name);
     }
   }
 
-  // Sorted by Side B's value, descending (task brief).
+  // Nobody qualifies for both windows → draw nothing (the caller shows an
+  // honest placeholder), never an empty bar box (§7 — mirrors buildSlopeChart).
+  if (included.length === 0) {
+    return { excluded, note: `${included.length} of ${players.length} selected players have data in both windows.` };
+  }
+
+  // Sorted by Window B's value, descending (kept from the original renderer).
   included.sort((a, b) => b.b - a.b);
 
   const pal = palette();
@@ -107,8 +105,8 @@ export function buildDumbbellChart(canvas, chartRef, { metric, labelA, labelB, r
             pointStyle: "circle",
             generateLabels() {
               return [
-                { text: `○ vs ${labelA}`, fillStyle: pal.bg, strokeStyle: pal.ink, lineWidth: 2, pointStyle: "circle", datasetIndex: 0 },
-                { text: `● vs ${labelB}`, fillStyle: pal.accent, strokeStyle: pal.accent, lineWidth: 2, pointStyle: "circle", datasetIndex: 0 },
+                { text: `○ ${labelA}`, fillStyle: pal.bg, strokeStyle: pal.ink, lineWidth: 2, pointStyle: "circle", datasetIndex: 0 },
+                { text: `● ${labelB}`, fillStyle: pal.accent, strokeStyle: pal.accent, lineWidth: 2, pointStyle: "circle", datasetIndex: 0 },
               ];
             },
           },
@@ -122,10 +120,7 @@ export function buildDumbbellChart(canvas, chartRef, { metric, labelA, labelB, r
             title: (items) => (items.length ? included[items[0].dataIndex].name : ""),
             label: (ctx) => {
               const r = included[ctx.dataIndex];
-              return [
-                `vs ${labelA}: ${labelForValue(metric, r.a)} (${r.ballsA.toLocaleString()} of ${r.totalBalls.toLocaleString()} balls)`,
-                `vs ${labelB}: ${labelForValue(metric, r.b)} (${r.ballsB.toLocaleString()} of ${r.totalBalls.toLocaleString()} balls)`,
-              ];
+              return [`${labelA}: ${labelForValue(metric, r.a)}`, `${labelB}: ${labelForValue(metric, r.b)}`];
             },
           },
         },
@@ -202,7 +197,7 @@ export function buildDumbbellChart(canvas, chartRef, { metric, labelA, labelB, r
 
   const note =
     included.length < players.length
-      ? `${included.length} of ${players.length} selected players have data for both sides.`
+      ? `${included.length} of ${players.length} selected players have data in both windows.`
       : null;
 
   return { excluded, note };

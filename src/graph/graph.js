@@ -10,7 +10,7 @@
 // buildScopeClauses (via charts.js/players.js), table.js's buildQuery (via
 // players.js, for seeding).
 
-import { eligibleMetrics, matchupVsActive } from "../state.js";
+import { eligibleMetrics } from "../state.js";
 import { getMetric, hasMetricData } from "../metrics.js";
 import { escHtml, escAttr } from "../html.js";
 import { getManifest, query } from "../db.js";
@@ -35,17 +35,11 @@ import { eligibleRadarGroups } from "./radarGroups.js";
 import { eligiblePhaseFamilies } from "./phaseFamilies.js";
 import { timeseriesSupported, buildTimeseriesQuery } from "./timeseries.js";
 import { buildTimeseriesChart } from "./timeseriesChart.js";
-import {
-  dumbbellEligibleMetrics,
-  fetchDumbbellBowlingTypes,
-  fetchDumbbellSide,
-  defaultDumbbellSides,
-  oppositeDefaultSide,
-  encodeVs,
-  decodeVs,
-  vsLabel,
-  dumbbellVsOptionsHTML,
-} from "./dumbbell.js";
+// Dumbbell is now a TIME-WINDOW chart (owner correction: it is NOT a
+// Pace-vs-Spin chart) — it draws the SAME data as Slope (one rate/percent
+// metric across Window A vs Window B, via charts.js's fetchWindowMetric),
+// rendered as dot-bar-dot. It therefore needs none of src/graph/dumbbell.js's
+// matchup "Vs"-bucket machinery anymore; only the renderer is imported.
 import { buildDumbbellChart } from "./dumbbellChart.js";
 import {
   benchmarkEligibleMetrics,
@@ -162,32 +156,11 @@ function wireDropdown(toggleEl, panelEl) {
   });
 }
 
-/**
- * Whether the Dumbbell chart can be used at all right now: batting discipline
- * (see dumbbell.js's file header — matchup_bowling has no symmetric "two
- * sides" grain to chart) AND gender === "male". The gender guard matters
- * beyond just UI polish: matchupVsActive() (state.js) — which decides whether
- * buildQuery() takes the matchup path at all — returns false whenever
- * gender !== "male" (matchup "Vs" style data doesn't exist for women yet,
- * decision 21; table.js's own "Vs" select is disabled the same way, same
- * wording). Without this guard, a female-gender dumbbell attempt would
- * silently fall through to buildQuery's PLAIN (non-matchup) path — several
- * matchup_batting metric keys (average, strike_rate, dot_pct, boundary_pct, …)
- * also exist, with a DIFFERENT sqlExpression, in the plain "batting"
- * namespace — so the chart would draw real career-wide numbers mislabeled as
- * "vs Pace"/"vs Spin" instead of an honest no-data state. Never assumed;
- * caught by re-reading matchupVsActive's own gender check while wiring this up.
- */
-function dumbbellAvailable(state) {
-  return state.discipline === "batting" && state.gender === "male";
-}
-
-/** Honest reason the Dumbbell chart isn't available right now, for whichever
- * condition in dumbbellAvailable() is failing (checked in the same order). */
-function dumbbellUnavailableReason(state) {
-  if (state.gender !== "male") return "No bowling-style data for women's cricket yet.";
-  return "Batting view only for now.";
-}
+// NOTE: the Dumbbell chart used to be batting+men-only (a matchup "vs Pace/vs
+// Spin" chart, gated by a dumbbellAvailable()/dumbbellUnavailableReason() pair
+// here). It is now a time-window chart drawing Slope's exact data source, so
+// it works wherever Slope does — any gender, batting OR bowling — and needs no
+// availability gate at all. Both helpers were removed with that rebuild.
 
 /** Metrics eligible for the donut chart: additive totals only (Batch 3 fix 4 —
  * an explicit `additive: true` flag on the metric itself, set once in
@@ -322,15 +295,12 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
   // Batch 4 wave 2 (the last two chart types).
   let byYearMetricKey = null;
   let dumbbellMetricKey = null;
-  // {dim, value} pairs (dumbbell.js's shape), or null until
-  // ensureDumbbellSideDefaults() first sets them — same "owner-picked, never
-  // silently recomputed" posture as the Slope windows above.
-  let dumbbellSideA = null;
-  let dumbbellSideB = null;
-  // The distinct fine "Bowling type" values, lazily fetched once and cached —
-  // same idiom as table.js's own bowlingTypesCache (this module can't import
-  // that one; see dumbbell.js's file header on the Vs-vocabulary duplication).
-  let dumbbellBowlingTypesCache = null;
+  // Dumbbell is a time-window chart (owner correction): {from,to} "YYYY-MM"
+  // pairs, mirroring slopeWindowA/B exactly — null until
+  // ensureDumbbellWindowDefaults() first sets them (default half-split), then
+  // owner-picked, never silently recomputed.
+  let dumbbellWindowA = null;
+  let dumbbellWindowB = null;
 
   // B8b (Benchmark, decision 44e). `benchmarkAnchorId` is the checked
   // roster's own id (never a candidate outside it — see renderMetricControls'
@@ -498,28 +468,27 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
     slopeWindowB = { from: monthFromIndex(secondFromIdx), to };
   }
 
-  /** Dumbbell's Side A/Side B defaults (task brief): Pace vs Spin, set ONCE
-   * (like the Slope windows above) then left alone until the user repicks. */
-  function ensureDumbbellSideDefaults() {
-    if (dumbbellSideA && dumbbellSideB) return;
-    const d = defaultDumbbellSides();
-    dumbbellSideA = d.sideA;
-    dumbbellSideB = d.sideB;
-  }
-
-  /** Lazily fetch + cache the fine "Bowling type" vocabulary for the Dumbbell
-   * chart's Side A/B selects (dumbbell.js's own duplicate of table.js's
-   * distinct-bowling_type lookup — see that module's file header). No-op if
-   * already cached; re-renders the metric controls once the fetch resolves
-   * IF the Dumbbell chart is still the active type (a user who clicked away
-   * before it loaded shouldn't have their current controls yanked out from
-   * under them). */
-  function ensureDumbbellBowlingTypes() {
-    if (dumbbellBowlingTypesCache) return;
-    fetchDumbbellBowlingTypes().then((types) => {
-      dumbbellBowlingTypesCache = types;
-      if (chartType === "dumbbell") renderMetricControls();
-    });
+  /** Dumbbell's Window A/Window B defaults — IDENTICAL logic to
+   * ensureSlopeWindowDefaults() above (first half of the scope's date range
+   * vs second half), since the rebuilt Dumbbell is Slope's data drawn as
+   * dumbbells. Kept as its own function (not shared with the slope one) so
+   * each chart type owns its own independent, separately-repickable windows —
+   * exactly as they were separate before, just both now date windows rather
+   * than Slope=windows / Dumbbell=Vs-buckets. Set ONCE, then owner-picked. */
+  function ensureDumbbellWindowDefaults() {
+    if (dumbbellWindowA && dumbbellWindowB) return;
+    const state = store.get();
+    const { minMonth, maxMonth } = datasetMonthBounds();
+    const from = state.dateFrom || minMonth;
+    const to = state.dateTo || maxMonth;
+    if (!from || !to) return; // bounds not known yet — leave blank, user must pick both ends
+    const fromIdx = monthIndex(from);
+    const toIdx = monthIndex(to);
+    const span = Math.max(0, toIdx - fromIdx);
+    const midIdx = fromIdx + Math.floor(span / 2);
+    dumbbellWindowA = { from, to: monthFromIndex(midIdx) };
+    const secondFromIdx = Math.min(midIdx + (span > 0 ? 1 : 0), toIdx);
+    dumbbellWindowB = { from: monthFromIndex(secondFromIdx), to };
   }
 
   // ── Selection model: Best/Worst ranking (Batch 8, task 1 — v1's
@@ -837,39 +806,39 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
         });
       }
     } else if (chartType === "dumbbell") {
-      // Batch 4 wave 2, task 2: batting discipline + men's cricket only (see
-      // dumbbellAvailable() above and dumbbell.js's file header for why). The
-      // chart-type click handler / onScopeChanged already steer away from
-      // "dumbbell" whenever it's unavailable, but render an honest note
-      // defensively rather than assume that always ran first.
-      if (!dumbbellAvailable(state)) {
-        els.metricControls.innerHTML = `<p class="graph-metric-note">${dumbbellUnavailableReason(state)}</p>`;
-        return;
-      }
-      const metrics = dumbbellEligibleMetrics(formats);
+      // Time-window Dumbbell (owner correction — NOT a Pace/Spin chart): the
+      // SAME controls as Slope — one rate/percent metric + a Window A/Window B
+      // month range each — since it draws Slope's exact data (fetchWindowMetric
+      // per window) as dot-bar-dot. Works for batting AND bowling, any gender;
+      // no availability gate.
+      const metrics = eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent");
       if (!dumbbellMetricKey || !metrics.some((m) => m.key === dumbbellMetricKey)) {
-        dumbbellMetricKey = (metrics.find((m) => m.key === "strike_rate") || metrics[0])?.key ?? null;
+        const preferredKey = discipline === "batting" ? "strike_rate" : "economy";
+        dumbbellMetricKey = (metrics.find((m) => m.key === preferredKey) || metrics[0])?.key ?? null;
       }
-      ensureDumbbellSideDefaults();
-      ensureDumbbellBowlingTypes(); // fire-and-forget; re-renders these controls once loaded
-      const bowlingTypes = dumbbellBowlingTypesCache || [];
+      ensureDumbbellWindowDefaults();
+      const { minMonth, maxMonth } = datasetMonthBounds();
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
         <select class="select graph-metric-select" data-role="dumbbell-metric">
           ${
             metrics.length
               ? metrics.map((m) => `<option value="${m.key}" ${m.key === dumbbellMetricKey ? "selected" : ""}>${m.label}</option>`).join("")
-              : `<option value="">No matchup rate/percent metric available for this scope</option>`
+              : `<option value="">No rate/percent metric available for this scope</option>`
           }
         </select>
-        <span class="graph-control-label">Side A</span>
-        <select class="select graph-metric-select" data-role="dumbbell-side-a" aria-label="Side A">
-          ${dumbbellVsOptionsHTML(bowlingTypes, encodeVs(dumbbellSideA))}
-        </select>
-        <span class="graph-control-label">Side B</span>
-        <select class="select graph-metric-select" data-role="dumbbell-side-b" aria-label="Side B">
-          ${dumbbellVsOptionsHTML(bowlingTypes, encodeVs(dumbbellSideB))}
-        </select>
+        <span class="graph-control-label">Window A</span>
+        <div class="date-range graph-slope-range">
+          <select class="select" data-role="dumbbell-a-from" aria-label="Window A from">${monthOptionsHTML(minMonth, maxMonth, dumbbellWindowA?.from)}</select>
+          <span class="date-range__sep">–</span>
+          <select class="select" data-role="dumbbell-a-to" aria-label="Window A to">${monthOptionsHTML(minMonth, maxMonth, dumbbellWindowA?.to)}</select>
+        </div>
+        <span class="graph-control-label">Window B</span>
+        <div class="date-range graph-slope-range">
+          <select class="select" data-role="dumbbell-b-from" aria-label="Window B from">${monthOptionsHTML(minMonth, maxMonth, dumbbellWindowB?.from)}</select>
+          <span class="date-range__sep">–</span>
+          <select class="select" data-role="dumbbell-b-to" aria-label="Window B to">${monthOptionsHTML(minMonth, maxMonth, dumbbellWindowB?.to)}</select>
+        </div>
       `;
       const metricSel = els.metricControls.querySelector('[data-role="dumbbell-metric"]');
       if (metricSel) {
@@ -878,20 +847,19 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
           scheduleRender({ paramsChanged: true });
         });
       }
-      const sideASel = els.metricControls.querySelector('[data-role="dumbbell-side-a"]');
-      if (sideASel) {
-        sideASel.addEventListener("change", (e) => {
-          dumbbellSideA = decodeVs(e.target.value);
-          scheduleRender({ paramsChanged: true });
-        });
-      }
-      const sideBSel = els.metricControls.querySelector('[data-role="dumbbell-side-b"]');
-      if (sideBSel) {
-        sideBSel.addEventListener("change", (e) => {
-          dumbbellSideB = decodeVs(e.target.value);
-          scheduleRender({ paramsChanged: true });
-        });
-      }
+      const bindWindowSelect = (role, setter) => {
+        const el = els.metricControls.querySelector(`[data-role="${role}"]`);
+        if (el) {
+          el.addEventListener("change", (e) => {
+            setter(e.target.value);
+            scheduleRender({ paramsChanged: true });
+          });
+        }
+      };
+      bindWindowSelect("dumbbell-a-from", (v) => (dumbbellWindowA = { ...dumbbellWindowA, from: v }));
+      bindWindowSelect("dumbbell-a-to", (v) => (dumbbellWindowA = { ...dumbbellWindowA, to: v }));
+      bindWindowSelect("dumbbell-b-from", (v) => (dumbbellWindowB = { ...dumbbellWindowB, from: v }));
+      bindWindowSelect("dumbbell-b-to", (v) => (dumbbellWindowB = { ...dumbbellWindowB, to: v }));
     } else if (chartType === "benchmark") {
       // B8b (decision 44e). Anchor picker: a plain <select> over the CHECKED
       // roster ONLY (task brief) — unlike every other chart type, the pool
@@ -1262,9 +1230,6 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
     // reasons/strings).
     const poolReason = poolReasonOverride !== undefined ? poolReasonOverride : poolStatusReason();
     if (poolReason) return { ok: false, reason: poolReason };
-    if (typeKey === "dumbbell" && !dumbbellAvailable(state)) {
-      return { ok: false, reason: dumbbellUnavailableReason(state) };
-    }
     if (typeKey === "donut" && donutEligibleMetrics(state.discipline, state.formats).length === 0) {
       return { ok: false, reason: "Needs a countable stat" };
     }
@@ -1280,8 +1245,8 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
     if (typeKey === "byyear" && eligibleMetrics(state.discipline, state.formats).filter((m) => timeseriesSupported(m)).length === 0) {
       return { ok: false, reason: "No year-by-year metric available for this scope" };
     }
-    if (typeKey === "dumbbell" && dumbbellEligibleMetrics(state.formats).length === 0) {
-      return { ok: false, reason: "No matchup rate/percent metric available for this scope" };
+    if (typeKey === "dumbbell" && eligibleMetrics(state.discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent").length === 0) {
+      return { ok: false, reason: "No rate/percent metric available for this scope" };
     }
     // B8b (decision 44e): needs >=1 checked player (the anchor — covered by
     // the generic candidateCount/capDef.min check below, since
@@ -1581,18 +1546,24 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
       return metric ? { type: "byyear", discipline, metric, playerCount, roster } : null;
     }
     if (chartType === "dumbbell") {
-      if (!dumbbellAvailable(state) || !dumbbellSideA || !dumbbellSideB) return null;
-      const metrics = dumbbellEligibleMetrics(state.formats);
+      const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
       const metric = metrics.find((m) => m.key === dumbbellMetricKey) || metrics[0];
+      // labelA/labelB and sideAKey/sideBKey mirror what the render branch
+      // emits (see below) so card.js's autoTitle/regenKeyFor read the same
+      // window vocabulary here as there — sideAKey/sideBKey carry the window
+      // ranges (not Vs buckets), so a window change invalidates a hand-edited
+      // title exactly like a metric change does.
       return metric
         ? {
             type: "dumbbell",
             discipline,
             metric,
-            labelA: vsLabel(dumbbellSideA),
-            labelB: vsLabel(dumbbellSideB),
-            sideAKey: encodeVs(dumbbellSideA),
-            sideBKey: encodeVs(dumbbellSideB),
+            labelA: windowLabel(dumbbellWindowA),
+            labelB: windowLabel(dumbbellWindowB),
+            sideAKey: dumbbellWindowA ? `${dumbbellWindowA.from}:${dumbbellWindowA.to}` : null,
+            sideBKey: dumbbellWindowB ? `${dumbbellWindowB.from}:${dumbbellWindowB.to}` : null,
+            windowA: dumbbellWindowA,
+            windowB: dumbbellWindowB,
             playerCount,
             roster,
           }
@@ -1639,10 +1610,13 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
       return `${base} · Window A: ${a} · Window B: ${b}`;
     }
     if (config && config.type === "dumbbell") {
-      // Batch 4 wave 2, task 2: the footer must state both sides explicitly
-      // (§8.4) — mirrors slope's window footer above.
-      if (!config.labelA || !config.labelB) return base;
-      return `${base} · Side A: vs ${config.labelA} · Side B: vs ${config.labelB}`;
+      // Time-window Dumbbell: the footer states both windows explicitly (§8.4)
+      // — identical shape to slope's window footer above (owner correction:
+      // the sides are date windows, not Pace/Spin buckets).
+      const a = config.labelA ?? windowLabel(config.windowA);
+      const b = config.labelB ?? windowLabel(config.windowB);
+      if (!a || !b) return base;
+      return `${base} · Window A: ${a} · Window B: ${b}`;
     }
     if (config && config.type === "benchmark") {
       // B8b: "Footer states the pool honestly" (task brief) — the plain
@@ -1794,6 +1768,23 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
         const labelA = windowLabel(slopeWindowA);
         const labelB = windowLabel(slopeWindowB);
         const result = buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rowsA, rowsB, players });
+        const drawn = players.length - (result?.excluded?.length ?? 0);
+        if (drawn === 0) {
+          // Every selected player is missing data in at least one window, so
+          // there's no slope to draw. Show an honest message instead of the
+          // empty axis box buildSlopeChart now declines to draw (§7 — never a
+          // broken-looking blank plot). The card title still honestly reads
+          // "0 players".
+          if (chartRef.current) {
+            chartRef.current.destroy();
+            chartRef.current = null;
+          }
+          card.showPlaceholder("None of the selected players have data in both windows. Pick players with more innings, widen the windows, or choose a different metric.");
+          renderExclusions(result?.excluded ?? [], result?.note);
+          const titleCfg = buildTitleOnlyConfig(0);
+          if (titleCfg) card.regenerate(titleCfg, buildFooterScope(titleCfg));
+          return;
+        }
         renderExclusions(result?.excluded ?? [], result?.note);
 
         const config = {
@@ -1806,7 +1797,7 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
           windowBLabel: labelB,
           // The honest count for THIS chart's title is how many actually got
           // drawn (qualify in both windows), not the raw selection size.
-          playerCount: players.length - (result?.excluded?.length ?? 0),
+          playerCount: drawn,
           // If qualification dropped anyone, the survivors are no longer
           // exactly "the top N by <seed metric>" (a mid-ranked player may have
           // dropped while a lower-ranked one survived) — force the plain
@@ -1846,15 +1837,38 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
         if (token !== loadToken) return;
         hideStatus();
 
+        // The calendar-year span the x-axis should cover — the live scope's
+        // date window (state.dateFrom/dateTo are "YYYY-MM"), so the Line chart
+        // draws every year in range even for a roster of single-year players
+        // (was collapsing to just the years-with-data, cramming lone dots at
+        // the right edge — the "Line looks broken" bug).
+        const scopeYears = {
+          from: state.dateFrom ? Number(state.dateFrom.slice(0, 4)) : null,
+          to: state.dateTo ? Number(state.dateTo.slice(0, 4)) : null,
+        };
         const canvas = card.getCanvas();
-        const result = buildTimeseriesChart(canvas, chartRef, { metric, rows, players });
+        const result = buildTimeseriesChart(canvas, chartRef, { metric, rows, players, scopeYears });
+        const drawn = players.length - (result?.excluded?.length ?? 0);
+        if (drawn === 0) {
+          // Nobody has any qualifying year in range — show an honest message
+          // in place of an empty (year-less) plot, never a blank card (§7).
+          if (chartRef.current) {
+            chartRef.current.destroy();
+            chartRef.current = null;
+          }
+          card.showPlaceholder("None of the selected players have data in this date range. Pick players with innings in range, or widen the window.");
+          renderExclusions(result?.excluded ?? [], result?.note);
+          const titleCfg = buildTitleOnlyConfig(0);
+          if (titleCfg) card.regenerate(titleCfg, buildFooterScope(titleCfg));
+          return;
+        }
         renderExclusions(result?.excluded ?? [], result?.note);
 
         const config = {
           type: "byyear",
           discipline,
           metric,
-          playerCount: players.length - (result?.excluded?.length ?? 0),
+          playerCount: drawn,
           roster: (result?.excluded?.length ?? 0) > 0 ? { ...roster, dirty: true } : roster,
         };
         if (pendingRegenerate) {
@@ -1866,47 +1880,54 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
         return;
       }
 
-      // Dumbbell (Batch 4 wave 2, task 2): TWO independent matchup-mode
-      // queries (one per side, via dumbbell.js's fetchDumbbellSide — the same
-      // wrap-buildQuery idiom fetchWindowMetric uses for Slope's two windows)
-      // instead of fetchSelectedPlayerMetrics's single plain-discipline query.
+      // Dumbbell (owner correction): a TIME-WINDOW chart — Slope's exact data
+      // (fetchWindowMetric per window, one rate/percent metric) drawn as
+      // dot-bar-dot. Two independent per-window queries, same wrap-buildQuery
+      // idiom Slope uses; works for batting AND bowling, any gender (no
+      // availability gate — see the removed dumbbellAvailable note up top).
       if (chartType === "dumbbell") {
-        if (!dumbbellAvailable(state)) {
-          hideStatus();
-          if (chartRef.current) {
-            chartRef.current.destroy();
-            chartRef.current = null;
-          }
-          card.hidePlaceholder();
-          renderExclusions([], dumbbellUnavailableReason(state));
-          return;
-        }
-        const metrics = dumbbellEligibleMetrics(state.formats);
+        const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
         const metric = metrics.find((m) => m.key === dumbbellMetricKey) || metrics[0];
-        ensureDumbbellSideDefaults();
-        if (!metric || !dumbbellSideA || !dumbbellSideB) {
+        ensureDumbbellWindowDefaults();
+        const windowsReady = Boolean(dumbbellWindowA?.from && dumbbellWindowA?.to && dumbbellWindowB?.from && dumbbellWindowB?.to);
+        if (!metric || !windowsReady) {
           hideStatus();
           if (chartRef.current) {
             chartRef.current.destroy();
             chartRef.current = null;
           }
           card.hidePlaceholder();
-          renderExclusions([], "No matchup rate/percent metric available for this scope.");
+          renderExclusions([], metric ? "Pick both date windows to draw this chart." : "No rate/percent metric available for this scope.");
           return;
         }
 
         const ids = players.map((p) => p.id);
         const [rowsA, rowsB] = await Promise.all([
-          fetchDumbbellSide(state, dumbbellSideA, ids, metric),
-          fetchDumbbellSide(state, dumbbellSideB, ids, metric),
+          fetchWindowMetric(state, dumbbellWindowA, ids, metric),
+          fetchWindowMetric(state, dumbbellWindowB, ids, metric),
         ]);
         if (token !== loadToken) return;
         hideStatus();
 
         const canvas = card.getCanvas();
-        const labelA = vsLabel(dumbbellSideA);
-        const labelB = vsLabel(dumbbellSideB);
+        const labelA = windowLabel(dumbbellWindowA);
+        const labelB = windowLabel(dumbbellWindowB);
         const result = buildDumbbellChart(canvas, chartRef, { metric, labelA, labelB, rowsA, rowsB, players });
+        const drawn = players.length - (result?.excluded?.length ?? 0);
+        if (drawn === 0) {
+          // Same both-windows exclusion as Slope: nobody has data in both
+          // windows, so there's no dumbbell to draw. Honest message, not an
+          // empty bar box (§7).
+          if (chartRef.current) {
+            chartRef.current.destroy();
+            chartRef.current = null;
+          }
+          card.showPlaceholder("None of the selected players have data in both windows. Pick players with more innings, widen the windows, or choose a different metric.");
+          renderExclusions(result?.excluded ?? [], result?.note);
+          const titleCfg = buildTitleOnlyConfig(0);
+          if (titleCfg) card.regenerate(titleCfg, buildFooterScope(titleCfg));
+          return;
+        }
         renderExclusions(result?.excluded ?? [], result?.note);
 
         const config = {
@@ -1915,9 +1936,13 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
           metric,
           labelA,
           labelB,
-          sideAKey: encodeVs(dumbbellSideA),
-          sideBKey: encodeVs(dumbbellSideB),
-          playerCount: players.length - (result?.excluded?.length ?? 0),
+          // sideAKey/sideBKey carry the window ranges (card.js's regenKeyFor
+          // keys the title-edit guard off them) — see buildTitleOnlyConfig.
+          sideAKey: `${dumbbellWindowA.from}:${dumbbellWindowA.to}`,
+          sideBKey: `${dumbbellWindowB.from}:${dumbbellWindowB.to}`,
+          windowA: dumbbellWindowA,
+          windowB: dumbbellWindowB,
+          playerCount: drawn,
           roster: (result?.excluded?.length ?? 0) > 0 ? { ...roster, dirty: true } : roster,
         };
         if (pendingRegenerate) {
@@ -2133,45 +2158,20 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
   }
 
   /**
-   * Stats toolbar "Graph" button (decision 46f): navigates to Graphs exactly
-   * like the tab (onShow()) in the plain case — no forced chart type, no
-   * auto-render. The ONE exception (owner-approved, decision 46f): if the
-   * table was in matchup "Vs" mode when clicked, land directly on the
-   * Dumbbell chart — the one chart type that understands matchup vocabulary,
-   * so a bar chart would have nothing to draw from — with Side B set to the
-   * table's own "Vs" bucket and Side A defaulted to the opposite family.
-   * `preferredMetricKey` (the table's current sort column) is only used in
-   * that matchup branch; the plain branch has no pre-selected type for it to
-   * seed a metric onto anymore.
+   * Stats toolbar "Graph" button: navigates to Graphs exactly like the tab
+   * (onShow()) — no forced chart type, no auto-render (decision 46f).
+   *
+   * The old matchup special-case (land on Dumbbell with Side B = the table's
+   * "Vs" bucket) was REMOVED: Dumbbell is no longer a matchup chart, it's a
+   * time-window chart (owner correction), so there is no longer any chart type
+   * that consumes the table's Pace/Spin vocabulary — carrying that bucket into
+   * a chart would be dishonest. The bridge therefore now lands everywhere the
+   * same way: the plain Graphs entry, where the user picks a chart type. The
+   * `preferredMetricKey` arg (the table's current sort column) is accepted for
+   * caller-signature compatibility but no longer consulted — there's no
+   * pre-selected chart type for it to seed a metric onto.
    */
-  async function enterFromBridge({ preferredMetricKey } = {}) {
-    const state = store.get();
-
-    if (state.discipline === "batting" && matchupVsActive(state)) {
-      chartType = "dumbbell";
-      syncChartTypeButtons();
-      syncBarStyleVisibility();
-      clearCapNote();
-
-      // Side B = the table's own selection; Side A = the "opposite family"
-      // default (dumbbell.js's classifyBowlingFamily heuristic) — a sensible
-      // contrasting starting point the user can freely repick afterward.
-      const tableVs = state.matchupVs;
-      dumbbellSideB = tableVs;
-      dumbbellSideA = oppositeDefaultSide(tableVs);
-
-      const metrics = dumbbellEligibleMetrics(state.formats);
-      dumbbellMetricKey =
-        preferredMetricKey && metrics.some((m) => m.key === preferredMetricKey)
-          ? preferredMetricKey
-          : (metrics.find((m) => m.key === "strike_rate") || metrics[0])?.key ?? null;
-
-      renderMetricControls();
-      await seedSelection({ force: true });
-      scheduleRender({ paramsChanged: true });
-      return;
-    }
-
+  async function enterFromBridge(_opts = {}) {
     await onShow();
   }
 
@@ -2233,10 +2233,9 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
         return single(eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent"));
       case "byyear":
         return single(eligibleMetrics(discipline, formats).filter((m) => timeseriesSupported(m)));
-      case "dumbbell": {
-        if (!dumbbellAvailable(state)) return { kind: "none", note: dumbbellUnavailableReason(state) };
-        return single(dumbbellEligibleMetrics(formats));
-      }
+      case "dumbbell":
+        // Time-window Dumbbell shares Slope's exact metric set (rate/percent).
+        return single(eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent"));
       case "scatter": {
         const metrics = eligibleMetrics(discipline, formats);
         const options = metrics.map((m) => ({ key: m.key, label: m.label }));

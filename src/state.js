@@ -227,6 +227,25 @@ export function oppositionFilterActive(state) {
   return state.teamType === "international" && Array.isArray(state.opposition) && state.opposition.length > 0;
 }
 
+// ── Match filters: Event / Venue (Batch 1B, task 1B-1) ──────────────────────
+// Two additive match-level filters, structurally mirroring oppositionFilterActive
+// above but WITHOUT its teamType === "international" gate: event_name and venue
+// are meaningful for domestic competitions too (an IPL/county game has both),
+// so — unlike opposition, whose club team names are unnormalized (decision 20)
+// — there is no reason to restrict these to international scope. The query
+// side (filters.js buildScopeClauses) joins state.event/state.venue to
+// `matches` gender-scoped; see that module for the exact SQL.
+
+/** True if the Event filter (state.event) is currently narrowing the match set. */
+export function eventFilterActive(state) {
+  return Array.isArray(state.event) && state.event.length > 0;
+}
+
+/** True if the Venue filter (state.venue) is currently narrowing the match set. */
+export function venueFilterActive(state) {
+  return Array.isArray(state.venue) && state.venue.length > 0;
+}
+
 // ── Stat-condition subtitle tokens (B2R wave 2, decision 42) ─────────────────
 // describeScope() joins the active advanced conditions into the honest scope
 // sentence ("…, Runs ≥ 300") replacing the old "min N innings" phrase (min
@@ -312,6 +331,11 @@ export function createInitialState(maxMonth) {
                    // batting position within the current gender/format/date/team-type scope. [] = no
                    // predicate. Applies in plain mode only (matchup mode keeps its own `positions`).
     opposition: [], // opposition team names; [] = no predicate. International only (decision 20).
+    event: [], // event_name values (Batch 1B, task 1B-1); [] = no predicate. NOT gated on teamType
+               // (event_name is meaningful for domestic competitions too, unlike opposition) — see
+               // eventFilterActive() and filters.js buildScopeClauses' gender-scoped matches join.
+    venue: [], // venue values (Batch 1B, task 1B-1); [] = no predicate. See venueFilterActive() and
+               // filters.js buildScopeClauses' gender-scoped matches join.
     splitBy: null, // null | "position" | "opposition" | "dismissal" — table-only breakdown
     matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)
     pinnedPlayers: [], // [{id, name}] — owner decision 46 task 3b: players ADDED to the table's

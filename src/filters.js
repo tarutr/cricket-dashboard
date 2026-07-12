@@ -19,6 +19,8 @@ import {
   oppositionFilterActive,
   positionsFilterActive,
   regularPositionsFilterActive,
+  eventFilterActive,
+  venueFilterActive,
   escSql as esc,
 } from "./state.js";
 
@@ -38,6 +40,33 @@ function monthOptionsHTML(minMonth, maxMonth, selected) {
     }
   }
   return opts.join("");
+}
+
+// ── Day-level dates (Batch 1B, task 1B-1) ───────────────────────────────────
+// dateFrom/dateTo now accept EITHER the original "YYYY-MM" (month granularity)
+// or a new "YYYY-MM-DD" (day granularity). isDayDate distinguishes the two by
+// shape alone (both are produced by trusted internal code — the date pickers
+// — never typed freely by a user into SQL, but esc() still runs on every
+// interpolated value below as defense in depth, matching every other clause
+// in this file). nextCalendarDay computes an exclusive upper bound one day
+// past a given "YYYY-MM-DD", the day-granularity analogue of the month branch's
+// existing "first day of the following month" trick — done via UTC Date
+// arithmetic (never local time) so it can never drift a day from DST, mirroring
+// state.js's monthsAgo helper.
+const DAY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isDayDate(value) {
+  return DAY_DATE_RE.test(value);
+}
+
+function nextCalendarDay(yyyymmdd) {
+  const [y, m, d] = yyyymmdd.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + 1);
+  const ny = dt.getUTCFullYear();
+  const nm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const nd = String(dt.getUTCDate()).padStart(2, "0");
+  return `${ny}-${nm}-${nd}`;
 }
 
 /** The four filters that make up EVERY query's inescapable "core scope" —
@@ -63,13 +92,31 @@ export function buildCoreScopeClauses(state, { includeGender = true } = {}) {
     clauses.push(`match_type IN (${matchTypes.map((t) => `'${esc(t)}'`).join(", ")})`);
   }
 
-  if (state.dateFrom) clauses.push(`match_date >= DATE '${esc(state.dateFrom)}-01'`);
+  // Day-level dates (Batch 1B): a "YYYY-MM-DD" dateFrom/dateTo takes a new
+  // branch each; the ORIGINAL "YYYY-MM" branch below is untouched byte-for-byte,
+  // so with no dates set, or dates in the original month format, this emits the
+  // exact same clauses as before (baselines 2,813/2,049 unaffected).
+  if (state.dateFrom) {
+    if (isDayDate(state.dateFrom)) {
+      // Day-level lower bound: the day itself, used directly (inclusive).
+      clauses.push(`match_date >= DATE '${esc(state.dateFrom)}'`);
+    } else {
+      clauses.push(`match_date >= DATE '${esc(state.dateFrom)}-01'`);
+    }
+  }
   if (state.dateTo) {
-    // Inclusive of the whole "to" month: use the first day of the FOLLOWING month.
-    const [y, m] = state.dateTo.split("-").map(Number);
-    const nextY = m === 12 ? y + 1 : y;
-    const nextM = m === 12 ? 1 : m + 1;
-    clauses.push(`match_date < DATE '${nextY}-${String(nextM).padStart(2, "0")}-01'`);
+    if (isDayDate(state.dateTo)) {
+      // Day-level upper bound: inclusive of the whole day, via the FOLLOWING
+      // calendar day as an exclusive bound — same trick as the month branch,
+      // one granularity level down.
+      clauses.push(`match_date < DATE '${esc(nextCalendarDay(state.dateTo))}'`);
+    } else {
+      // Inclusive of the whole "to" month: use the first day of the FOLLOWING month.
+      const [y, m] = state.dateTo.split("-").map(Number);
+      const nextY = m === 12 ? y + 1 : y;
+      const nextM = m === 12 ? 1 : m + 1;
+      clauses.push(`match_date < DATE '${nextY}-${String(nextM).padStart(2, "0")}-01'`);
+    }
   }
 
   if (state.teamType === "international") clauses.push(`team_type = 'international'`);
@@ -90,7 +137,12 @@ export function buildCoreScopeClauses(state, { includeGender = true } = {}) {
  *     teamType === "international" (decision 20; the controls grey out
  *     elsewhere, so an inert selection must never filter silently).
  *   includePositions — apply the batting-position filter (batting innings
- *     views only; positions are a batting concept, inert in bowling). */
+ *     views only; positions are a batting concept, inert in bowling).
+ *
+ * Event / Venue (Batch 1B, task 1B-1) are NOT opt-in like the two above — they
+ * always apply when state.event/state.venue are non-empty, for every caller,
+ * via a match_id semi-join against `matches` (no column-name parameter needed;
+ * see the inline comment at the clause itself). */
 export function buildScopeClauses(
   state,
   { includeTeams = true, teamColumn, idColumn, oppositionColumn, includePositions = false, includeGender = true } = {}
@@ -103,6 +155,33 @@ export function buildScopeClauses(
 
   if (oppositionColumn && oppositionFilterActive(state)) {
     clauses.push(`${oppositionColumn} IN (${state.opposition.map((t) => `'${esc(t)}'`).join(", ")})`);
+  }
+
+  // Event / Venue (Batch 1B, task 1B-1): additive match-level filters via a
+  // semi-join to `matches`, gender-scoped (not the caller's other scope dims —
+  // `matches` is queried standalone here, so its own gender predicate is
+  // spelled out fresh rather than reusing buildCoreScopeClauses). A plain,
+  // NON-correlated IN-subquery: it only requires the CALLER's own FROM table to
+  // carry a `match_id` column, which batting_innings, bowling_innings,
+  // matchup_batting, and matchup_bowling — every view this function is ever
+  // called against — all do (verified against the live schema). No column-name
+  // option is needed (unlike teamColumn/oppositionColumn) because event_name
+  // and venue live on ONE table (`matches`) regardless of caller. Both are OFF
+  // by default (state.event / state.venue start as [] — see state.js), so this
+  // is a no-op addition until a picker UI (1B-2) sets either array.
+  if (eventFilterActive(state)) {
+    clauses.push(
+      `match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND event_name IN (${state.event
+        .map((e) => `'${esc(e)}'`)
+        .join(", ")}))`
+    );
+  }
+  if (venueFilterActive(state)) {
+    clauses.push(
+      `match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND venue IN (${state.venue
+        .map((v) => `'${esc(v)}'`)
+        .join(", ")}))`
+    );
   }
 
   if (includePositions && positionsFilterActive(state)) {

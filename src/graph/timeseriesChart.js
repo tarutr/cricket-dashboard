@@ -23,9 +23,16 @@ import { palette, SERIES_COLORS, labelForValue, destroyIfExists } from "./charts
  * @param {Array<{id, name}>} params.players the full selected roster (in
  *   selection order — determines series color assignment and the
  *   included/excluded split)
+ * @param {{from: number|null, to: number|null}} [params.scopeYears] the
+ *   calendar-year span of the current filter scope's date window (graph.js
+ *   derives it from state.dateFrom/dateTo). The x-axis is drawn across this
+ *   full span (contiguously filled), so a Jul 2023–Jul 2026 scope always
+ *   shows 2023·2024·2025·2026 — never collapsing to just the two years that
+ *   happen to have data (the bug where a top-by-average roster of single-year
+ *   players rendered lone dots crammed at the right edge on a 2-tick axis).
  * @returns {{excluded: string[], note: string|null}}
  */
-export function buildTimeseriesChart(canvas, chartRef, { metric, rows, players }) {
+export function buildTimeseriesChart(canvas, chartRef, { metric, rows, players, scopeYears }) {
   destroyIfExists(chartRef);
 
   // Group rows by player id -> Map<year, {value, sample}>.
@@ -50,15 +57,39 @@ export function buildTimeseriesChart(canvas, chartRef, { metric, rows, players }
     }
   }
 
-  // x axis: the union of every year with at least one INCLUDED player's row,
-  // sorted ascending — never the raw dataset's full year range, so a chart of
-  // just one modern player's short career doesn't stretch back to 1877.
-  const yearSet = new Set();
-  for (const p of included) for (const y of p.years.keys()) yearSet.add(y);
-  const years = [...yearSet].sort((a, b) => a - b);
+  // Nobody has a qualifying year in range → draw nothing (graph.js shows an
+  // honest placeholder), never an empty year-less plot (§7 — mirrors
+  // buildSlopeChart / buildDumbbellChart).
+  if (included.length === 0) {
+    return { excluded, note: null };
+  }
+
+  // x axis: a CONTIGUOUS span of calendar years covering both the filter
+  // scope's own date window (scopeYears — the meaningful, bounded range the
+  // user actually asked for, e.g. 2023–2026) AND any year that has data,
+  // then every year in between filled in. Filling contiguously (rather than
+  // only listing years-with-data) does two things the old union-of-data-years
+  // couldn't: it keeps single-year players from bunching at the right edge on
+  // a 2-tick axis, and it gives a gap year its own slot so a break in a
+  // player's line reads as "didn't play that year" at the right position. The
+  // scope window already bounds the query's date filter, so this never
+  // stretches back to 1877 the way the raw dataset range would.
+  const dataYears = [];
+  for (const p of included) for (const y of p.years.keys()) dataYears.push(Number(y));
+  let minYear = dataYears.length ? Math.min(...dataYears) : null;
+  let maxYear = dataYears.length ? Math.max(...dataYears) : null;
+  const scopeFrom = scopeYears && Number.isInteger(scopeYears.from) ? scopeYears.from : null;
+  const scopeTo = scopeYears && Number.isInteger(scopeYears.to) ? scopeYears.to : null;
+  if (scopeFrom != null) minYear = minYear == null ? scopeFrom : Math.min(minYear, scopeFrom);
+  if (scopeTo != null) maxYear = maxYear == null ? scopeTo : Math.max(maxYear, scopeTo);
+  const years = [];
+  if (minYear != null && maxYear != null) {
+    for (let y = minYear; y <= maxYear; y++) years.push(y);
+  }
 
   const pal = palette();
   let anyGreyPoint = false;
+  let lonePointPlayers = 0;
 
   const datasets = included.map((p, i) => {
     const color = SERIES_COLORS[i % SERIES_COLORS.length];
@@ -70,7 +101,8 @@ export function buildTimeseriesChart(canvas, chartRef, { metric, rows, players }
       const cell = p.years.get(y);
       // A year with no row, OR a row whose value is SQL NULL (a rate metric
       // with a zero denominator that year), is a GAP — never plotted as zero
-      // (§8.1). spanGaps: false (below) keeps the line from bridging over it.
+      // (§8.1). The gap point stays null with radius 0 (no marker), so the
+      // year is still honestly shown as blank for this player.
       if (!cell || !hasMetricData(metric, cell.value)) {
         data.push(null);
         pointBg.push(color);
@@ -88,6 +120,15 @@ export function buildTimeseriesChart(canvas, chartRef, { metric, rows, players }
       pointBorder.push(thin ? pal.muted : color);
       pointRadius.push(4);
     }
+    // A player with exactly one real (non-null) year in range can't form a
+    // line — draw that single point noticeably larger so it reads as a
+    // deliberate datum (a "played one season here" marker) rather than a
+    // stray dot, per the task brief. Counted for the honest footer note below.
+    const realIdxs = data.map((v, idx) => (v != null ? idx : -1)).filter((idx) => idx >= 0);
+    if (realIdxs.length === 1) {
+      pointRadius[realIdxs[0]] = 6;
+      lonePointPlayers++;
+    }
     return {
       label: p.name,
       data,
@@ -97,9 +138,15 @@ export function buildTimeseriesChart(canvas, chartRef, { metric, rows, players }
       pointBorderColor: pointBorder,
       pointBorderWidth: 2,
       pointRadius,
-      pointHoverRadius: 6,
+      pointHoverRadius: 7,
       borderWidth: 2,
-      spanGaps: false,
+      // spanGaps: true so a player with >=2 real year-points ALWAYS draws a
+      // connecting line, even across a season they didn't play (the gap years
+      // carry no marker, so the interpolation is visibly just a trend line
+      // between measured points — the task's "a player with >=2 year-points
+      // draws a line" requirement, which spanGaps:false could not guarantee
+      // once gap years occupy their own axis slots).
+      spanGaps: true,
       tension: 0.15,
     };
   });
@@ -134,6 +181,15 @@ export function buildTimeseriesChart(canvas, chartRef, { metric, rows, players }
     },
   });
 
-  const note = anyGreyPoint ? `Faded points: under ${MIN_BALLS_PER_YEAR} balls that year.` : null;
+  const notes = [];
+  if (anyGreyPoint) notes.push(`Faded points: under ${MIN_BALLS_PER_YEAR} balls that year.`);
+  if (lonePointPlayers > 0) {
+    notes.push(
+      `${lonePointPlayers} player${lonePointPlayers === 1 ? "" : "s"} with only one season in range ${
+        lonePointPlayers === 1 ? "shows" : "show"
+      } as a single point (no line).`
+    );
+  }
+  const note = notes.length ? notes.join(" ") : null;
   return { excluded, note };
 }

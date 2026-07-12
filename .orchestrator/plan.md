@@ -38,7 +38,7 @@ from the filter re-architecture.
 | # | Task | Owner files | Model/Effort | Depends on | Status |
 |---|------|-------------|--------------|------------|--------|
 | E | Inventory: scope-strip render/wire points, table.js toolbar hooks, styles.css region map, graph entry + back-link removal spot, muting-code locations (table/metrics/benchmark), search wiring | read-only | Haiku/med | — | pending |
-| F1a | State + interaction contract + Filters-popup shell; remove scope strip from page. Store scope keys UNCHANGED; Search = the one query trigger; table persists; Clear empties; no cross-gender memory; subtitle from applied scope. | state.js, main.js, index.html (scope-strip removal + popup shell), filter/popup-shell CSS | **Opus/xhigh** | E | pending |
+| F1a[DONE 28123cb, verified] | State + interaction contract + Filters-popup shell; remove scope strip from page. Store scope keys UNCHANGED; Search = the one query trigger; table persists; Clear empties; no cross-gender memory; subtitle from applied scope. | state.js, main.js, index.html (scope-strip removal + popup shell), filter/popup-shell CSS | **Opus/xhigh** | E | pending |
 | F1b | Populate popup: Conditions controls (Men left/Women right), compact Player profile (fix player_profile.png), Team dual-dropdown w/ popover-overflow fix (fix team_dropdown.png), opposition→Advanced-Filters condition (kill standalone dropdown + old Advanced section), women message "No bowling type data for Women available yet." | filters.js, drawer.js, drawerInnings.js, advanced.js, pills.js, popup-content CSS | Opus/high | F1a | pending |
 | F2 | Toolbar: Filters button; Clear button (red, right of Graph/Columns); remove Vs dropdown entirely on Women; move table-search INPUT into toolbar; pills row BETWEEN toolbar and table (above column headers) | table.js (toolbar region), main.js (search input mount), index.html (toolbar), toolbar/table CSS | Sonnet/high | F1b | pending |
 | G1 | Debug+fix **Line** (only 1 line draws) and **Slope** (0 players/empty); **rebuild Dumbbell** as time-window (Window A/B like Slope) for batting AND bowling | src/graph/timeseries*.js, charts.js, dumbbell*.js, graph.js (chart plumbing), graph CSS | **Opus/xhigh** | E | pending |
@@ -76,6 +76,49 @@ the table/metrics muting + export. Different files, correctly ordered.
 ## Pinned agents to create in .claude/agents/ (Phase 4)
 orch-explorer (haiku/med, read-only) · orch-implementer (sonnet/high) ·
 orch-heavy (opus/xhigh) · orch-reviewer (opus/xhigh, read-only).
+
+## STATUS: Batch 1 COMPLETE + GATE 1 APPROVED (with revisions → Batch 1B).
+Now planning Batch 1B (filter/header revision) + Batch 2 (graphs/popup) to run in
+PARALLEL, interleaved at ≤2 concurrent. Awaiting owner approval of this combined plan.
+
+## Batch 1B — filter & header revision (owner notes 1–9, 11–13 of the Gate-1 reply)
+Two popup sections: **Search Conditions** (Gender·Discipline·Format·Date·Team type)
++ **Advanced Filters** (everything else, as grouped condition types). Player section
+folded in. Grouped "+ Add condition" taxonomy:
+- Player: Role · Batting hand · Bowling style · R. Pos.
+- Team: Played for (single picker, no current/historic — date scopes it) · Against(opposition)
+- Match: Event · Venue
+- Basic metrics · Advanced metrics (dot%/boundary% STAY; dismissal-% REMOVED from filters
+  — those are table columns only)
+Date: NO default; day/month/year granularity; presets (last month / last 12 months /
+year-to-date / last calendar year); **REQUIRED** — Search blocked with no date (no
+all-time; data isn't all-time). Team+Event+Venue option lists gender-scoped; relevance
+search (team: text→games; event: text→games→recency; assume clean names — dirty base
+names are a separate data cleanup). Header shrunk to one row, subtitle REMOVED. Toolbar
+to ONE row. "Group rows" removed. Parked: note 10 (per-event date ranges), note 14
+(format-specific table options + final column sets).
+
+Batch-1B tasks (serial within 1B — shared files):
+| # | Task | Owner files | Model/Effort |
+|---|------|-------------|--------------|
+| 1B-1 | QUERY LAYER (number-producing → R2 verify): event+venue filtering via join to matches (gender-scoped); searchTeams/searchEvents/venue option loaders w/ relevance; day-level date clause; state keys event/venue, drop team mode | filters.js(buildScopeClauses), state.js, playerData.js/new searchOptions | data-engineer / sonnet + R2 verify |
+| 1B-2 | POPUP RESTRUCTURE: 2 sections, fold Player into Advanced, grouped condition taxonomy, Team/Event/Venue conditions, date picker+presets+required, remove dismissal-% from filters, gender-contextual lists | filters.js, drawer.js, drawerInnings.js, advanced.js, pills.js, popup CSS | frontend / **opus** high |
+| 1B-3 | HEADER+TOOLBAR: header→one row + remove subtitle; toolbar→one row; remove Group rows | index.html, table.js(toolbar), main.js(subtitle), header/toolbar CSS | frontend / sonnet |
+
+## Interleaved waves (≤2 concurrent, disjoint files: 1B=filters/header, 2=graph/player)
+- Wave A: **1B-1** (data-eng/sonnet) ‖ **G1** (fe/opus: Line+Slope fix, Dumbbell rebuild)
+- Wave B: **1B-2** (fe/opus) ‖ **P** (fe/sonnet: popup Pace/Spin group + Graph-this-player inert)
+- Wave C: **1B-3** (fe/sonnet) ‖ **G2** (fe/opus: graph no-defaults/recommend-after-metric/metric-persist/back-link)
+- Then: orchestrator verify → GATE 1B + GATE 2 (presented together, reviewed separately).
+Batch 3 (table internals: muting removal, top-50+ShowMore, R.Pos column, dynamic name
+width, preset-jump, drag polish, separators/no-striping, header-vs-table search split +
+player relevance + pins) still comes AFTER, its own gate.
+
+## Number-producing verification for 1B-1 (independent R2 derivations)
+Event filter: pick a known event, COUNT independently vs app. Venue filter likewise.
+Team relevance: "India" ranks the full national team #1 (most games) not India A/Air India.
+Day-date bound: a mid-month from/to returns the right slice. Baselines still 2,813/2,049
+when only gender/format/teamtype/date set. DuckDB BigInt → Number() before compare.
 
 ## Owner review gates (batched — approval required between batches)
 - Gate 1 = Batch 1 (F1a → F1b ‖ F2): Filters popup + page structure.

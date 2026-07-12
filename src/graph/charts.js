@@ -699,6 +699,17 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
     }
   }
 
+  // When NO selected player has data in BOTH windows (e.g. a roster of
+  // small-sample players who each only appear in one half of the range —
+  // exactly what a "top by a rate metric" seed surfaces now that the base
+  // min-innings gate is gone, decision 44c), there is nothing to plot. Draw
+  // no chart at all rather than an empty 0–1 axis box that reads as broken;
+  // graph.js sees the all-excluded result and shows an honest placeholder.
+  if (included.length === 0) {
+    const note = `${included.length} of ${players.length} selected players have innings in both windows.`;
+    return { excluded, note };
+  }
+
   const pal = palette();
 
   chartRef.current = new Chart(canvas, {

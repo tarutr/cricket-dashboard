@@ -185,6 +185,100 @@ export async function searchPlayers(term) {
   return rows;
 }
 
+// ── Match-level option loaders (Batch 1B, task 1B-1) ─────────────────────────
+// Gender-scoped relevance lists for the new Team/Event/Venue picker UIs (1B-2
+// builds the pickers themselves; this module only supplies their data). Unlike
+// the rest of this file (player-page queries scoped to one player_id), these
+// three query `matches` directly and are scoped by GENDER ONLY — no format/
+// date/team-type narrowing — per the Batch 1B design: a picker's option list
+// should reflect "everything that exists for this gender," not shrink as other
+// filters are set (team/event/venue identity doesn't depend on the rest of the
+// query scope, and a shrinking picker would make picking harder, not easier).
+//
+// Relevance ordering (flagged judgment call — see final report): rows whose
+// name contains the search term (case-insensitive substring, matching this
+// file's existing searchPlayers precedent above) sort before non-matching
+// rows; ties within/across that tier break by total games played descending,
+// and — for events only — a further tiebreak by recency (latest match_date)
+// descending, per the plan's "event: text→games→recency" ordering. An empty
+// term makes the text-match tier a no-op (every row ties on it, since the
+// CASE's condition can never be true), so the ordering collapses to games desc
+// (events: games desc, then recency desc) — this is what makes the empty-term
+// case "the full gender-scoped list ordered by games desc."
+//
+// No LIMIT on any of the three: the option counts are small (verified against
+// live data: ≤356 teams / ≤754 events / ≤742 venues per gender), matching the
+// existing (also unlimited) team option lookup in drawer.js's fetchTeamOptions.
+
+/** Shared ORDER BY prefix: a text-match tier (only emitted when `term` is
+ * non-blank — an empty term collapses to just `secondary`), then `secondary`
+ * (a raw ORDER BY fragment, e.g. "games DESC, label ASC"). */
+function relevanceOrderBy(col, term, secondary) {
+  const t = (term || "").trim();
+  const tier = t ? `CASE WHEN ${col} ILIKE '%${esc(t)}%' THEN 0 ELSE 1 END, ` : "";
+  return `ORDER BY ${tier}${secondary}`;
+}
+
+/**
+ * Distinct teams appearing in `matches` for `gender` (UNION ALL of team_1 and
+ * team_2 — a team never occupies both sides of the same match, so summing
+ * appearances across the two slots is exactly "number of matches this team
+ * appears in"). Feeds the new single Team picker (1B-2); state.teams itself
+ * and its query-side handling are untouched by this task.
+ */
+export async function searchTeams(term, gender) {
+  const orderBy = relevanceOrderBy("team", term, "games DESC, team ASC");
+  const sql = [
+    `WITH sides AS (`,
+    `  SELECT team_1 AS team FROM matches WHERE gender = '${esc(gender)}'`,
+    `  UNION ALL`,
+    `  SELECT team_2 AS team FROM matches WHERE gender = '${esc(gender)}'`,
+    `)`,
+    `SELECT team AS value, team AS label, COUNT(*) AS games`,
+    `FROM sides`,
+    `WHERE team IS NOT NULL`,
+    `GROUP BY team`,
+    orderBy,
+  ].join("\n");
+  const { rows } = await query(sql);
+  return rows;
+}
+
+/**
+ * Distinct event_name values in `matches` for `gender`. games = match count;
+ * latestDate = MAX(match_date). event_name is one label per tournament SERIES,
+ * not per edition/year (verified against live data — e.g. "ICC Men's T20 World
+ * Cup" spans matches dated 2014 through 2026 under the one name), so `games`
+ * here is the event's full multi-year total, matching what the picker's
+ * "games" column should mean for a series name.
+ */
+export async function searchEvents(term, gender) {
+  const orderBy = relevanceOrderBy("event_name", term, "games DESC, latestDate DESC, event_name ASC");
+  const sql = [
+    `SELECT event_name AS value, event_name AS label, COUNT(*) AS games, MAX(match_date) AS latestDate`,
+    `FROM matches`,
+    `WHERE gender = '${esc(gender)}' AND event_name IS NOT NULL`,
+    `GROUP BY event_name`,
+    orderBy,
+  ].join("\n");
+  const { rows } = await query(sql);
+  return rows;
+}
+
+/** Distinct venue values in `matches` for `gender`. games = match count. */
+export async function searchVenues(term, gender) {
+  const orderBy = relevanceOrderBy("venue", term, "games DESC, venue ASC");
+  const sql = [
+    `SELECT venue AS value, venue AS label, COUNT(*) AS games`,
+    `FROM matches`,
+    `WHERE gender = '${esc(gender)}' AND venue IS NOT NULL`,
+    `GROUP BY venue`,
+    orderBy,
+  ].join("\n");
+  const { rows } = await query(sql);
+  return rows;
+}
+
 /** The player's profile row (null for the ~unmatched; profiles are men-only). */
 export async function fetchProfile(playerId) {
   const { rows } = await query(`SELECT * FROM profiles WHERE player_id = '${esc(playerId)}'`);

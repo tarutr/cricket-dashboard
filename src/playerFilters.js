@@ -35,7 +35,7 @@ const POSITIONS = Array.from({ length: 12 }, (_, i) => i + 1);
  * that helper isn't exported (it's file-private) and this module only needs
  * it for two small option-list lookups, not for any stat computation. */
 function playerScopeClauses(pageState, idColumn, playerId) {
-  const scope = { ...pageState, teams: [], positions: [], opposition: [] };
+  const scope = { ...pageState, teams: [], positions: [], opposition: [], event: [], venue: [] };
   return [...buildScopeClauses(scope, { includeGender: false, includeTeams: false }), `${idColumn} = '${esc(playerId)}'`];
 }
 
