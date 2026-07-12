@@ -25,10 +25,11 @@ const footerDataDateEl = document.getElementById("footer-data-date");
 const disciplineToggleEl = document.querySelector('[data-role="discipline"]');
 const viewToggleEl = document.querySelector('[data-role="view"]');
 const filterBarEl = document.getElementById("filter-bar");
-const pillsBarEl = document.getElementById("pills-bar");
-const playerSearchSectionEl = document.getElementById("player-search-section");
-const playerSearchInputEl = document.getElementById("player-search-input");
-const playerSearchResultsEl = document.getElementById("player-search-results");
+// F2: #pills-bar and #player-search-section are gone — pills and the table
+// search box now live INSIDE #table-area's own results toolbar (built by
+// table.js's ensureSkeleton()), so there's no static host element for either
+// any more. See mountTableToolbarExtras() below, wired via mountTable's
+// onSkeletonReady.
 const headerSearchInputEl = document.getElementById("header-search-input");
 const headerSearchResultsEl = document.getElementById("header-search-results");
 const tableAreaEl = document.getElementById("table-area");
@@ -153,9 +154,13 @@ function updateDisciplineToggle() {
   });
 }
 
-/** Count badge on the "All filters" button — how many drawer filters are active. */
+/** Count badge on the toolbar's "Filters" button (F2 — repointed from the old
+ * "All filters" button, which F1a removed) — how many drawer filters are
+ * active. The badge only exists once the table's results toolbar has been
+ * built (first Search, or the next one after Clear/an error rebuilds it);
+ * the guard below is a harmless no-op the rest of the time, same as before. */
 function updateDrawerBadge() {
-  const countEl = filterBarEl.querySelector('[data-role="open-drawer-count"]');
+  const countEl = tableAreaEl.querySelector('[data-role="toolbar-filters-count"]');
   if (!countEl || !drawerController) return;
   const n = drawerController.activeCount();
   countEl.hidden = n === 0;
@@ -177,14 +182,12 @@ function updateViewToggle() {
  * enterFromBridge()/addPlayerFromOutside(), not a plain onShow()). */
 function showGraphView() {
   tableAreaEl.hidden = true;
-  playerSearchSectionEl.hidden = true;
   graphAreaEl.hidden = false;
   updateViewToggle();
 }
 function showTableView() {
   graphAreaEl.hidden = true;
   tableAreaEl.hidden = false;
-  playerSearchSectionEl.hidden = false;
   updateViewToggle();
 }
 
@@ -200,14 +203,15 @@ function applyView() {
     return graphController.onShow();
   }
   showTableView();
-  // Decision 44d: a plain view switch must never wipe an already-computed
-  // result set. enterView() restores the cached rows instantly if the
-  // filters/scope haven't moved on since that query, and falls back to the
-  // blank prompt otherwise. Under the F1a interaction model a plain filter
-  // change no longer blanks the table at all (onFiltersChanged just refreshes
-  // pills/subtitle); the table re-queries only from the popup's "Search". This
-  // enterView() cache path just makes bare tab switches / the graph's "Back to
-  // your table" bridge instant.
+  // Decision 44d, extended by F2: a plain view switch must never wipe an
+  // already-computed result set. enterView() restores the cached rows
+  // instantly whenever any exist — even if the filters/scope have since
+  // moved on unsearched — and only falls back to the blank prompt when
+  // nothing has ever loaded (or Clear reset it). Under the F1a interaction
+  // model a plain filter change no longer blanks the table at all
+  // (onFiltersChanged just refreshes pills/subtitle); the table re-queries
+  // only from the popup's "Search". This enterView() cache path just makes
+  // bare tab switches / the graph's "Back to your table" bridge instant.
   tableController.enterView();
   return Promise.resolve();
 }
@@ -348,6 +352,43 @@ function triggerHeaderFilterTable(text, matches) {
   triggerTableSearch(text, matches);
 }
 
+/**
+ * F2: (re-)wire the pills row and the compact table-search box onto the
+ * table's own results toolbar, called by mountTable's onSkeletonReady every
+ * time table.js actually (re)builds that toolbar — the first Search of a
+ * session, and again after Clear or a query error tears the previous one
+ * down and a later Search rebuilds it fresh. Both mountPills and
+ * mountOmnisearch attach their own listeners directly to the nodes they're
+ * handed, so calling them again on new nodes each time is exactly as safe as
+ * the very first mount (no teardown step needed — the old, now-detached
+ * nodes and their listeners are simply left behind for GC).
+ */
+function mountTableToolbarExtras({ searchInputEl, searchResultsEl, pillsHostEl }) {
+  pillsController = mountPills(
+    pillsHostEl,
+    store,
+    () => {
+      onFiltersChanged();
+    },
+    () => {
+      // Pin pills only (task 3b): "removing one un-pins and re-queries", not
+      // the standard persist-the-table filter-change path.
+      onFiltersChanged({ requery: true });
+    }
+  );
+  pillsController.render();
+
+  // Table search (task 3b): Stats-view-only box, now inside the toolbar.
+  // Picking a player row PINS them into the result set (pinPlayer) instead of
+  // opening the popup — the popup is reachable via the header search or by
+  // clicking the player's own row once it's showing. The trailing "Filter
+  // the table to names matching…" fallback row is UNCHANGED.
+  mountOmnisearch(searchInputEl, searchResultsEl, {
+    onOpenPlayer: (id, name) => pinPlayer(id, name),
+    onFilterTable: (text, matches) => triggerTableSearch(text, matches),
+  });
+}
+
 function boot() {
   renderInitLoading({ stage: "manifest" });
   initDB((progress) => renderInitLoading(progress))
@@ -481,19 +522,12 @@ function boot() {
         if (e.key === "Escape" && filtersPopup.isOpen()) closePopup();
       });
 
-      pillsController = mountPills(
-        pillsBarEl,
-        store,
-        () => {
-          onFiltersChanged();
-        },
-        () => {
-          // Pin pills only (task 3b): "removing one un-pins and re-queries",
-          // not the standard persist-the-table filter-change path.
-          onFiltersChanged({ requery: true });
-        }
-      );
-      pillsController.render();
+      // F2: pills now mount INSIDE the table's own results toolbar (a fresh
+      // host every time table.js's skeleton is (re)built), not here at boot —
+      // see mountTableToolbarExtras() below, wired via mountTable's
+      // onSkeletonReady. pillsController stays null until the first Search;
+      // every other use of it in this file already guards with
+      // `if (pillsController)` for exactly that reason.
 
       // Presentation controls in the table toolbar (presets, Group rows, Vs)
       // set state and reload directly without onFiltersChanged — keep the
@@ -517,12 +551,11 @@ function boot() {
 
       // Two omnisearch mounts (task 3, owner decision 46 search split) — same
       // component, different mount-site behaviour (see omnisearch.js's header
-      // comment). Both close over module-level `playerPopupController`/
-      // `tableController`/`pillsController`, which aren't assigned until
-      // later in this same boot() call (same pattern mountTable's
-      // onPlayerClick already uses below) — safe because these callbacks
-      // only ever run later, in response to user interaction after boot()
-      // has finished.
+      // comment). This one closes over module-level `playerPopupController`,
+      // not assigned until later in this same boot() call (same pattern
+      // mountTable's onPlayerClick already uses below) — safe because the
+      // callback only ever runs later, in response to user interaction after
+      // boot() has finished.
       //
       // Header search (task 3a): visible on both Stats/Graphs (it lives in
       // the persistent app-header, never toggled hidden by
@@ -534,15 +567,12 @@ function boot() {
         onFilterTable: (text, matches) => triggerHeaderFilterTable(text, matches),
       });
 
-      // Table search (task 3b): Stats-view-only box above the table. Picking
-      // a player row now PINS them into the result set (pinPlayer) instead of
-      // opening the popup — the popup is reachable via the header search or
-      // by clicking the player's own row once it's showing. The trailing
-      // "Filter the table to names matching…" fallback row is UNCHANGED.
-      mountOmnisearch(playerSearchInputEl, playerSearchResultsEl, {
-        onOpenPlayer: (id, name) => pinPlayer(id, name),
-        onFilterTable: (text, matches) => triggerTableSearch(text, matches),
-      });
+      // Table search (task 3b) mounts inside mountTableToolbarExtras() below,
+      // not here — F2 relocated its host INTO the table's own results
+      // toolbar, which table.js's ensureSkeleton() only builds once a Search
+      // actually runs (and rebuilds fresh after Clear/an error), so there's
+      // no static element to mount onto at boot the way the header search
+      // above still has.
 
       tableController = mountTable(tableAreaEl, store, {
         onPlayerClick: (id, name) => playerPopupController.open(id, name),
@@ -561,6 +591,16 @@ function boot() {
         // F1a: the empty-state prompt's "Open filters" button opens the Filters
         // popup (the query then runs from the popup's "Search").
         onOpenFilters: () => openFiltersPopup(),
+        // F2: the toolbar's red "Clear" button — the same full reset as
+        // everywhere else clearAll() is wired.
+        onClear: () => clearAll(),
+        // F2: table.js's persistent toolbar (Filters button/search box/pills
+        // host) only exists once its skeleton is built — the first Search of
+        // a session, and again after Clear or a query error tears the
+        // previous one down and a later Search rebuilds it. This fires every
+        // time that happens so the pills row and the relocated table-search
+        // box get (re-)wired onto the fresh nodes.
+        onSkeletonReady: (nodes) => mountTableToolbarExtras(nodes),
       });
       playerPopupController = mountPlayerPopup(playerPopupHostEl, store, {
         // "Graph this player" (task 4, decision 43): close the popup first

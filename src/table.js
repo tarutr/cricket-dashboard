@@ -139,17 +139,19 @@ function effectiveDiscipline(state) {
 }
 
 /** Serialize exactly the state fields that determine the query results AND
- * how they're rendered — used by mountTable's enterView() to tell whether a
- * cached last-load result set is still valid when the table view is
- * re-entered (decision 44d: a plain view switch must never wipe results;
- * only an actual change to one of these fields since the last successful
- * query should). Deliberately EXCLUDES `view` itself (switching tabs is
- * exactly the thing that must NOT invalidate the cache) and includes only
- * the ACTIVE effective namespace's column list (a column edit made in the
- * other discipline/matchup namespace while away doesn't change what's
- * currently on screen). Every field here is either read directly by
- * buildQuery/buildScopeClauses, or governs rendering shape (columns, sort,
- * splitBy/matchupVs).
+ * how they're rendered — feeds lastQueryStateKey, mountTable's simple "has a
+ * result ever been loaded" sentinel (hasResults()), kept in step at every
+ * site that produces/reshapes a result set (load(), reorderColumns(), the
+ * sort-click handler). F2 retired its other former job — gating enterView()'s
+ * cache restore on an exact-match comparison against the live state
+ * (decision 44d) — in favour of always restoring the last loaded rows
+ * against their OWN snapshot (see lastLoadedState, mountTable's top).
+ * Deliberately EXCLUDES `view` itself and includes only the ACTIVE effective
+ * namespace's column list (a column edit made in the other discipline/
+ * matchup namespace while away doesn't change what's currently on screen).
+ * Every field here is either read directly by buildQuery/buildScopeClauses,
+ * or governs rendering shape (columns, sort, splitBy/matchupVs) — the same
+ * fields lastLoadedState's snapshot needs to stay correct for.
  */
 function serializeQueryState(state) {
   const ns = effectiveDiscipline(state);
@@ -907,14 +909,29 @@ function compareSplitRows(a, b, splitDim, dir) {
 
 // ── Table controller ─────────────────────────────────────────────────────────
 
-export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, onOpenFilters } = {}) {
+export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, onOpenFilters, onClear, onSkeletonReady } = {}) {
   let lastRows = [];
   let loadToken = 0;
   // Snapshot (serializeQueryState) of the state that produced lastRows, or
-  // null before any successful load. enterView() (decision 44d) compares this
-  // against the CURRENT state to decide whether re-entering the table view
-  // can restore lastRows instantly instead of showing the blank prompt.
+  // null before any successful load. Only used as a "has a result ever been
+  // loaded" sentinel now (hasResults()) — enterView() used to also compare
+  // this against the CURRENT state before restoring lastRows (decision 44d),
+  // but F2 changed that: the table now persists across a bare tab switch even
+  // when the filters have since moved on unsearched (see lastLoadedState).
   let lastQueryStateKey = null;
+  // The full state object that produced lastRows (F2). enterView() renders
+  // lastRows against THIS, never the live store.get(), because the live
+  // state may have been edited in the still-open Filters popup without
+  // hitting Search — rendering against a mismatched discipline/columns/
+  // matchupVs would misdraw headers against the old rows' shape. Kept in
+  // step with lastQueryStateKey at every site that (re)produces or reshapes
+  // the current result set: load(), reorderColumns(), and the sort-click
+  // handler — a view-only change (sort/reorder) must still show correctly if
+  // the table view is re-entered later, exactly like a real reload would.
+  // Reset to null by renderPrompt() (first boot, or Clear) so enterView()
+  // correctly falls back to the blank prompt rather than resurrecting
+  // whatever was loaded before Clear.
+  let lastLoadedState = null;
   // The split dimension the CURRENT lastRows were queried with (null = no
   // split). Rendering and split-column sorting must use this, not live state —
   // the state may have moved on while the table still shows the old result.
@@ -990,19 +1007,57 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
   /** Build the persistent table-mode skeleton (toolbar + loading overlay +
    * table shell) once and cache node references. A no-op if it already
    * exists — repeated calls across a query cycle must never rebuild it,
-   * that's the whole point of this fix. */
+   * that's the whole point of this fix.
+   *
+   * F2: the toolbar now has a PERSISTENT left cluster (Filters button +
+   * compact table-search box) that `renderToolbar()` never touches —
+   * `toolbarEl` itself is repointed to `.table-toolbar__dynamic`, the child
+   * renderToolbar()'s innerHTML replacement actually owns (row count,
+   * presets, Vs/Group rows, Graph/Columns/Clear). The search box needs a
+   * stable node across reloads (typed text + the omnisearch dropdown's own
+   * state would be destroyed by a wholesale rebuild), and a fresh pills host
+   * lives right below the toolbar, between it and the table-scroll (F2 task
+   * 5) — both are handed to main.js via onSkeletonReady the moment they
+   * exist, since main.js's mountOmnisearch/mountPills calls need real DOM
+   * nodes and this closure is the only thing that can hand them over. */
   function ensureSkeleton() {
     if (toolbarEl) return;
     container.innerHTML = `
-      <div class="table-toolbar"></div>
+      <div class="table-toolbar">
+        <div class="table-toolbar__left">
+          <button type="button" class="btn btn--ghost table-toolbar__filters-btn" data-role="toolbar-filters-btn">Filters<span class="table-toolbar__filters-badge" data-role="toolbar-filters-count" hidden>0</span></button>
+          <div class="table-toolbar__search" data-role="table-search-host">
+            <input type="text" class="input" placeholder="Search players…" aria-label="Search players" autocomplete="off" role="combobox" aria-expanded="false" aria-autocomplete="list" data-role="table-search-input" />
+            <div class="omnisearch__results" role="listbox" aria-label="Player search results" hidden data-role="table-search-results"></div>
+          </div>
+        </div>
+        <div class="table-toolbar__dynamic"></div>
+      </div>
+      <div class="table-pills-host" data-role="table-pills-host"></div>
       <div class="table-loading-overlay" aria-live="polite" hidden>Running query…</div>
       <div class="table-scroll"><table class="data-table"><thead></thead><tbody></tbody></table></div>
     `;
-    toolbarEl = container.querySelector(".table-toolbar");
+    toolbarEl = container.querySelector(".table-toolbar__dynamic");
     overlayEl = container.querySelector(".table-loading-overlay");
     scrollEl = container.querySelector(".table-scroll");
     theadEl = container.querySelector(".data-table thead");
     tbodyEl = container.querySelector(".data-table tbody");
+
+    // Filters button (F2): opens the same Filters popup as the empty-state
+    // prompt's own button below — bound once here since, unlike the
+    // presentation controls renderToolbar() rebuilds every render, this
+    // button's behaviour never changes across reloads.
+    const filtersBtn = container.querySelector('[data-role="toolbar-filters-btn"]');
+    if (filtersBtn) filtersBtn.addEventListener("click", () => { if (onOpenFilters) onOpenFilters(); });
+
+    if (onSkeletonReady) {
+      const searchHostEl = container.querySelector('[data-role="table-search-host"]');
+      onSkeletonReady({
+        searchInputEl: searchHostEl.querySelector('[data-role="table-search-input"]'),
+        searchResultsEl: searchHostEl.querySelector('[data-role="table-search-results"]'),
+        pillsHostEl: container.querySelector('[data-role="table-pills-host"]'),
+      });
+    }
   }
 
   /** Forget the skeleton node references — called whenever container.innerHTML
@@ -1018,9 +1073,12 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
   }
 
   /**
-   * Blank/prompt state (owner: no automated search — the table stays empty until
-   * "Show results" is clicked, and reverts here whenever the filters change so it
-   * never shows numbers for a scope the filters no longer describe, §8.4).
+   * Blank/prompt state (owner: no automated search — the table stays empty
+   * until the Filters popup's "Search" is clicked). Shown on first boot
+   * (nothing has ever loaded) and by main.js's clearAll() (owner: Clear wipes
+   * the table back to this prompt) — a plain filter change no longer reverts
+   * here (F1a): the table persists until the next Search replaces it or
+   * Clear empties it.
    */
   function renderPrompt() {
     // Invalidate any in-flight load: without this, a query started just before
@@ -1031,6 +1089,21 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     loadToken++;
     closeColumnsPopover(); // no columns-btn here either — same reasoning.
     teardownSkeleton();
+    // F2: enterView() now unconditionally trusts lastLoadedState/lastRows
+    // whenever they're non-null (no more live-state comparison — see
+    // enterView()'s own doc comment below), so this is the ONE place that
+    // must actively forget a previous result set, the moment we go back to a
+    // genuine "nothing shown" state (first boot, or Clear). Without this, a
+    // Clear followed by a bare tab switch away and back would resurrect the
+    // pre-Clear table instead of this prompt — and hasResults() (read by
+    // graph.js's bridge to decide its own empty-state) would keep reporting
+    // "yes" straight through a Clear, letting Graphs silently seed itself
+    // from the just-reset default scope instead of honestly saying "run a
+    // search on Stats first."
+    lastRows = [];
+    lastQueryStateKey = null;
+    lastLoadedState = null;
+    lastSplitDim = null;
     container.innerHTML = `
       <div class="table-prompt">
         <p class="table-prompt__text">Set your filters, then search.</p>
@@ -1045,22 +1118,30 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
   }
 
   /** Called when the table view is (re-)entered — clicking the Stats tab, or
-   * the graph's "Back to your table" bridge (decision 44d) — as distinct from
-   * a filter change while the table is already showing, which always calls
-   * showPrompt() directly via main.js's onFiltersChanged (the no-automated-
-   * search rule is about filter changes, not tab switches, and is untouched
-   * by this). If the state that produced the last successful result set is
-   * IDENTICAL (per serializeQueryState — matchup mode, grouping, sort, and
-   * column choices all included) to the current state, that result set still
-   * describes exactly what the filters/pills currently show — re-render it
-   * from the in-memory cache instantly, no requery. Otherwise the scope moved
-   * on while the table was out of view; fall back to the blank prompt exactly
-   * as a filter change would.
+   * the graph's "Back to your table" bridge — as distinct from a filter
+   * change while the table is already showing, which never reverts here at
+   * all (the no-automated-search rule: onFiltersChanged just refreshes
+   * pills/subtitle, and is untouched by this).
+   *
+   * F2 (owner: the table must persist across a bare tab switch, full stop):
+   * restores the last LOADED result set whenever one exists, even if the
+   * live filter state has since moved on — e.g. the Filters popup was opened
+   * and edited but never Searched. This USED TO compare
+   * serializeQueryState(state) against the key captured at load time
+   * (decision 44d) and fall back to the blank prompt on ANY mismatch, which
+   * lost the table on every bare tab switch after so much as touching a
+   * control in the popup. Rendering uses lastLoadedState — the snapshot
+   * taken when lastRows was produced, kept in step by every site that
+   * changes what's on screen (load(), reorderColumns(), the sort-click
+   * handler) — never the live store.get(), so headers/columns/matchup-mode
+   * always match the shape of the rows actually on screen instead of
+   * whatever the popup currently shows unsearched. A genuinely fresh
+   * session, or right after Clear (renderPrompt() resets lastLoadedState to
+   * null), still falls through to the blank prompt.
    */
   function enterView() {
-    const state = store.get();
-    if (lastQueryStateKey !== null && serializeQueryState(state) === lastQueryStateKey) {
-      renderLoaded(lastRows, state, lastBowlingTypes);
+    if (lastLoadedState !== null) {
+      renderLoaded(lastRows, lastLoadedState, lastBowlingTypes);
       refreshOpenColumnsPopover();
       return;
     }
@@ -1182,10 +1263,12 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     }
     cols.splice(toIdx, 0, fromKey);
     store.set({ columns: { ...state.columns, [ns]: cols } });
-    // Keep enterView()'s cache key (decision 44d) in step with this view-only
-    // change, so a later tab-away/back still restores the reordered table
-    // instantly instead of falling back to the blank prompt.
+    // Keep enterView()'s snapshot in step with this view-only change, so a
+    // later tab-away/back shows the REORDERED columns, not whatever order was
+    // current as of the last actual load() (F2: lastLoadedState, not just
+    // lastQueryStateKey, since enterView() renders against the former now).
     lastQueryStateKey = serializeQueryState(store.get());
+    lastLoadedState = store.get();
   }
 
   function clearDragIndicators() {
@@ -1370,21 +1453,32 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         : "Seed the Graph Builder from this table";
     const turnIntoGraphBtnHTML = `<button type="button" class="btn btn--ghost" data-role="turn-into-graph" ${graphBtnDisabled ? "disabled" : ""} title="${escAttr(graphBtnTitle)}">Graph</button>`;
 
-    // "Vs" matchup select (D4 R3, decision 33): ALWAYS rendered, both modes —
-    // greyed for women (no style data yet, decision 21), presentation-mode
-    // control like Group rows (changes reload directly).
-    const vsDisabled = state.gender === "female";
-    const vsTitle = vsDisabled ? ` title="No style data for women's cricket yet"` : "";
-    const vsSelectHTML = `<label class="table-toolbar__group-label">Vs
-      <select class="select select--compact" data-role="matchup-vs" aria-label="Matchup opponent" ${vsDisabled ? "disabled" : ""}${vsTitle}>${matchupVsOptionsHTML(state, bowlingTypes)}</select>
+    // "Vs" matchup select (D4 R3, decision 33): rendered for the Men's view
+    // only. F2 (owner ruling): the Women view shows NO matchup control at
+    // all — not even greyed — since matchup coverage there is ~0% (decision
+    // 21) and a disabled control with an explanatory title was judged more
+    // confusing than simply absent. UI-only: matchupVsActive() (state.js)
+    // already hard-gates on state.gender === "male", so a stale
+    // state.matchupVs value left over from a prior Men's session stays
+    // completely inert for women's queries regardless of whether this
+    // control is shown — buildMatchupQuery/buildScopeClauses are untouched.
+    const vsSelectHTML =
+      state.gender === "female"
+        ? ""
+        : `<label class="table-toolbar__group-label">Vs
+      <select class="select select--compact" data-role="matchup-vs" aria-label="Matchup opponent">${matchupVsOptionsHTML(state, bowlingTypes)}</select>
     </label>`;
 
-    // Right-most cluster (decision 44d): Graph + Columns grouped together and
-    // pushed flush to the card's right edge via .table-toolbar__graph-columns
-    // (margin-left: auto in styles.css), Graph immediately left of Columns.
-    // Vs / Group rows keep their own left-packed cluster so the two groups
-    // can wrap independently on narrow (~380px) viewports without losing the
-    // "flush right" placement of Graph/Columns.
+    // Clear button (F2, red/danger-tinted): empties the table AND every
+    // filter/pin (main.js's clearAll()) — rightmost, right of Graph/Columns.
+    const clearBtnHTML = `<button type="button" class="btn btn--ghost table-toolbar__clear-btn" data-role="toolbar-clear-btn">Clear</button>`;
+
+    // Right-most cluster (decision 44d, +Clear in F2): Graph + Columns +
+    // Clear grouped together and pushed flush to the card's right edge via
+    // .table-toolbar__graph-columns (margin-left: auto in styles.css), in
+    // that order. Vs / Group rows keep their own left-packed cluster so the
+    // two groups can wrap independently on narrow (~380px) viewports without
+    // losing the "flush right" placement of Graph/Columns/Clear.
     toolbarEl.innerHTML = `
       <div class="table-toolbar__row-count">${rowCountLabel(rows, splitDim)}</div>
       ${presetsBlockHTML}
@@ -1396,6 +1490,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         <div class="table-toolbar__graph-columns">
           ${turnIntoGraphBtnHTML}
           ${columnsBtnHTML}
+          ${clearBtnHTML}
         </div>
       </div>
     `;
@@ -1448,6 +1543,11 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         if (turnIntoGraphBtn.disabled) return;
         if (onTurnIntoGraph) onTurnIntoGraph();
       });
+    }
+
+    const clearBtn = toolbarEl.querySelector('[data-role="toolbar-clear-btn"]');
+    if (clearBtn) {
+      clearBtn.addEventListener("click", () => { if (onClear) onClear(); });
     }
   }
 
@@ -1542,6 +1642,11 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         }
         const next = store.get();
         lastRows = applySort(lastRows, next);
+        // View-only change, same reasoning as reorderColumns (F2): keep
+        // enterView()'s snapshot in step so a later tab-away/back shows this
+        // sort, not whichever one was current as of the last actual load().
+        lastQueryStateKey = serializeQueryState(next);
+        lastLoadedState = next;
         renderLoaded(lastRows, next, bowlingTypes);
       });
     });
@@ -1867,6 +1972,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
 
       lastRows = sorted;
       lastQueryStateKey = serializeQueryState(state);
+      lastLoadedState = state; // F2: enterView() renders against this snapshot
       renderLoaded(sorted, state, bowlingTypes);
       // The columns popover (if open) lives outside `container` precisely so
       // this reload never destroys it (Batch 3 fix 3) — re-find its anchor in
@@ -1903,11 +2009,14 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
 
   // Graph-button/bridge handler (decision 46f): "has the Stats tab been
   // searched at least once, ever" — true the instant load() first succeeds,
-  // regardless of whether the scope has since moved on (unlike enterView()'s
-  // own exact-state-match cache check above). This is what lets the Graphs
-  // view decide between its empty-state ("run a search on Stats first") and
-  // seeding its player pool from the current filtered set — see graph.js's
-  // onShow()/seedSelection() and main.js's mountGraph() wiring.
+  // regardless of whether the scope has since moved on. False again after
+  // Clear (F2: renderPrompt() resets lastQueryStateKey to null there) — the
+  // owner's "Clear empties everything" applies to this too, otherwise Graphs
+  // would silently seed itself from the just-reset default scope instead of
+  // honestly saying "run a search on Stats first." This is what lets the
+  // Graphs view decide between that empty-state and seeding its player pool
+  // from the current filtered set — see graph.js's onShow()/seedSelection()
+  // and main.js's mountGraph() wiring.
   function hasResults() {
     return lastQueryStateKey !== null;
   }
