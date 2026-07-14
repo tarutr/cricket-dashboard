@@ -114,6 +114,55 @@ Batch 3 (table internals: muting removal, top-50+ShowMore, R.Pos column, dynamic
 width, preset-jump, drag polish, separators/no-striping, header-vs-table search split +
 player relevance + pins) still comes AFTER, its own gate.
 
+## HANDOFF STATUS (2026-07-14, session break — resume here)
+DONE + COMMITTED on polish-b1-mechanical (main untouched, owner gates every wave):
+- 28123cb F1a+F1b, 7d42989 F2 (Batch 1: Filters popup foundation, GATE 1 APPROVED)
+- d9a8970 Wave A (1B-1 event/venue/day-date query layer + G1 Line/Slope/Dumbbell)
+- 62302f1 Wave B (1B-2 popup rebuild + P popup pace/spin + inert graph button)
+- 2f847ee R3 Wave 1 (filter-popup 9 fixes incl. AND/OR restore + graph repairs:
+  binder error, 15-cap removed, search fixed, slope labels out of plot)
+OWNER APPROVED "go for wave 2" — NOT YET STARTED. Remaining waves (one at a time,
+≤2 agents, checkpoint-commit + browser-verify per wave, STOP for owner go between):
+- R3 Wave 2: [7b] pill-removal persistence bug (opus; main.js/table.js/pills.js/
+  state.js — removing a pill from the table left it stuck at 0 rows; symptom seen
+  with an event pill; root-cause state recovery) ‖ [8] zebra striping cleanup
+  (design-stylist sonnet; styles.css + popup mini-tables: striping ONLY in the main
+  results table; popup matchup tables highlight ONLY the Pace/Spin subheading rows;
+  sweep for other zebra spots)
+- R3 Wave 3 (solo, opus, big): [12] Graphs get their OWN Filters popup — graph-local
+  scope state seeded (copied) from the Stats state on entry, opened from a Filters
+  button in the graph controls; reuse mountFilters/mountFilterDrawer factories
+  bound to a graph-local store; do NOT edit main.js/index.html (append popup shell
+  from the graph module) so Wave 4 stays disjoint. Includes [10] day-level dates in
+  graph windows + inherit the Stats set's exact dates (fixes the Window A/B month-
+  select display desync noted in 2f847ee), plus the old G2 items: NO auto-render/
+  default metric on chart-type click, 'Recommended' tag only AFTER a metric is
+  chosen, metric persists across chart types (invalid metric for a type -> honest
+  message, no silent swap, no graph), restore '← Back to your table' link.
+- R3 Wave 4 (solo, sonnet): [1B-3] one-row page header, subtitle REMOVED entirely,
+  one-row toolbar, remove 'Group rows' control (owner notes 11-13).
+Then: full verification pass + fresh-eyes review, present GATE for round 3. Parked
+by owner: format-specific table presets + column sets; per-event date windows;
+mobile charts; player-popup graphing; global font/space shrink (all 'later
+discussion' items). Batch 3 (table internals: muting removal, top-50+Show More,
+R.Pos column, dynamic sticky width, preset-jump, drag polish, column separators,
+search split/relevance/pins) was superseded in part by rounds 2-3 verdicts — the
+NOT-yet-built table items remain: muting removal, top-50 pagination + 'Show More
+(N players)', R.Pos column option, dynamic name-col width, preset-button page-jump
+fix, drag live-shuffle, column separator lines, no-striping (Wave 2 covers), search
+relevance ordering + header-search clear-on-pick + pinned-pill colour/placement.
+Those table items need their own wave(s) after R3 Wave 4 — confirm scope with owner.
+TOOLING NOTES: preview_start by launch.json name intermittently fails ('no
+launch.json' despite valid file) — fallback: Bash `python3 -m http.server 8000`
+run_in_background + preview_start {url:'http://localhost:8000'}. Browser caches ES
+modules: fetch(file,{cache:'reload'}) each changed file then location.reload().
+Data rolled to 14 Jul 2026: anchors are STABLE only with the day-bounded range
+2023-07-01 → 2026-07-02 (2,813 batting / 2,049 bowling / SA Yadav 60/1,544/29.13/
+150.34; Event 'ICC Men's T20 World Cup' = 360; vs Australia = 214; IPL = 0 intl /
+1,243 club). DuckDB-WASM SUMs are BigInt -> Number() first. Org session limit kills
+agents mid-run: checkpoint-commit before big agents, check git status after any
+failure, relaunch fresh (resume via message also works).
+
 ## ROUND 3 (post-Wave-B owner review, 2026-07-12) — 15 fixes, 4 waves, one at a time
 Decisions: graphs get their OWN Filters popup (point 12, build now — supersedes old G2
 brief); AND/OR restored (14); Role→Bowler exposes FINE bowling styles (2); dismissal
