@@ -10,10 +10,12 @@
 // buildScopeClauses (via charts.js/players.js), table.js's buildQuery (via
 // players.js, for seeding).
 
-import { eligibleMetrics } from "../state.js";
+import { eligibleMetrics, createStore, pruneIneligibleState } from "../state.js";
 import { getMetric, hasMetricData } from "../metrics.js";
 import { escHtml, escAttr } from "../html.js";
 import { getManifest, query } from "../db.js";
+import { mountFilters } from "../filters.js";
+import { mountFilterDrawer } from "../drawer.js";
 import {
   CHART_CAPS,
   createSelection,
@@ -66,6 +68,15 @@ const CHART_TYPES = [
 ];
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Deep-copy a store state snapshot for the graph-local scope store (item 1).
+ * State is pure JSON (strings/numbers/arrays/plain objects/null), so a JSON
+ * round-trip is a correct, dependency-free deep clone that shares no nested
+ * references (profile / advanced.groups / columns / the filter arrays) with
+ * the Stats state — a graph edit can therefore never reach back into it. */
+function cloneState(state) {
+  return JSON.parse(JSON.stringify(state));
+}
 
 /** Same tiny option-building idiom src/filters.js uses for its scope-strip
  * month dropdowns — copied rather than imported (filters.js is table/scope-
@@ -183,10 +194,34 @@ function donutEligibleMetrics(discipline, formats) {
 // of mountGraph(), read by the two exported wrappers just below it.
 let currentInstance = null;
 
-export function mountGraph(container, store, { hasStatsResults = () => false } = {}) {
+export function mountGraph(container, statsStore, { hasStatsResults = () => false } = {}) {
+  // ── Graph-local scope store (R3 Wave 3, item 1) ──────────────────────────
+  // The Graph Builder owns its OWN filter scope, seeded (deep-copied) from the
+  // Stats state's applied scope at graph entry and INDEPENDENT thereafter:
+  // changing a graph filter mutates only this store, never `statsStore`, so it
+  // can never move the Stats table underneath the user. Every scope read below
+  // (`store.get()`, `store.describeScope()`, the seed/search queries) goes
+  // through this local store; only seeding (from `statsStore`) and the "Back to
+  // your table" link ever touch the Stats side. The clone is a pure-JSON deep
+  // copy (state is all strings/numbers/arrays/plain objects/null — no dates or
+  // functions), so it shares no nested references with the Stats state.
+  const store = createStore(cloneState(statsStore.get()));
+  // The Stats scope-key we last seeded FROM. Re-seed rule (item 1): on each
+  // Graphs entry, if the Stats scope has changed since the last seed (i.e. a
+  // NEW Stats search happened), re-inherit it wholesale — discarding the
+  // graph's own filter edits and the scope-derived window defaults. If it is
+  // unchanged (a bare tab toggle, or only the graph's own filters moved), keep
+  // the graph's edits. Graph-filter edits never change this key because they
+  // write to `store`, not `statsStore`.
+  let lastStatsScopeKey = null;
+
   container.innerHTML = `
     <div class="graph-builder">
       <div class="graph-builder__controls">
+        <div class="graph-builder__topbar">
+          <button type="button" class="link-btn graph-back-link" data-role="graph-back">← Back to your table</button>
+          <button type="button" class="btn btn--ghost graph-filters-btn" data-role="graph-filters-open">Filters</button>
+        </div>
         <div class="graph-control-group">
           <span class="graph-control-label">Chart type</span>
           <div class="segmented graph-chart-type" data-role="chart-type" role="group" aria-label="Chart type">
@@ -1469,6 +1504,173 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
     els.exportStatus.textContent = result.ok ? "Copied to clipboard" : `Copy failed: ${result.error?.message ?? "unknown error"}`;
   });
 
+  // ── Graph-local Filters popup (R3 Wave 3, items 1 + 2) ──────────────────────
+  // The graph gets its OWN Filters popup, REUSING the Stats popup's section
+  // factories (mountFilters / mountFilterDrawer) bound to the graph-local
+  // `store` above — no fork of their internals. The shell is created and
+  // appended to <body> by THIS module (index.html / main.js are untouched —
+  // document.body append is the established popover pattern, e.g. filters.js's
+  // wirePortalDropdown). Changing a graph filter here writes only to the
+  // graph-local store; the trigger button ("Apply to graph") applies the graph
+  // scope and re-renders the current chart via onScopeChanged().
+  const DEFAULT_SORT_KEY = { batting: "runs", bowling: "wickets" };
+  const gpopEl = document.createElement("div");
+  gpopEl.className = "filters-popup";
+  gpopEl.hidden = true;
+  gpopEl.setAttribute("data-role", "graph-filters-popup");
+  gpopEl.innerHTML = `
+    <div class="filters-popup__backdrop" data-role="gfpop-backdrop"></div>
+    <div class="filters-popup__panel" role="dialog" aria-modal="true" aria-label="Graph filters" tabindex="-1" data-role="gfpop-panel">
+      <div class="filters-popup__header">
+        <h2 class="filters-popup__title">Graph filters</h2>
+        <button type="button" class="filters-popup__close" data-role="gfpop-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="filters-popup__body">
+        <section class="filters-popup__section">
+          <button type="button" class="filters-popup__section-header" data-role="gfpop-section-toggle" aria-expanded="true">
+            <span class="filters-popup__section-name">Search Conditions</span>
+            <span class="filters-popup__chevron" aria-hidden="true">▾</span>
+          </button>
+          <div class="filters-popup__section-body">
+            <div class="filter-bar" data-role="gfpop-filter-bar"></div>
+          </div>
+        </section>
+        <section class="filters-popup__section">
+          <button type="button" class="filters-popup__section-header" data-role="gfpop-section-toggle" aria-expanded="true">
+            <span class="filters-popup__section-name">Advanced Filters</span>
+            <span class="filters-popup__chevron" aria-hidden="true">▾</span>
+          </button>
+          <div class="filters-popup__section-body">
+            <div data-role="gfpop-advanced-host"></div>
+          </div>
+        </section>
+      </div>
+      <div class="filters-popup__footer">
+        <button type="button" class="btn btn--primary" data-role="gfpop-apply">Apply to graph</button>
+      </div>
+    </div>`;
+  document.body.appendChild(gpopEl);
+
+  const gfpop = {
+    panel: gpopEl.querySelector('[data-role="gfpop-panel"]'),
+    backdrop: gpopEl.querySelector('[data-role="gfpop-backdrop"]'),
+    close: gpopEl.querySelector('[data-role="gfpop-close"]'),
+    apply: gpopEl.querySelector('[data-role="gfpop-apply"]'),
+    filterBar: gpopEl.querySelector('[data-role="gfpop-filter-bar"]'),
+    advancedHost: gpopEl.querySelector('[data-role="gfpop-advanced-host"]'),
+  };
+
+  // Section collapse/expand (same behaviour as main.js's Stats-popup toggles,
+  // but keyed off DOM structure so the two popups' section-body ids never
+  // collide).
+  gpopEl.querySelectorAll('[data-role="gfpop-section-toggle"]').forEach((toggle) => {
+    toggle.addEventListener("click", () => {
+      const body = toggle.nextElementSibling;
+      const expanded = toggle.getAttribute("aria-expanded") === "true";
+      if (body) body.hidden = expanded;
+      toggle.setAttribute("aria-expanded", String(!expanded));
+    });
+  });
+
+  // The two shared section factories, bound to the graph-local store. Their
+  // control changes write to `store` (graph-local) immediately; nothing
+  // queries until "Apply to graph" runs onScopeChanged() below. onChange here
+  // is a no-op (the graph has no pills/subtitle inside the popup — the card's
+  // own footer, via store.describeScope(), is refreshed on apply/render).
+  const graphFilterController = mountFilters(
+    gfpop.filterBar,
+    store,
+    () => {},
+    () => {},
+    () => {}
+  );
+  const graphDrawerController = mountFilterDrawer(
+    { advancedHost: gfpop.advancedHost },
+    store,
+    { onChange: () => {} }
+  );
+  {
+    const manifest = getManifest();
+    const gMin = manifest?.data?.min_match_date || null;
+    const gMax = manifest?.data?.max_match_date || null;
+    graphFilterController.setDateBounds(gMin, gMax);
+  }
+
+  function openGraphPopup() {
+    gpopEl.hidden = false;
+    graphFilterController.render();
+    graphDrawerController.onShow();
+    gfpop.panel.focus();
+  }
+  function closeGraphPopup() {
+    gpopEl.hidden = true;
+    graphDrawerController.onHide();
+  }
+  function applyGraphFilters() {
+    // Date is required, same rule as the Stats popup (a graph scope seeded from
+    // a searched Stats scope always starts with valid dates; block if cleared).
+    if (!graphFilterController.validateDate()) {
+      const body = gpopEl.querySelector('[data-role="gfpop-filter-bar"]').closest(".filters-popup__section-body");
+      const toggle = body?.previousElementSibling;
+      if (body) body.hidden = false;
+      if (toggle) toggle.setAttribute("aria-expanded", "true");
+      return;
+    }
+    if (!graphDrawerController.validate()) return;
+    // Keep the graph-local store coherent after scope edits, exactly as the
+    // Stats side does: drop columns/conditions the new scope orphaned, and fall
+    // back the sort key when it no longer resolves in the (possibly switched)
+    // discipline — seedFromFilteredSet ranks by state.sort, so a stale key
+    // would break the seed query.
+    pruneIneligibleState(store);
+    const gs = store.get();
+    if (!getMetric(gs.sort.key, gs.discipline)) {
+      store.set({ sort: { key: DEFAULT_SORT_KEY[gs.discipline] || "runs", dir: "desc" } });
+    }
+    closeGraphPopup();
+    onScopeChanged();
+  }
+
+  gfpop.close.addEventListener("click", closeGraphPopup);
+  gfpop.backdrop.addEventListener("click", closeGraphPopup);
+  gfpop.apply.addEventListener("click", applyGraphFilters);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !gpopEl.hidden) closeGraphPopup();
+  });
+
+  // The "Filters" button in the graph controls (item 2).
+  container.querySelector('[data-role="graph-filters-open"]').addEventListener("click", openGraphPopup);
+
+  // "← Back to your table" (item 5): return to the Stats view with the existing
+  // table intact. main.js/index.html are off-limits, so this drives the
+  // existing Stats view toggle button — whose main.js handler restores the
+  // cached table rows via applyView()/enterView() with NO re-query and no state
+  // loss — rather than re-implementing the view switch here.
+  container.querySelector('[data-role="graph-back"]').addEventListener("click", () => {
+    const statsBtn = document.querySelector('[data-role="view"] .segmented__btn[data-value="table"]');
+    if (statsBtn) statsBtn.click();
+  });
+
+  /** Re-inherit the Stats scope into the graph-local store when a NEW Stats
+   * search has changed it since the last seed (item 1's re-seed rule). Returns
+   * true when it actually re-seeded. A re-seed discards the graph's own filter
+   * edits AND the scope-derived window defaults (so Slope/Dumbbell windows
+   * re-initialise from the fresh date range); it deliberately keeps the chosen
+   * chart type + metric (decision 46f: scope never silently swaps the type). */
+  function seedGraphScopeFromStats() {
+    const statsState = statsStore.get();
+    const key = scopeSeedKey(statsState);
+    if (key === lastStatsScopeKey) return false;
+    lastStatsScopeKey = key;
+    store.set(cloneState(statsState));
+    slopeWindowA = null;
+    slopeWindowB = null;
+    dumbbellWindowA = null;
+    dumbbellWindowB = null;
+    graphFilterController.render();
+    return true;
+  }
+
   // ── Seeding ───────────────────────────────────────────────────────────────
 
   /**
@@ -2228,6 +2430,10 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
    * them (requirement 2's persistence rule).
    */
   async function onShow() {
+    // Item 1: re-inherit the Stats scope into the graph-local store when a new
+    // Stats search has changed it since the last seed; a bare tab toggle (or a
+    // graph that only changed its OWN filters) leaves the graph's scope alone.
+    seedGraphScopeFromStats();
     syncChartTypeButtons();
     syncBarStyleVisibility();
     renderMetricControls();

@@ -2195,6 +2195,19 @@ a { color: var(--color-accent); }
   padding: var(--space-4) var(--space-4) var(--space-5);
 }
 
+/* R3 Wave 3: graph controls top bar — "Back to your table" link + graph-local
+   "Filters" button. The Filters popup itself reuses the shared .filters-popup
+   classes (defined once, below), so only this small bar is graph-specific. */
+.graph-builder__topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.graph-back-link { padding-left: 0; }
+.graph-filters-btn { flex: 0 0 auto; }
+
 .graph-control-group { display: flex; flex-direction: column; gap: var(--space-2); }
 
 .graph-control-group__head {
