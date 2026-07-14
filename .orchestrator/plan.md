@@ -121,14 +121,17 @@ DONE + COMMITTED on polish-b1-mechanical (main untouched, owner gates every wave
 - 62302f1 Wave B (1B-2 popup rebuild + P popup pace/spin + inert graph button)
 - 2f847ee R3 Wave 1 (filter-popup 9 fixes incl. AND/OR restore + graph repairs:
   binder error, 15-cap removed, search fixed, slope labels out of plot)
-OWNER APPROVED "go for wave 2" — NOT YET STARTED. Remaining waves (one at a time,
-≤2 agents, checkpoint-commit + browser-verify per wave, STOP for owner go between):
-- R3 Wave 2: [7b] pill-removal persistence bug (opus; main.js/table.js/pills.js/
-  state.js — removing a pill from the table left it stuck at 0 rows; symptom seen
-  with an event pill; root-cause state recovery) ‖ [8] zebra striping cleanup
-  (design-stylist sonnet; styles.css + popup mini-tables: striping ONLY in the main
-  results table; popup matchup tables highlight ONLY the Pace/Spin subheading rows;
-  sweep for other zebra spots)
+R3 Wave 2 DONE + VERIFIED IN BROWSER (2026-07-14): ad1b569 [7b] pill fix (root
+cause: non-pin pill removal went through onFiltersChanged with requery:false —
+state updated but table never re-queried; now ALL pill removals requery; query
+builders untouched) + 3399456 [8] zebra (only ONE striping rule existed, shared
+.data-table/.mini-table; .mini-table dropped; Pace/Spin group-row highlight was
+already correct). Verified live: baseline 2,813 → +Event ICC Men's T20 World Cup
+= 360 → pill × → instant 2,813; SA Yadav popup anchors exact (60/1,544/29.13/
+150.34, vs Spin 38/322/454/140.99, 913 of 1,027 balls); popup mini-tables flat,
+PACE/SPIN subheadings highlighted, main-table striping intact; console clean.
+AWAITING OWNER GATE for Wave 3. Remaining waves (one at a time, ≤2 agents,
+checkpoint-commit + browser-verify per wave, STOP for owner go between):
 - R3 Wave 3 (solo, opus, big): [12] Graphs get their OWN Filters popup — graph-local
   scope state seeded (copied) from the Stats state on entry, opened from a Filters
   button in the graph controls; reuse mountFilters/mountFilterDrawer factories
