@@ -1273,12 +1273,14 @@ a { color: var(--color-accent); }
 
 /* Shared table base (task 3): .data-table (leaderboard) and .mini-table
    (player-page split tables, see "Compact split tables" below) implement the
-   same visual language — border-collapse, zebra striping, cell borders,
-   right-aligned numeric cells with a left-aligned first column. Factored
-   into one selector list here; .mini-table's own rules further down add only
-   its compact-modifier differences (tighter padding/type) plus the couple of
+   same visual language — border-collapse, cell borders, right-aligned
+   numeric cells with a left-aligned first column. Factored into one selector
+   list here; .mini-table's own rules further down add only its
+   compact-modifier differences (tighter padding/type) plus the couple of
    things it doesn't share with .data-table (no sticky header, no split-value
-   styling). */
+   styling, and — deliberately, R3 Wave 2 item 8 — no zebra striping: row
+   striping is reserved for the main Stats-view results table only; see the
+   zebra rule immediately below, which is .data-table-only now). */
 .data-table,
 .mini-table {
   border-collapse: collapse;
@@ -1302,9 +1304,12 @@ a { color: var(--color-accent); }
 .mini-table th:first-child,
 .mini-table td:first-child { text-align: left; }
 
-/* Subtle zebra for scanability across many rows */
-.data-table tbody tr:nth-child(even) .data-table__td,
-.mini-table tbody tr:nth-child(even) td {
+/* Subtle zebra for scanability across many rows — MAIN RESULTS TABLE ONLY
+   (owner rule, R3 Wave 2 item 8): .data-table is the Stats-view leaderboard;
+   .mini-table (player-popup breakdown tables) intentionally has no zebra —
+   see mini-table__group-row below for how those tables separate groups
+   instead. */
+.data-table tbody tr:nth-child(even) .data-table__td {
   background: var(--color-panel);
 }
 
@@ -3513,7 +3518,8 @@ a { color: var(--color-accent); }
 }
 
 /* Compact modifier (task 3): the shared shape (border-collapse, cell
-   borders/alignment, zebra striping, header style) lives on the combined
+   borders/alignment, header style — NOT zebra striping, which is
+   .data-table-only per R3 Wave 2 item 8) lives on the combined
    .data-table/.mini-table selectors above — .mini-table only overrides
    spacing/type to run tighter. Padding and body font-size were tightened
    further here as the task 5a live fix — the 5-column "Vs opposition"
@@ -3614,18 +3620,16 @@ a { color: var(--color-accent); }
 }
 
 /* Sub-group heading row INSIDE the "vs bowling type" mini-table (owner note
-   11, fix round): marks "Pace" then "Spin" as one continuous table instead of
-   splitting into two — a spanning cell (colspan, see playerSections.js's
+   11, fix round; confirmed R3 Wave 2 item 8 — mini-tables never stripe data
+   rows, ONLY the Pace/Spin subheading rows get a highlight background):
+   marks "Pace" then "Spin" as one continuous table instead of splitting into
+   two — a spanning cell (colspan, see playerSections.js's
    groupHeadingRowHTML) rather than a real <th>, since it doesn't repeat per
    column. Same type recipe as .matchup__subtable-title just above (so the
    two read as one family of "this is a label, not data") plus a panel-tint
-   background so it still reads as a divider at a glance. The selector is
-   deliberately as specific as the shared zebra rule (.mini-table tbody
-   tr:nth-child(even) td, in the shared table-base block far above) and
-   placed after it in the cascade, so this background always wins regardless
-   of whether the heading row lands on an odd or even position — without
-   that, a same-specificity tie earlier in the file could let the zebra
-   stripe's identical color "win" by accident on some rows and not others. */
+   background so it reads as a divider at a glance. Since .mini-table has no
+   zebra rule to fight with (removed, item 8), this background is unambiguous
+   on every row — no specificity/cascade-order trick needed. */
 .mini-table tbody tr.mini-table__group-row td {
   background: var(--color-panel);
   text-transform: uppercase;
