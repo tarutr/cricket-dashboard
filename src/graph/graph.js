@@ -78,61 +78,64 @@ function cloneState(state) {
   return JSON.parse(JSON.stringify(state));
 }
 
-/** Same tiny option-building idiom src/filters.js uses for its scope-strip
- * month dropdowns — copied rather than imported (filters.js is table/scope-
- * strip code, out of this module's ownership) so the Slope chart's Window A/B
- * pickers offer the identical "Jul 2023"-style vocabulary. */
-function monthOptionsHTML(minMonth, maxMonth, selected) {
-  if (!minMonth || !maxMonth) return "";
-  const [minY, minM] = minMonth.split("-").map(Number);
-  const [maxY, maxM] = maxMonth.split("-").map(Number);
-  const opts = [];
-  for (let y = maxY; y >= minY; y--) {
-    const mFrom = y === maxY ? maxM : 12;
-    const mTo = y === minY ? minM : 1;
-    for (let m = mFrom; m >= mTo; m--) {
-      const val = `${y}-${String(m).padStart(2, "0")}`;
-      opts.push(`<option value="${val}" ${val === selected ? "selected" : ""}>${MONTH_NAMES[m - 1]} ${y}</option>`);
-    }
-  }
-  return opts.join("");
+// ── Day-level date helpers (R3 Wave 3, item 10) ─────────────────────────────
+// The Slope/Dumbbell Window A/B pickers are now DAY-level native <input
+// type="date"> controls (they used to be month <select>s, which desynced their
+// displayed value — noted at commit 2f847ee). Windows are stored as
+// "YYYY-MM-DD" pairs; charts.js's fetchWindowMetric feeds them straight into
+// buildScopeClauses, whose buildCoreScopeClauses already accepts a day-shaped
+// dateFrom/dateTo (filters.js's isDayDate branch) — so no query shape changes,
+// only the granularity of the two dates handed to it. All arithmetic is UTC
+// (never local time) so it can never drift a day across a DST boundary.
+const DAY_MS = 86400000;
+function dayToMs(d) {
+  const [y, m, dd] = d.split("-").map(Number);
+  return Date.UTC(y, m - 1, dd);
+}
+function msToDay(ms) {
+  const d = new Date(ms);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+/** Coerce a stored date to a day-shaped "YYYY-MM-DD" ("" for a month-shaped
+ * legacy value pads to the 1st; null/blank -> null). */
+function toDay(v) {
+  if (!v) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  if (/^\d{4}-\d{2}$/.test(v)) return `${v}-01`;
+  return null;
+}
+/** "YYYY-MM-DD" -> "D Mon YYYY", or null. */
+function dayLabel(ymd) {
+  if (!ymd) return null;
+  const [y, m, d] = ymd.split("-").map(Number);
+  return `${d} ${MONTH_NAMES[m - 1]} ${y}`;
 }
 
-/** "YYYY-MM" -> "Mon YYYY", or null. */
-function monthLabel(yyyymm) {
-  if (!yyyymm) return null;
-  const [y, m] = yyyymm.split("-").map(Number);
-  return `${MONTH_NAMES[m - 1]} ${y}`;
-}
-
-/** A window's {from,to} -> "Mon YYYY–Mon YYYY" (or a single "Mon YYYY" when
- * from and to are the same month), or null if either bound is unset. */
+/** A window's {from,to} -> "D Mon YYYY – D Mon YYYY" (or a single day when
+ * from and to are the same), or null if either bound is unset. */
 function windowLabel(window) {
   if (!window || !window.from || !window.to) return null;
-  const from = monthLabel(window.from);
-  const to = monthLabel(window.to);
-  return from === to ? from : `${from}–${to}`;
+  const from = dayLabel(window.from);
+  const to = dayLabel(window.to);
+  return from === to ? from : `${from} – ${to}`;
 }
 
-function monthIndex(yyyymm) {
-  const [y, m] = yyyymm.split("-").map(Number);
-  return y * 12 + (m - 1);
-}
-function monthFromIndex(idx) {
-  const y = Math.floor(idx / 12);
-  const m = (idx % 12) + 1;
-  return `${y}-${String(m).padStart(2, "0")}`;
-}
-
-/** Dataset-wide date bounds (the manifest's min/max match_date), for the
- * Slope chart's Window A/B month-dropdown vocabulary — deliberately the FULL
- * dataset range, not the live filter scope's (narrower) dateFrom/dateTo, same
- * as the scope strip's own date pickers. */
-function datasetMonthBounds() {
+/** Dataset-wide day bounds (the manifest's min/max match_date, "YYYY-MM-DD"),
+ * for the Window A/B date pickers' min/max attributes — the FULL dataset range,
+ * not the live scope's narrower dateFrom/dateTo, same posture as before. */
+function datasetDayBounds() {
   const manifest = getManifest();
-  const maxMonth = manifest?.data?.max_match_date ? manifest.data.max_match_date.slice(0, 7) : null;
-  const minMonth = manifest?.data?.min_match_date ? manifest.data.min_match_date.slice(0, 7) : null;
-  return { minMonth, maxMonth };
+  return {
+    minDay: manifest?.data?.min_match_date || null,
+    maxDay: manifest?.data?.max_match_date || null,
+  };
+}
+
+/** min/max attributes for the Window A/B <input type="date"> pickers, pinned to
+ * the dataset's own day bounds (values come from the trusted manifest). */
+function dayInputAttrs() {
+  const { minDay, maxDay } = datasetDayBounds();
+  return `${minDay ? `min="${minDay}"` : ""} ${maxDay ? `max="${maxDay}"` : ""}`.trim();
 }
 
 /** Shared open/close/outside-click/Escape wiring for the roster picker
@@ -501,17 +504,19 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   function ensureSlopeWindowDefaults() {
     if (slopeWindowA && slopeWindowB) return;
     const state = store.get();
-    const { minMonth, maxMonth } = datasetMonthBounds();
-    const from = state.dateFrom || minMonth;
-    const to = state.dateTo || maxMonth;
+    const { minDay, maxDay } = datasetDayBounds();
+    // Item 10: initialise from the GRAPH scope's EXACT dateFrom/dateTo (day
+    // level), falling back to the dataset's full range if the scope isn't
+    // date-bounded yet.
+    const from = toDay(state.dateFrom) || minDay;
+    const to = toDay(state.dateTo) || maxDay;
     if (!from || !to) return; // bounds not known yet — leave blank, user must pick both ends
-    const fromIdx = monthIndex(from);
-    const toIdx = monthIndex(to);
-    const span = Math.max(0, toIdx - fromIdx);
-    const midIdx = fromIdx + Math.floor(span / 2);
-    slopeWindowA = { from, to: monthFromIndex(midIdx) };
-    const secondFromIdx = Math.min(midIdx + (span > 0 ? 1 : 0), toIdx);
-    slopeWindowB = { from: monthFromIndex(secondFromIdx), to };
+    const fromMs = dayToMs(from);
+    const toMs = dayToMs(to);
+    const midMs = fromMs + Math.floor((toMs - fromMs) / 2);
+    slopeWindowA = { from, to: msToDay(midMs) };
+    const secondFromMs = Math.min(midMs + (toMs > fromMs ? DAY_MS : 0), toMs);
+    slopeWindowB = { from: msToDay(secondFromMs), to };
   }
 
   /** Dumbbell's Window A/Window B defaults — IDENTICAL logic to
@@ -524,17 +529,16 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   function ensureDumbbellWindowDefaults() {
     if (dumbbellWindowA && dumbbellWindowB) return;
     const state = store.get();
-    const { minMonth, maxMonth } = datasetMonthBounds();
-    const from = state.dateFrom || minMonth;
-    const to = state.dateTo || maxMonth;
+    const { minDay, maxDay } = datasetDayBounds();
+    const from = toDay(state.dateFrom) || minDay;
+    const to = toDay(state.dateTo) || maxDay;
     if (!from || !to) return; // bounds not known yet — leave blank, user must pick both ends
-    const fromIdx = monthIndex(from);
-    const toIdx = monthIndex(to);
-    const span = Math.max(0, toIdx - fromIdx);
-    const midIdx = fromIdx + Math.floor(span / 2);
-    dumbbellWindowA = { from, to: monthFromIndex(midIdx) };
-    const secondFromIdx = Math.min(midIdx + (span > 0 ? 1 : 0), toIdx);
-    dumbbellWindowB = { from: monthFromIndex(secondFromIdx), to };
+    const fromMs = dayToMs(from);
+    const toMs = dayToMs(to);
+    const midMs = fromMs + Math.floor((toMs - fromMs) / 2);
+    dumbbellWindowA = { from, to: msToDay(midMs) };
+    const secondFromMs = Math.min(midMs + (toMs > fromMs ? DAY_MS : 0), toMs);
+    dumbbellWindowB = { from: msToDay(secondFromMs), to };
   }
 
   // ── Selection model: Best/Worst ranking (Batch 8, task 1 — v1's
@@ -782,7 +786,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         slopeMetricKey = (metrics.find((m) => m.key === preferredKey) || metrics[0])?.key ?? null;
       }
       ensureSlopeWindowDefaults();
-      const { minMonth, maxMonth } = datasetMonthBounds();
+      const slopeDayAttrs = dayInputAttrs();
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
         <select class="select graph-metric-select" data-role="slope-metric">
@@ -794,15 +798,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         </select>
         <span class="graph-control-label">Window A</span>
         <div class="date-range graph-slope-range">
-          <select class="select" data-role="slope-a-from" aria-label="Window A from">${monthOptionsHTML(minMonth, maxMonth, slopeWindowA?.from)}</select>
+          <input type="date" class="input date-range__input" data-role="slope-a-from" aria-label="Window A from" value="${escAttr(slopeWindowA?.from ?? "")}" ${slopeDayAttrs} />
           <span class="date-range__sep">–</span>
-          <select class="select" data-role="slope-a-to" aria-label="Window A to">${monthOptionsHTML(minMonth, maxMonth, slopeWindowA?.to)}</select>
+          <input type="date" class="input date-range__input" data-role="slope-a-to" aria-label="Window A to" value="${escAttr(slopeWindowA?.to ?? "")}" ${slopeDayAttrs} />
         </div>
         <span class="graph-control-label">Window B</span>
         <div class="date-range graph-slope-range">
-          <select class="select" data-role="slope-b-from" aria-label="Window B from">${monthOptionsHTML(minMonth, maxMonth, slopeWindowB?.from)}</select>
+          <input type="date" class="input date-range__input" data-role="slope-b-from" aria-label="Window B from" value="${escAttr(slopeWindowB?.from ?? "")}" ${slopeDayAttrs} />
           <span class="date-range__sep">–</span>
-          <select class="select" data-role="slope-b-to" aria-label="Window B to">${monthOptionsHTML(minMonth, maxMonth, slopeWindowB?.to)}</select>
+          <input type="date" class="input date-range__input" data-role="slope-b-to" aria-label="Window B to" value="${escAttr(slopeWindowB?.to ?? "")}" ${slopeDayAttrs} />
         </div>
       `;
       const metricSel = els.metricControls.querySelector('[data-role="slope-metric"]');
@@ -863,7 +867,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         dumbbellMetricKey = (metrics.find((m) => m.key === preferredKey) || metrics[0])?.key ?? null;
       }
       ensureDumbbellWindowDefaults();
-      const { minMonth, maxMonth } = datasetMonthBounds();
+      const dumbbellDayAttrs = dayInputAttrs();
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
         <select class="select graph-metric-select" data-role="dumbbell-metric">
@@ -875,15 +879,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         </select>
         <span class="graph-control-label">Window A</span>
         <div class="date-range graph-slope-range">
-          <select class="select" data-role="dumbbell-a-from" aria-label="Window A from">${monthOptionsHTML(minMonth, maxMonth, dumbbellWindowA?.from)}</select>
+          <input type="date" class="input date-range__input" data-role="dumbbell-a-from" aria-label="Window A from" value="${escAttr(dumbbellWindowA?.from ?? "")}" ${dumbbellDayAttrs} />
           <span class="date-range__sep">–</span>
-          <select class="select" data-role="dumbbell-a-to" aria-label="Window A to">${monthOptionsHTML(minMonth, maxMonth, dumbbellWindowA?.to)}</select>
+          <input type="date" class="input date-range__input" data-role="dumbbell-a-to" aria-label="Window A to" value="${escAttr(dumbbellWindowA?.to ?? "")}" ${dumbbellDayAttrs} />
         </div>
         <span class="graph-control-label">Window B</span>
         <div class="date-range graph-slope-range">
-          <select class="select" data-role="dumbbell-b-from" aria-label="Window B from">${monthOptionsHTML(minMonth, maxMonth, dumbbellWindowB?.from)}</select>
+          <input type="date" class="input date-range__input" data-role="dumbbell-b-from" aria-label="Window B from" value="${escAttr(dumbbellWindowB?.from ?? "")}" ${dumbbellDayAttrs} />
           <span class="date-range__sep">–</span>
-          <select class="select" data-role="dumbbell-b-to" aria-label="Window B to">${monthOptionsHTML(minMonth, maxMonth, dumbbellWindowB?.to)}</select>
+          <input type="date" class="input date-range__input" data-role="dumbbell-b-to" aria-label="Window B to" value="${escAttr(dumbbellWindowB?.to ?? "")}" ${dumbbellDayAttrs} />
         </div>
       `;
       const metricSel = els.metricControls.querySelector('[data-role="dumbbell-metric"]');

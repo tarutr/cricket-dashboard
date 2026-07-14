@@ -2275,11 +2275,13 @@ a { color: var(--color-accent); }
 
 .graph-metric-select { width: 100%; }
 
-/* Slope chart's Window A/B month pickers (Batch 4 part 1, decision 43) — the
-   scope strip's own `.date-range`/`.select` markup, reused verbatim, plus a
-   flex-shrink allowance since the sidebar column (300px) is much narrower
-   than the top filter bar these classes were first written for. */
-.graph-slope-range .select { flex: 1 1 0; min-width: 0; }
+/* Slope / Dumbbell Window A/B pickers — now DAY-level native <input
+   type="date"> controls (R3 Wave 3, item 10; were month <select>s). Same
+   `.date-range` markup as the scope strip, plus a flex-shrink allowance since
+   the sidebar column (300px) is much narrower than the top filter bar these
+   classes were first written for. */
+.graph-slope-range .select,
+.graph-slope-range .input { flex: 1 1 0; min-width: 0; }
 
 .graph-player-search { position: relative; }
 .graph-player-search .input { width: 100%; }
