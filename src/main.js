@@ -22,7 +22,10 @@ const initStatusEl = document.getElementById("init-status");
 const appContentEl = document.getElementById("app-content");
 const scopeSentenceEl = document.getElementById("scope-sentence");
 const footerDataDateEl = document.getElementById("footer-data-date");
-const disciplineToggleEl = document.querySelector('[data-role="discipline"]');
+// Discipline is now a compact <select> rendered by filters.js inside the Filters
+// popup (ROUND 3 task 1) — no static toggle element, no click wiring here. Its
+// change (default columns + sort-key fallback) is handled via the
+// onDisciplineChanged callback passed to mountFilters below.
 const viewToggleEl = document.querySelector('[data-role="view"]');
 const filterBarEl = document.getElementById("filter-bar");
 // F2: #pills-bar and #player-search-section are gone — pills and the table
@@ -107,7 +110,7 @@ export function clearAll() {
   lastAppliedDefaults.bowling = [...fresh.columns.bowling];
   // Re-render every control from the fresh defaults (the store.subscribe hook
   // refreshes pills/subtitle/badge; the controls need an explicit re-render).
-  updateDisciplineToggle();
+  // filterController.render() re-syncs the Gender/Discipline selects.
   updateViewToggle();
   if (filterController) {
     filterController.render();
@@ -147,13 +150,6 @@ function reapplyDefaultColumnsIfUnmodified() {
 
 function updateScopeSentence() {
   scopeSentenceEl.textContent = store.describeScope();
-}
-
-function updateDisciplineToggle() {
-  const state = store.get();
-  disciplineToggleEl.querySelectorAll(".segmented__btn").forEach((btn) => {
-    btn.classList.toggle("is-active", btn.dataset.value === state.discipline);
-  });
 }
 
 /** Count badge on the toolbar's "Filters" button (F2 — repointed from the old
@@ -419,28 +415,6 @@ function boot() {
         })}`;
       }
 
-      updateDisciplineToggle();
-
-      disciplineToggleEl.addEventListener("click", (e) => {
-        const btn = e.target.closest(".segmented__btn");
-        if (!btn) return;
-        const discipline = btn.dataset.value;
-        const state = store.get();
-        if (discipline === state.discipline) return;
-        // Re-apply the owner's Test/MDM default-column swap whenever discipline
-        // changes, in case the user hasn't customized columns yet.
-        store.set({ discipline });
-        reapplyDefaultColumnsIfUnmodified();
-        // If the current sort key doesn't exist for the new discipline (e.g.
-        // "runs" when switching to bowling), fall back to that discipline's
-        // default sort (runs/batting, wickets/bowling, both desc).
-        if (!getMetric(state.sort.key, discipline)) {
-          store.set({ sort: { key: DEFAULT_SORT_KEY[discipline], dir: "desc" } });
-        }
-        updateDisciplineToggle();
-        onFiltersChanged();
-      });
-
       filterController = mountFilters(
         filterBarEl,
         store,
@@ -449,6 +423,19 @@ function boot() {
         },
         () => {
           reapplyDefaultColumnsIfUnmodified();
+        },
+        // onDisciplineChanged (ROUND 3 task 1): the Discipline <select> already
+        // set state.discipline; re-apply the owner's Test/MDM default-column
+        // swap (when columns are still default) and fall back the sort key if it
+        // no longer resolves in the new discipline (e.g. "runs" → bowling). This
+        // is exactly what the old segmented-toggle click handler used to do;
+        // filters.js then calls onChange() → onFiltersChanged().
+        () => {
+          const state = store.get();
+          reapplyDefaultColumnsIfUnmodified();
+          if (!getMetric(state.sort.key, state.discipline)) {
+            store.set({ sort: { key: DEFAULT_SORT_KEY[state.discipline], dir: "desc" } });
+          }
         }
       );
       filterController.setDateBounds(minDate, maxDate);

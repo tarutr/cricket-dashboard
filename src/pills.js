@@ -125,14 +125,15 @@ export function mountPills(container, store, onChange, onPinChange = onChange) {
       }
     }
 
-    // Free-text player-name search (omnisearch's explicit "Filter the table
-    // to names matching …" action) — phrased exactly like describeScope()'s
-    // `matching "…"` subtitle token so the pill and the honest scope sentence
-    // never disagree (flagged: chose the subtitle's own wording over a
-    // shorter bare-quote label for that reason).
+    // Free-text player-name filter (state.search) — written by the new "Name"
+    // condition in the Filters popup (ROUND 3 task 6) and by omnisearch's
+    // "Filter the table to names matching …" action. Both are the same ILIKE
+    // filter, so one pill covers both. Labelled "Name: X" (task 6) — a shade
+    // shorter/clearer than describeScope()'s `matching "X"` subtitle token; the
+    // two describe the same filter, so the honest-scope invariant still holds.
     if (s.search && s.search.trim()) {
       const term = s.search.trim();
-      pills.push({ label: `matching "${term}"`, remove: () => store.set({ search: "" }) });
+      pills.push({ label: `Name: ${term}`, remove: () => store.set({ search: "" }) });
     }
 
     // Pinned players (task 3b): one removable "+ name" pill per pin. Inert

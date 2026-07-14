@@ -39,7 +39,10 @@ import {
   OPERATORS,
   activeConditionCount,
   conditionHasError,
-  addCondition,
+  addConditionToGroup,
+  addGroup,
+  removeGroup,
+  setGroupOp,
   removeConditionAt,
   partitionFilterMetrics,
 } from "./advanced.js";
@@ -76,6 +79,7 @@ const SINGLETON_TYPES = [
   { key: "hand", label: "Batting hand", group: "Player", menOnly: true },
   { key: "bowling", label: "Bowling style", group: "Player", menOnly: true },
   { key: "rpos", label: "R. Pos.", group: "Player", menOnly: false },
+  { key: "name", label: "Name", group: "Player", menOnly: false },
   { key: "team", label: "Played for", group: "Team", menOnly: false },
   { key: "opposition", label: "Against opposition", group: "Team", menOnly: false },
   { key: "event", label: "Event", group: "Match", menOnly: false },
@@ -101,6 +105,11 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       </div>`
   ).join("");
 
+  // ROUND 3 (task 7): the top-level single "+ Add condition" dropdown is gone;
+  // each numeric GROUP card now carries its OWN "+ Add condition" dropdown (with
+  // the full taxonomy, so singletons can still be added from it) plus a Match
+  // All|Any toggle, and a "+ Add group" button appends further AND groups. The
+  // singleton rows stay OUTSIDE the groups.
   advancedHost.innerHTML = `
     <div class="cond-builder">
       <div class="cond-builder__rows" data-role="singleton-rows">
@@ -108,12 +117,9 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
         <!-- R. Pos. and the matchup striker-position control share the R.Pos
              editor host; each self-hides in the other mode (drawerInnings.js). -->
       </div>
-      <div class="cond-builder__numeric" data-role="numeric-rows"></div>
-      <p class="cond-builder__empty profile-note" data-role="empty-note" hidden>No filters added yet — use "Add condition" below.</p>
       <p class="cond-builder__note profile-note" data-role="women-note" hidden>Role, batting hand and bowling style filters are available for men only.</p>
-      <div class="cond-builder__add">
-        <select class="select cond-builder__add-select" data-role="add-cond" aria-label="Add a filter condition"></select>
-      </div>
+      <p class="cond-builder__empty profile-note" data-role="empty-note" hidden>No filters added yet — use "Add condition" below.</p>
+      <div class="cond-builder__numeric" data-role="numeric-rows"></div>
     </div>`;
 
   const rowEls = {};
@@ -127,7 +133,6 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   const numericEl = advancedHost.querySelector('[data-role="numeric-rows"]');
   const emptyNoteEl = advancedHost.querySelector('[data-role="empty-note"]');
   const womenNoteEl = advancedHost.querySelector('[data-role="women-note"]');
-  const addSelectEl = advancedHost.querySelector('[data-role="add-cond"]');
 
   // ── Profile options + editors (men-only) ───────────────────────────────────
   let profileOptions = { roleGroups: [], subByGroup: {}, bowlingTypes: [], battingHands: [] };
@@ -144,14 +149,20 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     return opts.join("");
   }
 
-  // Role editor: broad role + (conditional) detailed sub-role.
+  // Role editor: broad role + (conditional) detailed sub-role + (when the broad
+  // role is "Bowler") the FINE bowling styles (ROUND 3, task 2). The fine-style
+  // select writes the SAME state.profile.bowlingType as the standalone "Bowling
+  // style" condition — they are two editors of one value (see report note on the
+  // redundancy). renderProfileEditors keeps both in sync from profile.bowlingType.
   editorHosts.role.innerHTML = `
     <div class="profile-role">
       <select class="select" data-role="prof-roleGroup" aria-label="Playing role"></select>
       <select class="select" data-role="prof-roleSub" aria-label="Detailed role" hidden></select>
+      <select class="select" data-role="prof-roleBowling" aria-label="Bowling style" hidden></select>
     </div>`;
   const roleGroupEl = editorHosts.role.querySelector('[data-role="prof-roleGroup"]');
   const roleSubEl = editorHosts.role.querySelector('[data-role="prof-roleSub"]');
+  const roleBowlingEl = editorHosts.role.querySelector('[data-role="prof-roleBowling"]');
   editorHosts.hand.innerHTML = `<select class="select" data-role="prof-hand" aria-label="Batting hand"></select>`;
   const handEl = editorHosts.hand.querySelector('[data-role="prof-hand"]');
   editorHosts.bowling.innerHTML = `<select class="select" data-role="prof-bowling" aria-label="Bowling style"></select>`;
@@ -168,6 +179,16 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       roleSubEl.innerHTML = "";
       roleSubEl.hidden = true;
     }
+    // Fine bowling styles: shown only when the broad role is "Bowler". Hiding it
+    // (role changed away from Bowler) never CLEARS bowlingType — the standalone
+    // "Bowling style" condition may own that value; the pill keeps it honest.
+    if (p.roleGroup === "Bowler" && profileOptions.bowlingTypes.length > 0) {
+      roleBowlingEl.innerHTML = selectOptionsHTML(profileOptions.bowlingTypes, p.bowlingType, "Any bowling style");
+      roleBowlingEl.hidden = false;
+    } else {
+      roleBowlingEl.innerHTML = "";
+      roleBowlingEl.hidden = true;
+    }
     handEl.innerHTML = selectOptionsHTML(profileOptions.battingHands, p.battingHand, "Any");
     bowlingEl.innerHTML = selectOptionsHTML(profileOptions.bowlingTypes, p.bowlingType, "Any");
   }
@@ -179,6 +200,11 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   });
   roleSubEl.addEventListener("change", () => {
     setProfile({ roleSub: roleSubEl.value || null });
+    onChange();
+  });
+  roleBowlingEl.addEventListener("change", () => {
+    setProfile({ bowlingType: roleBowlingEl.value || null });
+    renderProfileEditors();
     onChange();
   });
   handEl.addEventListener("change", () => {
@@ -243,6 +269,18 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   const eventController = mountEvent(editorHosts.event, store, onChange);
   const venueController = mountVenue(editorHosts.venue, store, onChange);
 
+  // Name condition (ROUND 3, task 6): a plain text input writing state.search —
+  // the existing ILIKE-on-name key the table already consumes (table.js's
+  // searchClause). Empty = inactive (no pill, no query effect, never blocks
+  // Search). The value is kept in sync by syncSingletonRows (guarded so it never
+  // clobbers the caret while the user is typing here).
+  editorHosts.name.innerHTML = `<input type="text" class="input cond-name-input" data-role="prof-name" placeholder="Player name…" aria-label="Player name" />`;
+  const nameEl = editorHosts.name.querySelector('[data-role="prof-name"]');
+  nameEl.addEventListener("input", () => {
+    store.set({ search: nameEl.value });
+    onChange();
+  });
+
   // ── Presence + session-added tracking ──────────────────────────────────────
   // sessionAdded: singleton rows the user added THIS popup session that don't
   // yet carry a value. Reset on every popup open (onShow) so never-filled rows
@@ -255,6 +293,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       case "hand": return Boolean(s.profile.battingHand);
       case "bowling": return Boolean(s.profile.bowlingType);
       case "rpos": return (s.regularPositions || []).length > 0 || (s.positions || []).length > 0;
+      case "name": return Boolean((s.search || "").trim());
       case "team": return (s.teams || []).length > 0;
       case "opposition": return (s.opposition || []).length > 0;
       case "event": return (s.event || []).length > 0;
@@ -274,6 +313,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       case "hand": setProfile({ battingHand: null }); break;
       case "bowling": setProfile({ bowlingType: null }); break;
       case "rpos": store.set({ regularPositions: [], positions: [] }); break;
+      case "name": store.set({ search: "" }); break;
       case "team": store.set({ teams: [] }); break;
       case "opposition": store.set({ opposition: [] }); break;
       case "event": store.set({ event: [] }); break;
@@ -291,59 +331,40 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     });
   }
 
-  // ── "+ Add condition" grouped dropdown ─────────────────────────────────────
-  let lastAddVocabKey = null;
-
+  // ── "+ Add condition" dropdown (rendered inside EACH numeric group) ────────
+  // ROUND 3 (tasks 3 + 7): the single top-level add dropdown is gone; each
+  // numeric GROUP card carries its own "+ Add condition" <select> (data-gi), so
+  // a metric is added to THAT group. It keeps the full taxonomy — Player · Team ·
+  // Match · Dismissal type · Basic metrics · Advanced metrics — so singletons
+  // can still be added from it (they attach to the shared singleton rows above,
+  // OUTSIDE every group). "Dismissal type" (task 3) sits between Match and Basic
+  // metrics and holds the dismissal COUNT metrics moved out of Advanced.
   function metricLabel(metricKey, ns) {
     const m = getMetric(metricKey, ns) || getMetric(metricKey);
     return m ? m.label : metricKey;
   }
 
-  function renderAddSelect(s) {
+  function addSelectOptionsHTML(s) {
     const ns = effectiveNamespace(s);
     const women = s.gender === "female";
-    const { basic, advanced } = partitionFilterMetrics(eligibleMetrics(ns, s.formats));
-    // A singleton already showing is disabled in the dropdown (at most one each);
-    // presence is in the key so it re-enables the moment its row is removed.
+    const { basic, dismissal, advanced } = partitionFilterMetrics(eligibleMetrics(ns, s.formats));
+    // A singleton already showing is disabled in every group's dropdown (at most
+    // one each); presence re-enables it the moment its row is removed.
     const present = SINGLETON_TYPES.filter((t) => isPresent(t, s)).map((t) => t.key);
-    const vocabKey = JSON.stringify({ ns, women, present, basic: basic.map((m) => m.key), advanced: advanced.map((m) => m.key) });
-    if (vocabKey === lastAddVocabKey) return; // nothing changed — don't rebuild (avoids churn while typing)
-    lastAddVocabKey = vocabKey;
-
     const groupOpts = (groupName) =>
       SINGLETON_TYPES.filter((t) => t.group === groupName && !(t.menOnly && women))
         .map((t) => `<option value="c:${t.key}"${present.includes(t.key) ? " disabled" : ""}>${escHtml(t.label)}</option>`)
         .join("");
     const metricOpts = (list) => list.map((m) => `<option value="m:${escAttr(m.key)}">${escHtml(m.label)}</option>`).join("");
-
-    addSelectEl.innerHTML = `
+    return `
       <option value="">+ Add condition…</option>
       <optgroup label="Player">${groupOpts("Player")}</optgroup>
       <optgroup label="Team">${groupOpts("Team")}</optgroup>
       <optgroup label="Match">${groupOpts("Match")}</optgroup>
+      ${dismissal.length ? `<optgroup label="Dismissal type">${metricOpts(dismissal)}</optgroup>` : ""}
       ${basic.length ? `<optgroup label="Basic metrics">${metricOpts(basic)}</optgroup>` : ""}
       ${advanced.length ? `<optgroup label="Advanced metrics">${metricOpts(advanced)}</optgroup>` : ""}`;
-    addSelectEl.value = "";
   }
-
-  addSelectEl.addEventListener("change", () => {
-    const v = addSelectEl.value;
-    addSelectEl.value = "";
-    if (!v) return;
-    if (v.startsWith("c:")) {
-      const key = v.slice(2);
-      sessionAdded[key] = true;
-      syncSingletonRows();
-      onChange();
-    } else if (v.startsWith("m:")) {
-      addCondition(store, v.slice(2));
-      renderNumeric(store.get(), true);
-      // Focus the freshly-added row's value input.
-      const inputs = numericEl.querySelectorAll('.cond-row--metric [data-role="v1"]');
-      if (inputs.length) inputs[inputs.length - 1].focus();
-      onChange();
-    }
-  });
 
   // ── Singleton rows: show/hide + editor sync ─────────────────────────────────
   function syncSingletonRows() {
@@ -362,27 +383,47 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     oppositionController.sync();
     eventController.sync();
     venueController.sync();
+    // Keep the Name input in sync without clobbering the caret while typing here.
+    if (document.activeElement !== nameEl) nameEl.value = s.search || "";
     renderProfileEditors();
     updateEmptyNote(s);
   }
 
-  // ── Numeric condition rows ──────────────────────────────────────────────────
-  // Rebuilt only when the numeric STRUCTURE changes (count / metric / operator),
-  // never on a value keystroke — otherwise the input being typed into would be
-  // destroyed, dropping focus and caret. `force` bypasses the key skip.
+  // ── Numeric condition GROUPS (multi-group AND/OR — ROUND 3 task 7) ──────────
+  // Rebuilt only when the STRUCTURE changes (group count / per-group op / metric
+  // / operator / eligible-metric vocabulary / singleton presence), never on a
+  // value keystroke — otherwise the input being typed into would be destroyed,
+  // dropping focus and caret. `force` bypasses the key skip.
   let lastNumericKey = null;
   let showErrors = false;
 
-  function numericConds(s) {
-    return (s.advanced.groups && s.advanced.groups[0] ? s.advanced.groups[0].conds : []) || [];
+  /** Groups to RENDER: a synthetic empty group 0 stands in when state has none
+   * yet, so there's always exactly one group card whose "+ Add condition"
+   * dropdown is the entry point. addConditionToGroup materialises it on the
+   * first metric add; before that, singletons added from it need no group. */
+  function renderGroups(s) {
+    const g = s.advanced.groups || [];
+    return g.length ? g : [{ op: "AND", conds: [] }];
+  }
+  function realGroups(s) {
+    return s.advanced.groups || [];
+  }
+  function totalNumericConds(s) {
+    return realGroups(s).reduce((n, g) => n + g.conds.length, 0);
   }
 
   function structuralKey(s) {
-    const conds = numericConds(s);
-    return JSON.stringify({ shape: conds.map((c) => `${c.metricKey}|${c.operator}`), errors: showErrors });
+    return JSON.stringify({
+      ns: effectiveNamespace(s),
+      women: s.gender === "female",
+      present: SINGLETON_TYPES.filter((t) => isPresent(t, s)).map((t) => t.key),
+      formats: s.formats,
+      groups: renderGroups(s).map((g) => ({ op: g.op, conds: g.conds.map((c) => `${c.metricKey}|${c.operator}`) })),
+      errors: showErrors,
+    });
   }
 
-  function conditionRowHTML(cond, ci, ns) {
+  function conditionRowHTML(cond, gi, ci, ns) {
     const hasError = showErrors && conditionHasError(cond);
     const valueFields =
       cond.operator === "between"
@@ -391,7 +432,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
            <input type="number" class="input cond-row__value-input" data-role="v2" value="${escAttr(cond.v2)}" placeholder="max" />`
         : `<input type="number" class="input cond-row__value-input" data-role="v1" value="${escAttr(cond.v1)}" placeholder="value" />`;
     return `
-      <div class="cond-row cond-row--metric ${hasError ? "cond-row--error" : ""}" data-ci="${ci}">
+      <div class="cond-row cond-row--metric ${hasError ? "cond-row--error" : ""}" data-gi="${gi}" data-ci="${ci}">
         <div class="cond-row__line">
           <div class="cond-row__main">
             <span class="cond-row__type">${escHtml(metricLabel(cond.metricKey, ns))}</span>
@@ -406,10 +447,38 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       </div>`;
   }
 
+  function groupCardHTML(g, gi, ns, s, multi) {
+    // The Match All|Any toggle shows once a group has ≥2 conditions (where it's
+    // meaningful) OR once there are multiple groups (so every group carries its
+    // own toggle, per task 7). A lone single-condition group still looks like
+    // the pre-ROUND-3 one row. "Remove group" shows only when >1 group exists.
+    const showOp = multi || g.conds.length >= 2;
+    const removeBtn = multi
+      ? `<button type="button" class="link-btn cond-group__remove" data-role="remove-group" data-gi="${gi}">Remove group</button>`
+      : "";
+    const opControl = showOp
+      ? `<span class="cond-group__match">Match</span>
+         <div class="segmented segmented--small" data-role="group-op" data-gi="${gi}">
+           <button type="button" class="segmented__btn ${g.op !== "OR" ? "is-active" : ""}" data-value="AND">All</button>
+           <button type="button" class="segmented__btn ${g.op === "OR" ? "is-active" : ""}" data-value="OR">Any</button>
+         </div>
+         <span class="cond-group__match">of</span>`
+      : "";
+    const head = showOp || removeBtn ? `<div class="cond-group__head">${opControl}${removeBtn}</div>` : "";
+    const rows = g.conds.map((c, ci) => conditionRowHTML(c, gi, ci, ns)).join("");
+    return `
+      <div class="cond-group${multi ? " is-multi" : ""}" data-gi="${gi}">
+        ${head}
+        <div class="cond-group__rows">${rows}</div>
+        <div class="cond-group__add">
+          <select class="select cond-builder__add-select" data-role="add-cond" data-gi="${gi}" aria-label="Add a filter condition">${addSelectOptionsHTML(s)}</select>
+        </div>
+      </div>`;
+  }
+
   function updateEmptyNote(s) {
     const anySingleton = SINGLETON_TYPES.some((t) => isPresent(t, s));
-    const anyNumeric = numericConds(s).length > 0;
-    emptyNoteEl.hidden = anySingleton || anyNumeric;
+    emptyNoteEl.hidden = anySingleton || totalNumericConds(s) > 0;
   }
 
   function renderNumeric(s, force = false) {
@@ -420,17 +489,87 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       return;
     }
     lastNumericKey = key;
-    const conds = numericConds(s);
-    numericEl.innerHTML = conds.map((c, ci) => conditionRowHTML(c, ci, ns)).join("");
+    const groups = renderGroups(s);
+    const multi = groups.length > 1;
+    const connector = `<div class="cond-group__connector">and</div>`;
+    const cards = groups.map((g, gi) => (gi > 0 ? connector : "") + groupCardHTML(g, gi, ns, s, multi)).join("");
+    // "+ Add group" appears once at least one numeric condition exists (adding
+    // empty groups before the first condition would be pointless). Groups
+    // AND-combine (advanced.op stays "AND") exactly as advancedToHaving renders.
+    const addGroupBtn =
+      totalNumericConds(s) >= 1
+        ? `<button type="button" class="text-btn text-btn--add-group" data-role="add-group">+ Add group</button>`
+        : "";
+    numericEl.innerHTML = cards + addGroupBtn;
     wireNumeric();
     updateEmptyNote(s);
   }
 
   function wireNumeric() {
-    const conds = numericConds(store.get());
+    const groups = realGroups(store.get());
+
+    // Per-group "+ Add condition" dropdowns (singleton OR metric, by data-gi).
+    numericEl.querySelectorAll('[data-role="add-cond"]').forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const gi = Number(sel.dataset.gi);
+        const v = sel.value;
+        sel.value = "";
+        if (!v) return;
+        if (v.startsWith("c:")) {
+          sessionAdded[v.slice(2)] = true;
+          syncSingletonRows();
+          renderNumeric(store.get(), true); // refresh disabled states in every group's dropdown
+          onChange();
+        } else if (v.startsWith("m:")) {
+          addConditionToGroup(store, gi, v.slice(2));
+          renderNumeric(store.get(), true);
+          // Focus the freshly-added row's value input within its own group.
+          const groupEl = numericEl.querySelector(`.cond-group[data-gi="${gi}"]`);
+          const inputs = (groupEl || numericEl).querySelectorAll('.cond-row--metric [data-role="v1"]');
+          if (inputs.length) inputs[inputs.length - 1].focus();
+          onChange();
+        }
+      });
+    });
+
+    // Per-group Match All|Any toggle (writes group.op "AND"/"OR").
+    numericEl.querySelectorAll('[data-role="group-op"]').forEach((seg) => {
+      const gi = Number(seg.dataset.gi);
+      seg.querySelectorAll(".segmented__btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          setGroupOp(store, gi, btn.dataset.value);
+          renderNumeric(store.get(), true);
+          onChange();
+        });
+      });
+    });
+
+    // Per-group "Remove group".
+    numericEl.querySelectorAll('[data-role="remove-group"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        removeGroup(store, Number(btn.dataset.gi));
+        renderNumeric(store.get(), true);
+        syncSingletonRows(); // empty-note may change
+        onChange();
+      });
+    });
+
+    // "+ Add group".
+    const addGroupBtn = numericEl.querySelector('[data-role="add-group"]');
+    if (addGroupBtn) {
+      addGroupBtn.addEventListener("click", () => {
+        addGroup(store);
+        renderNumeric(store.get(), true);
+        onChange();
+      });
+    }
+
+    // Condition rows (operator / value / remove), addressed by group + index.
     numericEl.querySelectorAll(".cond-row--metric").forEach((rowEl) => {
+      const gi = Number(rowEl.dataset.gi);
       const ci = Number(rowEl.dataset.ci);
-      const cond = conds[ci];
+      const group = groups[gi];
+      const cond = group && group.conds[ci];
       if (!cond) return;
 
       const opSel = rowEl.querySelector('[data-role="operator"]');
@@ -458,7 +597,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       });
 
       rowEl.querySelector('[data-role="remove-metric"]').addEventListener("click", () => {
-        removeConditionAt(store, 0, ci);
+        removeConditionAt(store, gi, ci);
         renderNumeric(store.get(), true);
         syncSingletonRows(); // empty-note may change
         onChange();
@@ -470,8 +609,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   /** decision 42: numeric conditions with a value missing block Search with an
    * inline per-row message. Singleton conditions never block (empty = inactive). */
   function validate() {
-    const conds = numericConds(store.get());
-    const hasErrors = conds.some(conditionHasError);
+    const hasErrors = (store.get().advanced.groups || []).some((g) => g.conds.some(conditionHasError));
     showErrors = hasErrors;
     if (!hasErrors) return true;
     renderNumeric(store.get(), true);
@@ -503,7 +641,6 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   function sync() {
     const s = store.get();
     syncSingletonRows();
-    renderAddSelect(s);
     renderNumeric(s);
   }
 

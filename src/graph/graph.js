@@ -219,6 +219,9 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
                 <button type="button" class="segmented__btn" data-value="best">Best</button>
                 <button type="button" class="segmented__btn" data-value="worst">Worst</button>
               </div>
+              <div class="graph-roster-filter" data-role="roster-filter-wrap" hidden>
+                <input type="text" class="input graph-roster-filter__input" data-role="roster-filter" placeholder="Filter players…" aria-label="Filter the player list" />
+              </div>
               <div class="dropdown__list graph-roster-list" data-role="roster-list"></div>
             </div>
           </div>
@@ -253,6 +256,8 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
     rosterToggle: container.querySelector('[data-role="roster-toggle"]'),
     rosterPanel: container.querySelector('[data-role="roster-panel"]'),
     rosterMode: container.querySelector('[data-role="roster-mode"]'),
+    rosterFilterWrap: container.querySelector('[data-role="roster-filter-wrap"]'),
+    rosterFilter: container.querySelector('[data-role="roster-filter"]'),
     rosterList: container.querySelector('[data-role="roster-list"]'),
     resetPlayers: container.querySelector('[data-role="reset-players"]'),
     capNote: container.querySelector('[data-role="cap-note"]'),
@@ -316,6 +321,10 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
   let seeded = false; // has the selection ever been seeded for the current discipline+scope?
   let lastSeedKey = null;
   let loadToken = 0;
+  // Owner point 13: the roster dropdown's filter-as-you-type text. The pool is
+  // the entire filtered set now, so the list is filtered by name and rendered
+  // in a capped slice (see renderPlayerList) — the pool itself is never capped.
+  let rosterFilterText = "";
 
   // Batch 3 part 2 (honest titles, decision 43): which metric key ranked the
   // MOST RECENT successful seed, and under which discipline — this is what
@@ -341,11 +350,13 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
   let lastRankMetricKey = null;
   let lastRankMetricDiscipline = null;
 
-  // decision 46f: the checked-set cap before any chart type is picked (the
-  // pool seed size and the "keep the existing top-N-by-current-sort checked
-  // subset" initial roster both use this) — the classic "top 15", same
-  // number Bar's own cap always was. Once a type is picked, activeMaxCap()
-  // switches to that type's own CHART_CAPS entry.
+  // decision 46f: the CHECKED-set cap before any chart type is picked — the
+  // classic "top 15", same number Bar's own cap always was. Once a type is
+  // picked, activeMaxCap() switches to that type's own CHART_CAPS entry.
+  // NOTE (owner point 13): this caps only what's CHECKED/plotted, never the
+  // candidate POOL — the pool is the entire filtered set (seedFromFilteredSet
+  // no longer takes a cap). deriveChecked() picks the top N of the full pool
+  // by rank up to this cap.
   const DEFAULT_PRETYPE_CAP = 15;
   function activeMaxCap() {
     return chartType ? CHART_CAPS[chartType].max : DEFAULT_PRETYPE_CAP;
@@ -1049,6 +1060,13 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
     return "Manual";
   }
 
+  // Owner point 13: at ~2,800 candidates, rendering every pool row is both a
+  // DOM/perf hazard and unusable — so once the pool exceeds this, the roster
+  // shows a filter-as-you-type box and renders only the first N matches, with
+  // a "type to narrow" note. The POOL is never capped (that's the whole point
+  // of point 13); only what's RENDERED here is.
+  const ROSTER_RENDER_CAP = 50;
+
   function renderPlayerList() {
     const checkedCount = selection.checkedCount();
     const candidates = selection.getFull();
@@ -1069,25 +1087,51 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
       });
     }
 
-    els.rosterList.innerHTML = total
-      ? candidates
-          .map((p, i) => {
-            const checked = selection.isChecked(p.id);
-            const atCap = !checked && checkedCount >= cap;
-            const title = atCap
-              ? `Max ${cap}${chartType ? " for this chart type" : " before picking a chart type"} — untick one first`
-              : checked
-                ? "Remove from graph"
-                : "Add to graph";
-            return `<div class="dropdown__item graph-roster-item${atCap ? " is-disabled" : ""}" data-id="${escAttr(p.id)}">
+    // The filter box only appears when there are more candidates than we
+    // render at once — a short pool needs no filtering.
+    els.rosterFilterWrap.hidden = total <= ROSTER_RENDER_CAP;
+
+    if (total === 0) {
+      els.rosterList.innerHTML = `<p class="graph-player-search__empty">No players yet — search above or use Filters.</p>`;
+      return;
+    }
+
+    // Filter by name (case-insensitive) but keep each candidate's REAL pool
+    // position — the "#N" meta doubles as its seed rank, so it must reflect the
+    // untouched pool order, not the filtered index. Map before filtering.
+    const filter = rosterFilterText.trim().toLowerCase();
+    const withIdx = candidates.map((p, i) => ({ p, i }));
+    const matched = filter ? withIdx.filter(({ p }) => p.name.toLowerCase().includes(filter)) : withIdx;
+
+    if (matched.length === 0) {
+      els.rosterList.innerHTML = `<p class="graph-player-search__empty">No players match &ldquo;${escHtml(rosterFilterText.trim())}&rdquo;.</p>`;
+      return;
+    }
+
+    const shown = matched.slice(0, ROSTER_RENDER_CAP);
+    const hiddenCount = matched.length - shown.length;
+
+    els.rosterList.innerHTML =
+      shown
+        .map(({ p, i }) => {
+          const checked = selection.isChecked(p.id);
+          const atCap = !checked && checkedCount >= cap;
+          const title = atCap
+            ? `Max ${cap}${chartType ? " for this chart type" : " before picking a chart type"} — untick one first`
+            : checked
+              ? "Remove from graph"
+              : "Add to graph";
+          return `<div class="dropdown__item graph-roster-item${atCap ? " is-disabled" : ""}" data-id="${escAttr(p.id)}">
               <input type="checkbox" data-role="roster-check" data-id="${escAttr(p.id)}" ${checked ? "checked" : ""} ${atCap ? "disabled" : ""} title="${escAttr(title)}" />
               <span class="graph-roster-item__name">${escHtml(p.name)}</span>
               <span class="graph-roster-item__meta">#${i + 1}</span>
               <button type="button" class="icon-btn graph-roster-item__remove" data-role="remove-candidate" data-id="${escAttr(p.id)}" title="Remove from list">&times;</button>
             </div>`;
-          })
-          .join("")
-      : `<p class="graph-player-search__empty">No players yet — search above or use Filters.</p>`;
+        })
+        .join("") +
+      (hiddenCount > 0
+        ? `<p class="graph-roster-more">Showing ${shown.length} of ${matched.length}${filter ? " matches" : ""} — type to narrow (${hiddenCount} more).</p>`
+        : "");
 
     els.rosterList.querySelectorAll('[data-role="roster-check"]').forEach((cb) => {
       cb.addEventListener("change", () => {
@@ -1121,6 +1165,18 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
 
   wireDropdown(els.rosterToggle, els.rosterPanel);
 
+  // Owner point 13: filter-as-you-type over the (full) pool. The input lives in
+  // the static panel markup (not rebuilt by renderPlayerList), so typing keeps
+  // focus while only the list below re-renders.
+  els.rosterFilter.addEventListener("input", () => {
+    rosterFilterText = els.rosterFilter.value;
+    renderPlayerList();
+  });
+  // Keep the panel open when interacting with the filter box (wireDropdown's
+  // document click-to-close ignores clicks inside the panel, so this is just
+  // belt-and-braces against the toggle handler).
+  els.rosterFilter.addEventListener("click", (e) => e.stopPropagation());
+
   els.rosterMode.addEventListener("click", (e) => {
     const btn = e.target.closest(".segmented__btn");
     if (!btn) return;
@@ -1145,29 +1201,52 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
     }
     searchDebounce = setTimeout(async () => {
       try {
-        // Full selection (not just the active/visible slice) — a player
-        // hidden by a smaller cap is still selected and shouldn't show up as
-        // addable in search (Batch 3 cap-switch-memory fix).
-        const excludeIds = selection.getFull().map((p) => p.id);
-        const results = await searchPlayers(store, term, excludeIds);
+        // Owner point 9: search no longer excludes pool members (the pool is
+        // now the whole filtered set, so excluding it hid EVERYONE). Matches
+        // already in the roster are marked and, on click, simply (re)checked.
+        const results = await searchPlayers(store, term);
         els.playerSearchResults.innerHTML =
           results
-            .map((r) => `<button type="button" class="graph-player-search__item" data-id="${r.id}" data-name="${escAttr(r.name)}">${escHtml(r.name)}</button>`)
+            .map((r) => {
+              const inPool = selection.has(r.id);
+              const meta = inPool ? (selection.isChecked(r.id) ? " (on chart)" : " (in list)") : "";
+              return `<button type="button" class="graph-player-search__item" data-id="${escAttr(r.id)}" data-name="${escAttr(r.name)}">${escHtml(r.name)}${
+                meta ? `<span class="graph-player-search__item-meta">${escHtml(meta)}</span>` : ""
+              }</button>`;
+            })
             .join("") || `<p class="graph-player-search__empty">No matches.</p>`;
         els.playerSearchResults.hidden = false;
 
         els.playerSearchResults.querySelectorAll(".graph-player-search__item").forEach((btn) => {
           btn.addEventListener("click", () => {
-            // The candidate pool is never truncated (task brief) — a search-
-            // add always joins it; `checked` is false only if the active
-            // chart type is already at cap, in which case the player still
-            // shows up (unticked) in the roster dropdown rather than being
-            // silently dropped.
-            const result = selection.addCandidate({ id: btn.dataset.id, name: btn.dataset.name });
-            if (result.ok && !result.checked) {
-              showCapNote(`Added to your list, but ${capSubjectLabel()} is capped at ${activeMaxCap()} players — untick one to plot them instead.`);
+            const id = btn.dataset.id;
+            const name = btn.dataset.name;
+            if (selection.has(id)) {
+              // Already a candidate — check it (make it plot) instead of the
+              // old dead "already selected" no-op, so a searched name is never
+              // a dead end. Freeze auto-recompute first, same as the roster
+              // checkbox does, since this is a deliberate manual pick.
+              if (!selection.isChecked(id)) {
+                selection.setMode("manual");
+                const res = selection.toggleChecked(id);
+                if (!res.ok && res.reason === "cap") {
+                  showCapNote(`Can't plot ${name} — ${capSubjectLabel()} is capped at ${activeMaxCap()} players. Untick one first.`);
+                } else {
+                  clearCapNote();
+                }
+              } else {
+                showCapNote(`${name} is already on the chart.`);
+              }
             } else {
-              clearCapNote();
+              // A brand-new candidate (e.g. from a wider search than the
+              // current pool) — the pool is never truncated; `checked` is
+              // false only if the active chart type is already at cap.
+              const result = selection.addCandidate({ id, name });
+              if (result.ok && !result.checked) {
+                showCapNote(`Added to your list, but ${capSubjectLabel()} is capped at ${activeMaxCap()} players — untick one to plot them instead.`);
+              } else {
+                clearCapNote();
+              }
             }
             els.playerSearch.value = "";
             els.playerSearchResults.hidden = true;
@@ -1434,11 +1513,10 @@ export function mountGraph(container, store, { hasStatsResults = () => false } =
     const key = scopeSeedKey(state);
     if (!force && seeded && key === lastSeedKey) return;
     try {
-      // The candidate POOL is never truncated to the active type's cap
-      // (decision 44d: "candidates pool never truncated" — Radar must show
-      // "6 of 15", not "6 of 6"): always seed at the full pre-type cap; the
-      // CHECKED subset is what deriveChecked() caps per type.
-      const seedPlayers = await seedFromFilteredSet(store, DEFAULT_PRETYPE_CAP);
+      // The candidate POOL is the ENTIRE filtered result set (owner point 13 —
+      // no 15-cap): the roster dropdown filters/renders a slice of it and each
+      // chart type caps only what's CHECKED (deriveChecked()), never the pool.
+      const seedPlayers = await seedFromFilteredSet(store);
       seeded = true;
       lastSeedKey = key;
       // Record what ranked this seed (Batch 3 part 2 title honesty) — the

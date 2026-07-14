@@ -186,14 +186,18 @@ export async function searchPlayers(term) {
 }
 
 // ── Match-level option loaders (Batch 1B, task 1B-1) ─────────────────────────
-// Gender-scoped relevance lists for the new Team/Event/Venue picker UIs (1B-2
-// builds the pickers themselves; this module only supplies their data). Unlike
+// Gender- + team-type-scoped relevance lists for the Team/Event/Venue picker
+// UIs (1B-2 builds the pickers; this module only supplies their data). Unlike
 // the rest of this file (player-page queries scoped to one player_id), these
-// three query `matches` directly and are scoped by GENDER ONLY — no format/
-// date/team-type narrowing — per the Batch 1B design: a picker's option list
-// should reflect "everything that exists for this gender," not shrink as other
-// filters are set (team/event/venue identity doesn't depend on the rest of the
-// query scope, and a shrinking picker would make picking harder, not easier).
+// three query `matches` directly and are scoped by GENDER and TEAM TYPE only —
+// no format/date narrowing — per the Batch 1B design (a picker's option list
+// should reflect "everything that exists for this gender + team type," not
+// shrink as format/date filters are set). ROUND 3 (bug 7a) added the team-type
+// dimension: on International, the Event picker must NOT list domestic-only
+// competitions (e.g. the IPL, which has 0 international matches); on Domestic it
+// must. See teamTypeMatchClause above. With teamType 'both' the constraint is
+// dropped, so the counts are byte-identical to the pre-ROUND-3 gender-only
+// lists (regression guard: "India 1,013 games" is unchanged under 'both').
 //
 // Relevance ordering (flagged judgment call — see final report): rows whose
 // name contains the search term (case-insensitive substring, matching this
@@ -219,6 +223,21 @@ function relevanceOrderBy(col, term, secondary) {
   return `ORDER BY ${tier}${secondary}`;
 }
 
+/** Team-type scoping fragment (ROUND 3, bug 7a): a SQL predicate restricting a
+ * `matches`-based option list to matches of the given team type, so an entity
+ * (team/event/venue) only appears — and its `games` count only tallies matches —
+ * of that type. 'international' → only international matches; 'club' → only club
+ * (domestic) matches; 'both'/anything else → no constraint (returns ""). The
+ * value is a trusted state enum, but it's matched against known strings and only
+ * fixed literals are emitted, so nothing unsanitised reaches the SQL. RESULT:
+ * on team type = International the Event picker drops IPL (0 international
+ * matches); switch to Domestic and it reappears. */
+function teamTypeMatchClause(teamType) {
+  if (teamType === "international") return " AND team_type = 'international'";
+  if (teamType === "club") return " AND team_type = 'club'";
+  return "";
+}
+
 /**
  * Distinct teams appearing in `matches` for `gender` (UNION ALL of team_1 and
  * team_2 — a team never occupies both sides of the same match, so summing
@@ -226,13 +245,14 @@ function relevanceOrderBy(col, term, secondary) {
  * appears in"). Feeds the new single Team picker (1B-2); state.teams itself
  * and its query-side handling are untouched by this task.
  */
-export async function searchTeams(term, gender) {
+export async function searchTeams(term, gender, teamType = "both") {
   const orderBy = relevanceOrderBy("team", term, "games DESC, team ASC");
+  const tt = teamTypeMatchClause(teamType);
   const sql = [
     `WITH sides AS (`,
-    `  SELECT team_1 AS team FROM matches WHERE gender = '${esc(gender)}'`,
+    `  SELECT team_1 AS team FROM matches WHERE gender = '${esc(gender)}'${tt}`,
     `  UNION ALL`,
-    `  SELECT team_2 AS team FROM matches WHERE gender = '${esc(gender)}'`,
+    `  SELECT team_2 AS team FROM matches WHERE gender = '${esc(gender)}'${tt}`,
     `)`,
     `SELECT team AS value, team AS label, COUNT(*) AS games`,
     `FROM sides`,
@@ -252,12 +272,12 @@ export async function searchTeams(term, gender) {
  * here is the event's full multi-year total, matching what the picker's
  * "games" column should mean for a series name.
  */
-export async function searchEvents(term, gender) {
+export async function searchEvents(term, gender, teamType = "both") {
   const orderBy = relevanceOrderBy("event_name", term, "games DESC, latestDate DESC, event_name ASC");
   const sql = [
     `SELECT event_name AS value, event_name AS label, COUNT(*) AS games, MAX(match_date) AS latestDate`,
     `FROM matches`,
-    `WHERE gender = '${esc(gender)}' AND event_name IS NOT NULL`,
+    `WHERE gender = '${esc(gender)}' AND event_name IS NOT NULL${teamTypeMatchClause(teamType)}`,
     `GROUP BY event_name`,
     orderBy,
   ].join("\n");
@@ -266,12 +286,12 @@ export async function searchEvents(term, gender) {
 }
 
 /** Distinct venue values in `matches` for `gender`. games = match count. */
-export async function searchVenues(term, gender) {
+export async function searchVenues(term, gender, teamType = "both") {
   const orderBy = relevanceOrderBy("venue", term, "games DESC, venue ASC");
   const sql = [
     `SELECT venue AS value, venue AS label, COUNT(*) AS games`,
     `FROM matches`,
-    `WHERE gender = '${esc(gender)}' AND venue IS NOT NULL`,
+    `WHERE gender = '${esc(gender)}' AND venue IS NOT NULL${teamTypeMatchClause(teamType)}`,
     `GROUP BY venue`,
     orderBy,
   ].join("\n");

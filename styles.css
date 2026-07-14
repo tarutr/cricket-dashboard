@@ -2292,6 +2292,9 @@ a { color: var(--color-accent); }
 
 .graph-player-search__item:hover { background: var(--color-panel); }
 .graph-player-search__empty { font-size: var(--text-md); padding: var(--space-2); margin: 0; }
+/* Owner point 9: "(in list)"/"(on chart)" marker on a search result already in
+   the pool — the search no longer hides those rows. */
+.graph-player-search__item-meta { color: var(--color-muted); font-size: var(--text-xs); margin-left: var(--space-2); }
 
 /* Roster picker dropdown (Batch 8, task 1 — v1's two-list model): the
    always-visible vertical player list is gone; in its place a
@@ -2316,6 +2319,17 @@ a { color: var(--color-accent); }
 
 .graph-roster-mode { margin-bottom: var(--space-2); }
 .graph-roster-mode .segmented__btn { flex: 1; }
+
+/* Owner point 13: filter-as-you-type box + "type to narrow" note for the
+   full-filtered-set pool (up to ~2,800 players). */
+.graph-roster-filter { margin-bottom: var(--space-2); }
+.graph-roster-filter__input { width: 100%; }
+.graph-roster-more {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  margin: var(--space-2) 0 0;
+  padding: 0 var(--space-2);
+}
 
 .graph-roster-list {
   max-height: 16rem;
@@ -2925,7 +2939,11 @@ a { color: var(--color-accent); }
 .filters-popup__panel {
   position: relative;
   margin: 4vh auto;
-  width: min(680px, 94vw);
+  /* ROUND 3 (task 1): widened so the compact Search Conditions row
+     (Gender · Discipline · Format · Date from–to · Team type) fits on ONE line
+     at desktop widths; 94vw still protects narrow screens (phone goes
+     full-screen via the ≤640px block below, where it wraps gracefully). */
+  width: min(880px, 94vw);
   max-height: 88vh;
   background: var(--color-bg);
   box-shadow: var(--shadow-popover);
@@ -3031,6 +3049,69 @@ a { color: var(--color-accent); }
   }
   .filters-popup__footer .btn { width: 100%; }
 }
+
+/* ── ROUND 3 (task 1): compact one-row Search Conditions ─────────────────────
+   The #filter-bar now lives ONLY inside the Filters popup, so these popup-scoped
+   rules (specificity 0,2,0) intentionally OVERRIDE the older full-page scope-
+   strip grid at ≤899px / 900-1149px (bare `.filter-bar`, 0,1,0) — inside the
+   ~840px-wide popup body we want a single wrapping row, not the 2-column mobile
+   grid. Gender · Discipline · Format · Date from–to · Team type sit on one line
+   at desktop widths and wrap gracefully when the popup goes full-screen on a
+   phone; the date presets already stack under the inputs (the dates group is a
+   flex column). Controls are shrunk a notch so the section stops feeling
+   oversized. */
+.filters-popup .filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
+  align-items: flex-end;
+}
+.filters-popup .filter-group { gap: var(--space-1); }
+.filters-popup .filter-bar .select,
+.filters-popup .filter-bar .dropdown__toggle,
+.filters-popup .filter-bar .date-range__input {
+  min-height: 34px;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm2);
+}
+.filters-popup .filter-group--gender .select,
+.filters-popup .filter-group--discipline .select { min-width: 6rem; }
+.filters-popup .filter-group--dates .date-range__input { flex: 0 1 8.5rem; }
+.filters-popup .filter-group--dates .date-presets { margin-top: var(--space-1); }
+.filters-popup .date-preset { min-height: 30px; padding: var(--space-1) var(--space-2); font-size: var(--text-sm2); }
+
+/* ── ROUND 3 (task 7): numeric condition GROUP cards ─────────────────────────
+   A single-group / single-condition builder still reads as one plain row (no
+   card chrome, no All|Any toggle). Chrome + the "and" connector between groups
+   appear only once a second group is added (.cond-group.is-multi). */
+.cond-group { display: flex; flex-direction: column; gap: var(--space-3); }
+.cond-group.is-multi {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+}
+.cond-group__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.cond-group__match {
+  font-size: var(--text-sm2);
+  color: var(--color-muted);
+}
+.cond-group__remove { margin-left: auto; }
+.cond-group__rows { display: flex; flex-direction: column; gap: var(--space-3); }
+.cond-group__add { display: flex; }
+.cond-group__connector {
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--color-muted);
+  padding: var(--space-1) 0;
+}
+.text-btn--add-group { align-self: flex-start; }
 
 .player-link {
   border: none;

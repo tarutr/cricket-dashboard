@@ -406,14 +406,22 @@ export function wirePortalDropdown(toggleEl, panelEl, { onOpen, onClose } = {}) 
  * pills/subtitle/badge (it no longer blanks the table — only the popup's
  * "Search" button re-queries). Store keys/values are unchanged.
  */
-export function mountFilters(container, store, onChange, onFormatsChanged) {
+export function mountFilters(container, store, onChange, onFormatsChanged, onDisciplineChanged) {
   container.innerHTML = `
     <div class="filter-group filter-group--gender">
       <span class="filter-label">Gender</span>
-      <div class="segmented" data-role="gender" role="group" aria-label="Gender">
-        <button type="button" class="segmented__btn" data-value="male">Men</button>
-        <button type="button" class="segmented__btn" data-value="female">Women</button>
-      </div>
+      <select class="select" data-role="gender" aria-label="Gender">
+        <option value="male">Men</option>
+        <option value="female">Women</option>
+      </select>
+    </div>
+
+    <div class="filter-group filter-group--discipline">
+      <span class="filter-label">Discipline</span>
+      <select class="select" data-role="discipline" aria-label="Discipline">
+        <option value="batting">Batting</option>
+        <option value="bowling">Bowling</option>
+      </select>
     </div>
 
     <div class="filter-group filter-group--format">
@@ -467,23 +475,15 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
     </div>
   `;
 
-  // Discipline (decision 44b) relocation: the segmented control is static
-  // markup in index.html (main.js's module-level
-  // `document.querySelector('[data-role="discipline"]')` binds to it at
-  // script-load time, before this function has ever run — it now lives in the
-  // Filters popup's Conditions section, as a sibling of this #filter-bar
-  // container). We move the EXISTING node into its visual slot, second, right
-  // after Gender, rather than re-rendering it: moving a DOM node doesn't
-  // invalidate main.js's reference or its event listener, so its wiring keeps
-  // working untouched wherever the node lives.
-  const disciplineGroup = container.parentElement?.querySelector(".filter-group--discipline");
-  const genderGroup = container.querySelector(".filter-group--gender");
-  if (disciplineGroup && genderGroup) {
-    genderGroup.insertAdjacentElement("afterend", disciplineGroup);
-  }
-
+  // ROUND 3 (task 1): Gender and Discipline are now plain compact <select>
+  // dropdowns rendered right here (Gender · Discipline lead the single-row
+  // Search Conditions layout), replacing the old segmented hero toggles. The
+  // static Discipline block that used to live in index.html — and main.js's
+  // click wiring for it — are gone; both selects are wired below against the
+  // same store keys (gender/discipline) with the same change behaviour.
   const els = {
     gender: container.querySelector('[data-role="gender"]'),
+    discipline: container.querySelector('[data-role="discipline"]'),
     dateFrom: container.querySelector('[data-role="dateFrom"]'),
     dateTo: container.querySelector('[data-role="dateTo"]'),
     datePresets: container.querySelector('[data-role="date-presets"]'),
@@ -500,12 +500,6 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
   // min/max and the preset math. maxDate = the reference "now" for presets.
   let minDate = null;
   let maxDate = null;
-
-  function syncSegmented(el, value) {
-    el.querySelectorAll(".segmented__btn").forEach((btn) => {
-      btn.classList.toggle("is-active", btn.dataset.value === value);
-    });
-  }
 
   function syncDateInputs() {
     const state = store.get();
@@ -580,7 +574,12 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
         return;
       }
       const teamType = next.international && next.club ? "both" : next.international ? "international" : "club";
-      store.set({ teamType, teams: [] });
+      // ROUND 3 (task 9): a team-type switch re-scopes the Team/Event/Venue/
+      // opposition vocabularies (see playerData.js's teamTypeMatchClause and
+      // buildScopeClauses' opposition gate), so clear those selections — a
+      // selected IPL event must not silently survive a switch to International.
+      // Profile filters are team-type-independent, so they're intentionally kept.
+      store.set({ teamType, teams: [], event: [], venue: [], opposition: [] });
       syncTeamTypeDropdown();
       onChange();
     });
@@ -589,7 +588,8 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
 
   function render() {
     const state = store.get();
-    syncSegmented(els.gender, state.gender);
+    els.gender.value = state.gender;
+    els.discipline.value = state.discipline;
     syncFormatDropdown();
     syncTeamTypeDropdown();
     syncDateInputs();
@@ -637,16 +637,14 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
   }
 
   // ---- wire remaining events ----
-  els.gender.addEventListener("click", (e) => {
-    const btn = e.target.closest(".segmented__btn");
-    if (!btn) return;
+  els.gender.addEventListener("change", () => {
     // Switching gender clears the gender-specific selections: teams differ by
     // gender; profile filters are men-only (decision 21); and Team/Event/Venue/
     // opposition are gender-scoped vocabularies, so a stale pick would silently
     // match nothing on the other gender — clear them so the option lists (which
     // re-scope by gender) and any selection stay honest.
     store.set({
-      gender: btn.dataset.value,
+      gender: els.gender.value,
       teams: [],
       profile: emptyProfile(),
       event: [],
@@ -654,6 +652,16 @@ export function mountFilters(container, store, onChange, onFormatsChanged) {
       opposition: [],
     });
     render();
+    onChange();
+  });
+
+  // Discipline (ROUND 3, task 1): plain <select>, same store key as the old
+  // segmented toggle. onDisciplineChanged (main.js) re-applies the default
+  // column set + falls back the sort key when it no longer resolves in the new
+  // discipline — the behaviour main.js's removed click handler used to run.
+  els.discipline.addEventListener("change", () => {
+    store.set({ discipline: els.discipline.value });
+    if (onDisciplineChanged) onDisciplineChanged();
     onChange();
   });
 

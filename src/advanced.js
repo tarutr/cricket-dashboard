@@ -8,10 +8,12 @@
 //
 // state.advanced keeps its original shape — { op, groups: [{ op, conds }] } —
 // so table.js's advancedToHaving()/activeGroups() consumers are byte-identical.
-// The 1B-2 builder only ever authors ONE AND group (all numeric conditions
-// AND-combined; the old AND/OR multi-group UI is retired), which advancedToHaving
-// renders as `(c1 AND c2 AND …)` — exactly what a single AND group always meant,
-// so no query changes and the baselines are untouched.
+// ROUND 3 (task 14/7) restores the multi-group AND/OR UI the 1B-2 builder had
+// retired: each group carries its own op ("AND"=All / "OR"=Any) and groups
+// combine with AND across the set (advanced.op stays "AND"). advancedToHaving
+// already renders exactly this — `(c1 AND c2) AND (c3 OR c4)` — so no query
+// changes and the baselines are untouched (a single AND group with one
+// condition still renders as just that condition, as before).
 //
 // A "condition" is { metricKey, operator: "gte"|"lte"|"eq"|"between", v1, v2 }.
 // Conditions apply to the COMPUTED metric values (HAVING-level) — table.js turns
@@ -87,11 +89,48 @@ export function removeConditionAt(store, gi, ci) {
   store.set({ advanced: { ...advanced, groups } });
 }
 
-/** Append a numeric condition on `metricKey` to the (single) numeric group. */
-export function addCondition(store, metricKey) {
+/** Append a numeric condition on `metricKey` to group `gi` (ROUND 3, task 7 —
+ * the multi-group AND/OR UI adds conditions to a specific group). Ensures at
+ * least one group exists, then clamps `gi` into range so a virtual/not-yet-
+ * materialised group 0 (the builder renders one even when state.groups is [])
+ * always resolves to the real group 0 once it is created here. */
+export function addConditionToGroup(store, gi, metricKey) {
   ensureGroup(store);
   const advanced = store.get().advanced;
-  const groups = advanced.groups.map((g, i) => (i === 0 ? { ...g, conds: [...g.conds, newCondition(metricKey)] } : g));
+  const idx = Math.max(0, Math.min(gi, advanced.groups.length - 1));
+  const groups = advanced.groups.map((g, i) => (i === idx ? { ...g, conds: [...g.conds, newCondition(metricKey)] } : g));
+  store.set({ advanced: { ...advanced, groups } });
+}
+
+/** Append a numeric condition to the LAST group (back-compat convenience). */
+export function addCondition(store, metricKey) {
+  ensureGroup(store);
+  addConditionToGroup(store, store.get().advanced.groups.length - 1, metricKey);
+}
+
+/** Append a new empty AND group (ROUND 3, task 7 — "+ Add group"). Groups
+ * combine with AND across the set (advanced.op stays "AND"), exactly as
+ * table.js's advancedToHaving already renders them. */
+export function addGroup(store) {
+  const advanced = store.get().advanced;
+  const groups = [...(advanced.groups || []), newGroup()];
+  store.set({ advanced: { ...advanced, groups } });
+}
+
+/** Remove group `gi` entirely (ROUND 3, task 7 — per-group "Remove group"). */
+export function removeGroup(store, gi) {
+  const advanced = store.get().advanced;
+  const groups = (advanced.groups || []).filter((_, i) => i !== gi);
+  store.set({ advanced: { ...advanced, groups } });
+}
+
+/** Set group `gi`'s combine operator (ROUND 3, task 7 — the per-group
+ * Match All | Any toggle). `op` is "AND" (All) or "OR" (Any) — UPPERCASE, the
+ * exact tokens table.js's advancedToHaving / advanced.js's describeAdvanced
+ * test with `=== "OR"`; a lowercase value would silently fall back to AND. */
+export function setGroupOp(store, gi, op) {
+  const advanced = store.get().advanced;
+  const groups = (advanced.groups || []).map((g, i) => (i === gi ? { ...g, op } : g));
   store.set({ advanced: { ...advanced, groups } });
 }
 
@@ -119,19 +158,28 @@ export function describeAdvanced(state) {
   return parts.join(state.advanced.op === "OR" ? " or " : " and ");
 }
 
-// ── Metric grouping for the "+ Add condition" dropdown (task 1B-2) ────────────
-// UI-ONLY categorisation of the numeric metrics into the two "+ Add condition"
-// optgroups. This references metric KEYS purely to bucket the dropdown; it
+// ── Metric grouping for the "+ Add condition" dropdown (task 1B-2 / ROUND 3) ──
+// UI-ONLY categorisation of the numeric metrics into the "+ Add condition"
+// optgroups. This references metric KEYS/flags purely to bucket the dropdown; it
 // defines no metric vocabulary or SQL (that stays in metrics.js). Rule:
 //   • Dismissal-% metrics (per-kind "% of dismissals": out_caught_pct, …) are
 //     REMOVED from the filter options entirely (owner 1B-2 — they are table
 //     columns, not filter criteria). Identified structurally as
 //     section === "dismissal" && format === "pct1" so no key list can drift.
 //     Non-dismissal percentages (Dot %, Boundary %, Not Out %) are kept.
+//   • Dismissal-TYPE COUNT metrics (ROUND 3, tasks 3+15) get their OWN
+//     "Dismissal type" group, pulled OUT of "Advanced metrics" where they used
+//     to sit: batting = the out_* COUNT metrics (Out Caught/Bowled/LBW/Run Out/
+//     Stumped/C&B/Hit Wicket + the rare ones), bowling = the wkt_* wicket-type
+//     COUNT metrics. Identified structurally by isDismissalTypeMetric() below —
+//     a COUNT (kind === "total") that is either section "dismissal" (the batting
+//     out_* + matchup wkt_*) or key-prefixed "wkt_" (plain bowling wkt_*, which
+//     carry no section field) — so no key list can drift. Same metric objects,
+//     same SQL; pure regrouping.
 //   • "Basic" = the everyday headline stats one filters on (counts + core
 //     rates + peak). Everything else eligible falls to "Advanced" (the
-//     percentages, balls-per-boundary, phase splits, progression buckets, and
-//     the dismissal / wicket-type COUNT breakdowns).
+//     non-dismissal percentages, balls-per-boundary, phase splits, progression
+//     buckets).
 const BASIC_METRIC_KEYS = new Set([
   "matches", "innings",
   // batting core
@@ -148,21 +196,39 @@ export function isMetricRemovedFromFilters(metric) {
   return metric.section === "dismissal" && metric.format === "pct1";
 }
 
-/** "basic" | "advanced" | null (null = removed from the filter dropdown). */
+/** True if a metric is a dismissal-TYPE COUNT (ROUND 3, tasks 3+15) — the
+ * batting out_* per-kind dismissal counts and the bowling/matchup wkt_*
+ * wicket-type counts. Structural, not a key list: a COUNT (kind "total") that
+ * is either flagged section "dismissal" (batting out_* + matchup_bowling wkt_*)
+ * or key-prefixed "wkt_" (plain bowling wkt_*, which have no section field).
+ * The out_*_pct percentages are kind "percent" (and section "dismissal"), so
+ * they never match here — they're handled by isMetricRemovedFromFilters. */
+export function isDismissalTypeMetric(metric) {
+  if (metric.kind !== "total") return false;
+  if (metric.section === "dismissal") return true;
+  if (/^wkt_/.test(metric.key)) return true;
+  return false;
+}
+
+/** "basic" | "dismissal" | "advanced" | null (null = removed from the dropdown). */
 export function metricFilterGroup(metric) {
   if (isMetricRemovedFromFilters(metric)) return null;
+  if (isDismissalTypeMetric(metric)) return "dismissal";
   return BASIC_METRIC_KEYS.has(metric.key) ? "basic" : "advanced";
 }
 
-/** Partition an eligible-metrics list into { basic, advanced }, dropping the
- * removed (dismissal-%) ones. Preserves catalogue order within each group. */
+/** Partition an eligible-metrics list into { basic, dismissal, advanced },
+ * dropping the removed (dismissal-%) ones. Preserves catalogue order within
+ * each group. */
 export function partitionFilterMetrics(metrics) {
   const basic = [];
+  const dismissal = [];
   const advanced = [];
   for (const m of metrics) {
     const g = metricFilterGroup(m);
     if (g === "basic") basic.push(m);
+    else if (g === "dismissal") dismissal.push(m);
     else if (g === "advanced") advanced.push(m);
   }
-  return { basic, advanced };
+  return { basic, dismissal, advanced };
 }

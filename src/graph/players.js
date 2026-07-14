@@ -65,53 +65,75 @@ const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
 const NAME_COL = { batting: "batter_name", bowling: "bowler_name" };
 const TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
 
+/** The value the active sort metric ranks by for one seed row — the `__sort`
+ * shadow column when the metric defines one, else the metric's own column.
+ * Mirrors table.js's sortValueFor(). NULL/undefined stays null (sorts last). */
+function seedSortValue(row, metric, key) {
+  const raw = metric.sortExpression ? row[`${key}__sort`] : row[key];
+  return raw === null || raw === undefined ? null : Number(raw);
+}
+
+/** Client-side comparator matching table.js's compareRows exactly: NULLs sort
+ * LAST regardless of direction; equal values break by id ASC for a
+ * deterministic pool order. Done in JS (not a SQL ORDER BY) so it works for
+ * EVERY metric uniformly — see seedFromFilteredSet's own doc comment on why a
+ * SQL ORDER BY cannot be used for the `matches` metric. */
+function compareSeedRows(a, b, metric, key, dir) {
+  const va = seedSortValue(a, metric, key);
+  const vb = seedSortValue(b, metric, key);
+  if (va === null && vb === null) return String(a.id).localeCompare(String(b.id));
+  if (va === null) return 1; // a's value missing -> a after b
+  if (vb === null) return -1; // b's value missing -> b after a
+  if (va !== vb) return dir === "asc" ? va - vb : vb - va;
+  return String(a.id).localeCompare(String(b.id));
+}
+
 /**
- * Run the SAME query the Compare Stats table would run for the current state
- * (state.js's buildQuery + the currently visible columns' set — but we only
- * need id/name/sort column here), then take the top N by the active sort.
- * Returns [{id, name}].
+ * Seed the candidate pool from the current filtered Stats result set, ordered
+ * by the table's active sort. Returns [{id, name}] for the ENTIRE filtered set
+ * (owner point 13 — the pool is no longer force-capped to 15; the roster
+ * dropdown filters/renders a slice, and each chart type caps only what's
+ * CHECKED, never the pool itself).
  *
- * Batch 5b C3: previously this ran buildQuery's SQL with no LIMIT, pulled
- * EVERY qualifying player's row across the wire (Arrow -> JS for the full
- * leaderboard), sorted client-side, then sliced to `cap`. Now the same
- * ranking is expressed in SQL — `ORDER BY <sort col> <dir> NULLS LAST` wrapped
- * around the query builder's own SQL, then `LIMIT cap` — so DuckDB only ever
- * returns the `cap` rows we keep. This reproduces table.js's compareRows
- * exactly: NULLs sort last regardless of direction (`NULLS LAST` after either
- * ASC or DESC). Ties (equal sort values) are broken by `id ASC` for a
- * deterministic cap boundary — the client sort this replaces had no explicit
- * tie-break (Array.sort is stable, so ties just kept the DB's own row order,
- * itself unspecified), so this is a defensible, deterministic choice rather
- * than an exact reproduction of undefined behavior.
+ * OWNER POINT 9 (binder-error fix): this used to wrap buildQuery's `sql` in an
+ * outer `SELECT * ... ORDER BY <sortKey> ... LIMIT cap`. That crashed
+ * ("Binder Error: Referenced column \"matches\" not found in FROM clause")
+ * whenever the active sort key was `matches`: buildQuery routes the
+ * `source: "player_matches"` metric (only `matches`) to a SEPARATE `matchesSql`
+ * query merged in JS, so `matches` is NOT a column in `sql` — ordering `sql` by
+ * it references a column that isn't there. The failing seed threw, was caught
+ * by graph.js's seedSelection(), and left the pool EMPTY (the "pool comes over
+ * empty" symptom) while "Reset to filtered set" surfaced the raw binder text.
  *
- * The seed step never excluded anyone for failing hasMetricData — it only
- * ever ranked by the table's active sort (NULLs last) and sliced to `cap`.
- * That's unchanged: a player with NULL for the sort metric can still be
- * seeded (filling remaining slots after non-NULL rows), same as before. The
- * separate "Excluded (no data)" note the Graph Builder shows (graph/charts.js)
- * operates on the CHARTED metric — which may differ from the table's sort
- * metric — against the already-seeded roster, and is untouched by this change.
+ * Fix: rank CLIENT-SIDE, exactly as table.js itself does (it never SQL-orders
+ * either — see its applySort/compareRows). We fetch `sql` (+ `matchesSql` when
+ * present), merge `matches` in JS, then sort with compareSeedRows(). This is
+ * metric-agnostic, so `matches` — or any future player_matches-sourced metric —
+ * ranks correctly instead of crashing. The projection stays lean: only the
+ * active sort metric's column(s) are requested (id/name come for free from
+ * buildQuery), so the full-set fetch is light over the wire even at ~2,800
+ * players.
+ *
+ * hasMetricData is NOT applied here (unchanged): a player with a NULL sort value
+ * still seeds (sorted last). The "Excluded (no data)" note the Graph Builder
+ * shows operates on the CHARTED metric against the already-seeded roster and is
+ * untouched.
  */
-export async function seedFromFilteredSet(store, cap) {
+export async function seedFromFilteredSet(store) {
   const state = store.get();
   const discipline = state.discipline;
-  const cols = state.columns[discipline];
-  // Ensure the active sort metric is included so we can rank by it even if
-  // it's not a visible column right now.
   const sortKey = state.sort.key;
-  const colsForQuery = cols.includes(sortKey) ? cols : [...cols, sortKey];
-
-  const { sql, matchesSql } = buildQuery(state, colsForQuery);
-
   const sortMetric = getMetric(sortKey, discipline);
-  const dir = state.sort.dir === "asc" ? "ASC" : "DESC";
-  const orderCol = sortMetric ? (sortMetric.sortExpression ? `${sortKey}__sort` : sortKey) : null;
-  const outerSql = orderCol
-    ? `SELECT * FROM (\n${sql}\n) seed_q\nORDER BY ${orderCol} ${dir} NULLS LAST, id ASC\nLIMIT ${cap}`
-    : `SELECT * FROM (\n${sql}\n) seed_q\nLIMIT ${cap}`;
+
+  // Lean projection: only the active sort metric's column(s). Requesting the
+  // sort key (even `matches`) makes buildQuery emit the right source query
+  // (and matchesSql when the metric lives in player_matches); id/name are
+  // always projected by buildQuery regardless.
+  const seedCols = sortMetric ? [sortKey] : [];
+  const { sql, matchesSql } = buildQuery(state, seedCols);
 
   const [{ rows }, matchesResult] = await Promise.all([
-    query(outerSql),
+    query(sql),
     matchesSql ? query(matchesSql) : Promise.resolve({ rows: [] }),
   ]);
 
@@ -121,15 +143,26 @@ export async function seedFromFilteredSet(store, cap) {
     merged = rows.map((r) => ({ ...r, matches: byId.get(r.id) ?? null }));
   }
 
+  if (sortMetric) {
+    merged = merged.slice().sort((a, b) => compareSeedRows(a, b, sortMetric, sortKey, state.sort.dir));
+  }
+
   return merged.map((r) => ({ id: r.id, name: r.name }));
 }
 
 /**
  * Search for players within the current scope (same ILIKE approach as the
- * player-search box), for manual add. Returns [{id, name}], excluding ids
- * already in `excludeIds`.
+ * player-search box), for manual add. Returns [{id, name}].
+ *
+ * OWNER POINT 9 (dead-search fix): this used to DROP any match already in the
+ * candidate pool (`excludeIds`). Since the pool is now the ENTIRE filtered set
+ * (owner point 13), every in-scope player is already a candidate, so that
+ * exclusion made the search return "No matches" for literally everyone (the
+ * "Kohli finds nothing" symptom). It now returns all matches; graph.js's result
+ * list marks the ones already in the roster and, on click, simply (re)checks
+ * them instead of erroring — so a searched name always comes back.
  */
-export async function searchPlayers(store, searchText, excludeIds) {
+export async function searchPlayers(store, searchText) {
   const state = store.get();
   const discipline = state.discipline;
   const view = discipline; // "batting" | "bowling" view names match discipline
@@ -159,8 +192,7 @@ export async function searchPlayers(store, searchText, excludeIds) {
   ].join("\n");
 
   const { rows } = await query(sql);
-  const exclude = new Set(excludeIds);
-  return rows.filter((r) => !exclude.has(r.id)).map((r) => ({ id: r.id, name: r.name }));
+  return rows.map((r) => ({ id: r.id, name: r.name }));
 }
 
 /**

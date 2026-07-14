@@ -132,9 +132,10 @@ export function autoTitle(config) {
     return rankedCountPhrase(`${config.metric.label} — Line`, config.playerCount, config.roster, config.metric.key);
   }
   if (type === "dumbbell") {
-    // Batch 4 wave 2, task 2: "<Metric> — vs <Side A> vs <Side B>", then the
-    // same count phrasing as bar/donut/slope.
-    const base = `${config.metric.label} — vs ${config.labelA} vs ${config.labelB}`;
+    // Time-window Dumbbell: "<Metric> — <window A> vs <window B>" — the SAME
+    // window phrasing Slope uses above (the stray leading "vs " was dropped per
+    // owner point 14), then the same count phrasing as bar/donut/slope.
+    const base = `${config.metric.label} — ${config.labelA} vs ${config.labelB}`;
     return rankedCountPhrase(base, config.playerCount, config.roster, config.metric.key);
   }
   if (type === "benchmark") {

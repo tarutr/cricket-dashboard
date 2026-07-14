@@ -14,7 +14,7 @@
 
   <!-- Filters popup (F1a): the single home for EVERY filter (replaces the old
        on-page scope strip + right-side drawer). Static shell so main.js's
-       module-level lookups for the discipline toggle and #filter-bar resolve at
+       module-level lookup for #filter-bar resolves at
        load time; opened via openFiltersPopup(), closed via ×/backdrop/Escape.
        Closing NEVER runs a query — only the footer "Search" button does. Two
        collapsible sections: Search Conditions + Advanced Filters (owner 1B-2 —
@@ -28,22 +28,16 @@
       </div>
 
       <div class="filters-popup__body">
-        <!-- Section 1: Search Conditions (was "Conditions") — holds the static
-             Discipline toggle (main.js binds it at module load) and #filter-bar,
-             which src/filters.js populates + relocates Discipline into. -->
+        <!-- Section 1: Search Conditions — src/filters.js populates #filter-bar
+             with Gender · Discipline · Format · Date range · Team type (ROUND 3
+             task 1: Gender and Discipline are now compact <select>s rendered by
+             filters.js, so there's no static Discipline markup here any more). -->
         <section class="filters-popup__section">
           <button type="button" class="filters-popup__section-header" data-role="fpop-section-toggle" aria-expanded="true" aria-controls="fpop-body-conditions">
             <span class="filters-popup__section-name">Search Conditions</span>
             <span class="filters-popup__chevron" aria-hidden="true">▾</span>
           </button>
           <div class="filters-popup__section-body" id="fpop-body-conditions">
-            <div class="filter-group filter-group--discipline">
-              <span class="filter-label">Discipline</span>
-              <div class="segmented" data-role="discipline" role="group" aria-label="Discipline">
-                <button type="button" class="segmented__btn is-active" data-value="batting">Batting</button>
-                <button type="button" class="segmented__btn" data-value="bowling">Bowling</button>
-              </div>
-            </div>
             <div class="filter-bar" id="filter-bar"></div>
           </div>
         </section>

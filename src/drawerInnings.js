@@ -20,12 +20,16 @@
 //   mountVenue            — "Venue" (state.venue, Batch 1B); gender-scoped.
 //
 // Team/Event/Venue share mountSearchMultiselect(): a relevance-ranked,
-// gender-scoped multiselect backed by playerData.js's searchTeams/searchEvents/
-// searchVenues loaders. Those loaders are called ONCE per gender with term=""
-// (the full gender-scoped list, ordered games-desc — events also recency-desc);
-// the search box then filters that cached list client-side, so within any typed
-// substring the games-desc order is preserved (typing "India" surfaces the
-// full national team — most games — first). Re-fetches when the gender changes.
+// gender- + team-type-scoped multiselect backed by playerData.js's searchTeams/
+// searchEvents/searchVenues loaders. Those loaders are called ONCE per
+// gender+teamType with term="" (the full scoped list, ordered games-desc —
+// events also recency-desc); the search box then filters that cached list
+// client-side, so within any typed substring the games-desc order is preserved
+// (typing "India" surfaces the full national team — most games — first).
+// Re-fetches when the gender OR the team type changes (ROUND 3 task 8 — on
+// International the Event list must drop domestic-only competitions like IPL).
+// On reopen with an empty term, currently-selected options float to the top
+// (task 5). Each row is labelled "<name>  N games" (task 4).
 
 import { query } from "./db.js";
 import { buildScopeClauses, wirePortalDropdown } from "./filters.js";
@@ -388,11 +392,19 @@ function mountSearchMultiselect(container, store, onChange, config) {
     clear: container.querySelector('[data-role="ms-clear"]'),
   };
 
-  let optionsCache = []; // [{value,label,games,...}] for loadedGender
-  let loadedGender = null; // gender the cache was loaded for
+  let optionsCache = []; // [{value,label,games,...}] for loadedKey
+  let loadedKey = null; // "gender|teamType" the cache was loaded for
   let loadToken = 0;
   let loading = false;
   let errored = false;
+
+  // Cache key (ROUND 3, task 8): options are gender- AND team-type-scoped, so
+  // the cache must invalidate when EITHER changes (e.g. switching to
+  // International must re-fetch so IPL drops out of the Event list).
+  function cacheKey() {
+    const s = store.get();
+    return `${s.gender}|${s.teamType}`;
+  }
 
   function selected() {
     return new Set(config.get(store.get()));
@@ -414,7 +426,17 @@ function mountSearchMultiselect(container, store, onChange, config) {
     }
     const q = (filterText || "").trim().toLowerCase();
     const sel = selected();
-    const filtered = optionsCache.filter((o) => o.label.toLowerCase().includes(q));
+    let filtered = optionsCache.filter((o) => o.label.toLowerCase().includes(q));
+    // Selected-first on reopen (ROUND 3, task 5): when the panel opens with an
+    // empty search term, float the currently-selected options to the TOP (in
+    // their existing relevance order), the rest below in the usual order. Only
+    // for the empty-term case — while the user is actively typing a filter, the
+    // list stays in pure relevance order so matches don't jump around.
+    if (q === "") {
+      const chosen = filtered.filter((o) => sel.has(o.value));
+      const rest = filtered.filter((o) => !sel.has(o.value));
+      filtered = [...chosen, ...rest];
+    }
     els.list.innerHTML =
       filtered
         .map((o) => {
@@ -439,20 +461,21 @@ function mountSearchMultiselect(container, store, onChange, config) {
   }
 
   async function ensureLoaded() {
-    const gender = store.get().gender;
-    if (loadedGender === gender && !errored) {
-      renderList(els.search.value); // already cached for this gender — show it
+    const key = cacheKey();
+    if (loadedKey === key && !errored) {
+      renderList(els.search.value); // already cached for this gender+teamType — show it
       return;
     }
     loading = true;
     errored = false;
     renderList(els.search.value); // "Loading…"
     const token = ++loadToken;
+    const s = store.get();
     try {
-      const rows = await config.loader(gender);
+      const rows = await config.loader(s.gender, s.teamType);
       if (token !== loadToken) return;
       optionsCache = rows || [];
-      loadedGender = gender;
+      loadedKey = key;
       loading = false;
     } catch (e) {
       if (token !== loadToken) return;
@@ -481,10 +504,11 @@ function mountSearchMultiselect(container, store, onChange, config) {
   });
 
   function sync() {
-    // Gender changed since the cache loaded → drop it so the next open reloads
-    // for the new gender (selections are cleared by the gender handler).
-    if (loadedGender !== null && loadedGender !== store.get().gender) {
-      loadedGender = null;
+    // Gender OR team type changed since the cache loaded → drop it so the next
+    // open reloads for the new scope (selections are cleared by the gender /
+    // team-type handlers in filters.js — ROUND 3 task 9).
+    if (loadedKey !== null && loadedKey !== cacheKey()) {
+      loadedKey = null;
       optionsCache = [];
       dropdown.close();
     }
@@ -495,41 +519,48 @@ function mountSearchMultiselect(container, store, onChange, config) {
   return { sync };
 }
 
-/** "Played for" — single gender-scoped team picker (state.teams). */
+// Game-count meta label (ROUND 3, task 4): "1,013 games" — localized thousands
+// separator, the word "games" spelled out. Shared by Team/Event/Venue rows.
+// (The Opposition picker keeps its own plain list — no meta — see mountOpposition.)
+function gamesMeta(o) {
+  return o.games != null ? `${Number(o.games).toLocaleString()} games` : "";
+}
+
+/** "Played for" — single gender + team-type-scoped team picker (state.teams). */
 export function mountTeam(container, store, onChange) {
   return mountSearchMultiselect(container, store, onChange, {
     get: (s) => s.teams || [],
     set: (st, arr) => st.set({ teams: arr }),
-    loader: (gender) => searchTeams("", gender),
+    loader: (gender, teamType) => searchTeams("", gender, teamType),
     emptyLabel: "All teams",
     countLabel: (n) => `${n} teams`,
     searchPlaceholder: "Search teams…",
-    itemMeta: (o) => (o.games != null ? `${Number(o.games)}` : ""),
+    itemMeta: gamesMeta,
   });
 }
 
-/** "Event" — gender-scoped competition/series picker (state.event). */
+/** "Event" — gender + team-type-scoped competition/series picker (state.event). */
 export function mountEvent(container, store, onChange) {
   return mountSearchMultiselect(container, store, onChange, {
     get: (s) => s.event || [],
     set: (st, arr) => st.set({ event: arr }),
-    loader: (gender) => searchEvents("", gender),
+    loader: (gender, teamType) => searchEvents("", gender, teamType),
     emptyLabel: "Any event",
     countLabel: (n) => `${n} events`,
     searchPlaceholder: "Search events…",
-    itemMeta: (o) => (o.games != null ? `${Number(o.games)}` : ""),
+    itemMeta: gamesMeta,
   });
 }
 
-/** "Venue" — gender-scoped ground picker (state.venue). */
+/** "Venue" — gender + team-type-scoped ground picker (state.venue). */
 export function mountVenue(container, store, onChange) {
   return mountSearchMultiselect(container, store, onChange, {
     get: (s) => s.venue || [],
     set: (st, arr) => st.set({ venue: arr }),
-    loader: (gender) => searchVenues("", gender),
+    loader: (gender, teamType) => searchVenues("", gender, teamType),
     emptyLabel: "Any venue",
     countLabel: (n) => `${n} venues`,
     searchPlaceholder: "Search venues…",
-    itemMeta: (o) => (o.games != null ? `${Number(o.games)}` : ""),
+    itemMeta: gamesMeta,
   });
 }

@@ -712,6 +712,25 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
 
   const pal = palette();
 
+  // Owner point 11: the "Name (value)" endpoint labels now sit OUTSIDE the plot
+  // (left margin for Window A, right margin for Window B) instead of inside it,
+  // where they collided with the lines. Reserve exactly enough horizontal
+  // padding for the widest label on each side so the plot never overlaps them
+  // (measured here, before the chart exists, with the card's own label font;
+  // the drawing plugin re-sets ctx.font, so this measure is self-contained).
+  // Capped so a very long name can't starve the plot of width on narrow cards.
+  const LABEL_FONT = "600 11px Inter, sans-serif";
+  const measureCtx = canvas.getContext("2d");
+  measureCtx.save();
+  measureCtx.font = LABEL_FONT;
+  const labelWidth = (name, value) => measureCtx.measureText(`${shortenName(name)} (${labelForValue(metric, value)})`).width;
+  const maxAWidth = included.reduce((w, r) => Math.max(w, labelWidth(r.name, r.a)), 0);
+  const maxBWidth = included.reduce((w, r) => Math.max(w, labelWidth(r.name, r.b)), 0);
+  measureCtx.restore();
+  const LABEL_GAP = 10; // gap between plot edge and the label column
+  const padLeft = Math.min(Math.ceil(maxAWidth) + LABEL_GAP + 4, 220);
+  const padRight = Math.min(Math.ceil(maxBWidth) + LABEL_GAP + 4, 220);
+
   chartRef.current = new Chart(canvas, {
     type: "line",
     data: {
@@ -738,9 +757,11 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      // Room on both sides for the "Name (value)" labels the plugin below
-      // draws past each endpoint.
-      layout: { padding: { right: 96, top: 12, bottom: 12, left: 24 } },
+      // Reserve a left margin for Window A's labels and a right margin for
+      // Window B's — sized to the widest label on each side (owner point 11) so
+      // the endpoint labels draw entirely OUTSIDE the plot area, never over the
+      // lines.
+      layout: { padding: { left: padLeft, right: padRight, top: 12, bottom: 12 } },
       plugins: {
         legend: { display: false }, // player identity comes from the endpoint name label, not a legend
         tooltip: {
@@ -757,33 +778,35 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
         },
         y: {
           grid: { color: pal.line },
-          ticks: { color: pal.muted },
+          // Owner point 11: the numeric y-axis ticks are hidden — each endpoint
+          // label now carries its own exact value, so the axis numbers were
+          // redundant AND sat in the very left margin the Window A labels now
+          // occupy (they would have collided). Gridlines stay for magnitude.
+          ticks: { display: false },
         },
       },
     },
     plugins: [
       {
-        // Endpoint labels (owner redesign): the standalone value numbers used
-        // to clash visually with the lines/points they sat next to, so each
-        // endpoint now carries ONE combined "Name (value)" label instead —
-        // Window A's label reads its Window A value, Window B's reads its
-        // Window B value, so a player's identity travels with both ends of
-        // their own line (no legend needed either way).
+        // Endpoint labels (owner point 11): each endpoint carries ONE combined
+        // "Name (value)" label — Window A's reads its Window A value, Window
+        // B's its Window B value — so a player's identity travels with both
+        // ends of their own line (no legend needed).
         //
-        // Label collision fix (live testing at ~800px and narrower, 11
-        // players) kept from the original design: labels are ALWAYS anchored
-        // at their own endpoint, never flipped to a mid-chart position — if
-        // the full text would overflow the canvas, its horizontal start/end
-        // slides just enough to stay inside chartArea (a plain clamp, not a
-        // side-flip). The two columns (A and B) are decluttered
-        // independently since they're visually separate: sort top to bottom
-        // by desired pixel y, push any label closer than MIN_GAP to its
-        // predecessor further down, then (if that ran the column past the
-        // bottom edge) walk back up from the last label enforcing the same
-        // minimum gap — keeping the whole column inside chartArea rather
-        // than letting it slide off, the same "stay inside the plot" intent
-        // as scatter's point-label clamp, just applied to a column of labels
-        // instead of a single one.
+        // These labels now draw entirely OUTSIDE the plot: Window A's in the
+        // reserved LEFT margin (right-aligned, ending just left of the axis),
+        // Window B's in the reserved RIGHT margin (left-aligned, starting just
+        // right of the plot). The layout padding above reserves exactly the
+        // width each column needs, so a label can never overlap the lines it
+        // labels — the previous design anchored them just inside each endpoint,
+        // which collided with the plotted lines/points.
+        //
+        // The two columns are still decluttered independently (they're
+        // visually separate): sort top to bottom by desired pixel y, push any
+        // label closer than MIN_GAP to its predecessor further down, then (if
+        // that ran the column past the bottom edge) walk back up from the last
+        // label enforcing the same minimum gap — keeping each column inside the
+        // vertical plot bounds rather than letting it slide off.
         id: "slopeEndLabels",
         afterDatasetsDraw(chart) {
           const { ctx, chartArea } = chart;
@@ -822,28 +845,24 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
           ctx.font = "600 11px Inter, sans-serif";
           ctx.fillStyle = pal.ink;
 
-          // Window A: "Name (value)" ending just left of the point.
+          // Window A: "Name (value)" right-aligned in the LEFT margin, ending
+          // just left of the plot's left edge (never inside the plot).
           const aItems = declutter(rows.map((row) => ({ row, y: row.pointA.y })));
           ctx.textAlign = "right";
+          const aEdge = chartArea.left - LABEL_GAP;
           for (const { row, y } of aItems) {
             const text = `${shortenName(row.r.name)} (${labelForValue(metric, row.r.a)})`;
-            const width = ctx.measureText(text).width;
-            // Clamp so the text's LEFT edge never runs past the plot's
-            // left edge (same clamp idiom as scatter's point labels).
-            const x = Math.max(row.pointA.x - 8, chartArea.left + width + 4);
-            ctx.fillText(text, x, y);
+            ctx.fillText(text, aEdge, y);
           }
 
-          // Window B: "Name (value)" starting just right of the point.
+          // Window B: "Name (value)" left-aligned in the RIGHT margin, starting
+          // just right of the plot's right edge (never inside the plot).
           const bItems = declutter(rows.map((row) => ({ row, y: row.pointB.y })));
           ctx.textAlign = "left";
+          const bEdge = chartArea.right + LABEL_GAP;
           for (const { row, y } of bItems) {
             const text = `${shortenName(row.r.name)} (${labelForValue(metric, row.r.b)})`;
-            const width = ctx.measureText(text).width;
-            // Right-endpoint only: clamp the START leftward if needed to
-            // keep the END inside the canvas.
-            const x = Math.min(row.pointB.x + 8, chartArea.right - 4 - width);
-            ctx.fillText(text, x, y);
+            ctx.fillText(text, bEdge, y);
           }
 
           ctx.restore();

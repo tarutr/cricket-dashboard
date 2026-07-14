@@ -114,6 +114,24 @@ Batch 3 (table internals: muting removal, top-50+ShowMore, R.Pos column, dynamic
 width, preset-jump, drag polish, separators/no-striping, header-vs-table search split +
 player relevance + pins) still comes AFTER, its own gate.
 
+## ROUND 3 (post-Wave-B owner review, 2026-07-12) — 15 fixes, 4 waves, one at a time
+Decisions: graphs get their OWN Filters popup (point 12, build now — supersedes old G2
+brief); AND/OR restored (14); Role→Bowler exposes FINE bowling styles (2); dismissal
+COUNTS stay, moved to a new "Dismissal type" group (3+15); option lists scoped by
+team type too (7a — IPL must not appear under International); name condition under
+Player writing state.search (6); "[team] N games" labels (4); selected-first on
+reopen (5); compact one-row Search Conditions w/ gender+discipline as plain dropdowns
+(1). Bugs: pill-removal leaves table stuck at 0 (7b); graph binder error "ORDER BY
+matches" + empty header-entry pool + dead player search (9); slope labels inside plot
+(11); pool force-capped to 15 (13). Zebra striping only in main table (8). Wave 3 =
+graph-filters architecture (12+10+no-defaults+Recommended-after-metric+back-link).
+Wave 4 = 1B-3 header/toolbar one-row.
+- W1: filter-popup fixes (opus) ‖ graph repairs (opus) — DISJOINT (filter files vs graph/*)
+- W2: 7b persistence (opus) ‖ 8 zebra cleanup (stylist sonnet)
+- W3: 12 graph own-filters (opus, solo; graph/* + graph-local popup, NO main.js/index.html
+  edits — popup shell appended by graph module itself to keep 1B-3 disjoint)
+- W4: 1B-3 (sonnet, solo)
+
 ## Number-producing verification for 1B-1 (independent R2 derivations)
 Event filter: pick a known event, COUNT independently vs app. Venue filter likewise.
 Team relevance: "India" ranks the full national team #1 (most games) not India A/Air India.
