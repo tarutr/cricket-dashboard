@@ -362,18 +362,21 @@ function triggerHeaderFilterTable(text, matches) {
  * nodes and their listeners are simply left behind for GC).
  */
 function mountTableToolbarExtras({ searchInputEl, searchResultsEl, pillsHostEl }) {
-  pillsController = mountPills(
-    pillsHostEl,
-    store,
-    () => {
-      onFiltersChanged();
-    },
-    () => {
-      // Pin pills only (task 3b): "removing one un-pins and re-queries", not
-      // the standard persist-the-table filter-change path.
-      onFiltersChanged({ requery: true });
-    }
-  );
+  // R3 Wave 2 (item 7b): removing ANY pill re-queries immediately. A pill is a
+  // direct edit of the ALREADY-searched result set — not a Filters-popup control
+  // that waits for "Search" — so the table must reflect the remaining conditions
+  // at once (removing an over-constraining pill is how the user recovers results
+  // from a 0-row set). This previously split into two callbacks: the general
+  // (non-pin) path called onFiltersChanged() with NO requery, which under the
+  // F1a "persist the table as-is" rule left the table showing the pre-removal
+  // rows — or stuck at 0 — while the pill row and scope sentence already said
+  // otherwise; only pin removal (onPinChange) re-queried. Both paths now
+  // requery, so a single callback covers both (mountPills defaults onPinChange
+  // to onChange). The query builders are untouched — for a given state the SQL
+  // is byte-identical; only WHEN load() runs changed.
+  pillsController = mountPills(pillsHostEl, store, () => {
+    onFiltersChanged({ requery: true });
+  });
   pillsController.render();
 
   // Table search (task 3b): Stats-view-only box, now inside the toolbar.

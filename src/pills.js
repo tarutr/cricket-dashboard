@@ -47,13 +47,15 @@ function conditionPillLabel(cond, state) {
  * is expected to call `render()` again as part of that same pipeline, the
  * same way it re-syncs the drawer and advanced-filter count elsewhere).
  *
- * `onPinChange` (task 3b, owner decision 46) is called instead of `onChange`
- * when a PINNED-PLAYER pill's × is clicked — every other pill removal is a
- * filter change (reverts to the blank prompt per the no-automated-search
- * rule, onFiltersChanged's default path), but "removing one un-pins and
- * re-queries" immediately per the owner's ruling, so main.js wires this to
- * its requery variant instead. Defaults to `onChange` so a caller that never
- * pins anything doesn't need to pass a second callback.
+ * `onPinChange` (task 3b, owner decision 46) is a separate hook for a
+ * PINNED-PLAYER pill's × — retained so a caller could ever treat un-pinning
+ * differently from a filter-pill removal. As of R3 Wave 2 (item 7b) it makes
+ * no difference: main.js wires BOTH to the same immediate-requery path, since
+ * removing any pill edits the already-searched result set and the table must
+ * reflect the remaining conditions at once (see main.js mountTableToolbarExtras
+ * for the rationale). Defaults to `onChange` so a caller that never pins
+ * anything — and every caller now that the two paths are identical — needs to
+ * pass only one callback.
  */
 export function mountPills(container, store, onChange, onPinChange = onChange) {
   function render() {
