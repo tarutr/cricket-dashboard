@@ -130,8 +130,24 @@ already correct). Verified live: baseline 2,813 → +Event ICC Men's T20 World C
 = 360 → pill × → instant 2,813; SA Yadav popup anchors exact (60/1,544/29.13/
 150.34, vs Spin 38/322/454/140.99, 913 of 1,027 balls); popup mini-tables flat,
 PACE/SPIN subheadings highlighted, main-table striping intact; console clean.
-AWAITING OWNER GATE for Wave 3. Remaining waves (one at a time, ≤2 agents,
-checkpoint-commit + browser-verify per wave, STOP for owner go between):
+R3 Wave 3 DONE + VERIFIED IN BROWSER (2026-07-15): d791ef6/890c9b4/563e7c9 —
+graph-local store (deep clone of Stats state; re-seeds ONLY when a new Stats
+search changes the applied scope, bare tab toggles keep graph edits); "Graph
+filters" popup reusing mountFilters/mountFilterDrawer bound to the graph store
+(filters.js/drawer.js/state.js/main.js/index.html UNTOUCHED — popup appended by
+graph.js); day-level Window A/B date inputs seeded from scope's exact days;
+no-defaults (chart type → "Choose a metric to draw…", no Recommended until a
+metric chosen, metric persists across types, honest "X can't be shown on a
+donut chart" refusal); "← Back to your table" restored. Verified live: 2,813
+baseline; popup seeded Men/Batting/T20/Intl 2023-07-01→2026-07-02; Slope
+windows 1Jul23–30Dec24 / 31Dec24–2Jul26; discipline→Bowling applied to graph
+only (Slope re-rendered "top 12 by wickets"); back-link → batting table intact
+(2,813, Karanbir Singh 2,454); toggle back → graph still Bowling; console
+clean. Known notes: graph.js now ~2600 lines (split deferred); second
+.filters-popup in DOM (hidden when closed); back-link clicks the Stats view
+toggle programmatically. AWAITING OWNER GATE for Wave 4. Remaining waves (one
+at a time, ≤2 agents, checkpoint-commit + browser-verify per wave, STOP for
+owner go between):
 - R3 Wave 3 (solo, opus, big): [12] Graphs get their OWN Filters popup — graph-local
   scope state seeded (copied) from the Stats state on entry, opened from a Filters
   button in the graph controls; reuse mountFilters/mountFilterDrawer factories
