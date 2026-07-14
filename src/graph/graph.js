@@ -322,6 +322,21 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // tab switches / chart-type re-picks for the rest of the session once set,
   // same as every other control below.
   let chartType = null;
+  // R3 Wave 3, item 4 (no defaults / honest graph state):
+  //  • chosenMetricKey — the ONE metric the user has picked, shared across the
+  //    single-metric chart types (bar/donut/slope/byyear/dumbbell + scatter's Y
+  //    axis) so it PERSISTS across chart-type switches. Adopted into a type's
+  //    own key only when it's valid for that type; otherwise that type renders
+  //    an honest "choose another metric" message rather than silently swapping.
+  //  • metricEverChosen — has the user explicitly chosen ANY metric/group/
+  //    family/axis this session? Gates the "Recommended" chart-type tag, which
+  //    must not appear until a metric is chosen (no auto-pick, no auto-render).
+  let chosenMetricKey = null;
+  let metricEverChosen = false;
+  function markMetricChosen(key) {
+    if (key) chosenMetricKey = key;
+    metricEverChosen = true;
+  }
   let barStyle = "bars"; // "bars" | "dots" (lollipop) — bar chart only
   let barMetricKey = null;
   let donutMetricKey = null;
@@ -656,6 +671,24 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
   // ── Metric controls (rebuilt per chart type) ──────────────────────────────
 
+  /** <option>s for a single-metric select, with a "Choose a metric…"
+   * placeholder first (item 4 — no auto-pick). `selectedKey` may be null. */
+  function metricOptionsHTML(metrics, selectedKey) {
+    const placeholder = `<option value="" ${!selectedKey ? "selected" : ""}>Choose a metric…</option>`;
+    return (
+      placeholder +
+      metrics.map((m) => `<option value="${escAttr(m.key)}" ${m.key === selectedKey ? "selected" : ""}>${escHtml(m.label)}</option>`).join("")
+    );
+  }
+
+  /** Adopt the shared chosen metric (item 4) into a per-type key ONLY when it's
+   * valid for that type's own eligible list; otherwise null — the type then
+   * shows an honest "choose a metric" message rather than silently auto-picking
+   * one, and the user's metric survives every type switch where it IS valid. */
+  function adoptChosenMetric(metrics) {
+    return chosenMetricKey && metrics.some((m) => m.key === chosenMetricKey) ? chosenMetricKey : null;
+  }
+
   function renderMetricControls() {
     // decision 46f: nothing to show before a chart type is picked.
     if (!chartType) {
@@ -668,84 +701,78 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
     if (chartType === "bar") {
       const metrics = eligibleMetrics(discipline, formats);
-      if (!barMetricKey || !metrics.some((m) => m.key === barMetricKey)) {
-        const preferredKey = discipline === "batting" ? "runs" : "wickets";
-        barMetricKey = (metrics.find((m) => m.key === preferredKey) || metrics[0])?.key ?? null;
-      }
+      barMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
         <select class="select graph-metric-select" data-role="bar-metric">
-          ${metrics.map((m) => `<option value="${m.key}" ${m.key === barMetricKey ? "selected" : ""}>${m.label}</option>`).join("")}
+          ${metricOptionsHTML(metrics, barMetricKey)}
         </select>
       `;
       els.metricControls.querySelector('[data-role="bar-metric"]').addEventListener("change", (e) => {
-        barMetricKey = e.target.value;
+        barMetricKey = e.target.value || null;
+        if (barMetricKey) markMetricChosen(barMetricKey);
+        syncChartTypeButtons();
         onRankMetricChanged();
       });
     } else if (chartType === "donut") {
       const metrics = donutEligibleMetrics(discipline, formats);
-      if (!donutMetricKey || !metrics.some((m) => m.key === donutMetricKey)) {
-        const preferredKey = discipline === "batting" ? "runs" : "wickets";
-        donutMetricKey = (metrics.find((m) => m.key === preferredKey) || metrics[0])?.key ?? null;
-      }
+      donutMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric (total)</span>
         <select class="select graph-metric-select" data-role="donut-metric">
-          ${
-            metrics.length
-              ? metrics.map((m) => `<option value="${m.key}" ${m.key === donutMetricKey ? "selected" : ""}>${m.label}</option>`).join("")
-              : `<option value="">No additive totals available</option>`
-          }
+          ${metrics.length ? metricOptionsHTML(metrics, donutMetricKey) : `<option value="">No additive totals available</option>`}
         </select>
       `;
       const sel = els.metricControls.querySelector('[data-role="donut-metric"]');
       if (sel) {
         sel.addEventListener("change", (e) => {
-          donutMetricKey = e.target.value;
+          donutMetricKey = e.target.value || null;
+          if (donutMetricKey) markMetricChosen(donutMetricKey);
+          syncChartTypeButtons();
           onRankMetricChanged();
         });
       }
     } else if (chartType === "scatter") {
       const metrics = eligibleMetrics(discipline, formats);
-      // Defaults that make an interesting first scatter: consistency vs tempo
-      // (batting) / thrift vs penetration (bowling).
-      const prefX = discipline === "batting" ? "average" : "economy";
-      const prefY = discipline === "batting" ? "strike_rate" : "strike_rate";
-      if (!scatterXKey || !metrics.some((m) => m.key === scatterXKey)) {
-        scatterXKey = (metrics.find((m) => m.key === prefX) || metrics[0])?.key ?? null;
-      }
-      if (!scatterYKey || !metrics.some((m) => m.key === scatterYKey)) {
-        scatterYKey = (metrics.find((m) => m.key === prefY) || metrics[1] || metrics[0])?.key ?? null;
-      }
+      // item 4: no auto-pick. The Y axis carries the shared chosen metric (it's
+      // what ranks Best/Worst — see rankMetricForActiveType); X is scatter-local.
+      // Both start on the "Choose a metric…" placeholder until explicitly picked.
+      scatterYKey = adoptChosenMetric(metrics) || (scatterYKey && metrics.some((m) => m.key === scatterYKey) ? scatterYKey : null);
+      scatterXKey = scatterXKey && metrics.some((m) => m.key === scatterXKey) ? scatterXKey : null;
       els.metricControls.innerHTML = `
         <span class="graph-control-label">X axis</span>
         <select class="select graph-metric-select" data-role="scatter-x">
-          ${metrics.map((m) => `<option value="${m.key}" ${m.key === scatterXKey ? "selected" : ""}>${m.label}</option>`).join("")}
+          ${metricOptionsHTML(metrics, scatterXKey)}
         </select>
         <span class="graph-control-label">Y axis</span>
         <select class="select graph-metric-select" data-role="scatter-y">
-          ${metrics.map((m) => `<option value="${m.key}" ${m.key === scatterYKey ? "selected" : ""}>${m.label}</option>`).join("")}
+          ${metricOptionsHTML(metrics, scatterYKey)}
         </select>
       `;
       els.metricControls.querySelector('[data-role="scatter-x"]').addEventListener("change", (e) => {
-        scatterXKey = e.target.value;
+        scatterXKey = e.target.value || null;
+        if (scatterXKey) metricEverChosen = true;
+        syncChartTypeButtons();
         scheduleRender({ paramsChanged: true });
       });
       els.metricControls.querySelector('[data-role="scatter-y"]').addEventListener("change", (e) => {
-        scatterYKey = e.target.value;
+        scatterYKey = e.target.value || null;
+        if (scatterYKey) markMetricChosen(scatterYKey);
+        syncChartTypeButtons();
         onRankMetricChanged();
       });
     } else if (chartType === "radar") {
       const groups = eligibleRadarGroups(discipline, formats);
-      if (!radarGroupId || !groups.some((g) => g.id === radarGroupId)) {
-        radarGroupId = groups[0]?.id ?? null;
-      }
+      // item 4: no auto-pick — require an explicit group choice (radar has no
+      // single "metric", so its group selector is the pick that specifies it).
+      if (radarGroupId && !groups.some((g) => g.id === radarGroupId)) radarGroupId = null;
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric group</span>
         <select class="select graph-metric-select" data-role="radar-group">
           ${
             groups.length
-              ? groups.map((g) => `<option value="${g.id}" ${g.id === radarGroupId ? "selected" : ""}>${g.label}</option>`).join("")
+              ? `<option value="" ${!radarGroupId ? "selected" : ""}>Choose a metric group…</option>` +
+                groups.map((g) => `<option value="${escAttr(g.id)}" ${g.id === radarGroupId ? "selected" : ""}>${escHtml(g.label)}</option>`).join("")
               : `<option value="">No groups available for this scope</option>`
           }
         </select>
@@ -753,21 +780,23 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const sel = els.metricControls.querySelector('[data-role="radar-group"]');
       if (sel) {
         sel.addEventListener("change", (e) => {
-          radarGroupId = e.target.value;
+          radarGroupId = e.target.value || null;
+          if (radarGroupId) metricEverChosen = true;
+          syncChartTypeButtons();
           scheduleRender({ paramsChanged: true });
         });
       }
     } else if (chartType === "phases") {
       const families = eligiblePhaseFamilies(discipline, formats);
-      if (!phaseFamilyId || !families.some((f) => f.id === phaseFamilyId)) {
-        phaseFamilyId = families[0]?.id ?? null;
-      }
+      // item 4: no auto-pick — require an explicit family choice.
+      if (phaseFamilyId && !families.some((f) => f.id === phaseFamilyId)) phaseFamilyId = null;
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric family</span>
         <select class="select graph-metric-select" data-role="phase-family">
           ${
             families.length
-              ? families.map((f) => `<option value="${f.id}" ${f.id === phaseFamilyId ? "selected" : ""}>${f.label}</option>`).join("")
+              ? `<option value="" ${!phaseFamilyId ? "selected" : ""}>Choose a metric family…</option>` +
+                families.map((f) => `<option value="${escAttr(f.id)}" ${f.id === phaseFamilyId ? "selected" : ""}>${escHtml(f.label)}</option>`).join("")
               : `<option value="">No phase families available for this scope</option>`
           }
         </select>
@@ -775,16 +804,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const sel = els.metricControls.querySelector('[data-role="phase-family"]');
       if (sel) {
         sel.addEventListener("change", (e) => {
-          phaseFamilyId = e.target.value;
+          phaseFamilyId = e.target.value || null;
+          if (phaseFamilyId) metricEverChosen = true;
+          syncChartTypeButtons();
           scheduleRender({ paramsChanged: true });
         });
       }
     } else if (chartType === "slope") {
       const metrics = eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent");
-      if (!slopeMetricKey || !metrics.some((m) => m.key === slopeMetricKey)) {
-        const preferredKey = discipline === "batting" ? "strike_rate" : "economy";
-        slopeMetricKey = (metrics.find((m) => m.key === preferredKey) || metrics[0])?.key ?? null;
-      }
+      slopeMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
       ensureSlopeWindowDefaults();
       const slopeDayAttrs = dayInputAttrs();
       els.metricControls.innerHTML = `
@@ -792,7 +820,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         <select class="select graph-metric-select" data-role="slope-metric">
           ${
             metrics.length
-              ? metrics.map((m) => `<option value="${m.key}" ${m.key === slopeMetricKey ? "selected" : ""}>${m.label}</option>`).join("")
+              ? metricOptionsHTML(metrics, slopeMetricKey)
               : `<option value="">No rate/percent metrics available for this scope</option>`
           }
         </select>
@@ -812,7 +840,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const metricSel = els.metricControls.querySelector('[data-role="slope-metric"]');
       if (metricSel) {
         metricSel.addEventListener("change", (e) => {
-          slopeMetricKey = e.target.value;
+          slopeMetricKey = e.target.value || null;
+          if (slopeMetricKey) markMetricChosen(slopeMetricKey);
+          syncChartTypeButtons();
           scheduleRender({ paramsChanged: true });
         });
       }
@@ -834,16 +864,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // cleanly per (player, year) — timeseries.js's own whitelist (kind
       // total/rate, innings-sourced); never re-derived here (§8.2).
       const metrics = eligibleMetrics(discipline, formats).filter((m) => timeseriesSupported(m));
-      if (!byYearMetricKey || !metrics.some((m) => m.key === byYearMetricKey)) {
-        const preferredKey = discipline === "batting" ? "strike_rate" : "economy";
-        byYearMetricKey = (metrics.find((m) => m.key === preferredKey) || metrics[0])?.key ?? null;
-      }
+      byYearMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
         <select class="select graph-metric-select" data-role="byyear-metric">
           ${
             metrics.length
-              ? metrics.map((m) => `<option value="${m.key}" ${m.key === byYearMetricKey ? "selected" : ""}>${m.label}</option>`).join("")
+              ? metricOptionsHTML(metrics, byYearMetricKey)
               : `<option value="">No year-by-year metric available for this scope</option>`
           }
         </select>
@@ -851,7 +878,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const sel = els.metricControls.querySelector('[data-role="byyear-metric"]');
       if (sel) {
         sel.addEventListener("change", (e) => {
-          byYearMetricKey = e.target.value;
+          byYearMetricKey = e.target.value || null;
+          if (byYearMetricKey) markMetricChosen(byYearMetricKey);
+          syncChartTypeButtons();
           scheduleRender({ paramsChanged: true });
         });
       }
@@ -862,10 +891,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // per window) as dot-bar-dot. Works for batting AND bowling, any gender;
       // no availability gate.
       const metrics = eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent");
-      if (!dumbbellMetricKey || !metrics.some((m) => m.key === dumbbellMetricKey)) {
-        const preferredKey = discipline === "batting" ? "strike_rate" : "economy";
-        dumbbellMetricKey = (metrics.find((m) => m.key === preferredKey) || metrics[0])?.key ?? null;
-      }
+      dumbbellMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
       ensureDumbbellWindowDefaults();
       const dumbbellDayAttrs = dayInputAttrs();
       els.metricControls.innerHTML = `
@@ -873,7 +899,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         <select class="select graph-metric-select" data-role="dumbbell-metric">
           ${
             metrics.length
-              ? metrics.map((m) => `<option value="${m.key}" ${m.key === dumbbellMetricKey ? "selected" : ""}>${m.label}</option>`).join("")
+              ? metricOptionsHTML(metrics, dumbbellMetricKey)
               : `<option value="">No rate/percent metric available for this scope</option>`
           }
         </select>
@@ -893,7 +919,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const metricSel = els.metricControls.querySelector('[data-role="dumbbell-metric"]');
       if (metricSel) {
         metricSel.addEventListener("change", (e) => {
-          dumbbellMetricKey = e.target.value;
+          dumbbellMetricKey = e.target.value || null;
+          if (dumbbellMetricKey) markMetricChosen(dumbbellMetricKey);
+          syncChartTypeButtons();
           scheduleRender({ paramsChanged: true });
         });
       }
@@ -987,6 +1015,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       if (anchorSel) {
         anchorSel.addEventListener("change", (e) => {
           benchmarkAnchorId = e.target.value || null;
+          // item 4: an explicit benchmark configuration counts as "a metric
+          // chosen" for the Recommended-tag gate (benchmark has no single
+          // metric — anchor + the metric set together specify it).
+          metricEverChosen = true;
+          syncChartTypeButtons();
           // "Changing anchor re-renders, no refetch" (task brief) — enforced
           // by renderChart()'s pool cache (keyed on scope+metrics, NOT
           // anchor), not by anything special here; scheduleRender is the
@@ -1036,7 +1069,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
             set.delete(k);
           }
           benchmarkMetricKeys = [...set];
+          metricEverChosen = true; // item 4: benchmark metric-set edit counts
           syncBenchmarkMetricsUI();
+          syncChartTypeButtons();
           scheduleRender({ paramsChanged: true });
         });
       });
@@ -1423,7 +1458,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     const state = store.get();
     const statuses = {};
     for (const t of CHART_TYPES) statuses[t.key] = evaluateTypeStatus(t.key, state);
-    const recommended = recommendedChartType(state, statuses);
+    // item 4: the "Recommended" tag appears only AFTER a metric has been chosen
+    // — never on first paint, so a chart type is never nudged before the user
+    // has expressed what they want to measure.
+    const recommended = metricEverChosen ? recommendedChartType(state, statuses) : null;
 
     els.chartType.querySelectorAll(".segmented__btn").forEach((btn) => {
       const key = btn.dataset.value;
@@ -1774,6 +1812,31 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     return { dirty: selection.isDirty(), seedByMetric: resolveSeedMetric(discipline) };
   }
 
+  /** Item 4: honest "no metric chosen / chosen metric invalid here" sentence
+   * for a single-metric chart type. Reached only when eligible metrics DO
+   * exist for the type (evaluateTypeStatus already blocks metric-starved
+   * scopes with their own reasons), so this is always about the user's own
+   * pick — never a silent auto-swap. */
+  function noMetricGuidance(typeLabel) {
+    if (metricEverChosen && chosenMetricKey) {
+      const m = getMetric(chosenMetricKey, store.get().discipline);
+      return `${m ? m.label : "That metric"} can't be shown on ${typeLabel} — choose another metric.`;
+    }
+    return `Choose a metric to draw ${typeLabel}.`;
+  }
+
+  /** Show a one-line guidance sentence in the stage IN PLACE OF a chart (item 4
+   * — no graph while under-specified) and tear down any chart still on screen. */
+  function showChartGuidance(text) {
+    hideStatus();
+    if (chartRef.current) {
+      chartRef.current.destroy();
+      chartRef.current = null;
+    }
+    renderExclusions([]);
+    showStageGuidance(text);
+  }
+
   /** Build a title-only chart config for the CURRENT chart-type controls —
    * used when there isn't (yet) a real chart to draw (zero players, or below
    * the chart type's minimum) but the card must still show an honest title
@@ -1799,17 +1862,17 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     }
     if (chartType === "radar") {
       const groups = eligibleRadarGroups(discipline, state.formats);
-      const group = groups.find((g) => g.id === radarGroupId) || groups[0];
+      const group = groups.find((g) => g.id === radarGroupId); // item 4: no auto-pick
       return group ? { type: "radar", discipline, group, playerCount, roster } : null;
     }
     if (chartType === "phases") {
       const families = eligiblePhaseFamilies(discipline, state.formats);
-      const family = families.find((f) => f.id === phaseFamilyId) || families[0];
+      const family = families.find((f) => f.id === phaseFamilyId); // item 4: no auto-pick
       return family ? { type: "phases", discipline, family, playerCount, roster } : null;
     }
     if (chartType === "slope") {
       const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
-      const metric = metrics.find((m) => m.key === slopeMetricKey) || metrics[0];
+      const metric = metrics.find((m) => m.key === slopeMetricKey); // item 4: no auto-pick
       return metric
         ? {
             type: "slope",
@@ -1826,12 +1889,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     }
     if (chartType === "byyear") {
       const metrics = eligibleMetrics(discipline, state.formats).filter((m) => timeseriesSupported(m));
-      const metric = metrics.find((m) => m.key === byYearMetricKey) || metrics[0];
+      const metric = metrics.find((m) => m.key === byYearMetricKey); // item 4: no auto-pick
       return metric ? { type: "byyear", discipline, metric, playerCount, roster } : null;
     }
     if (chartType === "dumbbell") {
       const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
-      const metric = metrics.find((m) => m.key === dumbbellMetricKey) || metrics[0];
+      const metric = metrics.find((m) => m.key === dumbbellMetricKey); // item 4: no auto-pick
       // labelA/labelB and sideAKey/sideBKey mirror what the render branch
       // emits (see below) so card.js's autoTitle/regenKeyFor read the same
       // window vocabulary here as there — sideAKey/sideBKey carry the window
@@ -2027,16 +2090,20 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // where playerCount is just the selection size.
       if (chartType === "slope") {
         const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
-        const metric = metrics.find((m) => m.key === slopeMetricKey) || metrics[0];
+        const metric = metrics.find((m) => m.key === slopeMetricKey); // item 4: no auto-pick
+        if (!metric) {
+          showChartGuidance(noMetricGuidance("a slope chart"));
+          return;
+        }
         const windowsReady = Boolean(slopeWindowA?.from && slopeWindowA?.to && slopeWindowB?.from && slopeWindowB?.to);
-        if (!metric || !windowsReady) {
+        if (!windowsReady) {
           hideStatus();
           if (chartRef.current) {
             chartRef.current.destroy();
             chartRef.current = null;
           }
           card.hidePlaceholder();
-          renderExclusions([], metric ? "Pick both date windows to draw this chart." : "No rate/percent metric available for this scope.");
+          renderExclusions([], "Pick both date windows to draw this chart.");
           return;
         }
 
@@ -2103,15 +2170,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // fetchSelectedPlayerMetrics's flat per-player grouping.
       if (chartType === "byyear") {
         const metrics = eligibleMetrics(discipline, state.formats).filter((m) => timeseriesSupported(m));
-        const metric = metrics.find((m) => m.key === byYearMetricKey) || metrics[0];
+        const metric = metrics.find((m) => m.key === byYearMetricKey); // item 4: no auto-pick
         if (!metric) {
-          hideStatus();
-          if (chartRef.current) {
-            chartRef.current.destroy();
-            chartRef.current = null;
-          }
-          card.hidePlaceholder();
-          renderExclusions([], "No year-by-year metric available for this scope.");
+          showChartGuidance(noMetricGuidance("a line chart"));
           return;
         }
 
@@ -2171,17 +2232,21 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // availability gate — see the removed dumbbellAvailable note up top).
       if (chartType === "dumbbell") {
         const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
-        const metric = metrics.find((m) => m.key === dumbbellMetricKey) || metrics[0];
+        const metric = metrics.find((m) => m.key === dumbbellMetricKey); // item 4: no auto-pick
+        if (!metric) {
+          showChartGuidance(noMetricGuidance("a dumbbell chart"));
+          return;
+        }
         ensureDumbbellWindowDefaults();
         const windowsReady = Boolean(dumbbellWindowA?.from && dumbbellWindowA?.to && dumbbellWindowB?.from && dumbbellWindowB?.to);
-        if (!metric || !windowsReady) {
+        if (!windowsReady) {
           hideStatus();
           if (chartRef.current) {
             chartRef.current.destroy();
             chartRef.current = null;
           }
           card.hidePlaceholder();
-          renderExclusions([], metric ? "Pick both date windows to draw this chart." : "No rate/percent metric available for this scope.");
+          renderExclusions([], "Pick both date windows to draw this chart.");
           return;
         }
 
@@ -2325,31 +2390,30 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       let config;
 
       if (chartType === "bar") {
-        const metric = getMetric(barMetricKey, discipline);
-        if (!metric) { hideStatus(); return; }
+        const metric = getMetric(barMetricKey, discipline); // item 4: no auto-pick
+        if (!metric) { showChartGuidance(noMetricGuidance("a bar chart")); return; }
         metricKeys = [metric.key];
         config = { type: "bar", discipline, metric, playerCount: players.length, style: barStyle, roster };
       } else if (chartType === "donut") {
-        const metric = getMetric(donutMetricKey, discipline);
-        if (!metric) {
-          hideStatus();
-          renderExclusions([], "No additive-total metric available for a donut chart in this scope.");
-          return;
-        }
+        const metric = getMetric(donutMetricKey, discipline); // item 4: no auto-pick
+        if (!metric) { showChartGuidance(noMetricGuidance("a donut chart")); return; }
         metricKeys = [metric.key];
         config = { type: "donut", discipline, metric, playerCount: players.length, roster };
       } else if (chartType === "scatter") {
         const metricX = getMetric(scatterXKey, discipline);
         const metricY = getMetric(scatterYKey, discipline);
-        if (!metricX || !metricY) { hideStatus(); return; }
+        if (!metricX || !metricY) {
+          // item 4: scatter needs BOTH axes chosen — one honest sentence, no plot.
+          showChartGuidance(metricEverChosen ? "Choose both an X and a Y metric to draw a scatter plot." : "Choose an X and a Y metric to draw a scatter plot.");
+          return;
+        }
         metricKeys = [metricX.key, metricY.key];
         config = { type: "scatter", discipline, metricX, metricY, playerCount: players.length, roster };
       } else if (chartType === "radar") {
         const groups = eligibleRadarGroups(discipline, state.formats);
-        const group = groups.find((g) => g.id === radarGroupId) || groups[0];
+        const group = groups.find((g) => g.id === radarGroupId); // item 4: no auto-pick
         if (!group) {
-          hideStatus();
-          renderExclusions([], "No metric groups available for this scope.");
+          showChartGuidance("Choose a metric group to draw a radar chart.");
           return;
         }
         const metrics = group.metricKeys.map((k) => getMetric(k, discipline)).filter(Boolean);
@@ -2357,10 +2421,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         config = { type: "radar", discipline, group, metrics, playerCount: players.length, roster };
       } else if (chartType === "phases") {
         const families = eligiblePhaseFamilies(discipline, state.formats);
-        const family = families.find((f) => f.id === phaseFamilyId) || families[0];
+        const family = families.find((f) => f.id === phaseFamilyId); // item 4: no auto-pick
         if (!family) {
-          hideStatus();
-          renderExclusions([], "No phase metric families available for this scope.");
+          showChartGuidance("Choose a metric family to draw a phases chart.");
           return;
         }
         const metrics = family.members.map((mm) => getMetric(mm.key, discipline)).filter(Boolean);
@@ -2619,7 +2682,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     if (newType === "scatter") {
       if (metricKey && typeof metricKey === "object") {
         if (metricKey.x) scatterXKey = metricKey.x;
-        if (metricKey.y) scatterYKey = metricKey.y;
+        if (metricKey.y) {
+          scatterYKey = metricKey.y;
+          markMetricChosen(metricKey.y); // item 4: chooser Y is the shared metric
+        } else {
+          metricEverChosen = true;
+        }
       }
     } else if (typeof metricKey === "string" && metricKey) {
       if (newType === "bar") barMetricKey = metricKey;
@@ -2627,8 +2695,22 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       else if (newType === "slope") slopeMetricKey = metricKey;
       else if (newType === "byyear") byYearMetricKey = metricKey;
       else if (newType === "dumbbell") dumbbellMetricKey = metricKey;
-      // radar/phases/benchmark: no single metric — renderMetricControls()
-      // below fills in the usual defaults (group/family/anchor+keys) itself.
+      markMetricChosen(metricKey); // item 4: chooser pick persists + arms Recommended
+    } else {
+      // radar/phases/benchmark: no single metric to pick. The chooser is an
+      // EXPLICIT type confirm, so seed the first group/family (item 4's
+      // no-auto-pick applies to the Builder's own controls; a deliberate
+      // chooser confirm still lands on a drawn chart) and count it as a metric
+      // choice for the Recommended-tag gate. Benchmark self-configures.
+      const gs = store.get();
+      if (newType === "radar") {
+        const groups = eligibleRadarGroups(gs.discipline, gs.formats);
+        if (groups[0] && !groups.some((g) => g.id === radarGroupId)) radarGroupId = groups[0].id;
+      } else if (newType === "phases") {
+        const families = eligiblePhaseFamilies(gs.discipline, gs.formats);
+        if (families[0] && !families.some((f) => f.id === phaseFamilyId)) phaseFamilyId = families[0].id;
+      }
+      metricEverChosen = true;
     }
 
     syncChartTypeButtons();
