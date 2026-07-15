@@ -20,7 +20,6 @@ const DEFAULT_SORT_KEY = { batting: "runs", bowling: "wickets" };
 
 const initStatusEl = document.getElementById("init-status");
 const appContentEl = document.getElementById("app-content");
-const scopeSentenceEl = document.getElementById("scope-sentence");
 const footerDataDateEl = document.getElementById("footer-data-date");
 // Discipline is now a compact <select> rendered by filters.js inside the Filters
 // popup (ROUND 3 task 1) — no static toggle element, no click wiring here. Its
@@ -109,7 +108,7 @@ export function clearAll() {
   lastAppliedDefaults.batting = [...fresh.columns.batting];
   lastAppliedDefaults.bowling = [...fresh.columns.bowling];
   // Re-render every control from the fresh defaults (the store.subscribe hook
-  // refreshes pills/subtitle/badge; the controls need an explicit re-render).
+  // refreshes pills/badge; the controls need an explicit re-render).
   // filterController.render() re-syncs the Gender/Discipline selects.
   updateViewToggle();
   if (filterController) {
@@ -118,7 +117,6 @@ export function clearAll() {
   }
   if (drawerController) drawerController.sync();
   if (pillsController) pillsController.render();
-  updateScopeSentence();
   updateDrawerBadge();
   // Empty the table back to the initial prompt, in the table view.
   showTableView();
@@ -146,10 +144,6 @@ function reapplyDefaultColumnsIfUnmodified() {
   const next = defaultColumnsFor(discipline, state.formats);
   lastAppliedDefaults[discipline] = next;
   store.set({ columns: { ...state.columns, [discipline]: next } });
-}
-
-function updateScopeSentence() {
-  scopeSentenceEl.textContent = store.describeScope();
 }
 
 /** Count badge on the toolbar's "Filters" button (F2 — repointed from the old
@@ -242,7 +236,6 @@ function onFiltersChanged({ requery = false } = {}) {
   // onShow() syncs directly on open.
   if (drawerController && filtersPopup && filtersPopup.isOpen()) drawerController.sync();
   if (pillsController) pillsController.render();
-  updateScopeSentence();
   updateDrawerBadge();
   // NEW INTERACTION MODEL (F1a): touching a control NEVER blanks the table — in
   // table view the table persists as-is. The query re-runs ONLY via the popup's
@@ -527,23 +520,22 @@ function boot() {
       // every other use of it in this file already guards with
       // `if (pillsController)` for exactly that reason.
 
-      // Presentation controls in the table toolbar (presets, Group rows, Vs)
-      // set state and reload directly without onFiltersChanged — keep the
-      // honest scope sentence, pills, and badge in step with EVERY state
-      // change (e.g. entering matchup mode makes the position filter inert,
-      // so its pill and badge count must drop immediately).
+      // Presentation controls in the table toolbar (presets, Vs) set state and
+      // reload directly without onFiltersChanged — keep pills and the badge in
+      // step with EVERY state change (e.g. entering matchup mode makes the
+      // position filter inert, so its pill and badge count must drop
+      // immediately).
       store.subscribe(() => {
-        updateScopeSentence();
         if (pillsController) pillsController.render();
         updateDrawerBadge();
         // The popup's filter content too: toolbar presentation controls (Vs,
-        // Group rows, presets) bypass onFiltersChanged, but the position-chip
-        // enablement and condition-builder vocabulary depend on the Vs
-        // selection. sync() is scope-key-cached (option refetches no-op unless
-        // scope moved), but is gated to the popup being VISIBLE (Batch 3 fix 2):
-        // syncing hidden content is wasted work, and syncing while open used to
-        // rebuild the advanced panel's innerHTML on each keystroke, destroying
-        // the input being typed into. onShow() syncs directly on open.
+        // presets) bypass onFiltersChanged, but the position-chip enablement
+        // and condition-builder vocabulary depend on the Vs selection. sync()
+        // is scope-key-cached (option refetches no-op unless scope moved), but
+        // is gated to the popup being VISIBLE (Batch 3 fix 2): syncing hidden
+        // content is wasted work, and syncing while open used to rebuild the
+        // advanced panel's innerHTML on each keystroke, destroying the input
+        // being typed into. onShow() syncs directly on open.
         if (drawerController && filtersPopup && filtersPopup.isOpen()) drawerController.sync();
       });
 
@@ -627,7 +619,6 @@ function boot() {
         applyView();
       });
 
-      updateScopeSentence();
       updateDrawerBadge();
       updateViewToggle();
       // Owner: blank on first load — show the prompt, don't auto-run the query.

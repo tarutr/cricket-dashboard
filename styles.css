@@ -159,16 +159,27 @@ a { color: var(--color-accent); }
 
 /* ── Header ────────────────────────────────────────────────────────────────── */
 
+/* R3 Wave 4: single-row header (owner — subtitle removed entirely, see
+   .app-header__brand below). align-items: center (was flex-start, needed
+   when the brand block carried a second (subtitle) line and had to top-align
+   with the taller controls cluster) now centers the wordmark against the
+   search box + view toggle on their one shared line. Padding is symmetric
+   top/bottom (was heavier on top to counterbalance the subtitle's line-height
+   below the title) since there's no second line to balance against any more. */
 .app-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-5);
-  padding: var(--space-6) var(--space-6) var(--space-5);
+  padding: var(--space-5) var(--space-6);
   border-bottom: 1px solid var(--color-line);
   flex-wrap: wrap;
 }
 
+/* R3 Wave 4: brand is just the wordmark now — the scope-sentence subtitle
+   (#scope-sentence) that used to sit under it is gone (owner: header is one
+   compact row). max-width kept in case a future brand mark needs room, but
+   nothing currently constrains it. */
 .app-header__brand {
   max-width: 42rem;
 }
@@ -182,15 +193,6 @@ a { color: var(--color-accent); }
   line-height: 1;
   color: var(--color-fg);
   text-transform: lowercase;
-}
-
-.app-header__scope {
-  margin: var(--space-3) 0 0;
-  color: var(--color-muted);
-  font-size: 1.05rem;
-  line-height: 1.5;
-  font-weight: 400;
-  max-width: 34rem;
 }
 
 /* The header now holds the header search (task 3a) plus the Stats/Graphs
@@ -1159,15 +1161,29 @@ a { color: var(--color-accent); }
   background: var(--color-bg-raised);
 }
 
+/* R3 Wave 4 (owner): consolidated to ONE row at desktop widths — Filters,
+   search, count, presets, Vs, then the flush-right Graph/Columns/Clear
+   cluster. gap tightened from space-3 to space-2 (part of the width budget
+   that makes everything fit on 1280px alongside the toolbar-scoped .btn
+   compaction further below); still wraps gracefully at narrow widths since
+   flex-wrap: wrap is unchanged. */
 .table-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: var(--space-2);
   padding: var(--space-3) var(--space-5);
   border-bottom: 1px solid var(--color-line);
   background: var(--color-panel);
   flex-wrap: wrap;
+}
+
+/* R3 Wave 4: toolbar action buttons (Filters trigger, Graph, Columns, Clear)
+   use tighter horizontal padding than the app's base .btn — part of the
+   one-row-at-1280px width budget. Scoped to .table-toolbar only; every other
+   .btn in the app (popup footers, drawer, etc.) is untouched. */
+.table-toolbar .btn {
+  padding: var(--space-2) var(--space-3);
 }
 
 .table-toolbar__row-count {
@@ -1191,7 +1207,7 @@ a { color: var(--color-accent); }
 .table-toolbar__left {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
@@ -1227,7 +1243,7 @@ a { color: var(--color-accent); }
   font-size: 0.9rem;
 }
 
-/* The presentation controls (row count, presets, Vs/Group rows,
+/* The presentation controls (row count, presets, Vs,
    Graph/Columns/Clear) rebuilt by renderToolbar() on every render — same flex
    row/wrap/gap treatment .table-toolbar used to apply directly to these as
    its own immediate children, now one level down since .table-toolbar__left
@@ -1239,7 +1255,7 @@ a { color: var(--color-accent); }
 .table-toolbar__dynamic {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   flex-wrap: wrap;
   flex: 1 1 auto;
   min-width: 0;
@@ -1870,7 +1886,10 @@ a { color: var(--color-accent); }
 }
 
 .chip--preset {
-  padding: var(--space-1) var(--space-3);
+  /* R3 Wave 4: horizontal padding trimmed from space-3 to space-2 — part of
+     the width budget for fitting the whole toolbar (Filters, search, count,
+     all 5 presets, Vs, Graph/Columns/Clear) on one row at 1280px. */
+  padding: var(--space-1) var(--space-2);
   font-size: var(--text-sm2);
   min-height: 32px;
 }
@@ -3809,22 +3828,22 @@ a { color: var(--color-accent); }
 /* ── Leaderboard matchup mode (D4 R3, decision 33) ──────────────────────────
    "Vs" comparison: a fixed-column table where every row also carries a
    coverage figure. Reuses .select/.table-toolbar primitives; adds the
-   coverage cell, the toolbar note that replaces presets/Customise, and a
-   little breathing room for the Vs/Group-rows/Customise cluster now that it
-   can hold three controls. */
+   coverage cell and the toolbar note that replaces presets/Customise. R3
+   Wave 4: the "Group rows" control that used to share this cluster with Vs
+   is gone — .table-toolbar__controls now holds Vs alone. */
 
 .table-toolbar__actions {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   flex-wrap: wrap;
   /* B1 mechanical fix: .table-toolbar__actions is itself one flex item of
      .table-toolbar (which uses justify-content: space-between across
      row-count / presets / this block) — without flex-grow it only ever
-     shrink-wraps its own content (Vs+Group rows next to Graph+Columns), so
+     shrink-wraps its own content (Vs next to Graph+Columns), so
      .table-toolbar__graph-columns' margin-left: auto below had no leftover
      width in THIS box to push against and Graph/Columns sat bunched right
-     next to Group rows instead of flush against the toolbar's true right
+     next to Vs instead of flush against the toolbar's true right
      edge. flex: 1 lets this box claim all the row's remaining width (or,
      once wrapped onto its own line on narrow viewports, the full line width)
      so the auto-margin has real room to work. */
@@ -3832,7 +3851,7 @@ a { color: var(--color-accent); }
   min-width: 0;
 }
 
-/* Decision 44d: Vs / Group rows pack on the left; Graph + Columns (+ Clear,
+/* Decision 44d: Vs packs on the left; Graph + Columns (+ Clear,
    F2) are a distinct right-most cluster (margin-left: auto keeps it flush to
    the card's right edge, and lets it drop to its own line — still
    right-aligned on that line — before the left cluster does on narrow
@@ -3840,7 +3859,7 @@ a { color: var(--color-accent); }
 .table-toolbar__controls {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
@@ -3865,6 +3884,10 @@ a { color: var(--color-accent); }
   border-color: var(--color-bad);
 }
 
+/* Generic "label wrapping a compact select" look — historically shared by
+   Vs and the now-removed Group rows control (R3 Wave 4), Vs is its only user
+   today. Name kept as-is (not user-visible; renaming risks an unrelated
+   diff). */
 .table-toolbar__group-label {
   display: inline-flex;
   align-items: center;

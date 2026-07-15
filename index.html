@@ -68,7 +68,6 @@
     <header class="app-header">
       <div class="app-header__brand">
         <h1 class="app-header__title"><span class="app-header__wordmark">cricdb</span></h1>
-        <p class="app-header__scope" id="scope-sentence" aria-live="polite"></p>
       </div>
       <div class="app-header__controls">
         <!-- Header search (task 3a, owner decision 46): a compact player
@@ -114,8 +113,10 @@
       <div id="app-content" class="app-content" hidden>
         <!-- Scope strip removed (F1a) — all filters now live in the Filters
              popup above. The Discipline toggle + #filter-bar moved into that
-             popup's Conditions section; the subtitle (#scope-sentence) is the
-             only always-visible scope indicator.
+             popup's Conditions section. R3 Wave 4: the header's scope-sentence
+             subtitle is gone too (owner: header is a single row, wordmark +
+             search + view toggle only) — the Filters button's badge count is
+             now the only always-visible scope indicator.
              F2: the applied-filter pills row and the table-search box (former
              #pills-bar / #player-search-section, static siblings here) both
              moved INSIDE #table-area's own results toolbar — table.js's

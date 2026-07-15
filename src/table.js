@@ -20,8 +20,6 @@ import {
   oppositionFilterActive,
   COLUMN_PRESET_DEFS,
   activePresetKey,
-  SPLIT_DIMENSIONS,
-  splitAllowed,
   matchupVsActive,
   effectiveNamespace,
   escSql as esc,
@@ -956,7 +954,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
   // innerHTML-replaced by container.innerHTML wholesale again — every
   // subsequent render (loading, loaded, re-sort) writes into these nodes'
   // OWN innerHTML in place. This is what keeps the toolbar's controls
-  // (Vs / Group rows / Columns / presets) visible and interactive-looking
+  // (Vs / Columns / presets) visible and interactive-looking
   // DURING a re-query instead of vanishing under the user's cursor and the
   // toolbar's geometry jumping. Null whenever we're not in table mode
   // (prompt/error), so ensureSkeleton() knows to rebuild fresh next time.
@@ -1013,7 +1011,8 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
    * compact table-search box) that `renderToolbar()` never touches —
    * `toolbarEl` itself is repointed to `.table-toolbar__dynamic`, the child
    * renderToolbar()'s innerHTML replacement actually owns (row count,
-   * presets, Vs/Group rows, Graph/Columns/Clear). The search box needs a
+   * presets, Vs, Graph/Columns/Clear — one row at desktop widths, R3 Wave 4).
+   * The search box needs a
    * stable node across reloads (typed text + the omnisearch dropdown's own
    * state would be destroyed by a wholesale rebuild), and a fresh pills host
    * lives right below the toolbar, between it and the table-scroll (F2 task
@@ -1360,21 +1359,27 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
 
   /**
    * Render the persistent toolbar's contents in place (row count, preset
-   * chips, "Vs" / Group rows / Columns actions) and rebind its listeners.
-   * Called both mid-query (`rows: null` → "Loading…" row count, everything
-   * else still fully interactive-looking) and after a load resolves (`rows`:
-   * the result set) — same markup shape either way, so no control ever
-   * vanishes or changes position between the two states (Batch 1 mechanical
-   * fix: previously the whole toolbar was replaced by a bare "Loading…" div
-   * on every re-query).
+   * chips, "Vs" / Columns actions) and rebind its listeners. Called both
+   * mid-query (`rows: null` → "Loading…" row count, everything else still
+   * fully interactive-looking) and after a load resolves (`rows`: the result
+   * set) — same markup shape either way, so no control ever vanishes or
+   * changes position between the two states (Batch 1 mechanical fix:
+   * previously the whole toolbar was replaced by a bare "Loading…" div on
+   * every re-query).
    *
-   * Column presets and "Group rows" don't apply in matchup mode (no row
-   * grouping/preset vocabulary there — only the restricted column picker
-   * applies), but they stay in their normal toolbar slot, just greyed out
-   * (disabled + title) instead of being removed — removing them (the old
-   * behavior) is what let the "Vs" control and the Columns button drift to
-   * different positions between modes, since removing an earlier sibling
-   * reflows everything after it.
+   * Column presets don't apply in matchup mode (no preset vocabulary there —
+   * only the restricted column picker applies), but they stay in their
+   * normal toolbar slot, just greyed out (disabled + title) instead of being
+   * removed — removing them (the old behavior) is what let the "Vs" control
+   * and the Columns button drift to different positions between modes,
+   * since removing an earlier sibling reflows everything after it.
+   *
+   * R3 Wave 4 (owner): consolidated to fit on ONE row at desktop widths
+   * (1280px) — row count, presets, Vs, then the flush-right Graph/Columns/
+   * Clear cluster; wraps gracefully on narrow viewports. The "Group rows"
+   * select (No grouping / Batting position / Opposition / Dismissal) that
+   * used to sit next to "Vs" is removed entirely — see the comment further
+   * down where its markup used to be built.
    */
   function renderToolbar(state, rows, bowlingTypes) {
     const matchupOn = matchupVsActive(state);
@@ -1414,23 +1419,13 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     const noteHTML = noteText ? `<div class="table-toolbar__matchup-note">${noteText}</div>` : "";
     const presetsBlockHTML = `<div class="table-toolbar__presets" role="group" aria-label="Column presets">${presetChipsHTML}</div>${noteHTML}`;
 
-    // "Group rows" (decision 29: row-splitting kept, tucked in the toolbar).
-    // A presentation control like the column picker, so changes reload directly
-    // (no Show-results round trip — the scope hasn't changed, only its layout).
-    // Always rendered, greyed out in matchup mode (same reasoning as presets).
-    const groupOptionsHTML = ["", ...Object.keys(SPLIT_DIMENSIONS)]
-      .map((key) => {
-        if (key === "") return `<option value="">No grouping</option>`;
-        const dim = SPLIT_DIMENSIONS[key];
-        const allowed = splitAllowed(state, key);
-        return `<option value="${key}" ${allowed ? "" : "disabled"} ${state.splitBy === key ? "selected" : ""}>${dim.label}</option>`;
-      })
-      .join("");
-    const groupDisabledAttr = matchupOn ? ` disabled title="Row grouping isn't available in matchup mode"` : "";
-    const groupRowsHTML = `<label class="table-toolbar__group-label">Group rows
-      <select class="select select--compact" data-role="group-rows" aria-label="Group rows"${groupDisabledAttr}>${groupOptionsHTML}</select>
-    </label>`;
-
+    // "Group rows" UI control removed (R3 Wave 4, owner decision): the
+    // toolbar's row-grouping <select> (No grouping / Batting position /
+    // Opposition / Dismissal) and its wiring are gone. The underlying
+    // splitBy/SPLIT_DIMENSIONS/splitAllowed plumbing (state.js, and
+    // effectiveSplitDim/rowCountLabel etc. below in this file) is untouched
+    // and still consulted at render/query time — state.splitBy just never
+    // changes from its initial null now that nothing in the UI sets it.
     const columnsBtnHTML = `<button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>`;
 
     // "Graph" bridge button (Batch 3 part 2, decision 43; matchup mode enabled
@@ -1442,8 +1437,8 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     // table's own Vs bucket as one side) — see graph.js's enterFromBridge().
     // An unqueried/empty table has nothing to seed from, so that's the only
     // state that still disables the button, with an honest title rather than
-    // removing it (same reasoning as the presets/Group-rows greying above —
-    // the toolbar's shape never changes between modes).
+    // removing it (same reasoning as the presets greying above — the
+    // toolbar's shape never changes between modes).
     const noResultsForGraph = !rows || rows.length === 0;
     const graphBtnDisabled = noResultsForGraph;
     const graphBtnTitle = noResultsForGraph
@@ -1476,16 +1471,16 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     // Right-most cluster (decision 44d, +Clear in F2): Graph + Columns +
     // Clear grouped together and pushed flush to the card's right edge via
     // .table-toolbar__graph-columns (margin-left: auto in styles.css), in
-    // that order. Vs / Group rows keep their own left-packed cluster so the
-    // two groups can wrap independently on narrow (~380px) viewports without
-    // losing the "flush right" placement of Graph/Columns/Clear.
+    // that order. Vs keeps its own left-packed cluster (R3 Wave 4: Group rows
+    // removed from it) so the two groups can wrap independently on narrow
+    // (~380px) viewports without losing the "flush right" placement of
+    // Graph/Columns/Clear.
     toolbarEl.innerHTML = `
       <div class="table-toolbar__row-count">${rowCountLabel(rows, splitDim)}</div>
       ${presetsBlockHTML}
       <div class="table-toolbar__actions">
         <div class="table-toolbar__controls">
           ${vsSelectHTML}
-          ${groupRowsHTML}
         </div>
         <div class="table-toolbar__graph-columns">
           ${turnIntoGraphBtnHTML}
@@ -1506,14 +1501,6 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         load();
       });
     });
-
-    const groupSelect = toolbarEl.querySelector('[data-role="group-rows"]');
-    if (groupSelect) {
-      groupSelect.addEventListener("change", () => {
-        store.set({ splitBy: groupSelect.value || null });
-        load();
-      });
-    }
 
     const vsSelect = toolbarEl.querySelector('[data-role="matchup-vs"]');
     if (vsSelect) {
