@@ -553,7 +553,18 @@ function boot() {
       // exactly like the table-search box used to do everywhere before this
       // task split it in two.
       mountOmnisearch(headerSearchInputEl, headerSearchResultsEl, {
-        onOpenPlayer: (id, name) => playerPopupController.open(id, name),
+        // R3 Wave 6: picking a player clears the header box back to empty
+        // (ready for the next search) in addition to opening the popup —
+        // unlike the table-search box, where the typed term stays put next
+        // to the "+ name" pin so the user can see what's still narrowing the
+        // result. Dispatching "input" (not just setting .value) keeps
+        // omnisearch.js's own internal state (rows/currentTerm) in sync with
+        // the now-empty box, exactly as if the user had cleared it by hand.
+        onOpenPlayer: (id, name) => {
+          playerPopupController.open(id, name);
+          headerSearchInputEl.value = "";
+          headerSearchInputEl.dispatchEvent(new Event("input", { bubbles: true }));
+        },
         onFilterTable: (text, matches) => triggerHeaderFilterTable(text, matches),
       });
 

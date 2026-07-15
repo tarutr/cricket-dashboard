@@ -138,23 +138,6 @@ export function mountPills(container, store, onChange, onPinChange = onChange) {
       pills.push({ label: `Name: ${term}`, remove: () => store.set({ search: "" }) });
     }
 
-    // Pinned players (task 3b): one removable "+ name" pill per pin. Inert
-    // (greyed, with an explaining title) while matchup "Vs" mode is active —
-    // pins only apply in plain mode (buildMatchupQuery is left completely
-    // untouched, per decision 39's byte-identical-SQL rule) — but the × still
-    // works either way, since un-pinning is always a valid, honest action.
-    const matchupInert = matchupVsActive(s);
-    for (const p of s.pinnedPlayers || []) {
-      pills.push({
-        label: `+ ${p.name}`,
-        inert: matchupInert,
-        title: matchupInert ? "Pinned players don't apply in matchup (Vs) mode" : null,
-        requery: true,
-        remove: () =>
-          store.set({ pinnedPlayers: (store.get().pinnedPlayers || []).filter((x) => x.id !== p.id) }),
-      });
-    }
-
     // Stat conditions (decision 42): one pill per ACTIVE condition (metric +
     // valid value), reading the condition itself. Iterates the raw
     // state.advanced.groups (not advanced.js's activeGroups()) so gi/ci here
@@ -171,6 +154,30 @@ export function mountPills(container, store, onChange, onPinChange = onChange) {
       });
     });
 
+    // Pinned players (task 3b; R3 Wave 6 owner-decided leftover: pushed LAST
+    // so they always render to the right of every filter pill above — a pin
+    // ADDS a player to the result set rather than narrowing it, so it reads
+    // differently and sits differently). `pinned: true` gets the distinct
+    // accent-tint styling (.pill--pinned in styles.css) so it's visually
+    // distinguishable from the neutral filter pills too, not just positioned
+    // after them. Inert (greyed, with an explaining title) while matchup "Vs"
+    // mode is active — pins only apply in plain mode (buildMatchupQuery is
+    // left completely untouched, per decision 39's byte-identical-SQL rule)
+    // — but the × still works either way, since un-pinning is always a valid,
+    // honest action.
+    const matchupInert = matchupVsActive(s);
+    for (const p of s.pinnedPlayers || []) {
+      pills.push({
+        label: `+ ${p.name}`,
+        inert: matchupInert,
+        pinned: true,
+        title: matchupInert ? "Pinned players don't apply in matchup (Vs) mode" : null,
+        requery: true,
+        remove: () =>
+          store.set({ pinnedPlayers: (store.get().pinnedPlayers || []).filter((x) => x.id !== p.id) }),
+      });
+    }
+
     if (pills.length === 0) {
       container.innerHTML = "";
       return;
@@ -179,7 +186,7 @@ export function mountPills(container, store, onChange, onPinChange = onChange) {
     container.innerHTML = `<div class="pills-row">${pills
       .map(
         (p, i) =>
-          `<span class="pill${p.inert ? " pill--inert" : ""}"${p.title ? ` title="${esc(p.title)}"` : ""}>${esc(p.label)} <button type="button" class="pill__x" data-idx="${i}" aria-label="Remove filter">&times;</button></span>`
+          `<span class="pill${p.inert ? " pill--inert" : ""}${p.pinned ? " pill--pinned" : ""}"${p.title ? ` title="${esc(p.title)}"` : ""}>${esc(p.label)} <button type="button" class="pill__x" data-idx="${i}" aria-label="Remove filter">&times;</button></span>`
       )
       .join("")}</div>`;
 

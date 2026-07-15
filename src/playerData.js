@@ -164,21 +164,52 @@ function applyOverlay(baseWhere, overlay, caps) {
  * player has appeared under and display the most recent one, so both the
  * maiden and current names find the same person. player_matches also covers
  * players who were selected but never batted or bowled (decision 9).
+ *
+ * Relevance ranking (R3 Wave 6, owner-decided leftover): tiered so a famous
+ * player surfaces above obscure namesakes —
+ *   1. exact name match (case-insensitive, any of the player's name-history
+ *      rows equals the search term exactly)
+ *   2. prefix match (a name-history row STARTS WITH the term)
+ *   3. everything else (the existing plain substring match)
+ * — and, WITHIN each tier, by the player's whole-database career
+ * appearances (COUNT(DISTINCT match_id) over ALL player_matches rows for
+ * that player_id — every gender/format/date, not the current leaderboard
+ * scope; same aggregate SPEC's canonical "Matches" metric uses) descending,
+ * so e.g. "kohli" surfaces V Kohli above any lesser-known Kohli even though
+ * neither is an exact/prefix hit on "kohli" (both land in tier 3, where
+ * appearances desc breaks the tie). Ties within a tier+appearances bucket
+ * fall back to name asc for determinism. This is the ONE suggestion query
+ * — both the header search and the table search (omnisearch.js, mounted
+ * twice) call it, so the ranking applies identically to both.
  */
 export async function searchPlayers(term) {
   const t = (term || "").trim();
   if (t.length < 2) return [];
+  const et = esc(t);
   const sql = [
     `WITH latest AS (`,
     `  SELECT player_id AS id, arg_max(player_name, match_date) AS name`,
     `  FROM player_matches GROUP BY player_id`,
+    `), appearances AS (`,
+    `  SELECT player_id AS id, COUNT(DISTINCT match_id) AS n`,
+    `  FROM player_matches GROUP BY player_id`,
     `), hits AS (`,
-    `  SELECT DISTINCT player_id AS id FROM player_matches WHERE player_name ILIKE '%${esc(t)}%'`,
+    `  SELECT player_id AS id,`,
+    `    MIN(CASE`,
+    `      WHEN player_name ILIKE '${et}' THEN 0`,
+    `      WHEN player_name ILIKE '${et}%' THEN 1`,
+    `      ELSE 2`,
+    `    END) AS tier`,
+    `  FROM player_matches`,
+    `  WHERE player_name ILIKE '%${et}%'`,
+    `  GROUP BY player_id`,
     `)`,
     `SELECT l.id, l.name, pr.country AS country, pr.playing_role AS playing_role`,
-    `FROM hits h JOIN latest l ON l.id = h.id`,
+    `FROM hits h`,
+    `JOIN latest l ON l.id = h.id`,
+    `LEFT JOIN appearances a ON a.id = h.id`,
     `LEFT JOIN profiles pr ON pr.player_id = l.id`,
-    `ORDER BY l.name`,
+    `ORDER BY h.tier ASC, COALESCE(a.n, 0) DESC, l.name ASC`,
     `LIMIT 25`,
   ].join("\n");
   const { rows } = await query(sql);

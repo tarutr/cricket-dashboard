@@ -1791,6 +1791,20 @@ a { color: var(--color-accent); }
   border-style: dashed;
 }
 
+/* Pinned-player pill tint (R3 Wave 6): pills.js renders "+ Name" pins AFTER
+   every filter pill and flags them `pinned: true` for this class — a pin
+   ADDS a player to the result set rather than narrowing it, so it gets the
+   same low-saturation accent-red tint already used for .advanced-connector__
+   pill (AND/OR) rather than the neutral filter-pill background, keeping the
+   two kinds of pill visually distinct wherever a row mixes both. Coexists
+   with .pill--inert (matchup "Vs" mode) without conflict — that rule only
+   touches opacity/border-style, not color. */
+.pill--pinned {
+  background: var(--color-accent-tint);
+  color: var(--color-accent-strong);
+  border-color: var(--color-accent-tint);
+}
+
 .pill__x {
   position: relative;
   font: inherit;
