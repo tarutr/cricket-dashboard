@@ -1033,19 +1033,12 @@ a { color: var(--color-accent); }
 
 .date-presets { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
 
-.date-preset {
-  font: inherit;
-  font-size: var(--text-sm2);
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--color-line-strong);
-  border-radius: var(--radius-pill);
-  background: var(--color-bg-raised);
-  color: var(--color-fg);
-  cursor: pointer;
-  min-height: 34px;
-}
-.date-preset:hover { border-color: var(--color-fg); }
-.date-preset:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Date preset dropdown (R4 Wave 1a — replaces the old row of 4 preset
+   buttons with one compact <select>; ".select" already supplies the shared
+   look, this just caps its width so it stays compact next to the date
+   inputs rather than stretching to fill the row). */
+.date-preset-select { max-width: 11rem; }
+.date-preset-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .date-required-note { margin: var(--space-2) 0 0; color: var(--color-bad); font-style: normal; }
 
@@ -3208,7 +3201,7 @@ a { color: var(--color-accent); }
 .filters-popup .filter-group--discipline .select { min-width: 6rem; }
 .filters-popup .filter-group--dates .date-range__input { flex: 0 1 8.5rem; }
 .filters-popup .filter-group--dates .date-presets { margin-top: var(--space-1); }
-.filters-popup .date-preset { min-height: 30px; padding: var(--space-1) var(--space-2); font-size: var(--text-sm2); }
+.filters-popup .date-preset-select { min-height: 30px; }
 
 /* ── ROUND 3 (task 7): numeric condition GROUP cards ─────────────────────────
    A single-group / single-condition builder still reads as one plain row (no

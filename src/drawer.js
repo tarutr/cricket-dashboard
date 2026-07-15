@@ -344,6 +344,15 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     return m ? m.label : metricKey;
   }
 
+  // Display-only override for the "+ Add condition…" dropdown OPTION label
+  // (R4 Wave 1a, owner decision): "R. Pos." reads as jargon in that menu.
+  // Everything else that shows this condition type — the row's own type label
+  // (syncSingletonRows sets it to "R. Pos." / "Batting position"), pills, and
+  // the metric label elsewhere — is untouched; SINGLETON_TYPES.rpos.label
+  // ("R. Pos.") stays as-is and still drives those. Scoped to this one builder
+  // function rather than renaming the shared type label globally.
+  const ADD_CONDITION_LABEL_OVERRIDES = { rpos: "Regular position" };
+
   function addSelectOptionsHTML(s) {
     const ns = effectiveNamespace(s);
     const women = s.gender === "female";
@@ -353,7 +362,12 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     const present = SINGLETON_TYPES.filter((t) => isPresent(t, s)).map((t) => t.key);
     const groupOpts = (groupName) =>
       SINGLETON_TYPES.filter((t) => t.group === groupName && !(t.menOnly && women))
-        .map((t) => `<option value="c:${t.key}"${present.includes(t.key) ? " disabled" : ""}>${escHtml(t.label)}</option>`)
+        .map(
+          (t) =>
+            `<option value="c:${t.key}"${present.includes(t.key) ? " disabled" : ""}>${escHtml(
+              ADD_CONDITION_LABEL_OVERRIDES[t.key] || t.label
+            )}</option>`
+        )
         .join("");
     const metricOpts = (list) => list.map((m) => `<option value="m:${escAttr(m.key)}">${escHtml(m.label)}</option>`).join("");
     return `
