@@ -72,7 +72,18 @@
 //                    "peak" (best/extreme of a single innings — High Score, BBI).
 //                    Gates which chart types accept a metric (totals→donut,
 //                    rates/percents→slope, peaks excluded from most); pure
-//                    metadata, orthogonal to sqlExpression.
+//                    metadata, orthogonal to sqlExpression. A 5th value,
+//                    "position" (R3 Wave 5 polish), is used by exactly one
+//                    metric (batting's `r_pos`) — deliberately NOT one of the
+//                    four above so it's excluded from every existing kind-based
+//                    Graph Builder filter (`m.kind === "total"/"rate"/
+//                    "percent"`, `m.additive === true`, `timeseriesSupported`)
+//                    without needing to touch any of that code: a batting
+//                    position is a table-display label, not a summable/
+//                    trend-able/rankable stat.
+//   columnTitle    — optional hover title for the column header (`<th
+//                    title="...">`), beyond the plain shortLabel text. Only
+//                    `r_pos` uses this today.
 
 // ── Batting ───────────────────────────────────────────────────────────────────
 const BATTING_METRICS = [
@@ -386,6 +397,34 @@ const BATTING_METRICS = [
     isPhaseMetric: "odi", zeroIsData: false,
     kind: "rate",
     minSampleComponent: "SUM(odi_death_balls)",
+  },
+  // R. Pos. column (owner decision 46, R3 Wave 5 polish): the player's
+  // statistical MODE of batting_position — ties broken to the LOWEST position
+  // — over the CORE scope (gender/format/date/team_type) ONLY, matching the
+  // existing R. Pos. FILTER's own definition of "regular position" exactly
+  // (filters.js's regularPositionsFilterActive block, commit e71530d) so the
+  // column and the filter can never disagree about what a player's regular
+  // position is. `sqlExpression` here is a placeholder never sent to DuckDB —
+  // this ONE metric needs the live `state` (for the core-scope WHERE inside a
+  // correlated CTE), which the generic "interpolate sqlExpression verbatim"
+  // path can't express, so table.js's buildQuery special-cases this exact key
+  // (see its regularPositionCteSql/wantsRPos). `discipline: "batting"` alone
+  // is what keeps this batting-tables-only: bowling has no metric of this key,
+  // and the matchup namespaces (matchup_batting/matchup_bowling) are separate
+  // disciplines that never see it either — eligibleMetrics(ns, ...) filters by
+  // exact discipline match, so it can only ever appear in the plain batting
+  // column picker.
+  {
+    key: "r_pos",
+    label: "R. Pos.",
+    shortLabel: "R. Pos.",
+    columnTitle: "Regular position — where this player most often bats",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "__R_POS_PLACEHOLDER__", // never interpolated — see comment above
+    higherIsBetter: null, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "position",
   },
 ];
 

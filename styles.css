@@ -1317,6 +1317,24 @@ a { color: var(--color-accent); }
   text-align: right;
 }
 
+/* Column separators (R3 Wave 5 polish, task 7): a subtle 1px vertical rule
+   between every pair of columns, MAIN RESULTS TABLE ONLY — same "owner rule"
+   precedent as the zebra striping just below (.mini-table's own compact
+   breakdown tables keep their existing borderless look; they were never part
+   of this ask). Composes cleanly with zebra: both only ever set
+   background/border, never each other's properties. The last column's own
+   right edge drops the rule so the table doesn't end in a stray line against
+   the card edge. */
+.data-table__th,
+.data-table__td {
+  border-right: 1px solid var(--color-line);
+}
+
+.data-table__th:last-child,
+.data-table__td:last-child {
+  border-right: none;
+}
+
 .data-table__th:first-child,
 .data-table__td:first-child,
 .mini-table th:first-child,
@@ -1331,12 +1349,23 @@ a { color: var(--color-accent); }
   background: var(--color-panel);
 }
 
-/* Thin sticky Player column (task 1, B1 polish): capped width + ellipsis so
-   this column never eats the viewport on tablet/mobile — the name stays
-   sticky/clickable/sortable exactly as before, just visually truncated (the
-   name cell's own `title` attribute, set in table.js, carries the full name
-   on hover/focus; table.js's own truncateName() also pre-shortens the
-   rendered text as a belt-and-suspenders measure — see its doc comment).
+/* Sticky Player column — DYNAMIC width (task 4, R3 Wave 5 polish, replacing
+   the old fixed 10/7/6rem-by-breakpoint tiers + JS truncateName()): table.js
+   measures the widest visible name once per render (an offscreen probe
+   `<table class="data-table">` — see updateStickyColWidth()/
+   widestNameColWidthPx() there) and sets `--sticky-col-w` as an inline style
+   on `.table-scroll` (an ancestor of every th/td here), clamped to a sane
+   ~14rem max — so names almost never truncate on desktop, and the column
+   never sits wider than it needs to for THIS result set. Deliberately no
+   `--sticky-col-w:` value is declared on the selector itself below (only a
+   var() FALLBACK, used before the first render, or if JS ever fails to run)
+   — declaring one here would win over the ancestor's inline value for every
+   element in this rule (custom properties cascade like any other property:
+   an element's own declaration always beats inheriting an ancestor's),
+   defeating the whole mechanism. The ≤640px media query further down
+   (task 8) is the one deliberate exception — it re-declares the property
+   directly on these same selectors, which is exactly what lets it win at
+   that breakpoint regardless of what JS computed.
    Critically this is `width` (a definite size), NOT just `max-width`: per
    the CSS2.1 auto table-layout algorithm, a column only counts as
    "constrained" (opts out of receiving a share of the table's `width: 100%`
@@ -1353,30 +1382,55 @@ a { color: var(--color-accent); }
   left: 0;
   background: var(--color-bg-raised);
   z-index: 1;
-  --sticky-col-w: 10rem;
-  width: var(--sticky-col-w);
-  max-width: var(--sticky-col-w);
+  width: var(--sticky-col-w, 10rem);
+  max-width: var(--sticky-col-w, 10rem);
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Indented-name fix (task 2, R3 Wave 5 polish): `<button class="player-link">`
+   is a `<button>` — browsers' own UA stylesheet defaults a button's internal
+   text-align to `center`, which `.player-link` (styles.css, further down)
+   never overrode (it only resets border/background/padding/color/cursor/
+   text-decoration). Centering inside a block sized to --sticky-col-w reads as
+   "indented" for any name shorter than the column's full width, relative to
+   neighboring rows whose (truncated or longer) names fill more of it — this
+   is the actual root cause, not a leftover class from the old
+   grouping/split rendering. The plain `<span>` fallback (no onPlayerClick)
+   never had this bug (a span's default text-align is inherited, i.e. left,
+   same as its ancestor td), which is why it was only ever visible with
+   player-link buttons live. Explicit `text-align: left` here fixes both
+   forms in one rule, and guards any future non-.player-link button reusing
+   this slot from the same UA default. */
 .data-table__td--sticky .player-link,
 .data-table__td--sticky span {
   display: block;
-  width: var(--sticky-col-w);
+  width: var(--sticky-col-w, 10rem);
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
 }
 
 .data-table tbody tr:nth-child(even) .data-table__td--sticky {
   background: var(--color-panel);
 }
 
-@media (max-width: 768px) {
+/* Mobile (task 8, R3 Wave 5 polish): ≤640px overrides JS's dynamic width back
+   down to a small fixed column (truncating with the ellipsis the base rule
+   above already sets up) plus a slightly smaller font, so more of the table's
+   other columns fit in the same horizontal-scroll viewport — this is a
+   deliberate, permanent exception to "dynamic width" for exactly this
+   breakpoint (see the "Sticky Player column" comment above for why
+   redeclaring --sticky-col-w here, rather than relying on the JS-set
+   ancestor value, is what makes the override actually take effect). */
+@media (max-width: 640px) {
   .data-table__th--sticky,
-  .data-table__td--sticky { --sticky-col-w: 7rem; }
+  .data-table__td--sticky {
+    --sticky-col-w: 6rem;
+    font-size: var(--text-sm);
+  }
 }
 
 /* Shared header-cell language (task 3): uppercase, muted, semibold column
@@ -1420,16 +1474,6 @@ a { color: var(--color-accent); }
   font-weight: 600;
   color: var(--color-fg);
   font-variant-numeric: normal;
-}
-
-/* Muted sub-sample values (decision 44c): a rate/percent value backed by a
-   sample below its metric's floor (src/table.js's SAMPLE_FLOORS) — real data,
-   just thin, so only the text color changes (title carries the "Based on N
-   …" honesty note). Deliberately no other rule here so it composes cleanly
-   with the zebra background and the sticky first column, both of which set
-   background only, never color, on this same element. */
-.data-table__td--thin-sample {
-  color: var(--color-muted);
 }
 
 .data-table__sort-btn {
@@ -1556,12 +1600,41 @@ a { color: var(--color-accent); }
   .columns-popover__disclosure-arrow { transition: none; }
 }
 
-/* Loading overlay */
+/* Loading overlay (task 6, R3 Wave 5 polish, preset-button page-jump fix) ───
+   .table-body-wrap is the positioning context for the overlay: it wraps BOTH
+   the overlay and .table-scroll, and — critically — .table-scroll is never
+   `hidden` during a reload anymore (table.js's renderLoadingState/renderLoaded
+   used to hide it, collapsing the whole card's height to just the overlay's
+   own padding for the duration of every query, which is what jumped the
+   viewport on a preset click: the page got dramatically shorter mid-reload,
+   then snapped back once the new rows painted). The overlay now sits
+   absolutely over the still-visible previous table instead, so the
+   container's height — and the page's scroll position — never moves. */
+.table-body-wrap {
+  position: relative;
+}
 
 .table-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4; /* above the sticky header (z-index: 2/3) and sticky column (1) */
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
   padding: var(--space-6);
   text-align: center;
   font-size: 0.95rem;
+  background: color-mix(in srgb, var(--color-bg) 75%, transparent);
+  backdrop-filter: blur(1px);
+}
+
+/* Show More (task 3, R3 Wave 5 polish): sits below the table, outside the
+   horizontal-scroll region, so it's always reachable without scrolling right
+   first. */
+.table-show-more {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-4) 0;
 }
 
 /* ── Error box ─────────────────────────────────────────────────────────────── */
@@ -2160,8 +2233,10 @@ a { color: var(--color-accent); }
   .data-table__th,
   .data-table__td { padding: var(--space-2) var(--space-3); }
 
-  .data-table__th--sticky,
-  .data-table__td--sticky { --sticky-col-w: 6rem; }
+  /* --sticky-col-w itself is already fixed at 6rem by the ≤640px rule
+     (styles.css, "Mobile" comment near .data-table__th--sticky) — this
+     ≤480px block is a strict subset of that breakpoint, so nothing further
+     is needed here. */
 
   .data-table__sort-btn {
     min-height: 40px;

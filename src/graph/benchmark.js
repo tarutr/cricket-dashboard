@@ -37,38 +37,29 @@
 // Dumbbell's OWN gender/discipline gate, for the same underlying reason: this
 // chart's vocabulary doesn't exist in the matchup namespace).
 //
-// ── Sample floors (decision 44c wave 3; task 2, B1 polish) ───────────────────
-// Reuses table.js's exported SAMPLE_FLOORS AND sampleFloorFor() verbatim
-// (never redefined here) — the latter is the metric-aware override (a
-// dismissals-sampled AVERAGE floors at 5, every other dismissals-sampled
-// metric at the base 3) so this chart's muting never silently drifts from the
-// table's. table.js's own CLASSIFIER functions (sampleUnitFor/isMutableKind,
-// used by its dataCellHTML for the "muted thin sample" cell styling) are NOT
-// exported — same "duplicate the ~10-line private helper rather than edit a
-// file outside this batch's ownership" precedent already established by
-// src/graph/dumbbell.js (BOWLING_TYPE_PREFERENCE/orderBowlingTypes) and
-// src/graph/timeseries.js (per-discipline column maps). Kept byte-for-
-// semantics identical to table.js's own version (verified against table.js
-// at authoring time).
+// ── Sample floors — REMOVED (R3 Wave 5 polish, owner decision) ─────────────
+// table.js no longer exports SAMPLE_FLOORS/sampleFloorFor (the whole
+// min-sample-floor/muting mechanism was removed there): every value in the
+// pool now renders and ranks un-greyed, however thin its backing sample.
+// Direct consequence, surfaced to the owner: computeBenchmarkRows()'s
+// "best other" can now legitimately be a tiny-sample outlier — e.g. a player
+// with one innings and a freak 250.00 strike rate can beat the real
+// contenders and be named #1, where the old floor would have excluded them
+// from the "others" ranking pool. This module still has its own §8.1
+// hasMetricData() gate (NULL/0 rate values are excluded as genuine no-data,
+// per the global rule) — that gate is unrelated to floors and stays exactly
+// as it was.
+// benchmarkFloorNotes() is kept as a stub (below) rather than deleted:
+// graph.js imports and calls it directly (outside this wave's file
+// ownership) for the paper card's footer text — returning `[]` unconditionally
+// means that footer simply never mentions a floor again, which is the
+// correct honest behavior now that none exist (SPEC §8: state only filters
+// actually applied).
 
 import { hasMetricData } from "../metrics.js";
 import { eligibleMetrics } from "../state.js";
-import { buildQuery, SAMPLE_FLOORS, sampleFloorFor } from "../table.js";
+import { buildQuery } from "../table.js";
 import { query } from "../db.js";
-
-// ── Duplicated from table.js (private there) — see file header. ────────────
-function sampleUnitFor(metric) {
-  const expr = metric.minSampleComponent || "";
-  if (/balls/i.test(expr)) return "balls";
-  if (/dismissals|dismissed/i.test(expr)) return "dismissals";
-  if (/wickets/i.test(expr)) return "wickets";
-  if (/fours_hit|sixes_hit|fours_conceded|sixes_conceded/i.test(expr)) return "boundaries";
-  if (/COUNT/i.test(expr)) return "innings";
-  return null;
-}
-function isMutableKind(metric) {
-  return metric.kind === "rate" || metric.kind === "percent";
-}
 
 // ── Category headers (task brief: "group by the metric `kind` field") ──────
 // Structural rule, applied literally: exactly 3 possible headers, one per
@@ -147,7 +138,7 @@ export function defaultBenchmarkMetricKeys(discipline) {
  * given metric keys, over the FULL filtered pool (never restricted to the
  * checked roster — see file header). `matchupVs` is force-cleared (see file
  * header's judgment call).
- * @returns {Promise<Array<object>>} pool rows: {id, name, [key], [key__sample]?}
+ * @returns {Promise<Array<object>>} pool rows: {id, name, [key]}
  */
 export async function fetchBenchmarkPool(state, metricKeys) {
   const poolState = { ...state, matchupVs: null };
@@ -170,38 +161,15 @@ export function groupMetricsByKind(metrics) {
 }
 
 /**
- * Distinct sample-floor descriptors backing the CURRENTLY selected rate/
- * percent metrics, for the paper card's honest footer ("rates/percents: min
- * 30 balls, min 3 dismissals"). Deterministic order (SAMPLE_FLOORS' own key
- * order); a metric with no classifiable unit (sampleUnitFor -> null, e.g. no
- * minSampleComponent at all) contributes nothing rather than a guess.
- *
- * Uses the same per-metric sampleFloorFor() override the muting itself uses,
- * so a selection mixing a dismissals-sampled average (floors at 5) with a
- * dismissals-sampled percent metric (floors at 3) reports both:
- * "min 5 dismissals (averages), min 3 dismissals".
+ * Sample-floor footer notes — REMOVED (R3 Wave 5 polish): there are no more
+ * floors to report, so this always returns `[]` now. Kept as a stub (not
+ * deleted) purely because graph.js imports and calls it directly for the
+ * paper card's footer text and is outside this wave's file ownership;
+ * graph.js's own call site already treats an empty array as "say nothing
+ * about floors", so this is a correct, no-code-elsewhere-touched no-op.
  */
-export function benchmarkFloorNotes(metrics) {
-  // unit -> Set of effective floors across the selected metrics for that unit
-  const floorsByUnit = new Map();
-  for (const m of metrics) {
-    if (!isMutableKind(m)) continue;
-    const unit = sampleUnitFor(m);
-    if (!unit) continue;
-    if (!floorsByUnit.has(unit)) floorsByUnit.set(unit, new Set());
-    floorsByUnit.get(unit).add(sampleFloorFor(m, unit));
-  }
-  return Object.keys(SAMPLE_FLOORS)
-    .filter((unit) => floorsByUnit.has(unit))
-    .flatMap((unit) => {
-      const floors = [...floorsByUnit.get(unit)].sort((a, b) => b - a);
-      if (floors.length === 1) return [`min ${floors[0]} ${unit}`];
-      // Today the only >base floor is the dismissals-average override, so the
-      // higher figure is honestly attributable to averages.
-      return floors.map((f) =>
-        f > SAMPLE_FLOORS[unit] ? `min ${f} ${unit} (averages)` : `min ${f} ${unit}`
-      );
-    });
+export function benchmarkFloorNotes(_metrics) {
+  return [];
 }
 
 /**
@@ -214,12 +182,12 @@ export function benchmarkFloorNotes(metrics) {
  * else: a player (anchor or other) with no data for a metric is out of that
  * metric's ranking entirely.
  *
- * Sample floors (rate/percent metrics only) exclude thin OTHER rows from
- * being a ranking/best-other candidate — the anchor itself is NEVER excluded
- * by the floor (its rank/value are always computed from its real data); if
- * the anchor is itself sub-floor, `anchorMuted` is set so the renderer can
- * mute the value with the standard "Based on N <unit>" title (table.js's own
- * phrasing, reused verbatim for consistency).
+ * Sample floors — REMOVED (R3 Wave 5 polish, owner decision): every row with
+ * real data (hasMetricData) is now a full ranking/"best other" candidate,
+ * however thin its backing sample. FLAGGED CONSEQUENCE: `bestOther` can now
+ * legitimately be a tiny-sample outlier (e.g. one-innings, freak-value
+ * players) rather than a genuine contender — surfaced here since it changes
+ * what "best other" can mean, not silently absorbed.
  *
  * @param {Array<object>} pool fetchBenchmarkPool()'s rows
  * @param {Array<object>} metrics metrics.js metric objects (benchmarkEligibleMetrics-filtered)
@@ -229,15 +197,6 @@ export function benchmarkFloorNotes(metrics) {
 export function computeBenchmarkRows(pool, metrics, anchorId) {
   return metrics.map((metric) => {
     const key = metric.key;
-    const sampleKey = `${key}__sample`;
-    const mutable = isMutableKind(metric);
-    const unit = mutable ? sampleUnitFor(metric) : null;
-    // sampleFloorFor (not a bare SAMPLE_FLOORS[unit] lookup): keeps this in
-    // sync with table.js's own dataCellHTML, including the task-2 override
-    // that floors dismissals-sampled AVERAGES (e.g. Batting Average,
-    // Balls per Dismissal) at 5 rather than the base dismissals floor of 3 —
-    // see sampleFloorFor's doc comment in table.js.
-    const floor = unit != null ? sampleFloorFor(metric, unit) : null;
 
     // §8.1, universal — anchor included.
     const eligible = pool.filter((r) => hasMetricData(metric, r[key]));
@@ -248,19 +207,8 @@ export function computeBenchmarkRows(pool, metrics, anchorId) {
     }
 
     const anchorValue = Number(anchorRow[key]);
-    // Number() coercion matters: DuckDB-WASM returns integer SUMs (e.g. a
-    // dismissals sample) as BigInt — a typeof "number" check would exclude
-    // EVERY row for such metrics ("No qualifying comparison" bug).
-    const anchorSample = mutable && anchorRow[sampleKey] != null ? Number(anchorRow[sampleKey]) : null;
-    const anchorMuted = mutable && floor != null && Number.isFinite(anchorSample) && anchorSample < floor;
 
-    // Floor-exclude OTHERS only (never the anchor) for rate/percent metrics.
-    const others = eligible.filter((r) => {
-      if (r.id === anchorId) return false;
-      if (!mutable || floor == null) return true;
-      const s = Number(r[sampleKey]);
-      return Number.isFinite(s) && s >= floor;
-    });
+    const others = eligible.filter((r) => r.id !== anchorId);
 
     const dir = metric.higherIsBetter; // boolean, never null (pre-filtered by benchmarkEligibleMetrics)
     const rankPool = [anchorRow, ...others].sort((a, b) => {
@@ -319,10 +267,6 @@ export function computeBenchmarkRows(pool, metrics, anchorId) {
       anchorValue,
       anchorRank,
       poolSize,
-      anchorMuted,
-      anchorSample,
-      floor,
-      unit,
       bestOther: bestOther ? { id: bestOther.id, name: bestOther.name, value: Number(bestOther[key]) } : null,
       ratioPct,
       anchorLeads,

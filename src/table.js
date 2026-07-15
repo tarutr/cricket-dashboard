@@ -35,78 +35,6 @@ const TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
 // batted against / bowled to.
 const OPP_COL = { batting: "bowling_team", bowling: "batting_team" };
 
-// ── Muted sub-sample values (decision 44c, B2R wave 3) ──────────────────────
-// With the min-innings base gate removed, a rate/percent leaderboard column
-// can surface a value backed by a tiny sample (e.g. a 100.00 average from one
-// dismissal). Rather than hide these rows (they're real data — §8.1 already
-// hides genuine no-data via hasMetricData/"—"), mute the cell color and add an
-// honest title="Based on N <unit>" so the number is legible but visibly thin.
-//
-// Per-metric-family floor, below which a value is muted. OWNER REVIEWS THESE
-// NUMBERS — only `balls: 30` has an existing precedent (matches the By-year
-// chart's MIN_BALLS_PER_YEAR, src/graph/timeseries.js) and `innings`/
-// `dismissals` were given as examples in the design brief (decision 44c);
-// `wickets` and `boundaries` are this file's own judgment call (no metric in
-// metrics.js uses those units for a rate/percent's minSampleComponent except
-// bowling average/SR — sample is wicket count — and balls-per-boundary —
-// sample is boundary count), sized to the same small-count-denominator
-// reasoning as `dismissals` pending owner sign-off.
-export const SAMPLE_FLOORS = {
-  balls: 30,
-  innings: 5,
-  dismissals: 3,
-  wickets: 3,
-  boundaries: 3,
-};
-
-/** Classify a metric's minSampleComponent (metrics.js's own aggregate SQL for
- * its sample size — never re-derived here) into one of SAMPLE_FLOORS' units,
- * purely by inspecting the expression text. Order matters: checked from most
- * to least specific so no expression matches the wrong unit (verified against
- * every rate/percent metric in metrics.js at authoring time). Returns null for
- * a metric whose sample can't be classified (never muted, rather than guess). */
-function sampleUnitFor(metric) {
-  const expr = metric.minSampleComponent || "";
-  if (/balls/i.test(expr)) return "balls";
-  if (/dismissals|dismissed/i.test(expr)) return "dismissals";
-  if (/wickets/i.test(expr)) return "wickets";
-  if (/fours_hit|sixes_hit|fours_conceded|sixes_conceded/i.test(expr)) return "boundaries";
-  if (/COUNT/i.test(expr)) return "innings";
-  return null;
-}
-
-/** True for exactly the metrics muting can ever apply to — totals and peaks
- * are raw counts/extremes, never "thin", per the owner's rule that only
- * rate/percent metrics can be built from a tiny sample. */
-function isMutableKind(metric) {
-  return metric.kind === "rate" || metric.kind === "percent";
-}
-
-// Owner ruling (task 2, Batch B1 polish): a dismissals-sampled metric that is
-// itself an AVERAGE (kind: "rate" — per the field-reference comment above,
-// "rate" IS the average/SR/economy family) must mute below 5 dismissals, not
-// the base floor of 3 — batting's `average` and `balls_per_dismissal` (an
-// average expressed as balls, not runs, per dismissal) and their
-// matchup_batting counterparts (`average`/`balls_per_dismissal` "vs style").
-// Every OTHER dismissals-sampled metric — the "Out X %" dismissal-kind
-// columns, kind: "percent", a share-of-whole rather than an average — keeps
-// the base floor of 3. Deliberately metric-aware (kind + unit), not a blanket
-// raise of SAMPLE_FLOORS.dismissals, which would also (wrongly) affect those
-// percent columns. Bowling's `average`/economy are wickets-sampled, not
-// dismissals-sampled, and are untouched by this either way.
-const DISMISSALS_AVERAGE_FLOOR = 5;
-
-/** The sample-size floor below which a metric's value renders muted, given
- * its classified sample unit (sampleUnitFor). Single source of truth for both
- * this file's dataCellHTML and graph/benchmark.js's computeBenchmarkRows
- * (which duplicates the surrounding classifier functions but imports this one
- * — see that file's header comment on why it duplicates rather than reaches
- * into this module's other internals). */
-export function sampleFloorFor(metric, unit) {
-  if (unit === "dismissals" && metric.kind === "rate") return DISMISSALS_AVERAGE_FLOOR;
-  return unit ? SAMPLE_FLOORS[unit] : null;
-}
-
 // ── Matchup mode (D4 R3, decision 33) ───────────────────────────────────────
 // "Vs" leaderboard comparison: every row recomputes against one bowling-style
 // bucket (batting view) or batting-hand bucket (bowling view), over the
@@ -383,16 +311,6 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
       aggSelectParts.push(`${appendFilterToAggregates(m.sortExpression, bucketClause)} AS ${m.key}__sort`);
     }
   }
-  // Additive display-only sample-size columns (decision 44c, muted sub-sample
-  // values — same reasoning as buildQuery's plain path above): FILTER'd by the
-  // same bucketClause as the metric itself, so the sample honestly reflects
-  // this bucket, not the player's whole career. Every select item above this
-  // is untouched; this only appends new aliases.
-  for (const m of metrics) {
-    if (isMutableKind(m) && m.minSampleComponent) {
-      aggSelectParts.push(`${appendFilterToAggregates(m.minSampleComponent, bucketClause)} AS ${m.key}__sample`);
-    }
-  }
   for (const { metric, alias } of extraAggColumns) {
     aggSelectParts.push(`${appendFilterToAggregates(metric.sqlExpression, bucketClause)} AS ${alias}`);
   }
@@ -438,9 +356,6 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     passThroughCols.push(m.key);
     if (m.sortExpression) passThroughCols.push(`${m.key}__sort`);
   }
-  for (const m of metrics) {
-    if (isMutableKind(m) && m.minSampleComponent) passThroughCols.push(`${m.key}__sample`);
-  }
   for (const { alias } of extraAggColumns) passThroughCols.push(alias);
   const windowedSql = [
     `SELECT ${passThroughCols.join(", ")},`,
@@ -457,7 +372,6 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     "id",
     "name",
     ...metrics.flatMap((m) => (m.sortExpression ? [m.key, `${m.key}__sort`] : [m.key])),
-    ...metrics.filter((m) => isMutableKind(m) && m.minSampleComponent).map((m) => `${m.key}__sample`),
     "__coverage_total",
     "__coverage_mapped",
   ];
@@ -504,6 +418,16 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
 function conditionToHaving(cond, discipline, exprFn) {
   const metric = getMetric(cond.metricKey, discipline);
   if (!metric) return null;
+  // R. Pos. (task 5) is NOT usable as a stat condition — its sqlExpression is
+  // a non-SQL placeholder (metrics.js), since its real value only exists via
+  // buildQuery's own special-cased CTE/JOIN (regularPositionCteSql), not a
+  // static per-condition expression. The drawer's stat-condition picker
+  // (advanced.js/drawer.js, outside this wave's scope) still lists it as a
+  // pickable metric, so this guard is what keeps a user's pick from ever
+  // reaching SQL — treated as "doesn't apply here", the same honest
+  // degradation an out-of-namespace condition already gets (see
+  // conditionApplicability just below, which this stays in step with).
+  if (metric.kind === "position") return null;
   const expr = exprFn ? exprFn(cond, metric) : metric.sqlExpression;
   if (!expr) return null;
   // §8.1: rate/ratio metrics (zeroIsData:false) treat 0 as "no data" too, so a
@@ -547,7 +471,11 @@ function conditionApplicability(advanced, ns) {
   for (const g of groups) {
     for (const c of g.conds) {
       total += 1;
-      if (getMetric(c.metricKey, ns)) applied += 1;
+      const m = getMetric(c.metricKey, ns);
+      // kind "position" (R. Pos.) is never a usable condition — see
+      // conditionToHaving's guard just above, which this must stay honest
+      // about (never silently count it as "applied").
+      if (m && m.kind !== "position") applied += 1;
     }
   }
   return { total, applied };
@@ -567,6 +495,39 @@ function advancedToHaving(advanced, discipline, exprFn) {
   if (parts.length === 0) return null;
   const topJoiner = advanced.op === "OR" ? " OR " : " AND ";
   return parts.length > 1 ? `(${parts.join(topJoiner)})` : parts[0];
+}
+
+/**
+ * R. Pos. column support (task 5): a `WITH r_pos_cte AS (...)` fragment (the
+ * "WITH " keyword itself is NOT included — the caller prepends it, since this
+ * text is also useful standalone in error messages/tests) computing each
+ * batter's modal batting_position — ties broken to the LOWEST position — over
+ * the CORE scope only (buildCoreScopeClauses: gender/format/date/team_type),
+ * reusing the exact rank shape of the existing R. Pos. FILTER
+ * (filters.js's regularPositionsFilterActive block: `ROW_NUMBER() OVER
+ * (PARTITION BY batter_id ORDER BY COUNT(*) DESC, batting_position ASC)`,
+ * grouped by (batter_id, batting_position) first so COUNT(*) is the innings
+ * count AT that position) so the column can never disagree with what the
+ * filter calls a player's "regular position". The join key is aliased
+ * `pos_batter_id` (see buildQuery's fromSql comment for why it must not be
+ * named `batter_id`). One CTE, one scan of `batting` regardless of how many
+ * output rows the outer query has (a correlated per-row subquery would have
+ * been O(players × rows) instead).
+ */
+function regularPositionCteSql(state) {
+  const coreScope = buildCoreScopeClauses(state).join(" AND ");
+  return [
+    "r_pos_cte AS (",
+    "  SELECT pos_batter_id, pos FROM (",
+    "    SELECT batter_id AS pos_batter_id, batting_position AS pos,",
+    "           ROW_NUMBER() OVER (PARTITION BY batter_id ORDER BY COUNT(*) DESC, batting_position ASC) AS rn",
+    "    FROM batting",
+    `    WHERE ${coreScope} AND batting_position IS NOT NULL`,
+    "    GROUP BY batter_id, batting_position",
+    "  ) ranked",
+    "  WHERE rn = 1",
+    ")",
+  ].join("\n");
 }
 
 /**
@@ -610,20 +571,34 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
     .map((key) => getMetric(key, discipline))
     .filter((m) => m && m.source !== "player_matches");
 
+  // R. Pos. column (task 5, B1 Wave 5 polish): batting-only, opts this ONE
+  // metric out of the generic "interpolate metric.sqlExpression verbatim"
+  // path below. Every other metric's sqlExpression is a static aggregate over
+  // THIS query's own already-filtered rows; R. Pos. instead must reproduce the
+  // existing R. Pos. FILTER's semantics exactly (filters.js's
+  // regularPositionsFilterActive block) — the player's modal batting_position
+  // over the CORE scope only (gender/format/date/team_type), regardless of
+  // whatever team/opposition/position filter is also narrowing this query —
+  // so a player's R. Pos. column value never disagrees with the R. Pos.
+  // filter's own definition of "their regular position". That can't be
+  // expressed as a fixed sqlExpression string (it needs live `state`), so it's
+  // special-cased here: regularPositionCteSql() builds a ONE-PASS CTE (a
+  // ROW_NUMBER-over-count rank, tie-broken to the lowest position — the same
+  // shape as the filter's own subquery) and wantsRPos wires it into the FROM
+  // clause below via a LEFT JOIN, only when the column is actually requested.
+  const wantsRPos = discipline === "batting" && inningsMetrics.some((m) => m.key === "r_pos");
+
   const selectParts = [`${idCol} AS id`, `${nameCol} AS name`];
   if (splitExpr) selectParts.push(`${splitExpr} AS split_value`);
   for (const m of inningsMetrics) {
-    selectParts.push(`${m.sqlExpression} AS ${m.key}`);
-    if (m.sortExpression) selectParts.push(`${m.sortExpression} AS ${m.key}__sort`);
-  }
-  // Additive display-only sample-size columns (decision 44c, muted sub-sample
-  // values): for rate/percent columns only, also SELECT the aggregate backing
-  // their sample size — metrics.js's own minSampleComponent, verbatim, never
-  // re-derived — so the renderer can mute thin-sample cells. Every select item
-  // above this is untouched; this only appends new aliases.
-  for (const m of inningsMetrics) {
-    if (isMutableKind(m) && m.minSampleComponent) {
-      selectParts.push(`${m.minSampleComponent} AS ${m.key}__sample`);
+    if (m.key === "r_pos") {
+      // Constant per (idCol) group (regularPositionCteSql guarantees at most
+      // one row per pos_batter_id) — MAX() is just how a non-aggregate,
+      // functionally-dependent JOIN column is projected out of a GROUP BY.
+      selectParts.push(`MAX(r_pos_cte.pos) AS ${m.key}`);
+    } else {
+      selectParts.push(`${m.sqlExpression} AS ${m.key}`);
+      if (m.sortExpression) selectParts.push(`${m.sortExpression} AS ${m.key}__sort`);
     }
   }
 
@@ -694,9 +669,17 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
   const groupBy = [idCol, nameCol];
   if (splitExpr) groupBy.push(splitExpr);
 
+  // r_pos_cte's join column is deliberately NOT named "batter_id"/"bowler_id"
+  // (i.e. not idCol) — this view and the CTE would then both carry a column
+  // of that exact name post-JOIN, making every existing bare `${idCol}`
+  // reference elsewhere in this SELECT/GROUP BY (batter_id AS id, GROUP BY
+  // batter_id, ...) ambiguous. "pos_batter_id" can never collide.
+  const fromSql = wantsRPos ? `${view} LEFT JOIN r_pos_cte ON r_pos_cte.pos_batter_id = ${idCol}` : view;
+
   const sql = [
+    ...(wantsRPos ? [`WITH ${regularPositionCteSql(state)}`] : []),
     `SELECT ${selectParts.join(", ")}`,
-    `FROM ${view}`,
+    `FROM ${fromSql}`,
     `WHERE ${whereSql}`,
     `GROUP BY ${groupBy.join(", ")}`,
     // No base gate anymore (decision 44c) — HAVING is emitted only when the
@@ -730,24 +713,61 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
   return { sql, matchesSql, splitDim };
 }
 
-// Thin sticky Player column (task 1, B1 polish): the CSS width cap on
-// .data-table__td--sticky (styles.css) alone isn't enough — browsers size an
-// auto-layout `<table>`'s columns from a cell's underlying (nowrap) TEXT
-// content, not the specified width of a nested block element, so a single
-// long name anywhere in a 2,000+ row result set (e.g. "Nelson Jesus
-// Navarrete Aburto") still stretches the whole column well past the CSS cap.
-// Truncating the rendered text itself, here, sidesteps that entirely — the
-// browser never sees text long enough to want a wider column in the first
-// place. NAME_TRUNCATE_CHARS is picked to sit safely under the narrowest CSS
-// cap (6rem/480px); CSS's own overflow/ellipsis (styles.css) is kept as a
-// backstop for the rare remaining case, not the primary mechanism. The
-// title="" attribute (set at both call sites below) always carries the FULL,
-// untruncated name regardless of this.
-const NAME_TRUNCATE_CHARS = 16;
+// ── Dynamic sticky Player column width (task 4, R3 Wave 5 polish) ──────────
+// Replaces the old fixed-width-by-breakpoint + JS truncateName() approach: the
+// column is now sized, once per render, to the widest name actually on
+// screen — so names almost never truncate on desktop — via an offscreen probe
+// `<table class="data-table">` that shares the REAL `.data-table`/
+// `.data-table__td` classes (so padding/font-weight/font-size are read off
+// the genuine cascade, never guessed at in JS), clamped to
+// [STICKY_COL_MIN_PX, STICKY_COL_MAX_PX] and written as an inline
+// `--sticky-col-w` custom property on `.table-scroll` (mountTable's
+// updateStickyColWidth(), called from renderLoaded) — see styles.css's
+// ".data-table__th--sticky, .data-table__td--sticky" rule for why this
+// specific ancestor/property combination is what makes the mobile breakpoint
+// override still win at ≤640px. CSS's own overflow/ellipsis stays as the
+// backstop for anything past STICKY_COL_MAX_PX, or before the very first
+// measurement.
+const STICKY_COL_MIN_PX = 96; // 6rem @ 16px root — same floor the old mobile tier used
+const STICKY_COL_MAX_PX = 224; // 14rem @ 16px root (task 4's "sane max")
 
-function truncateName(name) {
-  const s = name ?? "";
-  return s.length > NAME_TRUNCATE_CHARS ? `${s.slice(0, NAME_TRUNCATE_CHARS - 1)}…` : s;
+let measureProbe = null; // { table, td } — built once, reused for every measurement
+
+function ensureMeasureProbe() {
+  if (measureProbe) return measureProbe;
+  const table = document.createElement("table");
+  table.className = "data-table";
+  table.setAttribute("aria-hidden", "true");
+  table.style.position = "absolute";
+  table.style.visibility = "hidden";
+  table.style.left = "-9999px";
+  table.style.top = "0";
+  table.style.tableLayout = "auto";
+  const tbody = document.createElement("tbody");
+  const tr = document.createElement("tr");
+  const td = document.createElement("td");
+  td.className = "data-table__td";
+  tr.appendChild(td);
+  tbody.appendChild(tr);
+  table.appendChild(tbody);
+  document.body.appendChild(table);
+  measureProbe = { table, td };
+  return measureProbe;
+}
+
+/** Widest rendered width (px) any of `names` would need in a real
+ * `.data-table__td` cell — same classes as a genuine sticky name cell, minus
+ * the `--sticky` modifier's own width/overflow rules (which would make every
+ * measurement identical to the constrained box instead of the natural one). */
+function widestNameColWidthPx(names) {
+  const { td } = ensureMeasureProbe();
+  let max = 0;
+  for (const name of names) {
+    td.textContent = name || "";
+    const w = td.getBoundingClientRect().width;
+    if (w > max) max = w;
+  }
+  return max;
 }
 
 /** Shared display formatter for metric values ("—" for no-data per §8.1). Also used by the player page. */
@@ -769,31 +789,17 @@ export function formatValue(metric, value) {
   }
 }
 
-/** Render one metric's `<td>`, muting the value (decision 44c) when it's a
- * rate/percent column whose backing sample (the `${key}__sample` column added
- * by buildQuery/buildMatchupQuery) is below that unit's floor (sampleFloorFor
- * — SAMPLE_FLOORS' entry, except dismissals-sampled averages, see that
- * function's doc comment). No-data cells ("—") are never muted — hasMetricData
- * already governs that, this is strictly a further honesty layer on real
- * values. Totals/peaks never carry a `${key}__sample` column at all
- * (isMutableKind gates that at query time), so they always take the plain
- * branch. */
+/** Render one metric's `<td>`. Sample-based muting (decision 44c) was removed
+ * (Batch B1 Wave 5, owner decision): every value — however thin its backing
+ * sample — renders identically, plain and un-greyed. §8.1's hasMetricData
+ * still governs "—" for genuine no-data; that's a different, still-live rule. */
 function dataCellHTML(metric, row) {
   const value = row[metric.key];
   const text = formatValue(metric, value);
-  if (isMutableKind(metric) && hasMetricData(metric, value)) {
-    const unit = sampleUnitFor(metric);
-    const floor = sampleFloorFor(metric, unit);
-    // Number() coercion matters: DuckDB-WASM returns integer SUMs (e.g. a
-    // dismissals sample) as BigInt, which would silently fail a typeof
-    // "number" check and leave thin integer-sampled rates unmuted.
-    const sample = Number(row[`${metric.key}__sample`]);
-    if (floor != null && Number.isFinite(sample) && sample < floor) {
-      const title = `Based on ${sample.toLocaleString()} ${sample === 1 ? unit.replace(/s$/, "") : unit}`;
-      return `<td class="data-table__td data-table__td--thin-sample" title="${escAttr(title)}">${text}</td>`;
-    }
-  }
-  return `<td class="data-table__td">${text}</td>`;
+  // data-key (task 9): lets the live drag-reorder preview find "the cell in
+  // THIS row belonging to column X" without any index arithmetic — see
+  // wireColumnDrag's onMove.
+  return `<td class="data-table__td" data-key="${metric.key}">${text}</td>`;
 }
 
 // ── Dismissals column-picker pruning (decision 44/42, B2R wave 3) ───────────
@@ -963,6 +969,16 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
   let scrollEl = null;
   let theadEl = null;
   let tbodyEl = null;
+  let showMoreWrapEl = null;
+  let showMoreBtnEl = null;
+  // Pagination (task 3, B1 Wave 5 polish): how many of the CURRENT lastRows
+  // are actually painted into tbody. Reset to PAGE_SIZE on every fresh load()
+  // and on every client-side re-sort (both are "a new view of the data, start
+  // at the top" per the task) — left untouched by a pure column reorder
+  // (task 9) or by enterView()'s tab-switch restore, so paging back into an
+  // already-expanded table doesn't collapse it again.
+  const PAGE_SIZE = 50;
+  let visibleRowCount = PAGE_SIZE;
 
   function visibleColumns() {
     const state = store.get();
@@ -1033,14 +1049,29 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         <div class="table-toolbar__dynamic"></div>
       </div>
       <div class="table-pills-host" data-role="table-pills-host"></div>
-      <div class="table-loading-overlay" aria-live="polite" hidden>Running query…</div>
-      <div class="table-scroll"><table class="data-table"><thead></thead><tbody></tbody></table></div>
+      <div class="table-body-wrap" data-role="table-body-wrap">
+        <div class="table-loading-overlay" aria-live="polite" hidden>Running query…</div>
+        <div class="table-scroll"><table class="data-table"><thead></thead><tbody></tbody></table></div>
+      </div>
+      <div class="table-show-more" data-role="table-show-more" hidden>
+        <button type="button" class="btn btn--ghost" data-role="show-more-btn"></button>
+      </div>
     `;
     toolbarEl = container.querySelector(".table-toolbar__dynamic");
     overlayEl = container.querySelector(".table-loading-overlay");
     scrollEl = container.querySelector(".table-scroll");
     theadEl = container.querySelector(".data-table thead");
     tbodyEl = container.querySelector(".data-table tbody");
+    showMoreWrapEl = container.querySelector('[data-role="table-show-more"]');
+    showMoreBtnEl = container.querySelector('[data-role="show-more-btn"]');
+    if (showMoreBtnEl) {
+      showMoreBtnEl.addEventListener("click", () => {
+        // Reveal-all-at-once (task 3: "one click"), not another page. Pure
+        // re-render of the already-loaded rows — no requery.
+        visibleRowCount = lastRows.length;
+        renderLoaded(lastRows, lastLoadedState ?? store.get(), lastBowlingTypes);
+      });
+    }
 
     // Filters button (F2): opens the same Filters popup as the empty-state
     // prompt's own button below — bound once here since, unlike the
@@ -1069,6 +1100,8 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     scrollEl = null;
     theadEl = null;
     tbodyEl = null;
+    showMoreWrapEl = null;
+    showMoreBtnEl = null;
   }
 
   /**
@@ -1103,6 +1136,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     lastQueryStateKey = null;
     lastLoadedState = null;
     lastSplitDim = null;
+    visibleRowCount = PAGE_SIZE;
     container.innerHTML = `
       <div class="table-prompt">
         <p class="table-prompt__text">Set your filters, then search.</p>
@@ -1167,7 +1201,10 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     // reordered via drag — see wireColumnDrag. The sticky Player column and
     // the structural split/coverage columns (rendered elsewhere in
     // renderLoaded, never through this function) never get this class.
-    return `<th data-key="${metric.key}" class="data-table__th data-table__th--draggable ${isSorted ? "is-sorted" : ""}" scope="col">
+    // `columnTitle` (task 5, R. Pos.): an optional metrics.js field for a
+    // header hover title beyond the plain label — most metrics omit it.
+    const titleAttr = metric.columnTitle ? ` title="${escAttr(metric.columnTitle)}"` : "";
+    return `<th data-key="${metric.key}" class="data-table__th data-table__th--draggable ${isSorted ? "is-sorted" : ""}" scope="col"${titleAttr}>
       <button type="button" class="data-table__sort-btn">${metric.shortLabel}${arrow}</button>
     </th>`;
   }
@@ -1290,6 +1327,46 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     let startX = null;
     let dragging = false;
     let moved = false;
+    // Live preview (task 9): the last (overKey, side) pair actually APPLIED to
+    // the DOM, so moveColumnDom only runs when the target genuinely changes,
+    // not on every pointermove tick.
+    let appliedOverKey;
+    let appliedSide;
+
+    /** Actually move `th` — and every currently-rendered row's matching
+     * `<td data-key="key">` — to sit before/after the column identified by
+     * `overKey`, or to the very end when `overKey` is null (dragged past the
+     * last column). Real DOM moves (Element.before()/after() MOVE an
+     * already-attached node, they don't clone it) rather than a CSS trick;
+     * cheap enough to do on every target change because at most PAGE_SIZE
+     * rows are ever rendered (task 3's pagination keeps this bounded
+     * regardless of how many players the query returned). Purely a VISUAL
+     * preview — the committed column order (state.columns[ns]) only changes
+     * on drop, in onUp below, via reorderColumns; a full renderLoaded() after
+     * a real drop rebuilds the DOM from that committed order anyway, so
+     * there's nothing here that ever needs an explicit "revert". */
+    function moveColumnDom(overKey, side) {
+      const targetTh = overKey ? theadEl.querySelector(`.data-table__th--draggable[data-key="${overKey}"]`) : null;
+      if (targetTh) {
+        if (side === "after") targetTh.after(th);
+        else targetTh.before(th);
+      } else {
+        const headerRow = theadEl.querySelector("tr");
+        if (headerRow) headerRow.appendChild(th);
+      }
+      for (const tr of tbodyEl.querySelectorAll("tr")) {
+        const draggedTd = tr.querySelector(`td[data-key="${key}"]`);
+        if (!draggedTd) continue; // sticky/coverage/split cells never carry data-key
+        if (overKey) {
+          const targetTd = tr.querySelector(`td[data-key="${overKey}"]`);
+          if (!targetTd) continue;
+          if (side === "after") targetTd.after(draggedTd);
+          else targetTd.before(draggedTd);
+        } else {
+          tr.appendChild(draggedTd);
+        }
+      }
+    }
 
     function onMove(e) {
       if (startX === null) return;
@@ -1311,11 +1388,19 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
           break;
         }
       }
+      const overKey = target ? target.dataset.key : null;
+      const effectiveSide = target ? side : null;
       if (target) {
         target.classList.add(side === "before" ? "data-table__th--drop-before" : "data-table__th--drop-after");
-        dragState = { key, ns, overKey: target.dataset.key, side };
-      } else {
-        dragState = { key, ns, overKey: null, side: null };
+      }
+      dragState = { key, ns, overKey, side: effectiveSide };
+      // Only touch the DOM when the drop target actually changed — every
+      // other pointermove tick (moving within the same target's bounds) is a
+      // no-op here, same as the old indicator-only version was.
+      if (overKey !== appliedOverKey || effectiveSide !== appliedSide) {
+        moveColumnDom(overKey, effectiveSide);
+        appliedOverKey = overKey;
+        appliedSide = effectiveSide;
       }
     }
 
@@ -1330,6 +1415,8 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
       }
       dragState = null;
       startX = null;
+      appliedOverKey = undefined;
+      appliedSide = undefined;
       if (moved) {
         // Swallow the click the browser fires right after this pointerup so
         // a real drag never ALSO re-sorts by this column — capturing means
@@ -1540,23 +1627,45 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
 
   /** Mid-query state: the toolbar stays mounted and fully interactive-looking
    * (only its row-count slot reads "Loading…"); the table area shows the
-   * existing "Running query…" overlay in place of the table-scroll, which is
-   * hidden rather than emptied (Batch 1 mechanical fix — see mountTable's
-   * skeleton doc comment). */
+   * existing "Running query…" overlay ON TOP of whatever was already painted
+   * in table-scroll (task 6 fix — see .table-body-wrap in styles.css). The
+   * PREVIOUS query's rows/thead stay in the DOM, unhidden, underneath the
+   * overlay for the duration of the reload: `.table-scroll` never used to be
+   * hidden here (Batch 1 mechanical fix's own comment above used to say so —
+   * corrected), which is exactly what caused task 6's preset-button page-jump:
+   * hiding a tall `.table-scroll` collapsed the container's height to just the
+   * overlay's, and restoring it after load() shifted the viewport. Keeping the
+   * old table visible (dimmed by the overlay's own backdrop) keeps the height
+   * — and the scroll position — stable across the whole reload. */
   function renderLoadingState(state, bowlingTypes = lastBowlingTypes) {
     ensureSkeleton();
     overlayEl.hidden = false;
-    scrollEl.hidden = true;
     renderToolbar(state, null, bowlingTypes);
+  }
+
+  /** Set `--sticky-col-w` (styles.css) from the widest name in `names`, once
+   * per render — see the module-level "Dynamic sticky Player column width"
+   * comment above widestNameColWidthPx. Set on `.table-scroll` (an ancestor
+   * of every th/td in this table), clamped to
+   * [STICKY_COL_MIN_PX, STICKY_COL_MAX_PX]. */
+  function updateStickyColWidth(names) {
+    const measured = names.length ? widestNameColWidthPx(names) : 0;
+    const clamped = Math.min(Math.max(measured, STICKY_COL_MIN_PX), STICKY_COL_MAX_PX);
+    scrollEl.style.setProperty("--sticky-col-w", `${Math.ceil(clamped)}px`);
   }
 
   /** Loaded state: fills in the table head/body and the toolbar's final row
    * count, then rebinds the table's own listeners (sort, player links).
-   * `rows` must already be the split/matchup-aware, sorted rows for `state`. */
+   * `rows` must already be the split/matchup-aware, sorted rows for `state`.
+   *
+   * Pagination (task 3, R3 Wave 5 polish): only the first `visibleRowCount`
+   * rows are actually painted into tbody — `rows` itself stays the FULL
+   * result set throughout (renderToolbar's row-count slot, and the Show More
+   * button's remaining-count label, both read `rows.length`, the TOTAL,
+   * exactly as the task requires; only tbody's own contents are sliced). */
   function renderLoaded(rows, state, bowlingTypes = lastBowlingTypes) {
     ensureSkeleton();
     overlayEl.hidden = true;
-    scrollEl.hidden = false;
 
     const matchupOn = matchupVsActive(state);
     const ns = effectiveDiscipline(state);
@@ -1582,7 +1691,10 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         ${cols.map((m) => headerCellHTML(m, state)).join("")}
       </tr>`;
 
-    tbodyEl.innerHTML = rows
+    const pageRows = rows.slice(0, visibleRowCount);
+    updateStickyColWidth(pageRows.map((r) => r.name ?? ""));
+
+    tbodyEl.innerHTML = pageRows
       .map((row) => {
         const coverageTd = matchupOn
           ? `<td class="data-table__td data-table__td--coverage">${coverageLabel(row.coverage)}</td>`
@@ -1591,20 +1703,28 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
           ? `<td class="data-table__td data-table__td--split">${row.split_value == null ? "—" : escHtml(row.split_value)}</td>`
           : "";
         const cells = cols.map((m) => dataCellHTML(m, row)).join("");
-        // Player names link to the player page (R2, decision 29). `title`
-        // (task 1) carries the FULL name (never truncated) so it's still
-        // readable on hover/focus; the visible text is pre-truncated in JS
-        // (truncateName — see its doc comment for why CSS ellipsis alone
-        // isn't enough) — the sticky/click/sort behaviour itself is
-        // otherwise untouched.
+        // Player names link to the player page (R2, decision 29). The full
+        // name is now always the rendered text (task 4 replaced JS
+        // pre-truncation with a dynamically-sized column — see
+        // widestNameColWidthPx's doc comment); `title` still carries it too,
+        // for the rare case a name still overflows (very long outlier name,
+        // or the ≤640px mobile tier, task 8) and CSS ellipsis takes over.
         const fullName = row.name ?? "";
-        const shownName = truncateName(fullName);
         const nameCell = onPlayerClick
-          ? `<button type="button" class="player-link" data-player-id="${escAttr(row.id ?? "")}" title="${escAttr(fullName)}">${escHtml(shownName)}</button>`
-          : `<span title="${escAttr(fullName)}">${escHtml(shownName)}</span>`;
+          ? `<button type="button" class="player-link" data-player-id="${escAttr(row.id ?? "")}" title="${escAttr(fullName)}">${escHtml(fullName)}</button>`
+          : `<span title="${escAttr(fullName)}">${escHtml(fullName)}</span>`;
         return `<tr><td class="data-table__td data-table__td--sticky">${nameCell}</td>${coverageTd}${splitTd}${cells}</tr>`;
       })
       .join("");
+
+    // Show More (task 3): reveals the rest in one click, not another page.
+    if (showMoreWrapEl && showMoreBtnEl) {
+      const remaining = rows.length - pageRows.length;
+      showMoreWrapEl.hidden = remaining <= 0;
+      if (remaining > 0) {
+        showMoreBtnEl.textContent = `Show More (${remaining.toLocaleString()} player${remaining === 1 ? "" : "s"})`;
+      }
+    }
 
     renderToolbar(state, rows, bowlingTypes);
 
@@ -1634,6 +1754,8 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         // sort, not whichever one was current as of the last actual load().
         lastQueryStateKey = serializeQueryState(next);
         lastLoadedState = next;
+        // Task 3: a new sort order is "a new view of the data" — back to page 1.
+        visibleRowCount = PAGE_SIZE;
         renderLoaded(lastRows, next, bowlingTypes);
       });
     });
@@ -1960,6 +2082,9 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
       lastRows = sorted;
       lastQueryStateKey = serializeQueryState(state);
       lastLoadedState = state; // F2: enterView() renders against this snapshot
+      // Task 3: every fresh query (a search, a preset, a column/Vs change) is
+      // "a new view of the data" — back to page 1, same as a re-sort.
+      visibleRowCount = PAGE_SIZE;
       renderLoaded(sorted, state, bowlingTypes);
       // The columns popover (if open) lives outside `container` precisely so
       // this reload never destroys it (Batch 3 fix 3) — re-find its anchor in
