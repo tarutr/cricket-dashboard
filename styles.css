@@ -1234,8 +1234,10 @@ a { color: var(--color-accent); }
 .table-toolbar__search {
   position: relative;
   flex: 1 1 auto;
-  min-width: 9rem;
-  max-width: 16rem;
+  min-width: 8rem;
+  /* R3 Wave 4 one-row budget: 16rem → 10rem so Filters+search+count+presets+
+     Vs+Graph/Columns/Clear fit one row at 1280px (measured 1224 vs 1166). */
+  max-width: 10rem;
 }
 
 .table-toolbar__search .input {
@@ -1881,7 +1883,7 @@ a { color: var(--color-accent); }
 .table-toolbar__presets {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--space-1); /* space-2 → space-1: R3 Wave 4 one-row budget */
   align-items: center;
 }
 
@@ -3903,7 +3905,9 @@ a { color: var(--color-accent); }
    contained (not reliant on the .table-toolbar__group-label ancestor) so
    the modifier works wherever a compact select is reused. */
 .select--compact {
-  max-width: 11rem;
+  /* 11rem → 8.5rem: R3 Wave 4 one-row toolbar budget; dropdown panel still
+     opens at full label width, only the closed control is capped. */
+  max-width: 8.5rem;
 }
 
 .table-toolbar__matchup-note {

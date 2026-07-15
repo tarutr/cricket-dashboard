@@ -158,8 +158,15 @@ owner go between):
   default metric on chart-type click, 'Recommended' tag only AFTER a metric is
   chosen, metric persists across chart types (invalid metric for a type -> honest
   message, no silent swap, no graph), restore '← Back to your table' link.
-- R3 Wave 4 (solo, sonnet): [1B-3] one-row page header, subtitle REMOVED entirely,
-  one-row toolbar, remove 'Group rows' control (owner notes 11-13).
+- R3 Wave 4 DONE + VERIFIED (2026-07-15): 0244e18 (agent: subtitle node +
+  updateScopeSentence + Group rows select/wiring removed; grouping internals
+  dormant in state.js/table.js, describeScope now dead — future cleanup) +
+  orchestrator CSS fit fix (agent's width arithmetic was ~60px over: search
+  max-width 16rem→10rem, .select--compact 11rem→8.5rem, presets gap
+  space-2→space-1). Verified live at 1280: header one row (empty + loaded),
+  toolbar one row (Filters|search|count|presets|Vs|Graph/Columns/Clear-red),
+  2,813 baseline (data rolled to 15 Jul; day-bounded anchors immune),
+  375px wraps gracefully, Graphs back-link → intact table, console clean.
 Then: full verification pass + fresh-eyes review, present GATE for round 3. Parked
 by owner: format-specific table presets + column sets; per-event date windows;
 mobile charts; player-popup graphing; global font/space shrink (all 'later
