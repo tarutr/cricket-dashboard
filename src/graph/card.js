@@ -68,9 +68,10 @@ function slugify(text) {
  *   - clean seed, ranked by a DIFFERENT metric -> "top N by <that metric>"
  *   - manually edited (or provenance unknown/unresolvable) -> "N players"
  * `displayedMetricKey` is the metric key this chart is ranking/showing (bar's
- * metric, donut's metric); radar has no single "displayed" metric (it shows a
- * GROUP), so it passes null and always takes the "by X" or "N players"
- * branch — there's no metric it could coincidentally match. Scatter makes no
+ * metric, donut's metric); radar has no single "displayed" metric (it shows
+ * several chosen metric axes at once), so it passes null and always takes the
+ * "by X" or "N players" branch — there's no metric it could coincidentally
+ * match. Scatter makes no
  * count claim ("X vs Y") so it never calls this at all.
  */
 function rankedCountPhrase(baseLabel, playerCount, roster, displayedMetricKey) {
@@ -104,7 +105,13 @@ export function autoTitle(config) {
     return `${config.metricX.label} vs ${config.metricY.label}`;
   }
   if (type === "radar") {
-    return rankedCountPhrase(config.group.label, config.playerCount, config.roster, null);
+    // R4 Wave 1b (item 3): radar has no fixed group name anymore — it draws the
+    // user's chosen metric axes. Title stays a generic "Radar" base plus the
+    // same honest count phrasing (never "top N" bare — a radar shows several
+    // metrics at once, so there's no single displayed metric key that could
+    // match a seed's ranking metric); the axes themselves are labelled on the
+    // chart. `null` displayedMetricKey => always "by X" or "N players".
+    return rankedCountPhrase("Radar", config.playerCount, config.roster, null);
   }
   if (type === "phases") {
     // Same "group, not a single displayed metric" shape as radar — a family
@@ -165,7 +172,11 @@ function regenKeyFor(config) {
   const { type } = config;
   if (type === "bar" || type === "donut") return JSON.stringify([type, config.metric.key]);
   if (type === "scatter") return JSON.stringify([type, config.metricX.key, config.metricY.key]);
-  if (type === "radar") return JSON.stringify([type, config.group.id]);
+  // R4 Wave 1b (item 3): radar's title-edit identity is now its chosen axis
+  // set (metricKeys) rather than a group id — changing which metrics are on the
+  // radar should invalidate a manually-edited title exactly like swapping a
+  // group used to.
+  if (type === "radar") return JSON.stringify([type, config.metricKeys]);
   if (type === "phases") return JSON.stringify([type, config.family.id]);
   // Slope's title embeds the window ranges themselves, so a window-date
   // change must invalidate a manually-edited title exactly like a metric

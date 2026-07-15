@@ -4,7 +4,7 @@
 // part 1, decision 43). Each family is a small ordered list of metric KEYS
 // from src/metrics.js ONLY — no new metric vocabulary defined here (§8.2).
 //
-// Gating mirrors src/graph/radarGroups.js exactly: a family is offered only
+// Gating: a family is offered only
 // when EVERY one of its member metric keys currently resolves via
 // eligibleMetrics(discipline, formats) — i.e. the T20-range families surface
 // only under the exact T20 format scope their phase metrics require
@@ -60,8 +60,8 @@ const PHASE_FAMILIES = {
 
 /**
  * Families currently eligible for `discipline` under the current `formats`
- * scope — same all-members-must-be-eligible gate as radarGroups.js's
- * eligibleRadarGroups(). "Innings build-up SR" uses non-phase metric keys, so
+ * scope — an all-members-must-be-eligible gate. "Innings build-up SR" uses
+ * non-phase metric keys, so
  * it's always eligible; the T20 phase families are restricted to the T20
  * bucket because their member metrics fail phaseMetricAllowed elsewhere.
  */

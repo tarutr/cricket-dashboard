@@ -890,8 +890,13 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
  * outward always means better) — computed ONCE across every CHARTED player,
  * exactly as before, just rendered as N single-dataset charts instead of one
  * multi-dataset chart. Tooltips still show the REAL (unscaled) values. A
- * player missing hasMetricData for ANY metric in the group is excluded from
- * the whole grid (visible note, same rule as before).
+ * player missing hasMetricData for ANY of the selected metrics is excluded
+ * from the whole grid (visible note, same rule as before).
+ *
+ * R4 Wave 1b (item 3): `metrics` is now the user's individually-checked radar
+ * metric set (up to 10), not a fixed group's members — this renderer never
+ * cared where the array came from, so only the removed `group` passthrough
+ * changed here.
  *
  * The grid is built as a sibling of `canvas` inside the paper card's chart
  * area (canvas.parentElement — card.js's `.paper-card__chart-area`), so it's
@@ -903,7 +908,7 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
  * destroyIfExists(chartRef)) cleans this up for free, no special-casing
  * needed elsewhere.
  */
-export function buildRadarSmallMultiples(canvas, chartRef, { group, metrics, rowsById, players }) {
+export function buildRadarSmallMultiples(canvas, chartRef, { metrics, rowsById, players }) {
   destroyIfExists(chartRef);
 
   const chartArea = canvas.parentElement;
@@ -1013,5 +1018,5 @@ export function buildRadarSmallMultiples(canvas, chartRef, { group, metrics, row
     },
   };
 
-  return { excluded, group };
+  return { excluded };
 }

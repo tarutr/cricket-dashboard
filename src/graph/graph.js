@@ -33,7 +33,6 @@ import {
   buildSlopeChart,
 } from "./charts.js";
 import { mountCard } from "./card.js";
-import { eligibleRadarGroups } from "./radarGroups.js";
 import { eligiblePhaseFamilies } from "./phaseFamilies.js";
 import { timeseriesSupported, buildTimeseriesQuery } from "./timeseries.js";
 import { buildTimeseriesChart } from "./timeseriesChart.js";
@@ -187,6 +186,25 @@ function donutEligibleMetrics(discipline, formats) {
   return eligibleMetrics(discipline, formats).filter((m) => m.additive === true);
 }
 
+// R4 Wave 1b (item 3 + item 4): the radar-valid metric predicate — the ONE
+// source both the radar checkbox picker's list AND the honest-refusal/enable
+// checks read from (no second copy of the rule). A metric is radar-valid iff
+// it's eligible for the scope AND has a defined better-direction
+// (higherIsBetter !== null). The radar normalises each axis 0.1–1.0 by
+// min/max across the charted players and inverts lower-is-better metrics so
+// "outward = better" always holds (see charts.js buildRadarSmallMultiples), so
+// a metric with NO better-direction (dismissal breakdowns, not-out %, raw
+// matches/innings/balls) can't be honestly placed on an axis. This is a
+// SUPERSET of every metric the old curated radarGroups.js groups ever offered
+// (all of those had a defined direction), so nothing that was radar-able before
+// is lost — the group *structure* is gone, the metric vocabulary is not.
+function radarEligibleMetrics(discipline, formats) {
+  return eligibleMetrics(discipline, formats).filter((m) => m.higherIsBetter !== null);
+}
+// Min axes to draw a meaningful radar polygon; max the user may check at once.
+const RADAR_MIN_METRICS = 3;
+const RADAR_MAX_METRICS = 10;
+
 // Owner decision 46 ("Graph this player" chooser, src/playerGraphChooser.js):
 // mountGraph() is only ever called once per page load (one Graphs panel), so
 // a module-level pointer to the live instance lets OTHER modules — the
@@ -217,6 +235,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // the graph's edits. Graph-filter edits never change this key because they
   // write to `store`, not `statsStore`.
   let lastStatsScopeKey = null;
+  // R4 Wave 1b (item 1 — standalone graph): true once the user has applied a
+  // VALID graph-local scope via "Apply to graph" at least once. The Graph
+  // Builder no longer depends on a prior Stats search: an applied graph scope
+  // is a first-class trigger for seeding the candidate pool (seedSelection's
+  // gate reads this OR hasStatsResults), and it re-words the empty-state so a
+  // fresh load points at the graph's own Filters button rather than dead-ending
+  // on "Run a search on the Stats tab first."
+  let graphScopeApplied = false;
 
   container.innerHTML = `
     <div class="graph-builder">
@@ -342,7 +368,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   let donutMetricKey = null;
   let scatterXKey = null;
   let scatterYKey = null;
-  let radarGroupId = null;
+  // R4 Wave 1b (item 3): radar no longer uses fixed metric GROUPS. The user
+  // now checks INDIVIDUAL radar-valid metrics (radarEligibleMetrics below) in a
+  // dropdown, up to RADAR_MAX_METRICS, and ONE radar is drawn with them as
+  // axes. `radarMetricKeys` is that ordered selection (catalogue order, pruned
+  // to what's currently eligible on every render). >= RADAR_MIN_METRICS are
+  // needed to draw a meaningful polygon (fewer shows honest guidance).
+  let radarMetricKeys = [];
   let phaseFamilyId = null;
   let slopeMetricKey = null;
   // {from,to} "YYYY-MM" pairs, or null until ensureSlopeWindowDefaults() first
@@ -430,9 +462,17 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * eligibility/floor checks take over from there). */
   function poolStatusReason() {
     if (selection.candidateCount() > 0) return null;
-    return hasStatsResults()
-      ? "No players match your current filters — adjust them on the Stats tab and search again."
-      : "Run a search on the Stats tab first.";
+    // The pool always seeds from the GRAPH-LOCAL scope (seedFromFilteredSet
+    // reads `store`), so an empty pool has exactly two honest causes:
+    //  • a scope has been searched (Stats search, or a graph "Apply to graph")
+    //    but matches nobody -> tell the user to adjust and search/apply again;
+    //  • nothing has ever been searched -> point at BOTH entry points (the
+    //    Stats tab AND this graph's own Filters button — item 1: the empty
+    //    state must no longer dead-end on Stats alone).
+    if (hasStatsResults() || graphScopeApplied) {
+      return "No players match the current filters — adjust them and apply again, or search on the Stats tab.";
+    }
+    return "Run a search on the Stats tab first, or set filters here and apply.";
   }
 
   const selection = createSelection({
@@ -762,30 +802,94 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         onRankMetricChanged();
       });
     } else if (chartType === "radar") {
-      const groups = eligibleRadarGroups(discipline, formats);
-      // item 4: no auto-pick — require an explicit group choice (radar has no
-      // single "metric", so its group selector is the pick that specifies it).
-      if (radarGroupId && !groups.some((g) => g.id === radarGroupId)) radarGroupId = null;
+      // R4 Wave 1b (item 3): a checkbox dropdown of INDIVIDUAL radar-valid
+      // metrics (no more fixed groups), max RADAR_MAX_METRICS. Mirrors the
+      // Benchmark metric multi-select's markup/wiring (the shared .dropdown
+      // pattern) — the difference is a max-only cap (no min FLOOR that
+      // auto-refills; item 3's "no auto-pick" means an empty radar stays empty
+      // until the user checks metrics), and a small in-panel note at the cap.
+      const eligible = radarEligibleMetrics(discipline, formats);
+      // Prune any keys no longer eligible (phase gating / discipline switch),
+      // preserving selection order; NEVER auto-fill toward a floor.
+      radarMetricKeys = radarMetricKeys.filter((k) => eligible.some((m) => m.key === k));
       els.metricControls.innerHTML = `
-        <span class="graph-control-label">Metric group</span>
-        <select class="select graph-metric-select" data-role="radar-group">
-          ${
-            groups.length
-              ? `<option value="" ${!radarGroupId ? "selected" : ""}>Choose a metric group…</option>` +
-                groups.map((g) => `<option value="${escAttr(g.id)}" ${g.id === radarGroupId ? "selected" : ""}>${escHtml(g.label)}</option>`).join("")
-              : `<option value="">No groups available for this scope</option>`
-          }
-        </select>
+        <span class="graph-control-label">Metrics (axes)</span>
+        <div class="dropdown graph-radar-metrics" data-role="radar-metrics-dropdown">
+          <button type="button" class="select dropdown__toggle" data-role="radar-metrics-toggle" aria-haspopup="true" aria-expanded="false" ${eligible.length ? "" : "disabled"}></button>
+          <div class="dropdown__panel graph-radar-metrics__panel" data-role="radar-metrics-panel" hidden>
+            <p class="graph-radar-metrics__note" data-role="radar-metrics-note" hidden></p>
+            ${
+              eligible.length
+                ? eligible
+                    .map(
+                      (m) => `<label class="dropdown__item">
+                        <input type="checkbox" data-metric-key="${escAttr(m.key)}" ${radarMetricKeys.includes(m.key) ? "checked" : ""} />
+                        <span>${escHtml(m.label)}</span>
+                      </label>`
+                    )
+                    .join("")
+                : `<p class="graph-radar-metrics__group-label">No radar metrics available for this scope</p>`
+            }
+          </div>
+        </div>
       `;
-      const sel = els.metricControls.querySelector('[data-role="radar-group"]');
-      if (sel) {
-        sel.addEventListener("change", (e) => {
-          radarGroupId = e.target.value || null;
-          if (radarGroupId) metricEverChosen = true;
+      const radarToggle = els.metricControls.querySelector('[data-role="radar-metrics-toggle"]');
+      const radarPanel = els.metricControls.querySelector('[data-role="radar-metrics-panel"]');
+      const radarNote = els.metricControls.querySelector('[data-role="radar-metrics-note"]');
+      const radarCheckboxes = () => els.metricControls.querySelectorAll('[data-role="radar-metrics-panel"] input[type="checkbox"]');
+
+      // Cap guard: once RADAR_MAX_METRICS are checked, every UNchecked box is
+      // disabled with an explanatory tooltip (the established cap-block idiom,
+      // e.g. filters.js's format/team-type dropdowns and the Benchmark picker)
+      // and an in-panel note appears. There is no minimum floor here.
+      function syncRadarMetricsUI() {
+        radarToggle.textContent = eligible.length
+          ? radarMetricKeys.length
+            ? `${radarMetricKeys.length} of ${eligible.length} metrics`
+            : "Choose metrics…"
+          : "No metrics available";
+        const atCap = radarMetricKeys.length >= RADAR_MAX_METRICS;
+        if (radarNote) {
+          radarNote.hidden = !atCap;
+          radarNote.textContent = atCap ? `Up to ${RADAR_MAX_METRICS} metrics — untick one to swap.` : "";
+        }
+        radarCheckboxes().forEach((cb) => {
+          const checked = radarMetricKeys.includes(cb.dataset.metricKey);
+          cb.checked = checked;
+          const blocked = !checked && atCap;
+          cb.disabled = blocked;
+          cb.closest(".dropdown__item").classList.toggle("is-disabled", blocked);
+          cb.title = blocked ? `Pick at most ${RADAR_MAX_METRICS} metrics` : "";
+        });
+      }
+      syncRadarMetricsUI();
+
+      radarCheckboxes().forEach((cb) => {
+        cb.addEventListener("change", () => {
+          const k = cb.dataset.metricKey;
+          const set = new Set(radarMetricKeys);
+          if (cb.checked) {
+            if (set.size >= RADAR_MAX_METRICS) {
+              cb.checked = false; // defensive: disabled should already prevent this
+              return;
+            }
+            set.add(k);
+          } else {
+            set.delete(k);
+          }
+          // Preserve catalogue order so axes are stable regardless of tick order.
+          radarMetricKeys = eligible.map((m) => m.key).filter((mk) => set.has(mk));
+          if (radarMetricKeys.length) metricEverChosen = true;
+          syncRadarMetricsUI();
           syncChartTypeButtons();
           scheduleRender({ paramsChanged: true });
         });
-      }
+      });
+
+      // Same rebuilt-each-render caveat as the Benchmark dropdown (see its
+      // JUDGMENT CALL note): wireDropdown() re-attaches document listeners on
+      // the fresh nodes; the previous rebuild's detached ones are inert no-ops.
+      if (radarToggle && radarPanel && eligible.length) wireDropdown(radarToggle, radarPanel);
     } else if (chartType === "phases") {
       const families = eligiblePhaseFamilies(discipline, formats);
       // item 4: no auto-pick — require an explicit family choice.
@@ -1386,8 +1490,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     if (typeKey === "donut" && donutEligibleMetrics(state.discipline, state.formats).length === 0) {
       return { ok: false, reason: "Needs a countable stat" };
     }
-    if (typeKey === "radar" && eligibleRadarGroups(state.discipline, state.formats).length === 0) {
-      return { ok: false, reason: "No metric groups available for this scope" };
+    if (typeKey === "radar" && radarEligibleMetrics(state.discipline, state.formats).length < RADAR_MIN_METRICS) {
+      return { ok: false, reason: `Needs at least ${RADAR_MIN_METRICS} radar metrics for this scope` };
     }
     if (typeKey === "phases" && eligiblePhaseFamilies(state.discipline, state.formats).length === 0) {
       return { ok: false, reason: "No phase metric families available for this scope" };
@@ -1421,37 +1525,66 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   }
 
   /**
-   * The single best-fit type among the OK ones, for the current candidate
-   * pool size — v1's "prefer the type whose constraints the current state
-   * exactly satisfies" re-expressed over player count (see the file header
-   * comment above for why metric-count doesn't translate):
-   *   1. Scatter, once there's a proper crowd (>= 10 candidates) — its whole
-   *      niche (up to 60 players, uncapped-feeling) is the one type that
-   *      wants MORE players, not fewer, so a big pool is its "exact fit".
-   *   2. Radar, for a small handful within its own tight ceiling (2..6
-   *      candidates) — shape comparison is cluttered past a few players,
-   *      exactly radar's own cap.
-   *   3. Donut, when the pool is modest enough (<= 8) that every player gets
-   *      an individually-named slice with no "Other" bucket needed yet — the
-   *      cleanest, most literal "share of a total" read.
-   *   4. Bar — the general-purpose default once none of the above's tighter
-   *      niche applies.
-   *   5. Everything else (phases/slope/byyear/dumbbell, plus donut/scatter/
-   *      radar outside their niches above) — specialized lenses, only ever
-   *      recommended when they are the SOLE ok type (never displace the
-   *      general-purpose picks above), mirroring how v1 never recommends its
-   *      own specialized "arrow" type as a default either.
+   * The single best-fit type among the OK ones (R4 Wave 1b, item 2 — genuinely
+   * METRIC-AWARE, replacing the old count-only ranking that recommended Scatter
+   * for any pool of >=10 and so effectively tagged Scatter forever, since a
+   * Stats-seeded pool is almost always large). The recommendation now derives
+   * from what the user has actually chosen to MEASURE, with pool size only as a
+   * tie-breaker inside a metric family. Rules, first satisfied wins, each gated
+   * on the type being OK for the current scope:
+   *
+   *   A. INTENT OVERRIDES (the user has already configured a specialized lens
+   *      in a way only that lens honours — confirm it, don't nudge away):
+   *        • radar, once >=3 axes are selected — a multi-metric shape read.
+   *        • slope / dumbbell, once BOTH of their windows are fully set — a
+   *          before/after read across two time windows (task 2: "two time
+   *          windows -> Slope/Dumbbell only make sense with windows").
+   *   B. METRIC-DRIVEN NUDGE (the shared chosen metric's KIND decides the
+   *      family; pool size N picks within it):
+   *        • rate/percent metric: big crowd (N >= 12) -> Scatter (a rate across
+   *          many players reads as a distribution; the other axis pairs a second
+   *          rate); otherwise -> Bar (compare a rate across a handful).
+   *        • additive TOTAL metric: modest pool (N <= 8) -> Donut (a literal
+   *          share-of-total, every player its own slice); otherwise -> Bar
+   *          (rank many totals).
+   *        • anything else with one value per player (e.g. a peak like High
+   *          score / Best): -> Bar.
+   *   C. NO CLEAR WINNER: return null (show NO tag) rather than a constant one —
+   *      e.g. only a scatter X-axis or a phase family was chosen, so there's no
+   *      single metric to reason a nudge from.
+   *
+   * Only ever returns an OK type (see `rec()`), and only runs at all once a
+   * metric has been chosen (syncChartTypeButtons gates on metricEverChosen).
    */
   function recommendedChartType(state, statuses) {
-    const okKeys = CHART_TYPES.map((t) => t.key).filter((k) => statuses[k].ok);
-    if (okKeys.length === 0) return null;
-    const candidateCount = selection.candidateCount();
-    if (okKeys.includes("scatter") && candidateCount >= 10) return "scatter";
-    if (okKeys.includes("radar") && candidateCount >= 2 && candidateCount <= CHART_CAPS.radar.max) return "radar";
-    if (okKeys.includes("donut") && candidateCount <= 8) return "donut";
-    if (okKeys.includes("bar")) return "bar";
-    const fallbackOrder = ["donut", "scatter", "radar", "phases", "slope", "byyear", "dumbbell", "benchmark"];
-    return fallbackOrder.find((k) => okKeys.includes(k)) ?? okKeys[0];
+    const okKeys = new Set(CHART_TYPES.map((t) => t.key).filter((k) => statuses[k].ok));
+    if (okKeys.size === 0) return null;
+    const N = selection.candidateCount();
+    const rec = (k) => (okKeys.has(k) ? k : null);
+
+    // A. Intent overrides.
+    if (chartType === "radar" && radarMetricKeys.length >= RADAR_MIN_METRICS && okKeys.has("radar")) return "radar";
+    const slopeReady = Boolean(slopeWindowA?.from && slopeWindowA?.to && slopeWindowB?.from && slopeWindowB?.to);
+    const dumbbellReady = Boolean(dumbbellWindowA?.from && dumbbellWindowA?.to && dumbbellWindowB?.from && dumbbellWindowB?.to);
+    if (chartType === "slope" && slopeReady && okKeys.has("slope")) return "slope";
+    if (chartType === "dumbbell" && dumbbellReady && okKeys.has("dumbbell")) return "dumbbell";
+
+    // B. Metric-driven nudge, keyed off the shared chosen metric's kind.
+    const metric = chosenMetricKey ? getMetric(chosenMetricKey, state.discipline) : null;
+    if (metric) {
+      if (metric.kind === "rate" || metric.kind === "percent") {
+        if (N >= 12 && okKeys.has("scatter")) return "scatter";
+        return rec("bar");
+      }
+      if (metric.additive === true) {
+        if (N <= 8 && okKeys.has("donut")) return "donut";
+        return rec("bar");
+      }
+      return rec("bar"); // peak / non-additive single-value metric
+    }
+
+    // C. No single chosen metric to reason from -> no tag.
+    return null;
   }
 
   function syncChartTypeButtons() {
@@ -1669,6 +1802,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     if (!getMetric(gs.sort.key, gs.discipline)) {
       store.set({ sort: { key: DEFAULT_SORT_KEY[gs.discipline] || "runs", dir: "desc" } });
     }
+    // R4 Wave 1b (item 1): a valid graph scope has now been applied — this is a
+    // first-class seed trigger, so onScopeChanged() -> seedSelection() will
+    // populate the candidate pool from the graph scope even if Stats was never
+    // searched. (Invalid/missing inputs never reach here — validateDate() /
+    // graphDrawerController.validate() above both surface a VISIBLE message in
+    // the popup and return early, so the failure is never silent.)
+    graphScopeApplied = true;
     closeGraphPopup();
     onScopeChanged();
   }
@@ -1749,10 +1889,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   }
 
   async function seedSelection({ force = false } = {}) {
-    // decision 46f: never query before Stats has been searched at least once
-    // — Graphs entering the empty-state (no pool at all) must not run a query
-    // of its own; the guidance line explains why (poolStatusReason()).
-    if (!hasStatsResults()) return;
+    // decision 46f + R4 Wave 1b (item 1): seed the pool once a scope has
+    // actually been searched — either a Stats search (hasStatsResults) OR a
+    // graph-local "Apply to graph" (graphScopeApplied). Before EITHER, Graphs
+    // sits in the empty-state and runs no query of its own; the guidance line
+    // explains why (poolStatusReason()). This is what makes the Graph Builder
+    // work standalone: applyGraphFilters() sets graphScopeApplied then calls
+    // onScopeChanged() -> seedSelection(), which now seeds from the graph scope
+    // instead of silently no-opping.
+    if (!hasStatsResults() && !graphScopeApplied) return;
     const state = store.get();
     const key = scopeSeedKey(state);
     if (!force && seeded && key === lastSeedKey) return;
@@ -1861,9 +2006,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       return metricX && metricY ? { type: "scatter", discipline, metricX, metricY, playerCount, roster } : null;
     }
     if (chartType === "radar") {
-      const groups = eligibleRadarGroups(discipline, state.formats);
-      const group = groups.find((g) => g.id === radarGroupId); // item 4: no auto-pick
-      return group ? { type: "radar", discipline, group, playerCount, roster } : null;
+      // item 3: title is honest only once >= RADAR_MIN_METRICS axes are chosen.
+      const eligible = radarEligibleMetrics(discipline, state.formats);
+      const metrics = radarMetricKeys.map((k) => getMetric(k, discipline)).filter((m) => m && eligible.some((e) => e.key === m.key));
+      return metrics.length >= RADAR_MIN_METRICS
+        ? { type: "radar", discipline, metricKeys: metrics.map((m) => m.key), metrics, playerCount, roster }
+        : null;
     }
     if (chartType === "phases") {
       const families = eligiblePhaseFamilies(discipline, state.formats);
@@ -2410,15 +2558,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         metricKeys = [metricX.key, metricY.key];
         config = { type: "scatter", discipline, metricX, metricY, playerCount: players.length, roster };
       } else if (chartType === "radar") {
-        const groups = eligibleRadarGroups(discipline, state.formats);
-        const group = groups.find((g) => g.id === radarGroupId); // item 4: no auto-pick
-        if (!group) {
-          showChartGuidance("Choose a metric group to draw a radar chart.");
+        // item 3: draw ONE radar from the individually-checked radar metrics.
+        const eligible = radarEligibleMetrics(discipline, state.formats);
+        const metrics = radarMetricKeys.map((k) => getMetric(k, discipline)).filter((m) => m && eligible.some((e) => e.key === m.key));
+        if (metrics.length < RADAR_MIN_METRICS) {
+          showChartGuidance(`Choose at least ${RADAR_MIN_METRICS} metrics to draw a radar chart.`);
           return;
         }
-        const metrics = group.metricKeys.map((k) => getMetric(k, discipline)).filter(Boolean);
         metricKeys = metrics.map((m) => m.key);
-        config = { type: "radar", discipline, group, metrics, playerCount: players.length, roster };
+        config = { type: "radar", discipline, metricKeys, metrics, playerCount: players.length, roster };
       } else if (chartType === "phases") {
         const families = eligiblePhaseFamilies(discipline, state.formats);
         const family = families.find((f) => f.id === phaseFamilyId); // item 4: no auto-pick
@@ -2444,7 +2592,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       } else if (config.type === "scatter") {
         result = buildScatterChart(canvas, chartRef, { metricX: config.metricX, metricY: config.metricY, rowsById, players });
       } else if (config.type === "radar") {
-        result = buildRadarSmallMultiples(canvas, chartRef, { group: config.group, metrics: config.metrics, rowsById, players });
+        result = buildRadarSmallMultiples(canvas, chartRef, { metrics: config.metrics, rowsById, players });
       } else if (config.type === "phases") {
         result = buildPhasesChart(canvas, chartRef, { family: config.family, metrics: config.metrics, rowsById, players });
       }
@@ -2593,7 +2741,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         return { kind: "xy", xOptions: options, yOptions: options, defaultX: metrics[0]?.key ?? null, defaultY: (metrics[1] || metrics[0])?.key ?? null };
       }
       case "radar":
-        return { kind: "none", note: "Radar compares a whole metric group at once — no single metric to pick." };
+        return { kind: "none", note: "Radar compares several metrics at once — pick them in the Graph Builder." };
       case "phases":
         return { kind: "none", note: "Phases compares a whole metric family at once — no single metric to pick." };
       case "benchmark":
@@ -2698,14 +2846,20 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       markMetricChosen(metricKey); // item 4: chooser pick persists + arms Recommended
     } else {
       // radar/phases/benchmark: no single metric to pick. The chooser is an
-      // EXPLICIT type confirm, so seed the first group/family (item 4's
-      // no-auto-pick applies to the Builder's own controls; a deliberate
-      // chooser confirm still lands on a drawn chart) and count it as a metric
-      // choice for the Recommended-tag gate. Benchmark self-configures.
+      // EXPLICIT type confirm, so seed a sensible default axis set / family
+      // (item 3's no-auto-pick applies to the Builder's own controls; a
+      // deliberate chooser confirm still lands on a drawn chart) and count it
+      // as a metric choice for the Recommended-tag gate. Benchmark
+      // self-configures.
       const gs = store.get();
       if (newType === "radar") {
-        const groups = eligibleRadarGroups(gs.discipline, gs.formats);
-        if (groups[0] && !groups.some((g) => g.id === radarGroupId)) radarGroupId = groups[0].id;
+        // Default to the first few radar-valid metrics (>= RADAR_MIN_METRICS)
+        // when the user has none checked yet, so the chooser confirm draws.
+        const eligible = radarEligibleMetrics(gs.discipline, gs.formats);
+        const stillValid = radarMetricKeys.filter((k) => eligible.some((m) => m.key === k));
+        radarMetricKeys = stillValid.length >= RADAR_MIN_METRICS
+          ? stillValid
+          : eligible.slice(0, Math.min(5, RADAR_MAX_METRICS)).map((m) => m.key);
       } else if (newType === "phases") {
         const families = eligiblePhaseFamilies(gs.discipline, gs.formats);
         if (families[0] && !families.some((f) => f.id === phaseFamilyId)) phaseFamilyId = families[0].id;

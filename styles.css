@@ -2509,6 +2509,27 @@ a { color: var(--color-accent); }
 }
 .graph-benchmark-metrics__group-label:first-child { margin-top: var(--space-1); }
 
+/* Radar chart's "Metrics (axes)…" multi-select dropdown (R4 Wave 1b, item 3) —
+   reuses the shared .dropdown/.dropdown__toggle/.dropdown__panel/
+   .dropdown__item classes; panel sizing mirrors the Benchmark picker's
+   (fixed max-height + scroll, width capped to the viewport rather than forced
+   to the sidebar width) so it stays overflow-safe at ~380px. */
+.graph-radar-metrics__panel {
+  width: min(20rem, calc(100vw - 2rem));
+  max-height: 20rem;
+  overflow-y: auto;
+}
+.graph-radar-metrics__group-label {
+  font-size: var(--text-sm2);
+  color: var(--color-muted);
+  margin: var(--space-2);
+}
+.graph-radar-metrics__note {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  margin: var(--space-2) var(--space-2) var(--space-1);
+}
+
 .graph-player-actions { display: flex; gap: var(--space-3); }
 .graph-cap-note { font-size: var(--text-sm2); color: var(--color-accent); margin: 0; }
 
