@@ -1283,9 +1283,21 @@ a { color: var(--color-accent); }
   margin-top: 0;
 }
 
+/* The table's own scroll region (tasks 3 + 5 / #12). It scrolls BOTH axes:
+   horizontally so wide column sets stay usable at ~380px (§8.8), and — the
+   #12 fix — vertically within a bounded height so the sticky header row
+   (`.data-table thead th { position: sticky; top: 0 }`) actually stays frozen
+   while the body scrolls UNDER it. Without a height cap this element is still
+   a scroll container in both axes (an `overflow-x: auto` box computes
+   `overflow-y` to `auto` per the CSS overflow spec) but never scrolls
+   vertically, so the header scrolled away with the page — the exact v1 bug.
+   The cap is sized to show ~15 of the now-denser rows plus the header before
+   the body starts scrolling; "Show More" still reveals the rest into this
+   same region. */
 .table-scroll {
-  overflow-x: auto;
+  overflow: auto;
   max-width: 100%;
+  max-height: 65vh;
 }
 
 /* Shared table base (task 3): .data-table (leaderboard) and .mini-table
@@ -1301,19 +1313,53 @@ a { color: var(--color-accent); }
 .data-table,
 .mini-table {
   border-collapse: collapse;
-  width: 100%;
   min-width: max-content;
   font-variant-numeric: tabular-nums;
 }
+
+/* Width (task 2): the main results table is CONTENT-sized — each column only
+   as wide as the larger of its header text or its widest value (the auto
+   table-layout default), never stretched to fill the card. Dead space on the
+   right is acceptable. `min-width: max-content` (above) keeps columns from
+   compressing below their content; `width: auto` stops the table growing past
+   it. mini-table (player-popup breakdowns) keeps filling its container. */
+.data-table {
+  width: auto;
+  /* Single source of truth for the rank column's width (task 1) — consumed
+     both by the rank cells' own `width` and by the Player column's `left`
+     sticky offset, so the two frozen left columns always stay flush. Sized to
+     fit a 4-digit rank plus the wider cell padding used at mobile widths. */
+  --rank-col-w: 3.5rem;
+}
+.mini-table { width: 100%; }
 
 .data-table__th,
 .data-table__td,
 .mini-table th,
 .mini-table td {
-  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--color-line);
   white-space: nowrap;
+}
+
+/* mini-table cells: unchanged — comfortable padding, right-aligned numerics
+   with a left-aligned first column. */
+.mini-table th,
+.mini-table td {
+  padding: var(--space-3) var(--space-4);
   text-align: right;
+}
+.mini-table th:first-child,
+.mini-table td:first-child { text-align: left; }
+
+/* Main results-table cells (tasks 2 + 3): denser rows so ~15 fit on one
+   screen (tighter vertical padding + a smaller cell font), and every column
+   CENTER-aligned — the sticky Player column overrides back to left in its own
+   rule below. */
+.data-table__th,
+.data-table__td {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+  text-align: center;
 }
 
 /* Column separators (R3 Wave 5 polish, task 7): a subtle 1px vertical rule
@@ -1334,18 +1380,30 @@ a { color: var(--color-accent); }
   border-right: none;
 }
 
-.data-table__th:first-child,
-.data-table__td:first-child,
-.mini-table th:first-child,
-.mini-table td:first-child { text-align: left; }
+/* Zebra striping removed entirely from the main results table (task 3, R7
+   Wave A, owner-approved): denser rows + a sticky, darker header band carry
+   scanability now; alternating row backgrounds are gone. (.mini-table never
+   had zebra — see mini-table__group-row for how those tables separate groups.)
 
-/* Subtle zebra for scanability across many rows — MAIN RESULTS TABLE ONLY
-   (owner rule, R3 Wave 2 item 8): .data-table is the Stats-view leaderboard;
-   .mini-table (player-popup breakdown tables) intentionally has no zebra —
-   see mini-table__group-row below for how those tables separate groups
-   instead. */
-.data-table tbody tr:nth-child(even) .data-table__td {
-  background: var(--color-panel);
+   Rank column (task 1): a display-only countdown index reflecting the current
+   sort, sticky at the very left (before the Player column) so BOTH stay frozen
+   during horizontal scroll. Fixed, narrow width (--rank-col-w) — used both as
+   this column's own size AND as the Player column's `left` offset below, so
+   the two frozen columns always sit flush. Tight horizontal padding so a
+   4-digit rank (up to the full 2,813-player baseline) still fits. */
+.data-table__th--rank,
+.data-table__td--rank {
+  position: sticky;
+  left: 0;
+  width: var(--rank-col-w, 3rem);
+  min-width: var(--rank-col-w, 3rem);
+  padding-left: var(--space-1);
+  padding-right: var(--space-1);
+  background: var(--color-bg-raised);
+  z-index: 1;
+  color: var(--color-muted);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Sticky Player column — DYNAMIC width (task 4, R3 Wave 5 polish, replacing
@@ -1378,13 +1436,20 @@ a { color: var(--color-accent); }
 .data-table__th--sticky,
 .data-table__td--sticky {
   position: sticky;
-  left: 0;
+  /* Offset by the rank column's width (task 1) so the frozen Player column
+     sits immediately right of the frozen rank column, both flush-left. */
+  left: var(--rank-col-w, 3rem);
   background: var(--color-bg-raised);
   z-index: 1;
   width: var(--sticky-col-w, 10rem);
   max-width: var(--sticky-col-w, 10rem);
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Player column stays left-aligned (task 2) while every other column centers. */
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-fg);
+  font-variant-numeric: normal;
 }
 
 /* Indented-name fix (task 2, R3 Wave 5 polish): `<button class="player-link">`
@@ -1412,9 +1477,7 @@ a { color: var(--color-accent); }
   text-align: left;
 }
 
-.data-table tbody tr:nth-child(even) .data-table__td--sticky {
-  background: var(--color-panel);
-}
+/* (Zebra sticky-column rule removed with the rest of the striping, task 3.) */
 
 /* Mobile (task 8, R3 Wave 5 polish): ≤640px overrides JS's dynamic width back
    down to a small fixed column (truncating with the ellipsis the base rule
@@ -1423,20 +1486,35 @@ a { color: var(--color-accent); }
    deliberate, permanent exception to "dynamic width" for exactly this
    breakpoint (see the "Sticky Player column" comment above for why
    redeclaring --sticky-col-w here, rather than relying on the JS-set
-   ancestor value, is what makes the override actually take effect). */
+   ancestor value, is what makes the override actually take effect).
+
+   Name-expand (task 7 / #11): double-clicking the Player header toggles
+   `.is-name-expanded` on `.table-scroll` (table.js). While set, the column
+   grows to `max-content` so full names show instead of the clamped 6rem
+   truncation — scoped to this breakpoint only (on wider viewports the column
+   is already dynamically full-width, so the gesture has nothing to do). The
+   three-class selector out-specifies the plain `.data-table__td--sticky`
+   override above, so it wins. */
 @media (max-width: 640px) {
   .data-table__th--sticky,
   .data-table__td--sticky {
     --sticky-col-w: 6rem;
     font-size: var(--text-sm);
   }
+
+  .table-scroll.is-name-expanded .data-table__th--sticky,
+  .table-scroll.is-name-expanded .data-table__td--sticky {
+    --sticky-col-w: max-content;
+    max-width: none;
+  }
+  .table-scroll.is-name-expanded .data-table__td--sticky .player-link,
+  .table-scroll.is-name-expanded .data-table__td--sticky span {
+    width: max-content;
+    max-width: none;
+  }
 }
 
-/* Shared header-cell language (task 3): uppercase, muted, semibold column
-   headers — .mini-table thead th (below) adds the same block plus its own
-   smaller font-size; sticky positioning and the stronger bottom rule are
-   data-table only (mini-table isn't tall enough to need a pinned header). */
-.data-table thead th,
+/* mini-table header (unchanged): uppercase, muted, semibold. */
 .mini-table thead th {
   background: var(--color-panel);
   letter-spacing: 0.03em;
@@ -1445,21 +1523,37 @@ a { color: var(--color-accent); }
   font-weight: 600;
 }
 
+/* Main results-table sticky header ROW (task 5 / #12): stays fixed at the top
+   while the body scrolls (position: sticky, top: 0 — the page is the scroll
+   context). BOLD, uppercase, and center-aligned (the sticky Player header
+   overrides back to left via .data-table__th--sticky above), on a DARKER
+   background than the body rows so the frozen header reads as its own band.
+   Header row height matches the (now denser) data rows: it inherits the same
+   compact cell padding as .data-table__th, and the sort button's vertical
+   padding is zeroed just below so the button doesn't inflate the row. */
 .data-table thead th {
   position: sticky;
   top: 0;
   z-index: 2;
-  font-size: var(--text-sm); /* was 0.78rem */
+  font-size: var(--text-sm);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--color-fg);
+  background: var(--color-line);
   border-bottom: 1px solid var(--color-line-strong);
 }
 
-.data-table thead th.data-table__th--sticky { z-index: 3; }
-
-.data-table__td:first-child {
-  font-weight: 600;
-  color: var(--color-fg);
-  font-variant-numeric: normal;
+/* Darker-than-body in dark mode too: --color-line is LIGHTER than the raised
+   row background there, so drop to the base background for the header band. */
+[data-theme="dark"] .data-table thead th {
+  background: var(--color-bg);
 }
+
+/* The corner cells (rank + Player headers) are sticky both ways — pin them
+   above the body's sticky first columns. */
+.data-table thead th.data-table__th--sticky,
+.data-table thead th.data-table__th--rank { z-index: 3; }
 
 .data-table__sort-btn {
   font: inherit;
@@ -1471,8 +1565,10 @@ a { color: var(--color-accent); }
   border: none;
   cursor: pointer;
   color: inherit;
-  padding: var(--space-1);
-  min-height: 32px;
+  /* No vertical padding / min-height on desktop so the header row is the same
+     height as a data row (task 5); mobile restores a 40px tap target below. */
+  padding: 0 var(--space-1);
+  min-height: 0;
 }
 
 .data-table__sort-btn:hover { color: var(--color-fg); }

@@ -871,6 +871,25 @@ function computeInitialShowPct(cols) {
   return pctCount > countCount;
 }
 
+/** Pseudo-metric for the Player-name column (task 6). It is NOT a real
+ * metrics.js entry (name is a structural column, not a stat), so it never
+ * appears in the column picker, presets, or any query — it exists only so the
+ * shared sort machinery (applySort / the sort-click handler / load()'s
+ * sort-key fallback) can treat "name" like any other sortable key. Sorting is
+ * client-side string comparison over row.name (compareRows special-cases it),
+ * so no query changes. higherIsBetter:false makes the first click sort A–Z
+ * (the sort-click default-direction rule maps higherIsBetter===false to "asc").
+ */
+const NAME_METRIC = { key: "name", label: "Player", shortLabel: "Player", higherIsBetter: false, format: "str" };
+
+/** Resolve a sort key to a metric definition, including the synthetic
+ * NAME_METRIC for the Player column. Every place that used getMetric() purely
+ * to validate/resolve the CURRENT SORT key must go through this instead, so
+ * sorting by name resolves rather than silently falling back to nothing. */
+function resolveSortMetric(key, ns) {
+  return key === "name" ? NAME_METRIC : getMetric(key, ns);
+}
+
 /** Sort value accessor: uses the __sort shadow column when present; NULL sorts last always. */
 function sortValue(row, metric) {
   const raw = metric.sortExpression ? row[`${metric.key}__sort`] : row[metric.key];
@@ -880,8 +899,19 @@ function sortValue(row, metric) {
 }
 
 function compareRows(a, b, metric, dir) {
-  const va = metric.key === "name" ? null : sortValue(a, metric);
-  const vb = metric.key === "name" ? null : sortValue(b, metric);
+  // Player name (task 6): client-side alphabetical, case/diacritic-insensitive.
+  // NULL/blank names sort last regardless of direction (§8.5), same as numerics.
+  if (metric.key === "name") {
+    const na = a.name == null ? "" : String(a.name);
+    const nb = b.name == null ? "" : String(b.name);
+    if (na === "" && nb === "") return 0;
+    if (na === "") return 1;
+    if (nb === "") return -1;
+    const cmp = na.localeCompare(nb, undefined, { sensitivity: "base" });
+    return dir === "asc" ? cmp : -cmp;
+  }
+  const va = sortValue(a, metric);
+  const vb = sortValue(b, metric);
   // NULLS LAST regardless of direction.
   if (va === null && vb === null) return 0;
   if (va === null) return 1;
@@ -927,6 +957,18 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
   // inside wireColumnDrag's own closure) purely so onUp() can read where the
   // pointer last was over — see wireColumnDrag's doc comment.
   let dragState = null;
+  // Mobile name-column expansion (task 7 / #11): on ≤640px the Player column is
+  // clamped to a narrow fixed width (styles.css), truncating long names.
+  // Double-clicking the Player header toggles this flag, which adds
+  // `.table-scroll.is-name-expanded` (CSS lets the column grow to full names at
+  // that breakpoint only). Lives on scrollEl, which persists across reloads via
+  // the skeleton, so an expanded name column survives re-sorts/re-queries;
+  // renderPrompt() resets it since a Clear rebuilds the whole skeleton.
+  let nameExpanded = false;
+  function toggleNameExpand() {
+    nameExpanded = !nameExpanded;
+    if (scrollEl) scrollEl.classList.toggle("is-name-expanded", nameExpanded);
+  }
 
   // Persistent table-mode skeleton (Batch 1 mechanical fix, decision 42/43):
   // the toolbar and table shell are built ONCE per entry into "table mode"
@@ -1110,6 +1152,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     lastQueryStateKey = null;
     lastLoadedState = null;
     visibleRowCount = PAGE_SIZE;
+    nameExpanded = false; // (task 7) a Clear rebuilds the skeleton — drop expansion
     container.innerHTML = `
       <div class="table-prompt">
         <p class="table-prompt__text">Set your filters, then search.</p>
@@ -1184,7 +1227,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
 
   /** Sort `rows` by the store's current sort (metric column). */
   function applySort(rows, s) {
-    const metric = getMetric(s.sort.key, effectiveDiscipline(s));
+    const metric = resolveSortMetric(s.sort.key, effectiveDiscipline(s));
     return metric ? rows.slice().sort((a, b) => compareRows(a, b, metric, s.sort.dir)) : rows;
   }
 
@@ -1337,21 +1380,48 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
       }
       if (!dragging) return;
       clearDragIndicators();
+      // Drop-index (task 4 / #10 fix): the OLD logic only recognised a target
+      // when the pointer was strictly INSIDE some other header's rect, and
+      // fell back to overKey=null (→ moveColumnDom appends to the far right)
+      // for every position that wasn't — including, critically, when the
+      // pointer sat over the dragged column itself after a live-preview move
+      // (that column is excluded from `others`, so nothing was "under" the
+      // pointer and the column flung to the end). Replaced with a midpoint
+      // scan that ALWAYS resolves to a definite, adjacent insertion point:
+      // insert before the first other header whose horizontal midpoint is to
+      // the right of the pointer; if none is (pointer past every midpoint),
+      // insert after the last one. Because the dragged column always sits
+      // between the others whose midpoints straddle the pointer, this lands
+      // exactly where released and never spuriously jumps to the far right.
       const others = [...theadEl.querySelectorAll(".data-table__th--draggable")].filter((el) => el !== th);
-      let target = null;
-      let side = "before";
+      let insertBeforeEl = null;
       for (const el of others) {
         const rect = el.getBoundingClientRect();
-        if (e.clientX >= rect.left && e.clientX <= rect.right) {
-          target = el;
-          side = e.clientX < rect.left + rect.width / 2 ? "before" : "after";
+        if (e.clientX < rect.left + rect.width / 2) {
+          insertBeforeEl = el;
           break;
         }
       }
-      const overKey = target ? target.dataset.key : null;
-      const effectiveSide = target ? side : null;
-      if (target) {
-        target.classList.add(side === "before" ? "data-table__th--drop-before" : "data-table__th--drop-after");
+      let overKey = null;
+      let effectiveSide = null;
+      let indicatorEl = null;
+      let indicatorSide = "before";
+      if (insertBeforeEl) {
+        overKey = insertBeforeEl.dataset.key;
+        effectiveSide = "before";
+        indicatorEl = insertBeforeEl;
+        indicatorSide = "before";
+      } else if (others.length) {
+        const lastOther = others[others.length - 1];
+        overKey = lastOther.dataset.key;
+        effectiveSide = "after";
+        indicatorEl = lastOther;
+        indicatorSide = "after";
+      }
+      if (indicatorEl) {
+        indicatorEl.classList.add(
+          indicatorSide === "before" ? "data-table__th--drop-before" : "data-table__th--drop-after"
+        );
       }
       dragState = { key, ns, overKey, side: effectiveSide };
       // Only touch the DOM when the drop target actually changed — every
@@ -1623,6 +1693,10 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
   function renderLoaded(rows, state, bowlingTypes = lastBowlingTypes) {
     ensureSkeleton();
     overlayEl.hidden = true;
+    // (task 7) Re-apply the mobile name-expansion class on every render — the
+    // thead/tbody are rebuilt here, but scrollEl (which carries the class)
+    // persists, so keep it honestly in step with the closure flag.
+    scrollEl.classList.toggle("is-name-expanded", nameExpanded);
 
     const matchupOn = matchupVsActive(state);
     const ns = effectiveDiscipline(state);
@@ -1633,9 +1707,25 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
       ? `<th class="data-table__th data-table__th--coverage" scope="col">Coverage</th>`
       : "";
 
+    // Rank column (task 1): a display-only countdown index, sticky at the very
+    // left (before Player). Its header is a plain "#" — rank is not a sortable
+    // column, it always reflects whatever the table is currently sorted by.
+    const rankTh = `<th class="data-table__th data-table__th--rank" scope="col" title="Rank in current sort">#</th>`;
+
+    // Player header (task 6): now a sortable column — clicking sorts by name
+    // A–Z, then Z–A, with the same caret the metric headers show. Stays sticky
+    // and is deliberately NOT draggable (no --draggable class). The sort +
+    // mobile double-click-to-expand (task 7) listeners are wired below.
+    const nameSorted = state.sort.key === "name";
+    const nameArrow = nameSorted ? (state.sort.dir === "asc" ? " ▲" : " ▼") : "";
+    const playerTh = `<th data-key="name" class="data-table__th data-table__th--sticky ${nameSorted ? "is-sorted" : ""}" scope="col">
+        <button type="button" class="data-table__sort-btn">Player${nameArrow}</button>
+      </th>`;
+
     theadEl.innerHTML = `
       <tr>
-        <th class="data-table__th data-table__th--sticky" scope="col">Player</th>
+        ${rankTh}
+        ${playerTh}
         ${coverageTh}
         ${cols.map((m) => headerCellHTML(m, state)).join("")}
       </tr>`;
@@ -1644,7 +1734,12 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     updateStickyColWidth(pageRows.map((r) => r.name ?? ""));
 
     tbodyEl.innerHTML = pageRows
-      .map((row) => {
+      .map((row, i) => {
+        // Rank (task 1): the row's position in the CURRENT sorted result set.
+        // `i` is the index within pageRows, which is always a prefix of the
+        // full sorted `rows`, so numbers run 1, 2, 3 … and continue unbroken
+        // across a "Show More" reveal (51, 52, …) — no query, pure display.
+        const rankTd = `<td class="data-table__td data-table__td--rank">${(i + 1).toLocaleString()}</td>`;
         const coverageTd = matchupOn
           ? `<td class="data-table__td data-table__td--coverage">${coverageLabel(row.coverage)}</td>`
           : "";
@@ -1659,7 +1754,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         const nameCell = onPlayerClick
           ? `<button type="button" class="player-link" data-player-id="${escAttr(row.id ?? "")}" title="${escAttr(fullName)}">${escHtml(fullName)}</button>`
           : `<span title="${escAttr(fullName)}">${escHtml(fullName)}</span>`;
-        return `<tr><td class="data-table__td data-table__td--sticky">${nameCell}</td>${coverageTd}${cells}</tr>`;
+        return `<tr>${rankTd}<td class="data-table__td data-table__td--sticky">${nameCell}</td>${coverageTd}${cells}</tr>`;
       })
       .join("");
 
@@ -1674,34 +1769,79 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
 
     renderToolbar(state, rows, bowlingTypes);
 
-    // Sorting: click header to sort/flip. Re-sorts the cached rows client-side
-    // (no requery needed — the result set is unchanged, only its order). The
-    // sort-state class (is-sorted / arrow) is recomputed from `state` on every
-    // renderLoaded call, so it survives this persistent-skeleton refactor the
-    // same way it always did — headerCellHTML just reads state.sort fresh.
-    theadEl.querySelectorAll(".data-table__th[data-key]").forEach((th) => {
-      th.addEventListener("click", () => {
-        const key = th.dataset.key;
-        const s = store.get();
-        if (s.sort.key === key) {
-          store.set({ sort: { key, dir: s.sort.dir === "asc" ? "desc" : "asc" } });
-        } else {
-          const metric = getMetric(key, effectiveDiscipline(s));
-          const defaultDir = metric.higherIsBetter === false ? "asc" : "desc";
-          store.set({ sort: { key, dir: defaultDir } });
-        }
-        const next = store.get();
-        lastRows = applySort(lastRows, next);
-        // View-only change, same reasoning as reorderColumns (F2): keep
-        // enterView()'s snapshot in step so a later tab-away/back shows this
-        // sort, not whichever one was current as of the last actual load().
-        lastQueryStateKey = serializeQueryState(next);
-        lastLoadedState = next;
-        // Task 3: a new sort order is "a new view of the data" — back to page 1.
-        visibleRowCount = PAGE_SIZE;
-        renderLoaded(lastRows, next, bowlingTypes);
-      });
+    /** Commit a new sort key/direction, then re-sort + re-render the cached
+     * rows client-side (no requery — the result set is unchanged, only its
+     * order). Shared by the metric-header clicks and the Player-header sort. */
+    function applySortKey(key) {
+      const s = store.get();
+      if (s.sort.key === key) {
+        store.set({ sort: { key, dir: s.sort.dir === "asc" ? "desc" : "asc" } });
+      } else {
+        const metric = resolveSortMetric(key, effectiveDiscipline(s));
+        const defaultDir = metric && metric.higherIsBetter === false ? "asc" : "desc";
+        store.set({ sort: { key, dir: defaultDir } });
+      }
+      const next = store.get();
+      lastRows = applySort(lastRows, next);
+      // View-only change, same reasoning as reorderColumns (F2): keep
+      // enterView()'s snapshot in step so a later tab-away/back shows this
+      // sort, not whichever one was current as of the last actual load().
+      lastQueryStateKey = serializeQueryState(next);
+      lastLoadedState = next;
+      // Task 3: a new sort order is "a new view of the data" — back to page 1.
+      visibleRowCount = PAGE_SIZE;
+      renderLoaded(lastRows, next, bowlingTypes);
+    }
+
+    // Sorting: click header to sort/flip. The sort-state class (is-sorted /
+    // arrow) is recomputed from `state` on every renderLoaded call, so it
+    // survives this persistent-skeleton refactor the same way it always did.
+    // The sticky Player header is EXCLUDED here (task 6/7) — it needs its own
+    // single-click-sort vs double-click-expand handling, wired just below.
+    theadEl.querySelectorAll(".data-table__th[data-key]:not(.data-table__th--sticky)").forEach((th) => {
+      th.addEventListener("click", () => applySortKey(th.dataset.key));
     });
+
+    // Player header (tasks 6 + 7 / #13 + #11): single click sorts by name;
+    // on mobile widths a double-click instead toggles the name column's
+    // expansion (full names vs the narrow truncated column). The two are
+    // disambiguated by a short debounce: on ≤640px the sort is deferred ~250ms
+    // so a second click within that window can cancel it and expand instead;
+    // on wider viewports (mouse) the sort fires immediately with no delay, and
+    // double-click-to-expand is simply not offered (the column is already
+    // dynamically full-width there). Single click always = sort (#6);
+    // double-click = expand (#11), never a double sort.
+    const nameTh = theadEl.querySelector('.data-table__th--sticky[data-key="name"]');
+    if (nameTh) {
+      let nameClickTimer = null;
+      nameTh.addEventListener("click", () => {
+        const mobile = window.matchMedia("(max-width: 640px)").matches;
+        if (!mobile) {
+          applySortKey("name");
+          return;
+        }
+        if (nameClickTimer) {
+          clearTimeout(nameClickTimer);
+          nameClickTimer = null;
+        }
+        nameClickTimer = setTimeout(() => {
+          nameClickTimer = null;
+          applySortKey("name");
+        }, 250);
+      });
+      nameTh.addEventListener("dblclick", () => {
+        // Expand is a mobile-only affordance (the column is already full-width
+        // on wider viewports); guarding here also prevents a desktop
+        // double-click from leaving stray expansion state that would surface
+        // if the window were later narrowed.
+        if (!window.matchMedia("(max-width: 640px)").matches) return;
+        if (nameClickTimer) {
+          clearTimeout(nameClickTimer);
+          nameClickTimer = null;
+        }
+        toggleNameExpand();
+      });
+    }
 
     if (onPlayerClick) {
       tbodyEl.querySelectorAll(".player-link").forEach((btn) => {
@@ -1979,7 +2119,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     // sort nothing. Falls back to runs/wickets desc, same defaults main.js
     // uses on a plain discipline switch.
     const preState = store.get();
-    if (!getMetric(preState.sort.key, effectiveDiscipline(preState))) {
+    if (!resolveSortMetric(preState.sort.key, effectiveDiscipline(preState))) {
       store.set({ sort: { key: preState.discipline === "batting" ? "runs" : "wickets", dir: "desc" } });
     }
 
