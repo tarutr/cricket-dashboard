@@ -395,7 +395,10 @@ a { color: var(--color-accent); }
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-5) var(--space-6);
-  align-items: flex-end;
+  /* flex-start (was flex-end): the date block grew taller in R4 (stacked
+     inputs + preset select), and bottom-aligning left dead space above the
+     short selects. Top-align so all labels sit on one line. */
+  align-items: flex-start;
 }
 
 .filter-group {
@@ -3208,7 +3211,11 @@ a { color: var(--color-accent); }
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3) var(--space-4);
-  align-items: flex-end;
+  /* flex-start (was flex-end): R4 made the dates group taller (stacked
+     inputs + preset select); bottom-aligning stranded the four selects
+     below dead space. Top-align so all group labels share the first line
+     and the date column simply runs deeper. */
+  align-items: flex-start;
 }
 .filters-popup .filter-group { gap: var(--space-1); }
 .filters-popup .filter-bar .select,
