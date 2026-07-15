@@ -118,21 +118,6 @@ export async function fetchWindowMetric(state, window, playerIds, metric) {
   return byId;
 }
 
-function formatMetricValue(metric, value) {
-  if (!hasMetricData(metric, value)) return null;
-  const n = Number(value);
-  switch (metric.format) {
-    case "int":
-      return Math.round(n);
-    case "dec1":
-    case "dec2":
-    case "pct1":
-      return n;
-    default:
-      return n;
-  }
-}
-
 export function labelForValue(metric, value) {
   if (!hasMetricData(metric, value)) return "—";
   const n = Number(value);
@@ -565,7 +550,7 @@ export function buildScatterChart(canvas, chartRef, { metricX, metricY, rowsById
   return { excluded };
 }
 
-export function shortenName(name) {
+function shortenName(name) {
   const parts = name.trim().split(/\s+/);
   if (parts.length <= 1) return name;
   const last = parts[parts.length - 1];

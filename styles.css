@@ -43,7 +43,6 @@
   --color-accent-strong: #7a1f1f;
   --color-accent-tint: #f5e6e2;
 
-  --color-good: #2f6b3f;
   --color-bad: #9c2b2b;
   --color-bad-bg: #f7e7e3;
 
@@ -103,7 +102,6 @@
   --color-accent-strong: #ef8b74;
   --color-accent-tint: #3a2420;
 
-  --color-good: #5fa876;
   --color-bad: #e2735a;
   --color-bad-bg: #3a2420;
 
@@ -384,13 +382,6 @@ a { color: var(--color-accent); }
 
 /* ── Filter bar ────────────────────────────────────────────────────────────── */
 
-.filter-section {
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-lg);
-  padding: var(--space-5);
-  background: var(--color-panel);
-}
-
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
@@ -645,14 +636,6 @@ a { color: var(--color-accent); }
 
 /* ── Profile filters (D4.2) — second filter row ────────────────────────────── */
 
-.filter-bar--profile {
-  margin-top: var(--space-5);
-  padding-top: var(--space-5);
-  border-top: 1px dashed var(--color-line);
-}
-
-.filter-group--profile-head { gap: var(--space-1); }
-
 .profile-note {
   font-size: var(--text-sm);
   color: var(--color-muted);
@@ -664,70 +647,6 @@ a { color: var(--color-accent); }
 }
 
 .profile-role { display: flex; gap: var(--space-2); }
-
-/* ── Player section: compact layout (F1b — fixes player_profile.png) ──────────
-   The Player popup section rebuilt as a tidy block: Team dual-control on top,
-   then Role / Batting hand / R. Pos. / Bowling style in an aligned 2-column
-   grid (1-column on narrow phones). New classnames deliberately AVOID reusing
-   `.filter-bar` so the scope strip's mobile grid-template-areas (which target
-   `.filter-bar`) can never bleed onto these controls. */
-.player-filters {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
-.player-filters__team {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.player-filters__team-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
-}
-.player-filters__team-row .filter-group { min-width: 0; }
-.player-filters__team-row .filter-group--teammode { flex: 0 0 auto; }
-.player-filters__team-row .filter-group--team,
-.player-filters__team-row .filter-group--profteams { flex: 1 1 12rem; }
-.player-filters__team-row .team-dropdown,
-.player-filters__team-row .team-dropdown__toggle { width: 100%; }
-
-.player-filters__profile {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding-top: var(--space-4);
-  border-top: 1px dashed var(--color-line);
-}
-.player-filters__profile .profile-note { margin: 0; }
-
-.profile-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3) var(--space-4);
-  align-items: start;
-}
-/* R. Pos. / matchup-position hosts are plain wrappers; display:contents
-   promotes their single inner .filter-group to a direct grid cell, so a hidden
-   one (via [hidden]) leaves NO empty cell — nothing stranded beside dead
-   space (the player_profile.png complaint). */
-.profile-grid [data-role="rpos-host"],
-.profile-grid [data-role="matchup-positions-host"] { display: contents; }
-
-.profile-grid .filter-group { min-width: 0; }
-.profile-grid .select,
-.profile-grid .dropdown,
-.profile-grid .dropdown__toggle { width: 100%; }
-.profile-grid .profile-role { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.profile-grid .profile-role .select { flex: 1 1 7rem; min-width: 0; }
-
-@media (max-width: 560px) {
-  .profile-grid { grid-template-columns: 1fr; }
-}
 
 /* Disabled section state lives entirely on the individual controls inside
    (see the unified :disabled rules below) — no wrapper-level opacity here,
@@ -852,139 +771,6 @@ a { color: var(--color-accent); }
 
 .icon-btn:hover { color: var(--color-bad); background: var(--color-bad-bg); }
 
-/* ── Advanced filters ──────────────────────────────────────────────────────── */
-
-.advanced-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.advanced-group {
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  background: var(--color-panel);
-}
-
-.advanced-group__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.advanced-group__label {
-  font-size: var(--text-md);
-  color: var(--color-muted);
-}
-
-.advanced-connector {
-  display: flex;
-  justify-content: center;
-}
-
-.advanced-connector__pill {
-  font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 0.15rem var(--space-3);
-  border-radius: var(--radius-pill);
-  background: var(--color-accent-tint);
-  color: var(--color-accent-strong);
-  border: 1px solid var(--color-accent-tint);
-}
-
-.advanced-conds {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-/* B2R wave 2 (decision 42): a condition row is now TWO stacked pieces — the
-   fields+remove-button line (.advanced-cond__row) and, only when this row
-   fails Apply's validation, an inline error message below it. Previously the
-   remove button lived inside the same wrapping flex row as the fields, so at
-   narrow widths it could wrap onto its own line and read as a stray floating
-   × rather than a clearly-placed one; .advanced-cond__remove now sits outside
-   the wrapping .advanced-cond__fields group so it never wraps away from the
-   row it belongs to. The group-level "remove whole group" × beside "Match
-   All/Any of:" is gone entirely (a group already disappears once its last
-   condition is removed) — advanced.js no longer renders it. */
-.advanced-cond {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.advanced-cond__row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-}
-
-.advanced-cond__fields {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 1;
-  min-width: 0;
-}
-
-.advanced-cond__remove {
-  flex-shrink: 0;
-}
-
-.advanced-cond__and {
-  color: var(--color-muted);
-  font-size: var(--text-md);
-}
-
-.advanced-cond__error {
-  margin: 0;
-  color: var(--color-bad);
-  font-size: var(--text-sm2);
-}
-
-.advanced-cond--error .select,
-.advanced-cond--error .input {
-  border-color: var(--color-bad);
-}
-
-/* Unified condition builder (F1b): the numeric AND/OR groups live in
-   .advanced-numeric; the SINGLETON "Against opposition" row (.advanced-cond--opp)
-   sits above them, reusing the .advanced-cond row/fields/remove layout so it
-   reads as just another condition row. Its value control is the embedded
-   opposition team-multiselect (state.opposition; buildScopeClauses untouched). */
-.advanced-numeric {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-.advanced-cond__type { flex: 0 0 auto; }
-.advanced-cond__opp-value { flex: 1 1 12rem; min-width: 0; }
-.advanced-cond--opp .filter-group--opp-embedded { gap: var(--space-1); }
-.advanced-cond--opp .team-dropdown,
-.advanced-cond--opp .team-dropdown__toggle { width: 100%; }
-
-/* ── Advanced section sub-heading (B2R wave 2) ────────────────────────────────
-   "Stat conditions" now sits inside the wider "Advanced" section alongside
-   the Against(opposition)/Has-ever-played-for(career) pickers, so it needs its
-   own small heading — one step down from .filter-drawer__section-title, one
-   step up from .filter-label's all-caps micro-label. */
-.filter-drawer__subsection-title {
-  margin: 0;
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: var(--text-md);
-  color: var(--color-muted);
-}
-
 /* ── Condition builder (Advanced Filters, owner task 1B-2) ────────────────────
    The ONE grouped condition builder. Singleton rows (Role/Hand/Bowling/R.Pos/
    Team/Opposition/Event/Venue) and numeric metric rows share the .cond-row
@@ -1042,7 +828,6 @@ a { color: var(--color-accent); }
 .cond-row--error .select,
 .cond-row--error .input { border-color: var(--color-bad); }
 
-.cond-builder__add { display: flex; flex-direction: column; gap: var(--space-2); }
 .cond-builder__add-select { align-self: flex-start; min-width: 14rem; max-width: 100%; }
 
 /* Games-count meta beside a team/event/venue option name. */
@@ -1814,14 +1599,6 @@ a { color: var(--color-accent); }
 
 /* ── "All filters" open button + count badge (owner decision 29) ──────────── */
 
-.filter-open-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-  align-self: center;
-}
-
 .filter-open-btn__count {
   display: inline-flex;
   align-items: center;
@@ -1845,10 +1622,6 @@ a { color: var(--color-accent); }
    element in place, which STILL consumed .app-content's `gap`, doubling the
    visible space above the search box in the common "nothing applied yet"
    state; collapsing it out of flow entirely restores one consistent gap). */
-.pills-section:empty {
-  display: none;
-}
-
 .pills-row {
   display: flex;
   flex-wrap: wrap;
@@ -1862,10 +1635,6 @@ a { color: var(--color-accent); }
    player-page overlay's reuse of this class, see .player-page__filter-pills
    below) would double up with that gap here, so it's zeroed out for this
    instance specifically rather than changed on the shared base rule. */
-.pills-section .pills-row {
-  margin-top: 0;
-}
-
 .pill {
   display: inline-flex;
   align-items: center;
@@ -1889,10 +1658,10 @@ a { color: var(--color-accent); }
 
 /* Pinned-player pill tint (R3 Wave 6): pills.js renders "+ Name" pins AFTER
    every filter pill and flags them `pinned: true` for this class — a pin
-   ADDS a player to the result set rather than narrowing it, so it gets the
-   same low-saturation accent-red tint already used for .advanced-connector__
-   pill (AND/OR) rather than the neutral filter-pill background, keeping the
-   two kinds of pill visually distinct wherever a row mixes both. Coexists
+   ADDS a player to the result set rather than narrowing it, so it gets a
+   low-saturation accent-red tint rather than the neutral filter-pill
+   background, keeping the two kinds of pill visually distinct wherever a row
+   mixes both. Coexists
    with .pill--inert (matchup "Vs" mode) without conflict — that rule only
    touches opacity/border-style, not color. */
 .pill--pinned {
@@ -1961,39 +1730,6 @@ a { color: var(--color-accent); }
   background: rgba(0, 0, 0, 0.6);
 }
 
-.filter-drawer__panel {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(420px, 100vw);
-  background: var(--color-bg);
-  box-shadow: var(--shadow-popover);
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-}
-
-.filter-drawer__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-5);
-  border-bottom: 1px solid var(--color-line);
-  position: sticky;
-  top: 0;
-  background: var(--color-bg);
-  z-index: 1;
-}
-
-.filter-drawer__title {
-  margin: 0;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 1.3rem;
-}
-
 .drawer__close {
   font: inherit;
   font-size: 1.4rem;
@@ -2010,34 +1746,6 @@ a { color: var(--color-accent); }
 
 .drawer__close:hover { color: var(--color-bad); background: var(--color-bad-bg); }
 
-.filter-drawer__body {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  padding: var(--space-5);
-  gap: var(--space-5);
-}
-
-.filter-drawer__section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding-bottom: var(--space-5);
-  border-bottom: 1px solid var(--color-line);
-}
-
-.filter-drawer__section:last-child {
-  border-bottom: none;
-  padding-bottom: 0;
-}
-
-.filter-drawer__section-title {
-  margin: 0;
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 1rem;
-}
-
 .filter-drawer__footer {
   display: flex;
   justify-content: space-between;
@@ -2051,8 +1759,6 @@ a { color: var(--color-accent); }
 }
 
 @media (max-width: 480px) {
-  .filter-drawer__panel { width: 100vw; }
-
   .filter-drawer__footer {
     flex-direction: column-reverse;
     align-items: stretch;
@@ -2134,7 +1840,6 @@ a { color: var(--color-accent); }
   .filter-group--format { grid-area: format; }
   .filter-group--teamtype { grid-area: teamtype; }
   .filter-group--dates { grid-area: dates; }
-  .filter-open-btn { grid-area: allfilters; }
 
   /* Gender/Discipline: stretch the pill control to fill its half-column and
      split it 50/50 between the two options — big tactile buttons instead of
@@ -2188,15 +1893,6 @@ a { color: var(--color-accent); }
     min-width: 0;
   }
 
-  /* "All filters" drops its desktop margin-left:auto (there's no row to push
-     against anymore) and becomes a full-width row of its own — the one
-     control that stays visually distinct from the two paired dropdown rows
-     above it, since it opens a drawer rather than a same-place panel. */
-  .filter-open-btn {
-    width: 100%;
-    justify-content: center;
-    margin-left: 0;
-  }
 }
 
 /* Phone-only tightening on top of the ≤899px shape above: claws back height
@@ -2252,11 +1948,6 @@ a { color: var(--color-accent); }
   .filter-group--format { grid-area: format; }
   .filter-group--teamtype { grid-area: teamtype; }
   .filter-group--dates { grid-area: dates; }
-  .filter-open-btn {
-    grid-area: allfilters;
-    margin-left: 0;
-    justify-self: end;
-  }
 
   .filter-group--format .dropdown,
   .filter-group--format .dropdown__toggle,
@@ -2308,7 +1999,6 @@ a { color: var(--color-accent); }
      breakpoint below via the same rule (kept here rather than duplicated,
      since ≤480 is a subset of ≤640 and this file loads ≤480 after ≤640 —
      source order, not a media-query subset, decides the cascade). */
-  .filter-section { padding: var(--space-3) var(--space-4); }
 
   /* .filter-bar's own layout (grid, column pairing, All-filters full-width)
      is owned by the 640px scope-strip grid block above — this ≤480 block
@@ -2320,11 +2010,6 @@ a { color: var(--color-accent); }
     width: 100%;
     left: 0;
     right: 0;
-  }
-
-  .advanced-cond__row {
-    flex-direction: column;
-    align-items: stretch;
   }
 
   .table-toolbar { padding: var(--space-3) var(--space-4); }
@@ -2755,7 +2440,7 @@ a { color: var(--color-accent); }
   --paper-rule: #ded7c8;
   /* B8b (Benchmark chart, decision 44e): matches charts.js's palette().accent
      / .good exactly (the fixed-light hex equivalents of --color-accent's
-     LIGHT-theme value / --color-good's LIGHT-theme value) — same "fixed
+     LIGHT-theme value / the green "good" value) — same "fixed
      regardless of site theme" posture as every other --paper-* token above,
      see .paper-card__radar-mini's use of pal.accent/pal.good for the same
      reasoning applied to the radar chart. */

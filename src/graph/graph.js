@@ -49,7 +49,6 @@ import {
   fetchBenchmarkPool,
   computeBenchmarkRows,
   groupMetricsByKind,
-  benchmarkFloorNotes,
 } from "./benchmark.js";
 import { buildBenchmarkChart } from "./benchmarkChart.js";
 
@@ -2443,11 +2442,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     }
     if (config && config.type === "benchmark") {
       // B8b: "Footer states the pool honestly" (task brief) — the plain
-      // filter scope sentence, plus the sample floors actually backing the
-      // CURRENTLY selected rate/percent metrics (nothing stated if none of
-      // them are rate/percent — no floor applies to pure totals).
-      const floors = benchmarkFloorNotes(config.metrics || []);
-      return floors.length ? `${base} · rates/percents: ${floors.join(", ")}` : base;
+      // filter scope sentence. There are no sample floors to report anymore
+      // (benchmark.js's floor mechanism was removed, R3 Wave 5), so this is
+      // always just the base scope sentence.
+      return base;
     }
     return base;
   }

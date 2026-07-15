@@ -21,8 +21,6 @@
 // hasMetricData guard for rate/ratio metrics (§8.1) so no-data players can never
 // satisfy a condition by accident.
 
-import { metricsFor } from "./metrics.js";
-
 export const OPERATORS = [
   { key: "gte", label: "at least (≥)" },
   { key: "lte", label: "at most (≤)" },
@@ -102,12 +100,6 @@ export function addConditionToGroup(store, gi, metricKey) {
   store.set({ advanced: { ...advanced, groups } });
 }
 
-/** Append a numeric condition to the LAST group (back-compat convenience). */
-export function addCondition(store, metricKey) {
-  ensureGroup(store);
-  addConditionToGroup(store, store.get().advanced.groups.length - 1, metricKey);
-}
-
 /** Append a new empty AND group (ROUND 3, task 7 — "+ Add group"). Groups
  * combine with AND across the set (advanced.op stays "AND"), exactly as
  * table.js's advancedToHaving already renders them. */
@@ -126,36 +118,12 @@ export function removeGroup(store, gi) {
 
 /** Set group `gi`'s combine operator (ROUND 3, task 7 — the per-group
  * Match All | Any toggle). `op` is "AND" (All) or "OR" (Any) — UPPERCASE, the
- * exact tokens table.js's advancedToHaving / advanced.js's describeAdvanced
- * test with `=== "OR"`; a lowercase value would silently fall back to AND. */
+ * exact tokens table.js's advancedToHaving tests with `=== "OR"`; a lowercase
+ * value would silently fall back to AND. */
 export function setGroupOp(store, gi, op) {
   const advanced = store.get().advanced;
   const groups = (advanced.groups || []).map((g, i) => (i === gi ? { ...g, op } : g));
   store.set({ advanced: { ...advanced, groups } });
-}
-
-function opWord(op) {
-  return { gte: "at least", lte: "at most", eq: "equal to", between: "between" }[op] ?? op;
-}
-
-function condPhrase(cond, discipline) {
-  const metric = metricsFor(discipline).find((m) => m.key === cond.metricKey);
-  const label = metric ? metric.label : cond.metricKey;
-  if (cond.operator === "between") return `${label} between ${cond.v1} and ${cond.v2}`;
-  return `${label} ${opWord(cond.operator)} ${cond.v1}`;
-}
-
-/** Plain-English clause for the advanced filters, honest about what's active. */
-export function describeAdvanced(state) {
-  const groups = activeGroups(state.advanced);
-  if (groups.length === 0) return "";
-  const multi = groups.length > 1;
-  const parts = groups.map((g) => {
-    const joiner = g.op === "OR" ? " or " : " and ";
-    const inner = g.conds.map((c) => condPhrase(c, state.discipline)).join(joiner);
-    return multi && g.conds.length > 1 ? `(${inner})` : inner;
-  });
-  return parts.join(state.advanced.op === "OR" ? " or " : " and ");
 }
 
 // ── Metric grouping for the "+ Add condition" dropdown (task 1B-2 / ROUND 3) ──

@@ -339,7 +339,7 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
     if (!el) return;
     const state = effectiveState();
     el.innerHTML = `<p class="player-page__scope">${escHtml(
-      scopeLine(state, overlay, { fixedDefault: fixedScope })
+      scopeLine(state, overlay)
     )}</p>${overlayPillsHTML(overlay)}`;
     el.querySelectorAll(".pill__x").forEach((btn) => {
       btn.addEventListener("click", () => {

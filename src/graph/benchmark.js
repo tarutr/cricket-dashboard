@@ -52,12 +52,6 @@
 // hasMetricData() gate (NULL/0 rate values are excluded as genuine no-data,
 // per the global rule) — that gate is unrelated to floors and stays exactly
 // as it was.
-// benchmarkFloorNotes() is kept as a stub (below) rather than deleted:
-// graph.js imports and calls it directly (outside this wave's file
-// ownership) for the paper card's footer text — returning `[]` unconditionally
-// means that footer simply never mentions a floor again, which is the
-// correct honest behavior now that none exist (SPEC §8: state only filters
-// actually applied).
 
 import { hasMetricData } from "../metrics.js";
 import { eligibleMetrics, escSql as esc } from "../state.js";
@@ -180,18 +174,6 @@ export function groupMetricsByKind(metrics) {
     label: BENCHMARK_KIND_LABELS[kind],
     metrics: metrics.filter((m) => m.kind === kind),
   })).filter((g) => g.metrics.length > 0);
-}
-
-/**
- * Sample-floor footer notes — REMOVED (R3 Wave 5 polish): there are no more
- * floors to report, so this always returns `[]` now. Kept as a stub (not
- * deleted) purely because graph.js imports and calls it directly for the
- * paper card's footer text and is outside this wave's file ownership;
- * graph.js's own call site already treats an empty array as "say nothing
- * about floors", so this is a correct, no-code-elsewhere-touched no-op.
- */
-export function benchmarkFloorNotes(_metrics) {
-  return [];
 }
 
 /**

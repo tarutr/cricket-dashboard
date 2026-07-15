@@ -416,30 +416,6 @@ export function wholeTabUnsupportedHTML(tabLabel, dims) {
 // repurpose without touching any other consumer.
 export const TEAM_TYPE_LABELS = { international: "International", club: "Domestic", both: "International + Domestic" };
 
-/** Extra plain-English tokens for whatever the popup's filters-drawer overlay
- * is currently narrowing. Pre-R5-Wave-2, scopeLine() appended these to its own
- * sentence; the reworded scopeLine no longer does (see its own comment) since
- * overlayPillsHTML's removable pills already show the same information right
- * below it. Kept exported/unused rather than deleted — same shape as
- * overlayPillsHTML's own per-dim logic, still the one place this mapping is
- * spelled out, in case a future caller wants the plain-English form again. */
-export function overlayTokens(overlay) {
-  if (!overlay) return [];
-  const tokens = [];
-  if (overlay.dateFrom || overlay.dateTo) {
-    const f = monthLabel(overlay.dateFrom);
-    const t = monthLabel(overlay.dateTo);
-    tokens.push(f && t ? `${f} – ${t}` : f ? `from ${f}` : t ? `through ${t}` : "narrower dates");
-  }
-  if (overlay.positions && overlay.positions.length) {
-    const sorted = [...overlay.positions].sort((a, b) => a - b);
-    tokens.push(`positions ${sorted.join(", ")}`);
-  }
-  if (overlay.opposition) tokens.push(`against ${overlay.opposition}`);
-  if (overlay.vs) tokens.push(`vs ${overlay.vs}`);
-  return tokens;
-}
-
 /** Honest scope sentence (R5 Wave 2 reword, owner point 3): a single plain
  * sentence — "Data for [format] ([team type]) from [start date] to [end
  * date]" — replacing the old pipe-separated fragments-plus-caveat shape.
@@ -448,8 +424,7 @@ export function overlayTokens(overlay) {
  * frozen fixedScopeState for a header-search popup — see that file's header
  * comment) — so the same sentence shape is honest for BOTH entry paths
  * without needing its own caveat/suffix per path any more (the old
- * `fixedDefault`-keyed suffix this replaced is gone; the param is kept, now
- * unused, so playerPage.js's one call site needs no change).
+ * `fixedDefault`-keyed suffix this replaced is gone).
  *
  * [format]: joins the state's format bucket(s) by their FORMAT_BUCKETS
  * `.label` (never hardcoded — SPEC §8.2, one metrics/vocabulary source),
@@ -466,7 +441,7 @@ export function overlayTokens(overlay) {
  * playerPage.js's renderScopeArea right after this line), so restating it
  * here would just duplicate that UI, not add honesty this sentence needs.
  */
-export function scopeLine(state, overlay, { fixedDefault = false } = {}) {
+export function scopeLine(state, overlay) {
   const formatLabel = FORMAT_BUCKETS.filter((b) => state.formats && state.formats.includes(b.key))
     .map((b) => b.label)
     .join(", ");

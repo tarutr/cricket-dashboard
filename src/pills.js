@@ -20,8 +20,8 @@ import { isConditionComplete, removeConditionAt } from "./advanced.js";
 import { metricsFor, getMetric } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
 
-// Symbol style (not advanced.js's describeAdvanced() word style, "at least
-// 300") — matches the worked examples in the brief ("Runs ≥ 300",
+// Symbol style (not a word phrasing like "at least 300") — matches the worked
+// examples in the brief ("Runs ≥ 300",
 // "Innings ≥ 10") and is reused verbatim by state.js's describeScope() for
 // the subtitle. The two can't share one function without state.js and
 // pills.js importing each other (pills.js already imports several helpers

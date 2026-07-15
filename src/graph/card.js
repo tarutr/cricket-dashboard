@@ -110,7 +110,7 @@ function rankedCountPhrase(baseLabel, playerCount, roster, displayedMetricKey) {
  * Build the auto title for the current chart configuration. Honest: only
  * describes what's actually charted (§8.4).
  */
-export function autoTitle(config) {
+function autoTitle(config) {
   const { type } = config;
   if (type === "bar" || type === "donut") {
     return rankedCountPhrase(config.metric.label, config.playerCount, config.roster, config.metric.key);
@@ -212,12 +212,12 @@ function regenKeyFor(config) {
 }
 
 /** Build the auto subtitle: the scope sentence, honest and never editable-derived. */
-export function autoSubtitle(scopeDescription) {
+function autoSubtitle(scopeDescription) {
   return scopeDescription;
 }
 
 /** Eyebrow line, e.g. "CRICDB · BATTING". */
-export function eyebrowFor(discipline) {
+function eyebrowFor(discipline) {
   return `CRICDB · ${discipline.toUpperCase()}`;
 }
 
@@ -341,10 +341,6 @@ export function mountCard(container) {
     els.canvas.hidden = false;
     els.placeholder.hidden = true;
     els.placeholder.textContent = "";
-  }
-
-  function isEdited() {
-    return titleEdited || subtitleEdited;
   }
 
   /**
@@ -505,7 +501,6 @@ export function mountCard(container) {
     getCanvas,
     showPlaceholder,
     hidePlaceholder,
-    isEdited,
     exportPNG,
     canCopyPNG,
     copyPNG,

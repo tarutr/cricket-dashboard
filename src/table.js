@@ -24,8 +24,6 @@ import {
   escSql as esc,
 } from "./state.js";
 
-export { eligibleMetrics };
-
 const VIEW_FOR_DISCIPLINE = { batting: "batting", bowling: "bowling" };
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
 const NAME_COL = { batting: "batter_name", bowling: "bowler_name" };

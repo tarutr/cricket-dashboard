@@ -1600,7 +1600,7 @@ const MATCHUP_BOWLING_METRICS = [
   },
 ];
 
-export const METRICS = [...BATTING_METRICS, ...BOWLING_METRICS, ...MATCHUP_BATTING_METRICS, ...MATCHUP_BOWLING_METRICS];
+const METRICS = [...BATTING_METRICS, ...BOWLING_METRICS, ...MATCHUP_BATTING_METRICS, ...MATCHUP_BOWLING_METRICS];
 
 // key is unique only within a discipline (batting & bowling share e.g. "average",
 // "strike_rate", "dot_pct", "innings", "matches"). Index by discipline+key.

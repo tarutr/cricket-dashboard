@@ -71,8 +71,3 @@ export function eligiblePhaseFamilies(discipline, formats) {
   return families.filter((f) => f.members.every((mm) => allowedKeys.has(mm.key)));
 }
 
-/** Look up one family by id within a discipline (or null). */
-export function getPhaseFamily(discipline, id) {
-  const families = PHASE_FAMILIES[discipline] || [];
-  return families.find((f) => f.id === id) ?? null;
-}
