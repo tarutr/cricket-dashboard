@@ -77,6 +77,19 @@ function cloneState(state) {
   return JSON.parse(JSON.stringify(state));
 }
 
+// Seed the graph-local store from a Stats state. The Graph Builder does NOT
+// consume matchup ("Vs") mode anymore (R4 Wave 3 — the Dumbbell is a
+// time-window chart, the bridge no longer carries the Vs bucket, and there is
+// no matchup chart type), so a matchupVs carried over from the Stats clone is
+// stale: it would make store.describeScope() emit a dishonest "vs Spin" token
+// in the card footer/subtitle and route the seed query through the matchup
+// path. Strip it here so the graph ignores matchup mode end-to-end.
+function cloneStatsScopeForGraph(state) {
+  const clone = cloneState(state);
+  clone.matchupVs = null;
+  return clone;
+}
+
 // ── Day-level date helpers (R3 Wave 3, item 10) ─────────────────────────────
 // The Slope/Dumbbell Window A/B pickers are now DAY-level native <input
 // type="date"> controls (they used to be month <select>s, which desynced their
@@ -226,7 +239,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // your table" link ever touch the Stats side. The clone is a pure-JSON deep
   // copy (state is all strings/numbers/arrays/plain objects/null — no dates or
   // functions), so it shares no nested references with the Stats state.
-  const store = createStore(cloneState(statsStore.get()));
+  const store = createStore(cloneStatsScopeForGraph(statsStore.get()));
   // The Stats scope-key we last seeded FROM. Re-seed rule (item 1): on each
   // Graphs entry, if the Stats scope has changed since the last seed (i.e. a
   // NEW Stats search happened), re-inherit it wholesale — discarding the
@@ -1844,7 +1857,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     const key = scopeSeedKey(statsState);
     if (key === lastStatsScopeKey) return false;
     lastStatsScopeKey = key;
-    store.set(cloneState(statsState));
+    store.set(cloneStatsScopeForGraph(statsState));
     slopeWindowA = null;
     slopeWindowB = null;
     dumbbellWindowA = null;
