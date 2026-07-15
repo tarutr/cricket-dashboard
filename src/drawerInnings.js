@@ -207,24 +207,18 @@ export function mountRegularPositions(container, store, onChange, { embedded = f
  * never narrows its own option list (buildScopeClauses called without
  * oppositionColumn here).
  *
- * R7 Wave B (item 5): options are ranked by MATCHES PLAYED against each opponent
- * within the current scope (most-played first), like the Team picker's
- * games-desc order — not alphabetical. `games` = COUNT(DISTINCT match_id), the
- * honest "how many matches this opponent appears in" for the same scope the
- * option list already reflects; ties break to team name ASC for determinism.
- * This changes the option ORDER only — the same set of distinct teams appears,
- * and no leaderboard/table query is touched (baseline unaffected).
+ * R7 owner correction (item 5): the opposition picker is the EXACT SAME
+ * mechanism as the "Played for" Team picker — searchTeams() counts each team's
+ * TOTAL matches from the matches table (scoped by gender + team type only, NOT
+ * date/format), games-desc. So the big cricketing nations (India, Pakistan,
+ * England…) lead, identical to the Team dropdown, rather than an in-scope count
+ * (which put associate nations on top in short windows). Shows every team (the
+ * search box narrows); changes ORDER/membership of the OPTION list only — no
+ * leaderboard/table query is touched (baseline unaffected).
  */
 async function fetchOppositionOptions(state) {
-  const view = state.discipline === "batting" ? "batting" : "bowling";
-  const idCol = state.discipline === "batting" ? "batter_id" : "bowler_id";
-  const teamCol = state.discipline === "batting" ? "batting_team" : "bowling_team";
-  const oppCol = state.discipline === "batting" ? "bowling_team" : "batting_team";
-  const clauses = buildScopeClauses(state, { includeTeams: true, teamColumn: teamCol, idColumn: idCol });
-  const where = clauses.length ? clauses.join(" AND ") : "TRUE";
-  const sql = `SELECT ${oppCol} AS team, COUNT(DISTINCT match_id) AS games FROM ${view} WHERE ${where} AND ${oppCol} IS NOT NULL GROUP BY ${oppCol} ORDER BY games DESC, team ASC`;
-  const { rows } = await query(sql);
-  return rows.map((r) => r.team);
+  const rows = await searchTeams("", state.gender, state.teamType);
+  return rows.map((r) => r.value);
 }
 
 /**
