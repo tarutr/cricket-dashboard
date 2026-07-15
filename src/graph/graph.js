@@ -382,9 +382,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
             <button type="button" class="select dropdown__toggle graph-roster-toggle" data-role="roster-toggle" aria-haspopup="true" aria-expanded="false"></button>
             <div class="dropdown__panel graph-roster-panel" data-role="roster-panel" hidden>
               <div class="segmented segmented--small graph-roster-mode" data-role="roster-mode" role="group" aria-label="Show" hidden>
-                <button type="button" class="segmented__btn" data-value="manual">Manual</button>
+                <button type="button" class="segmented__btn" data-value="topnames">Top names</button>
                 <button type="button" class="segmented__btn" data-value="best">Best</button>
                 <button type="button" class="segmented__btn" data-value="worst">Worst</button>
+                <button type="button" class="segmented__btn" data-value="manual">Manual</button>
               </div>
               <div class="graph-roster-filter" data-role="roster-filter-wrap" hidden>
                 <input type="text" class="input graph-roster-filter__input" data-role="roster-filter" placeholder="Filter players…" aria-label="Filter the player list" />
@@ -527,14 +528,26 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // in a capped slice (see renderPlayerList) — the pool itself is never capped.
   let rosterFilterText = "";
 
-  // R6 (owner fix 2): the auto-selection no longer ranks candidates by any
-  // METRIC — it ranks by whole-DB career games (biggest names first), so the
-  // paper-card title's honest phrasing is now "N most-capped players" /
-  // "N least-capped players" (currentRosterMeta()/card.js's rankedCountPhrase),
-  // NOT the old "top N by <metric>". Provenance is derived on demand from the
-  // live selection state (mode + candidateCount vs cap + dirty flag) rather
-  // than stored per-derivation, so there is no seed-metric/rank-metric state to
-  // track anymore (the old seedSortKey/lastRankMetricKey machinery is gone).
+  // R6b (owner correction to 41b88b7): the roster's Best/Worst modes are
+  // metric-based again — "Best" = the top of the filtered candidate set by the
+  // chart's active metric, "Worst" = the bottom — so the card title's honest
+  // phrasing for those modes is "top N" / "top N by <metric>" / "bottom N"
+  // (see resolveSeedMetric() + card.js's rankedCountPhrase). Only the DEFAULT
+  // auto-select ("Top names" mode, the initial one) ranks by whole-DB career
+  // games (biggest names), titled "N most-capped players". These four vars
+  // track the metric provenance for the Best/Worst titles, restored from the
+  // pre-R6 machinery:
+  //   • seedSortKey/Discipline — which metric ranked the MOST RECENT successful
+  //     seed (the graph scope's active sort at seed time), the fallback title
+  //     provenance for chart types with no single rankable metric.
+  //   • lastRankMetricKey/Discipline — which metric most recently ranked the
+  //     CHECKED set via a Best/Worst derivation (bar/donut/scatter-Y only —
+  //     see rankMetricForActiveType/deriveChecked); null whenever the
+  //     seed-order fallback was used or the roster is dirty.
+  let seedSortKey = null;
+  let seedSortDiscipline = null;
+  let lastRankMetricKey = null;
+  let lastRankMetricDiscipline = null;
 
   // decision 46f: the CHECKED-set cap before any chart type is picked — the
   // classic "top 15", same number Bar's own cap always was. Once a type is
@@ -829,44 +842,68 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     dumbbellWindowB = { from: msToDay(secondFromMs), to };
   }
 
-  // ── Selection model: auto-select the biggest names (R6, owner fix 2) ────────
+  // ── Selection model: three auto-select sources (R6b) ────────────────────────
+  //
+  // The roster's auto-selection has three modes plus Manual:
+  //   • "topnames" (DEFAULT) — biggest names by whole-DB career games. This is
+  //     the ONE new behaviour from R6: when a filter/graph is first set and the
+  //     candidate pool exceeds the cap, the players auto-picked to fill it are
+  //     the most-capped (biggest names), not a metric ranking. Uses
+  //     players.js's fetchCareerGames (COUNT(DISTINCT match_id) over ALL
+  //     player_matches — the same appearances measure the omnisearch player
+  //     search ranks by), scope-independent by design.
+  //   • "best"/"worst" — the FILTERED SET ranked by the chart's ACTIVE metric
+  //     (owner correction to 41b88b7: these are metric-based again, as they
+  //     were pre-R6). "Best" = the top of the pool by that metric, "Worst" =
+  //     the bottom. Chart types with no single rankable metric (radar/phases/
+  //     slope/byyear/dumbbell) fall back to the seed's own sort order (reversed
+  //     for "worst").
+  //   • "manual" — the user's literal hand-picks; nothing here recomputes them.
 
-  // Guards a rank fetch that's been superseded by a newer one (mode/type
+  /** The metric to rank Best/Worst by for the CURRENT chart type. Bar/donut
+   * rank by their own single displayed metric; scatter ranks by its Y axis (X
+   * is the OTHER axis, not "the" metric). Every other chart type
+   * (radar/phases/slope/byyear/dumbbell) shows a GROUP of metrics at once or
+   * needs its own per-player chart query (two windows/sides) to get a single
+   * value — too expensive to fetch just for a ranking preview across the WHOLE
+   * candidate pool — so those fall back to "the seed sort" in deriveChecked()
+   * (returns null here to signal that fallback). */
+  function rankMetricForActiveType(state) {
+    if (chartType === "bar") return getMetric(barMetricKey, state.discipline);
+    if (chartType === "donut") return getMetric(donutMetricKey, state.discipline);
+    if (chartType === "scatter") return getMetric(scatterYKey, state.discipline);
+    return null;
+  }
+
+  // Guards a rank fetch that's been superseded by a newer one (mode/metric/type
   // changed again before the first fetch returned) — same "ignore stale async
   // result" idiom renderChart() already uses via loadToken.
   let rankDeriveToken = 0;
 
   /**
-   * Re-derive the CHECKED set for "best"/"worst" mode by ranking the FULL
+   * Re-derive the CHECKED set for a non-manual mode by ranking the FULL
    * candidate pool (never just the currently-checked subset — a hidden
    * candidate must be able to become checked too) and keeping the top `cap`
    * many. A no-op for "manual" (just records the mode and re-renders — "Manual
-   * leaves user picks alone", task brief).
+   * leaves user picks alone").
    *
-   * R6 (owner fix 2 — "we want the biggest names selected always"): the ranking
-   * axis for WHICH candidates get checked is now whole-DB career games
-   * (players.js's fetchCareerGames — COUNT(DISTINCT match_id) over ALL
-   * player_matches, the same appearances measure the omnisearch player search
-   * ranks by), NOT the charted metric and NOT the filtered-scope games. This
-   * applies to EVERY chart type with no exceptions (bar, donut, radar, scatter,
-   * phases, slope, byyear, dumbbell, benchmark's anchor list) — an earlier fix
-   * that kept bar/donut ranked by their own metric was explicitly rejected by
-   * the owner. "Best" takes the MOST-capped candidates, "Worst" the LEAST-capped
-   * (same axis, reversed). bar/donut still SORT their displayed bars/slices by
-   * the metric value for readability (charts.js) — that is display order only;
-   * WHICH players are included is by career games, and the card title says so
-   * ("N most-capped players", see currentRosterMeta()/card.js).
+   * Ranking axis by mode:
+   *   • "topnames" — whole-DB career games (fetchCareerGames), most-capped
+   *     first. The DEFAULT auto-select ("biggest names"). Metric-independent.
+   *   • "best"/"worst" — the chart's ACTIVE metric (rankMetricForActiveType),
+   *     best-first / worst-first. SPEC §8.1's hasMetricData rule is applied
+   *     exactly as at chart-render time: a 0/NULL rate player has no result to
+   *     rank, so it can't be "best" or "worst" and is never included just to
+   *     fill the cap. For chart types with no single rankable metric, the
+   *     "seed sort" fallback is the candidate pool's OWN existing order (the
+   *     seed query's table-sort order), reversed for "worst".
    *
    * NUMBERS RULE: this only decides WHICH players are auto-selected. It never
    * changes any metric value computed for a player.
    *
-   * A candidate absent from the career-games map (no player_matches rows —
-   * shouldn't happen for a real candidate) reads as 0 games and sorts last;
-   * ties break by id for a deterministic roster. If the career-games fetch
-   * fails, we fall back to the candidate pool's own existing order (the seed's
-   * table-sort order, reversed for "worst") so the picker never empties or
-   * crashes — the next real chart render still gets its own retry via
-   * renderChart()'s try/catch.
+   * On any fetch failure we fall back to the candidate pool's own order
+   * (reversed for "worst") so the picker never empties or crashes — the next
+   * real chart render still gets its own retry via renderChart()'s try/catch.
    */
   async function deriveChecked(newMode) {
     selection.setMode(newMode);
@@ -875,41 +912,97 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       return;
     }
     const token = ++rankDeriveToken;
+    const state = store.get();
     const pool = selection.getFull();
     const cap = activeMaxCap();
     if (pool.length === 0) {
       selection.setChecked([], { dirty: false });
+      lastRankMetricKey = null;
+      lastRankMetricDiscipline = null;
       return;
     }
-    let gamesById = null;
-    try {
-      gamesById = await fetchCareerGames();
-    } catch {
-      gamesById = null;
+
+    // DEFAULT auto-select: biggest names by whole-DB career games. Metric
+    // provenance does not apply here — the title says "N most-capped players"
+    // via currentCareerGamesRank(), so clear any stale rank-metric.
+    if (newMode === "topnames") {
+      let gamesById = null;
+      try {
+        gamesById = await fetchCareerGames();
+      } catch {
+        gamesById = null;
+      }
+      if (token !== rankDeriveToken) return; // superseded by a later derive call
+      let ranked;
+      if (gamesById) {
+        ranked = pool.slice().sort((a, b) => {
+          const ga = gamesById.get(a.id) ?? 0;
+          const gb = gamesById.get(b.id) ?? 0;
+          if (ga !== gb) return gb - ga; // most-capped first
+          return String(a.id).localeCompare(String(b.id)); // deterministic tiebreak
+        });
+      } else {
+        ranked = pool.slice();
+      }
+      if (token !== rankDeriveToken) return;
+      selection.setChecked(ranked.slice(0, cap).map((p) => p.id), { dirty: false });
+      lastRankMetricKey = null;
+      lastRankMetricDiscipline = null;
+      return;
     }
-    if (token !== rankDeriveToken) return; // superseded by a later derive call
+
+    // "best"/"worst": rank the filtered set by the chart's active metric.
+    let metric = rankMetricForActiveType(state);
     let ranked;
-    if (gamesById) {
-      ranked = pool.slice().sort((a, b) => {
-        const ga = gamesById.get(a.id) ?? 0;
-        const gb = gamesById.get(b.id) ?? 0;
-        if (ga !== gb) return newMode === "worst" ? ga - gb : gb - ga; // most (or least) capped first
-        return String(a.id).localeCompare(String(b.id)); // deterministic tiebreak
-      });
-    } else {
+    let rankedByMetric = false;
+    if (metric) {
+      let rowsById = null;
+      try {
+        rowsById = await fetchSelectedPlayerMetrics(state, pool.map((p) => p.id), [metric.key]);
+      } catch {
+        // A failed ranking fetch shouldn't empty the roster or crash the
+        // picker — fall back to seed order for this one derivation, exactly
+        // as if no per-type metric applied; the next real chart render still
+        // gets its own error handling/retry via renderChart()'s try/catch.
+        rowsById = null;
+      }
+      if (token !== rankDeriveToken) return; // superseded by a later derive call
+      if (rowsById) {
+        const withData = pool.filter((p) => {
+          const row = rowsById.get(p.id);
+          return row && hasMetricData(metric, row[metric.key]);
+        });
+        withData.sort((a, b) => {
+          const va = Number(rowsById.get(a.id)[metric.key]);
+          const vb = Number(rowsById.get(b.id)[metric.key]);
+          const diff = metric.higherIsBetter ? vb - va : va - vb; // best-first order
+          return newMode === "worst" ? -diff : diff;
+        });
+        ranked = withData;
+        rankedByMetric = true;
+      }
+    }
+    if (!rankedByMetric) {
+      metric = null; // seed-order fallback — no per-type metric actually ranked this
       ranked = newMode === "worst" ? pool.slice().reverse() : pool.slice();
     }
     if (token !== rankDeriveToken) return;
     selection.setChecked(ranked.slice(0, cap).map((p) => p.id), { dirty: false });
+    lastRankMetricKey = metric ? metric.key : null;
+    lastRankMetricDiscipline = metric ? state.discipline : null;
   }
 
-  /** Wired to the bar/donut/scatter-Y metric selects. R6 (owner fix 2): the
-   * auto-selection no longer ranks by any metric (it's whole-DB career games
-   * now — see deriveChecked), so changing the displayed metric does NOT change
-   * WHICH players are selected; it only changes the display sort (bar/donut) or
-   * the axis (scatter), handled by the chart render. So this just re-renders —
-   * no re-derivation of the checked set is needed anymore. */
+  /** Wired to the bar/donut/scatter-Y metric selects — the three that feed
+   * rankMetricForActiveType. R6b (owner correction): Best/Worst rank by the
+   * chart's active metric again, so when that metric changes the Best/Worst
+   * checked set must re-derive ("switching to Best/Worst re-derives on metric
+   * change too"). A no-op beyond the render for "manual" (user picks are left
+   * alone) and "topnames" (the DEFAULT ranks by career games, which is
+   * metric-independent — the displayed metric only changes the chart's own
+   * sort/axis, not WHICH players are selected). */
   function onRankMetricChanged() {
+    const mode = selection.getMode();
+    if (mode === "best" || mode === "worst") deriveChecked(mode);
     scheduleRender({ paramsChanged: true });
   }
 
@@ -1416,10 +1509,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // ("N of M selected") opens a checkbox panel with one row per CANDIDATE
   // (the full pool, never truncated): checkbox (checked = plotted) + name +
   // a muted meta + a small × (remove from the pool entirely). Above the rows,
-  // a "Show: Manual | Best | Worst" segmented appears ONLY once there are more
-  // candidates than the active chart type can plot (v1's rankAndApply gate) —
-  // Best/Worst re-derive `checked` by rank (see deriveChecked() above);
-  // Manual leaves whatever's checked alone.
+  // a "Show: Top names | Best | Worst | Manual" segmented appears ONLY once
+  // there are more candidates than the active chart type can plot (v1's
+  // rankAndApply gate) — Top names/Best/Worst re-derive `checked` by rank (see
+  // deriveChecked() above); Manual leaves whatever's checked alone.
   //
   // Checkbox interaction (judgment call, documented): ANY manual tick/untick
   // always works, regardless of which mode segment is currently highlighted —
@@ -1447,6 +1540,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // out of scope here — flagged in the batch report as a follow-up candidate.
 
   function rosterModeLabel(mode) {
+    if (mode === "topnames") return "Top names";
     if (mode === "best") return "Best";
     if (mode === "worst") return "Worst";
     return "Manual";
@@ -1469,8 +1563,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     els.rosterToggle.textContent = `${checkedCount} of ${total} selected`;
     els.rosterToggle.title = mode !== "manual" ? `Auto-selected: ${rosterModeLabel(mode)}` : "";
 
-    // "Show: Manual | Best | Worst" only once there's an actual choice to make
-    // (more candidates than this chart type can plot) — task brief.
+    // "Show: Top names | Best | Worst | Manual" only once there's an actual
+    // choice to make (more candidates than this chart type can plot).
     const showModeSwitch = total > cap;
     els.rosterMode.hidden = !showModeSwitch;
     if (showModeSwitch) {
@@ -2130,47 +2224,80 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const seedPlayers = await seedFromFilteredSet(store);
       seeded = true;
       lastSeedKey = key;
+      // Record what metric ranked this seed (the graph scope's active sort at
+      // the moment seedFromFilteredSet ran), tied to the discipline it ran
+      // under — this is the fallback title provenance resolveSeedMetric() uses
+      // for Best/Worst on chart types with no single rankable metric.
+      seedSortKey = state.sort.key;
+      seedSortDiscipline = state.discipline;
       clearCapNote();
-      // Batch 8 (task 1): a fresh seed replaces the candidate POOL only —
-      // `checked` is then derived per the CURRENTLY active mode ("auto-check
-      // per the active mode", task brief; default "best"). A reseed always
-      // lands in "best" if the previous mode was "manual": manual picks were
-      // made against the OLD pool and have no meaning against a brand new
-      // one, whereas an explicit "best"/"worst" preference is about HOW to
-      // auto-pick, not which specific pool it's applied to, so it persists.
+      // A fresh seed replaces the candidate POOL only — `checked` is then
+      // derived per the CURRENTLY active mode ("auto-check per the active
+      // mode"; DEFAULT "topnames" = biggest names by career games). A reseed
+      // whose previous mode was "manual" lands in the DEFAULT "topnames":
+      // manual picks were made against the OLD pool and have no meaning against
+      // a brand new one, whereas an explicit "best"/"worst"/"topnames"
+      // preference is about HOW to auto-pick, not which specific pool it's
+      // applied to, so it persists.
       selection.setCandidates(seedPlayers);
-      const modeForReseed = selection.getMode() === "manual" ? "best" : selection.getMode();
+      const modeForReseed = selection.getMode() === "manual" ? "topnames" : selection.getMode();
       await deriveChecked(modeForReseed);
     } catch (e) {
       showErrorStatus(e, () => seedSelection({ force: true }));
     }
   }
 
-  /** R6 (owner fix 2): how the CURRENT checked set was chosen, for the honest
-   * card title — 'most' / 'least' / null. The auto-selection ranks candidates
-   * by whole-DB career games (deriveChecked), so a genuinely auto-picked subset
-   * is "the most-capped players" ("best" mode) or "the least-capped players"
-   * ("worst" mode). It's null — no career-games claim — when:
-   *   - the roster was hand-edited (dirty): the title says "N players";
-   *   - the mode is "manual": the user's literal picks, "N players";
-   *   - the candidate pool fits within the cap (candidateCount <= cap): EVERY
-   *     candidate is plotted, so no "top N by games" selection actually
-   *     happened — "N players" is the honest claim, not "most-capped".
-   * Derived live from selection state so it's always in sync with what's drawn. */
+  /** R6b: 'most' only when the DEFAULT "topnames" auto-select actually chose a
+   * subset — i.e. that mode is active, the roster is clean, and the pool
+   * exceeds the cap (so a real "biggest names" selection happened). The card
+   * title then reads "N most-capped players". Null (→ "N players") otherwise:
+   *   - the roster was hand-edited (dirty), or the mode is "manual";
+   *   - the mode is "best"/"worst" (a metric ranking — resolveSeedMetric drives
+   *     that title instead, see currentRosterMeta);
+   *   - every candidate fits within the cap (candidateCount <= cap): all are
+   *     plotted, so no "top N by games" selection actually happened.
+   * There is no 'least' — "topnames" is always most-capped-first. */
   function currentCareerGamesRank() {
+    if (selection.getMode() !== "topnames") return null;
     if (selection.isDirty()) return null;
-    if (selection.getMode() === "manual") return null;
     if (selection.candidateCount() <= activeMaxCap()) return null;
-    return selection.getMode() === "worst" ? "least" : "most";
+    return "most";
+  }
+
+  /** The metric that actually ranked the CURRENT Best/Worst checked set,
+   * resolved for `discipline` — or null if unknown/inapplicable. Prefers the
+   * per-type Best/Worst ranking metric (lastRankMetricKey — bar/donut/scatter-Y
+   * only) when one was used; otherwise falls back to whatever metric ranked the
+   * original SQL seed (seedSortKey — the graph scope's active sort at seed
+   * time), which is exactly right for the "seed sort" fallback types
+   * (radar/phases/slope/byyear/dumbbell) since their checked set's order
+   * literally IS that seed order (or its reverse, for "worst"). Returns null if
+   * there's been no seed yet, or either happened under a DIFFERENT discipline. */
+  function resolveSeedMetric(discipline) {
+    if (lastRankMetricKey && lastRankMetricDiscipline === discipline) {
+      return getMetric(lastRankMetricKey, discipline) || null;
+    }
+    if (!seedSortKey || seedSortDiscipline !== discipline) return null;
+    return getMetric(seedSortKey, discipline) || null;
   }
 
   /** roster-provenance block passed to card.js on every config — see its
-   * rankedCountPhrase() doc comment for how {dirty, careerGamesRank} become the
-   * title's "N most-capped players" / "N least-capped players" / "N players"
-   * phrasing. (`discipline` kept in the signature for call-site stability; the
-   * provenance is no longer metric- or discipline-specific.) */
-  function currentRosterMeta(_discipline) {
-    return { dirty: selection.isDirty(), careerGamesRank: currentCareerGamesRank() };
+   * rankedCountPhrase() doc comment for how {dirty, careerGamesRank,
+   * seedByMetric, rankDir} become the title's phrasing:
+   *   - "topnames" default (clean, pool>cap)  -> "N most-capped players"
+   *   - "best"  (clean)                        -> "top N" / "top N by <metric>"
+   *   - "worst" (clean)                        -> "bottom N" / "bottom N by <metric>"
+   *   - manual / dirty / unknown provenance    -> "N players"
+   * careerGamesRank (topnames) and seedByMetric (best/worst) are mutually
+   * exclusive by mode, so card.js can check them in order. */
+  function currentRosterMeta(discipline) {
+    const mode = selection.getMode();
+    return {
+      dirty: selection.isDirty(),
+      careerGamesRank: currentCareerGamesRank(),
+      seedByMetric: mode === "best" || mode === "worst" ? resolveSeedMetric(discipline) : null,
+      rankDir: mode === "worst" ? "bottom" : "top",
+    };
   }
 
   /** Item 3 (richer invalid-metric messaging): the honest "no metric chosen /
@@ -2917,8 +3044,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * "Graph" button now behave identically here (see enterFromBridge below) —
    * no chart type is pre-selected and no chart renders. If Stats has been
    * searched at least once, its result set becomes the candidate POOL (the
-   * existing top-N-by-current-sort "best" derivation becomes the initial
-   * CHECKED roster for free — see deriveChecked()'s seed-order fallback and
+   * DEFAULT "Top names" derivation — biggest names by career games — becomes
+   * the initial CHECKED roster for free, see deriveChecked() and
    * activeMaxCap()'s pre-type-selection default) so a type click can render
    * immediately with no re-ticking. If Stats has never been searched,
    * seedSelection() no-ops and renderChart() shows the empty-state guidance

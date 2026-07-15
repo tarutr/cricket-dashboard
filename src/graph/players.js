@@ -244,9 +244,11 @@ export async function fetchCareerGames() {
  *     invariant `checked.size <= cap()` at every mutation point in this
  *     module (never allowed to grow past cap; see toggleChecked/addCandidate).
  *     `get()` derives the rendered/queried list from it, in candidate order.
- *   - `mode`: "manual" | "best" | "worst" — which UI is driving `checked`
- *     right now. This module does NOT rank anything itself (ranking needs a
- *     metric VALUE per candidate, which needs a DB query — a chart-domain
+ *   - `mode`: "topnames" | "best" | "worst" | "manual" — which UI is driving
+ *     `checked` right now. "topnames" (DEFAULT) auto-picks the biggest names by
+ *     whole-DB career games; "best"/"worst" rank by the chart's active metric.
+ *     This module does NOT rank anything itself (ranking needs a metric VALUE
+ *     per candidate or a career-games fetch, both DB queries — a chart-domain
  *     concern owned by graph.js's deriveChecked()); it just stores the mode
  *     and lets the caller push a freshly computed checked-set via
  *     setChecked(). "manual" means checked only moves via toggleChecked/
@@ -257,23 +259,27 @@ export async function fetchCareerGames() {
  * see clampToCap()'s onTruncate note — but note the asymmetry with the old
  * single-list model: THERE, any cap-grow-back-later always "restored" hidden
  * players, because the one list was never touched by a shrink, just re-sliced.
- * HERE, that restoring guarantee only holds for "best"/"worst" mode, because
- * those modes fully RE-DERIVE `checked` from the untouched `candidates` pool
- * on every relevant trigger (graph.js's deriveChecked(), called on type
- * switch/metric change/reseed) — so a cap that grows back always re-ranks
- * fresh from the full pool, same observable effect as before. In "manual"
- * mode there is no such re-derivation (checked is the user's literal, ordered
- * choice), so clampToCap() must genuininely trim it on a shrink, and a later
- * grow does NOT bring the trimmed players back on its own — same principle as
- * a user un-ticking those boxes themselves, and the honest thing given manual
+ * HERE, that restoring guarantee only holds for the auto modes ("topnames"/
+ * "best"/"worst"), because those fully RE-DERIVE `checked` from the untouched
+ * `candidates` pool on every relevant trigger (graph.js's deriveChecked(),
+ * called on type switch/metric change/reseed) — so a cap that grows back always
+ * re-ranks fresh from the full pool, same observable effect as before. In
+ * "manual" mode there is no such re-derivation (checked is the user's literal,
+ * ordered choice), so clampToCap() must genuininely trim it on a shrink, and a
+ * later grow does NOT bring the trimmed players back on its own — same principle
+ * as a user un-ticking those boxes themselves, and the honest thing given manual
  * mode is a genuinely new, richer capability (arbitrary picks) the old model
- * never had at all. Default mode is "best", which is what most users will be
- * in most of the time, so the legacy guarantee holds for the common path.
+ * never had at all. Default mode is "topnames", so the legacy guarantee holds
+ * for the common path.
  */
 export function createSelection({ getCap, onChange, onTruncate }) {
   let candidates = []; // FULL ordered pool — never destructively truncated except by removeCandidate
   let checkedIds = new Set(); // invariant: checkedIds.size <= cap() at every point this module returns control
-  let mode = "best"; // "manual" | "best" | "worst"
+  // "topnames" (DEFAULT) | "best" | "worst" | "manual". "topnames" is the
+  // biggest-names-by-career-games auto-select (R6b); "best"/"worst" rank by the
+  // chart's active metric; "manual" is hand-picked. This module stores the mode
+  // only — graph.js's deriveChecked() computes the checked set per mode.
+  let mode = "topnames";
   // Batch 3 part 2 (honest titles, decision 43), redefined for the two-list
   // model (decision 44d): "dirty" now means the CHECKED set was shaped by a
   // manual tick/untick/add/remove since the last fresh seed or the last
