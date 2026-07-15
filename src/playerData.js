@@ -336,6 +336,28 @@ export async function fetchProfile(playerId) {
   return rows[0] ?? null;
 }
 
+/**
+ * A player's gender ('male' | 'female'), or null if the id has no rows at
+ * all. Player-page/popup scope building (R4 Wave 2, header-search entry —
+ * see playerPage.js's buildFixedScopeState) needs the SEARCHED PLAYER'S own
+ * gender, never the table's current gender setting, so a women's player
+ * found from a men's-view table still resolves correctly. One row is enough:
+ * a player_id never appears under both genders (a player plays either men's
+ * or women's cricket, never both, in this dataset), so any row's `gender`
+ * column is authoritative — no GROUP BY/aggregation needed.
+ *
+ * Note this is currently a defensive/future-proofing value, not one that
+ * changes any number rendered today: every player-page/popup query filters
+ * by this exact player_id already (whereFor() below), so the gender column
+ * is redundant to the result set regardless — see pageScopeClauses' own
+ * `includeGender: false` a few lines up, which has always been true for
+ * every entry path, not just the new header-search one.
+ */
+export async function fetchPlayerGender(playerId) {
+  const { rows } = await query(`SELECT gender FROM player_matches WHERE player_id = '${esc(playerId)}' LIMIT 1`);
+  return rows[0]?.gender ?? null;
+}
+
 const BATTING_SUMMARY_KEYS = ["innings", "runs", "average", "strike_rate", "balls_per_dismissal", "high_score"];
 const BOWLING_SUMMARY_KEYS = ["innings", "wickets", "average", "economy", "strike_rate", "best"];
 const SPLIT_BATTING_KEYS = ["innings", "runs", "average", "strike_rate"];

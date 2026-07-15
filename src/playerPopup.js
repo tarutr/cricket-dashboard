@@ -136,9 +136,18 @@ export function mountPlayerPopup(hostEl, store, { onGraphPlayer } = {}) {
     });
   }
 
-  function open(id, name) {
+  /**
+   * `opts.fixedScope` (R4 Wave 2, owner ruling): header-search entry only —
+   * see main.js's two onOpenPlayer wirings. true means "show this player's
+   * ENTIRE dataset under a fixed since-2020/T20/both-team-types default,
+   * never the table's applied filters"; playerPage.js's showPlayer() does
+   * the actual scope substitution. Omitted (table-row entry, main.js's
+   * onPlayerClick) keeps the pre-existing behaviour byte-for-byte: the popup
+   * scoped to whatever Format/Date/Team type the table currently has applied.
+   */
+  function open(id, name, opts = {}) {
     chooser.close(); // defensive: a stale chooser shouldn't survive a reopen for a different player
-    page.showPlayer(id, name);
+    page.showPlayer(id, name, opts);
     els.popup.hidden = false;
     els.body.scrollTop = 0;
     els.panel.focus();

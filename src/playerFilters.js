@@ -249,10 +249,21 @@ export function mountPlayerFilters(hostEl, { onApply }) {
     close();
   });
 
+  // This drawer's own date selects are MONTH-granular ("YYYY-MM" option
+  // values, see monthOptionsHTML) — but pageState.dateFrom/dateTo may now
+  // arrive DAY-granular ("YYYY-MM-DD"), either from the main scope strip's
+  // day-level date inputs (pre-existing, Batch 1B) or from a header-search
+  // popup's fixed "2020-01-01" default (R4 Wave 2). Truncate to the leading
+  // "YYYY-MM" so the right month still shows pre-selected instead of
+  // silently matching nothing and falling back to the blank "—" option.
+  function toMonthValue(v) {
+    return v ? v.slice(0, 7) : v;
+  }
+
   function renderAll() {
     const { minMonth, maxMonth } = dateBounds();
-    els.dateFrom.innerHTML = monthOptionsHTML(minMonth, maxMonth, pending.dateFrom ?? ctx.pageState.dateFrom);
-    els.dateTo.innerHTML = monthOptionsHTML(minMonth, maxMonth, pending.dateTo ?? ctx.pageState.dateTo);
+    els.dateFrom.innerHTML = monthOptionsHTML(minMonth, maxMonth, toMonthValue(pending.dateFrom ?? ctx.pageState.dateFrom));
+    els.dateTo.innerHTML = monthOptionsHTML(minMonth, maxMonth, toMonthValue(pending.dateTo ?? ctx.pageState.dateTo));
     renderPositions();
     els.opposition.disabled = ctx.pageState.teamType !== "international";
     els.oppNote.hidden = ctx.pageState.teamType === "international";

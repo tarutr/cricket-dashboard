@@ -433,9 +433,22 @@ export function overlayTokens(overlay) {
 }
 
 /** Honest scope sentence: the page's own three filters (Format/Date/Team
- * type, unchanged from pre-B7) plus the overlay's tokens, plus the fixed
- * caveat. */
-export function scopeLine(state, overlay) {
+ * type, unchanged from pre-B7) plus the overlay's tokens, plus a trailing
+ * caveat.
+ *
+ * `fixedDefault` (R4 Wave 2, owner ruling): true for header-search-opened
+ * popups, whose Format/Date/Team type are a FIXED full-history default —
+ * never the table's applied filters (see playerPage.js's
+ * buildFixedScopeState/effectiveState). The original caveat
+ * ("leaderboard-only filters don't apply here") was written for the case
+ * where Format/Date/Team type themselves DO still come from the table's
+ * scope strip and only the drawer's OWN extra filters (team, min innings,
+ * profile, position/opposition, stat conditions) don't apply — true of
+ * table-row entry, still the default here. That framing would be
+ * incomplete for a fixed-default popup, where the scope strip itself is
+ * ALSO not the table's — so this case gets its own, still 100% honest,
+ * wording instead of silently reusing one that only tells half the story. */
+export function scopeLine(state, overlay, { fixedDefault = false } = {}) {
   const parts = [];
   if (state.formats && state.formats.length) parts.push(state.formats.join(" + "));
   const fromLbl = monthLabel(state.dateFrom);
@@ -446,7 +459,9 @@ export function scopeLine(state, overlay) {
   const teamTypeStr = TEAM_TYPE_LABELS[state.teamType];
   if (teamTypeStr) parts.push(teamTypeStr);
   for (const t of overlayTokens(overlay)) parts.push(t);
-  const suffix = "leaderboard-only filters don't apply here";
+  const suffix = fixedDefault
+    ? "fixed default view, not the table's filters — narrow with Filters below"
+    : "leaderboard-only filters don't apply here";
   return parts.length ? `${parts.join(" · ")} · ${suffix}` : suffix;
 }
 

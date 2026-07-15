@@ -26,6 +26,7 @@
 
 import {
   fetchProfile,
+  fetchPlayerGender,
   searchPlayers,
   fetchBattingCore,
   fetchBattingPositions,
@@ -35,6 +36,7 @@ import {
   fetchBowlingOpposition,
   fetchBowlingMatchups,
 } from "./playerData.js";
+import { getManifest } from "./db.js";
 import { escHtml, escAttr } from "./html.js";
 import { mountPlayerFilters } from "./playerFilters.js";
 import {
@@ -61,6 +63,57 @@ function scopeKeyFor(state) {
  * next switch, not eagerly). */
 function cacheKeyFor(state, overlay) {
   return JSON.stringify([scopeKeyFor(state), overlay]);
+}
+
+// ── Fixed scope (R4 Wave 2, owner ruling) ────────────────────────────────────
+// The header search is reachable from anywhere and isn't "a row of the
+// table's current result set" the way clicking a name in the leaderboard is
+// — so its popup must NOT inherit the table's applied Format/Date/Team type.
+// mountPlayerPopup's `open(id, name, { fixedScope })` forwards that flag into
+// showPlayer() below; `fixedScopeState`, once resolved, becomes the ONE
+// object every scope-consuming call in this file reads instead of
+// store.get() — see effectiveState(). Table-row entry (main.js's
+// onPlayerClick, no opts) and the popup's own "Find another player" search
+// (showPlayer() called with no opts either, same code path as a fresh
+// player) never set fixedScope, so they read the live global store exactly
+// as before — byte-identical to pre-R4-Wave-2 behaviour.
+
+/**
+ * The fixed full-history default: Since-2020-to-the-data's-max-date (same
+ * bound math as filters.js's "Since 2020" preset — duplicated rather than
+ * imported because applyPreset() is file-private there; getManifest() is the
+ * same max-date source that preset itself reads via db.js), T20, both team
+ * types, and the SEARCHED PLAYER'S OWN gender (never the table's — a
+ * women's player found from a men's-view table must still resolve
+ * correctly). `gender` is passed in already-resolved (see showPlayer/
+ * loadAndRenderPlayer, which fetch it via playerData.js's
+ * fetchPlayerGender before calling this) since it depends on which player
+ * was searched, not on anything synchronous at open time.
+ *
+ * Note: gender is currently inert to every query this file's pipeline runs
+ * (pageScopeClauses always passes includeGender:false — see playerData.js's
+ * header, a player_id already pins the rows to one gender) — it's threaded
+ * through here for correctness/future-proofing, not because it changes any
+ * number rendered today. `fallbackGender` (the CALLER's store.get().gender —
+ * this function is module-scope, outside mountPlayerPage's closure, so it
+ * can't read the store itself) only fires if fetchPlayerGender found nothing
+ * for this id, which pageScopeClauses would ignore either way.
+ */
+function buildFixedScopeState(gender, fallbackGender) {
+  const manifest = getManifest();
+  const minDate = manifest?.data?.min_match_date || null;
+  const maxDate = manifest?.data?.max_match_date || null;
+  let dateFrom = "2020-01-01";
+  if (minDate && minDate > dateFrom) dateFrom = minDate; // never claim data earlier than the loaded snapshot
+  let dateTo = maxDate || dateFrom;
+  if (dateFrom > dateTo) dateFrom = dateTo; // defensive: never invert the window
+  return {
+    gender: gender || fallbackGender || "male",
+    formats: ["T20"],
+    dateFrom,
+    dateTo,
+    teamType: "both",
+  };
 }
 
 function syncSegmented(el, value) {
@@ -181,6 +234,22 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
   let cacheKey = null; // cacheKeyFor(state, overlay) the cached data below matches
   const data = { batting: undefined, bowling: undefined }; // undefined=not fetched, "loading", "error", or the fetched {core, ...extra}
 
+  // R4 Wave 2 (header-search entry): true for the lifetime of the CURRENT
+  // showPlayer() call when opened via { fixedScope: true } (main.js's header
+  // search only). fixedScopeState is the resolved override object (null
+  // until the async gender lookup in loadAndRenderPlayer() below resolves,
+  // and always null when fixedScope is false) — effectiveState() is the ONE
+  // seam every scope-consuming call below reads through, so table-row entry
+  // (fixedScope never set) is untouched: effectiveState() degrades to
+  // store.get() exactly as every call site read it before this task.
+  let fixedScope = false;
+  let fixedScopeState = null;
+
+  /** The state every scope-consuming call in this file should read. */
+  function effectiveState() {
+    return fixedScopeState || store.get();
+  }
+
   // The filters-drawer overlay is `position: fixed` (see styles.css's
   // .player-filters-drawer) and must escape the popup's own scrolling body —
   // mounted as a sibling of the app's other overlay hosts (index.html's
@@ -240,7 +309,7 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
     if (filtersBtn) {
       filtersBtn.addEventListener("click", () => {
         if (!current) return;
-        filters.open({ playerId: current.id, discipline: activeDiscipline, pageState: store.get(), overlay });
+        filters.open({ playerId: current.id, discipline: activeDiscipline, pageState: effectiveState(), overlay });
       });
     }
 
@@ -267,8 +336,10 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
   function renderScopeArea() {
     const el = container.querySelector('[data-role="scope-area"]');
     if (!el) return;
-    const state = store.get();
-    el.innerHTML = `<p class="player-page__scope">${escHtml(scopeLine(state, overlay))}</p>${overlayPillsHTML(overlay)}`;
+    const state = effectiveState();
+    el.innerHTML = `<p class="player-page__scope">${escHtml(
+      scopeLine(state, overlay, { fixedDefault: fixedScope })
+    )}</p>${overlayPillsHTML(overlay)}`;
     el.querySelectorAll(".pill__x").forEach((btn) => {
       btn.addEventListener("click", () => {
         clearOverlayDim(btn.dataset.dim);
@@ -364,7 +435,7 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
    * the body immediately (toggle click / Filters apply); the initial load
    * always renders. */
   async function loadDiscipline(discipline, { render }) {
-    const key = cacheKeyFor(store.get(), overlay);
+    const key = cacheKeyFor(effectiveState(), overlay);
     if (key !== cacheKey) {
       invalidateCaches();
       cacheKey = key;
@@ -386,7 +457,7 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
 
     let result;
     try {
-      result = await fetchDisciplineData(discipline, playerRef.id, store.get(), overlay);
+      result = await fetchDisciplineData(discipline, playerRef.id, effectiveState(), overlay);
     } catch (err) {
       if (token !== loadToken || current !== playerRef) return; // superseded — don't clobber newer data
       data[discipline] = { error: err };
@@ -456,23 +527,41 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
       }
       return;
     }
-    const state = store.get();
+    const state = effectiveState();
     el.innerHTML =
       activeDiscipline === "batting" ? battingGridHTML(state, entry.core, entry) : bowlingGridHTML(state, entry.core, entry);
   }
 
   async function loadAndRenderPlayer() {
     const playerRef = current;
-    const state = store.get();
-    scopeKey = scopeKeyFor(state);
+    const wantsFixedScope = fixedScope;
+    // Non-fixed (table-row entry, unchanged): scopeKey freezes on the live
+    // store synchronously, exactly as before this task — nothing below in
+    // this branch's timing changed. Fixed-scope popups defer scopeKey until
+    // fixedScopeState resolves (below), since it depends on the async gender
+    // lookup; nothing reads scopeKey in between (renderScopeArea/
+    // loadDiscipline only run after that point either way).
+    scopeKey = wantsFixedScope ? null : scopeKeyFor(store.get());
     const token = ++loadToken;
 
     container.innerHTML = loadingShellHTML(playerRef);
     bindShell(loadAndRenderPlayer);
 
     try {
-      profile = await fetchProfile(playerRef.id);
+      // R4 Wave 2: resolve the profile and (fixed-scope only) this player's
+      // own gender in parallel — same one network round-trip the loading
+      // shell already covers, so header-search popups open with no added
+      // perceived delay over the pre-existing table-row path.
+      const [profileResult, genderResult] = await Promise.all([
+        fetchProfile(playerRef.id),
+        wantsFixedScope ? fetchPlayerGender(playerRef.id) : Promise.resolve(null),
+      ]);
       if (token !== loadToken || current !== playerRef) return;
+      profile = profileResult;
+      if (wantsFixedScope) {
+        fixedScopeState = buildFixedScopeState(genderResult, store.get().gender);
+        scopeKey = scopeKeyFor(fixedScopeState);
+      }
 
       container.innerHTML = pageShellHTML({ current: playerRef, profile });
       bindShell(loadAndRenderPlayer);
@@ -487,7 +576,16 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
 
   // ---------- Public API ----------
 
-  function showPlayer(id, name) {
+  /**
+   * `opts.fixedScope` (R4 Wave 2): set only by main.js's header-search
+   * onOpenPlayer wiring, via playerPopup.js's `open(id, name, opts)`. Every
+   * other caller — main.js's onPlayerClick (table-row entry), and this
+   * file's own "Find another player" search result buttons just above,
+   * neither of which pass opts — leaves it false, so effectiveState()
+   * degrades to store.get() and this popup behaves exactly as it always
+   * has: scoped to the table's currently applied Format/Date/Team type.
+   */
+  function showPlayer(id, name, opts = {}) {
     current = { id, name };
     // Fresh player: reset everything popup-local (task 4/decision 44a — the
     // overlay and the discipline tab are cleared on every player switch, and
@@ -497,6 +595,8 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
     overlay = null;
     invalidateCaches();
     profile = null;
+    fixedScope = Boolean(opts.fixedScope);
+    fixedScopeState = null; // resolved in loadAndRenderPlayer once gender is known
     filters.close();
     loadAndRenderPlayer();
   }
@@ -506,15 +606,19 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
       renderSearchMode();
       return;
     }
-    if (scopeKeyFor(store.get()) !== scopeKey) {
+    if (scopeKeyFor(effectiveState()) !== scopeKey) {
       loadAndRenderPlayer();
     }
-    // Same player, same scope: the DOM from the last render is still correct.
+    // Same player, same scope: the DOM from the last render is still
+    // correct. For a fixed-scope popup effectiveState() always returns the
+    // same frozen fixedScopeState object, so this is always false — a
+    // header-search popup never silently re-scopes itself off a later table
+    // filter change.
   }
 
   function onScopeChanged() {
     if (!current) return; // search mode: filters don't apply, nothing to do
-    if (scopeKeyFor(store.get()) !== scopeKey) {
+    if (scopeKeyFor(effectiveState()) !== scopeKey) {
       loadAndRenderPlayer();
     }
   }

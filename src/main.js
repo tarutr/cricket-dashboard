@@ -560,8 +560,18 @@ function boot() {
         // result. Dispatching "input" (not just setting .value) keeps
         // omnisearch.js's own internal state (rows/currentTerm) in sync with
         // the now-empty box, exactly as if the user had cleared it by hand.
+        // R4 Wave 2 (owner ruling): the header search is reachable regardless
+        // of the table's applied filters, so its popup must not silently
+        // inherit them either — { fixedScope: true } tells playerPopup.js /
+        // playerPage.js to substitute the fixed full-history default (since
+        // 2020, T20, both team types, this player's own gender) in place of
+        // the live scope strip. Contrast with onPlayerClick below (table-row
+        // entry, mountTable's callback further down) and the table-search
+        // box's onOpenPlayer above (mountTableToolbarExtras) — neither passes
+        // this flag, so both keep pinning/opening scoped to the table's
+        // current filters exactly as before.
         onOpenPlayer: (id, name) => {
-          playerPopupController.open(id, name);
+          playerPopupController.open(id, name, { fixedScope: true });
           headerSearchInputEl.value = "";
           headerSearchInputEl.dispatchEvent(new Event("input", { bubbles: true }));
         },
