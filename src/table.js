@@ -1067,10 +1067,11 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
       <div class="table-pills-host" data-role="table-pills-host"></div>
       <div class="table-body-wrap" data-role="table-body-wrap">
         <div class="table-loading-overlay" aria-live="polite" hidden>Running query…</div>
-        <div class="table-scroll"><table class="data-table"><thead></thead><tbody></tbody></table></div>
-      </div>
-      <div class="table-show-more" data-role="table-show-more" hidden>
-        <button type="button" class="btn btn--ghost" data-role="show-more-btn"></button>
+        <div class="table-scroll"><table class="data-table"><thead></thead><tbody></tbody></table>
+          <div class="table-show-more" data-role="table-show-more" hidden>
+            <button type="button" class="btn btn--ghost" data-role="show-more-btn"></button>
+          </div>
+        </div>
       </div>
     `;
     toolbarEl = container.querySelector(".table-toolbar__dynamic");
