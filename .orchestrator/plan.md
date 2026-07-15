@@ -219,8 +219,36 @@ describeScope "grouped by" token (describeScope itself LIVE via graph.js:1952
 footer); search appearances CTE = full player_matches aggregate per keystroke
 (could restrict to hit ids); esc() LIKE-wildcard quirk (%/_); R.Pos condition
 exclusion belongs in drawer dropdown; file splits (graph.js ~2600,
-table.js ~2136). STATUS: ROUND 3 COMPLETE — AWAITING OWNER GATE (review on
-localhost:8000; merge to main stays owner-gated).
+table.js ~2136). ROUND 4 (owner verdicts 2026-07-15, 11 items; plan approved w/ ODM =
+"Domestic Limited Overs"): W1a 22186f6 (preset dropdown + Since 2020 —
+upper bound = data max date, owner may want wall-clock today; condition
+order G/D/F/TT/Date; format renames First Class/Domestic Limited Overs in
+filters.js FORMAT_DISPLAY_LABELS, display-only; "Regular position" label
+override in drawer.js ADD_CONDITION_LABEL_OVERRIDES) + W1b 2f26a20
+(standalone graph: graphScopeApplied flag joins hasStatsResults gate, root
+cause = seedSelection() hard-gated on Stats results; empty-state text names
+graph Filters; visible date-validation msg; metric-aware recommend() rule
+table replaces static pool≥10→Scatter; radar = checkbox dropdown max 10
+min 3, radarGroups.js DELETED, radar-valid = higherIsBetter!==null — newly
+exposes direction-having totals as axes, flag to owner; per-type metric
+lists already filtered elsewhere, radar was the outlier) + 4d38b52
+orchestrator fix (.filters-popup .filter-bar align-items flex-end→
+flex-start; taller date column stranded selects below dead space; base
+.filter-bar too). ALL W1 VERIFIED LIVE 2026-07-15: fresh-load standalone
+flow (no-dates Apply → red "Choose a start and end date"; Since 2020 →
+2020-01-01→2026-07-13 data-max; Apply → pool 15 of 3,563); Runs→Bar rec,
+Average→Scatter rec; Donut list totals-only + honest refusal intact; radar
+3 of 17 metrics → 6 small multiples (SA Yadav/Rizwan/Babar/Buttler…);
+format list Test/ODI/T20/First Class/Domestic Limited Overs; "Regular
+position" in add-condition; console clean. REMAINING R4: W2 = item 9
+header-search popup fixed scope (since 2020-01-01, T20 default, ALL team
+types — playerPopup/playerData/main.js, anchor-verify vs manual equivalent
+search) solo; W3 = item 11 cleanup batch (stale graph footer matchupVs
+token, benchmarkChart dead branch + orphaned CSS, splitBy plumbing +
+dead splitAllowed import, appearances-CTE perf restrict-to-hit-ids, esc()
+%/_ note, R.Pos condition exclusion from drawer dropdown) solo. Item 10 =
+no floors anywhere CONFIRMED (already built state). STATUS: R4 W1 DONE —
+awaiting owner gate for W2.
 TOOLING NOTES: preview_start by launch.json name intermittently fails ('no
 launch.json' despite valid file) — fallback: Bash `python3 -m http.server 8000`
 run_in_background + preview_start {url:'http://localhost:8000'}. Browser caches ES
