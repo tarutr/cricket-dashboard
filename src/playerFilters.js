@@ -265,8 +265,13 @@ export function mountPlayerFilters(hostEl, { onApply }) {
     els.dateFrom.innerHTML = monthOptionsHTML(minMonth, maxMonth, toMonthValue(pending.dateFrom ?? ctx.pageState.dateFrom));
     els.dateTo.innerHTML = monthOptionsHTML(minMonth, maxMonth, toMonthValue(pending.dateTo ?? ctx.pageState.dateTo));
     renderPositions();
-    els.opposition.disabled = ctx.pageState.teamType !== "international";
-    els.oppNote.hidden = ctx.pageState.teamType === "international";
+    // R7 (owner: opposition "show everything"): the vs-opposition splits table
+    // is no longer international-only, so the in-popup opposition-NARROWING
+    // control is un-gated too — usable for all team types (its option list is
+    // the player's actual opponents in scope, club/franchise included). The old
+    // "international-only" note is always hidden now.
+    els.opposition.disabled = false;
+    els.oppNote.hidden = true;
   }
 
   els.closeBtn.addEventListener("click", close);
