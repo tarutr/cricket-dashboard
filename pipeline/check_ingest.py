@@ -62,7 +62,7 @@ def _parse_log(text):
     return errors_count, failed
 
 
-def main():
+def _run():
     if not LOG_PATH.exists():
         print(f"check_ingest: {LOG_PATH} not found — nothing to check; exit 0")
         return 0
@@ -145,6 +145,19 @@ def main():
     state["failures"] = new_failures
     state_store.put_json(STATE_KEY, state)
     return 0  # stay green
+
+
+def main():
+    # Advisory health-report step — a transient failure (e.g. an R2 pipeline-state
+    # blip inside state_store) must NEVER fail the whole data refresh, which runs
+    # BEFORE the export step. Mirror queue_new_for_review.py: log and exit 0 on any
+    # runtime error. (SystemExit from bad CLI args is a BaseException and still
+    # propagates, so genuine misconfiguration stays loud.)
+    try:
+        return _run()
+    except Exception as e:  # noqa: BLE001 — never fail the run
+        print(f"check_ingest: non-fatal error: {e!r} — exiting 0")
+        return 0
 
 
 if __name__ == "__main__":

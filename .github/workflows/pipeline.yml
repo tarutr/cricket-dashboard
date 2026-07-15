@@ -108,6 +108,17 @@ jobs:
             echo "::warning::Could not push review/new_players_for_review.csv after retries — will retry next run"
           fi
 
+      - name: Export parquet + manifest
+        run: python export_parquet.py --db data/cricket.duckdb --out /tmp/export --upload
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+
+      # DB upload runs AFTER the export step on purpose: export_parquet.py's 21
+      # validation gates + spot-checks run there and abort the run on failure, so
+      # they gate the database upload too — a cricket.duckdb that fails
+      # cricket-correctness validation is never published to R2.
       - name: Upload cricket.duckdb to R2
         if: vars.DB_UPLOAD_ENABLED == 'true'
         run: python pipeline/upload_db.py
@@ -117,14 +128,7 @@ jobs:
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
       - name: DB upload skipped
         if: vars.DB_UPLOAD_ENABLED != 'true'
-        run: echo "DB upload SKIPPED — repository variable DB_UPLOAD_ENABLED is not 'true' (old pipeline still owns cricket.duckdb)"
-
-      - name: Export parquet + manifest
-        run: python export_parquet.py --db data/cricket.duckdb --out /tmp/export --upload
-        env:
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+        run: echo "DB upload SKIPPED — repository variable DB_UPLOAD_ENABLED is not 'true'"
 
       - name: Fail run if profiles fetch fell back
         run: |

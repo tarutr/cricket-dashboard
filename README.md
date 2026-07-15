@@ -19,28 +19,33 @@ sequentially:
    already ingested, one transaction per file).
 3. *(from Phase D2 onward)* Fetch the Cricinfo player-profiles sheet from Dropbox
    and rebuild the `player_profiles` table.
-4. Upload `cricket.duckdb` back to R2 — **gated** behind the repository variable
-   `DB_UPLOAD_ENABLED`. See below.
-5. Export the Parquet tables + `manifest.json` from the freshly-ingested local DB
-   and upload them to R2.
+4. Export the Parquet tables + `manifest.json` from the freshly-ingested local DB
+   and upload them to R2. This step runs `export_parquet.py`'s 21 validation gates
+   + spot-checks first and **aborts the run on any failure**, before uploading.
+5. Upload `cricket.duckdb` back to R2 — **gated** behind the repository variable
+   `DB_UPLOAD_ENABLED` (see below) *and* behind step 4: because the upload runs
+   after the export, the validation gates gate the database too, so a DB that
+   fails cricket-correctness validation is never published.
 
 The workflow uses a `concurrency` group (`data-pipeline`) so two runs can never
 overlap and clobber each other's DB upload, and every step relies on default
-failure behavior — any step failing fails the whole run, and a run that fails
-never reaches the upload step, so a partially-built DB is never published.
+failure behavior — any step failing fails the whole run, and a failed run never
+reaches the upload steps, so a partially-built or unvalidated DB is never published.
 
 ### The `DB_UPLOAD_ENABLED` latch
 
-This repo used to only export Parquet from a DB owned by the old `wt20-guide`
-pipeline. During the migration, `pipeline.yml` downloads and ingests into
-`cricket.duckdb` but the "Upload cricket.duckdb to R2" step only runs
-`if: vars.DB_UPLOAD_ENABLED == 'true'` — an unset repository variable is falsy, so
-uploads are **off by default**. This guarantees the old pipeline keeps owning the
-live database until the owner has verified this repo's ingestion end-to-end and
-explicitly disabled the old workflow. When skipped, the run logs a loud
-`DB upload SKIPPED` message so the gate is never silent. The owner flips it on by
-setting the `DB_UPLOAD_ENABLED` repository variable to `true` in
-Settings → Secrets and variables → Actions → Variables.
+`DB_UPLOAD_ENABLED` is a GitHub **repository variable** (Settings → Secrets and
+variables → Actions → Variables) that gates the "Upload cricket.duckdb to R2" step
+via `if: vars.DB_UPLOAD_ENABLED == 'true'`.
+
+It dates from the migration: this repo used to only export Parquet from a database
+owned by the old `wt20-guide` pipeline, and the latch kept this repo from uploading
+`cricket.duckdb` until its ingestion was verified end-to-end. **That handover is
+complete** — `DB_UPLOAD_ENABLED` is set to `true`, this repo now owns
+`cricket.duckdb` on R2, and the old `wt20-guide` "Update Data" workflow has been
+disabled (see the D0 gate in `review/owner_decisions.md`). If the variable is ever
+unset or not `'true'`, the upload is skipped and the run logs a loud
+`DB upload SKIPPED` message so the gate is never silent.
 
 ### `pipeline/`
 
