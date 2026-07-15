@@ -886,15 +886,16 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
  * ONE shared honest footer (card.js's, untouched) and NO per-mini legends.
  *
  * All minis share ONE scale: each axis is a PERCENTILE RANK (0-100) over the
- * ENTIRE filtered pool (R5 Wave 1b, item 4 — `poolRows`, benchmark.js's
- * fetchBenchmarkPool result), inverting lower-is-better metrics so outward
+ * CANDIDATE SET (R6, owner fix 1 — `poolRows`, benchmark.js's
+ * fetchBenchmarkPool result, now restricted to the candidate ids: the "N" in
+ * the roster's "X of N selected"), inverting lower-is-better metrics so outward
  * always means better. So the same spoke means the same thing on every mini,
- * and it's a rank against the whole field (e.g. all 120 matching players), not
- * a normalise within the <=6 plotted. Tooltips still show the REAL value plus
- * its percentile. A player missing hasMetricData for ANY of the selected
- * metrics is excluded from the whole grid (visible note, same rule as before);
- * their raw values are read from the SAME pool (every in-scope player is in
- * it), so no second per-player query runs.
+ * and it's a rank against the players the user is actually comparing (those N),
+ * not a normalise within the <=6 plotted and not the whole scope. Tooltips
+ * still show the REAL value plus its percentile. A player missing hasMetricData
+ * for ANY of the selected metrics is excluded from the whole grid (visible
+ * note, same rule as before); their raw values are read from the SAME pool
+ * (every candidate is in it), so no second per-player query runs.
  *
  * R4 Wave 1b (item 3): `metrics` is now the user's individually-checked radar
  * metric set (up to 10), not a fixed group's members — this renderer never
@@ -917,11 +918,12 @@ export function buildRadarSmallMultiples(canvas, chartRef, { metrics, players, p
   const chartArea = canvas.parentElement;
   canvas.hidden = true;
 
-  // R5 Wave 1b (item 4): each axis is a PERCENTILE RANK over the ENTIRE
-  // filtered pool (`poolRows` = benchmark.js's fetchBenchmarkPool result — one
-  // row per in-scope player, checked ones included), NOT a min/max normalise
-  // within the <=6 plotted players. So "80 on the Strike Rate axis" means
-  // "faster than 80% of the filtered field", the same reading on every mini.
+  // R6 (owner fix 1): each axis is a PERCENTILE RANK over the CANDIDATE SET
+  // (`poolRows` = benchmark.js's fetchBenchmarkPool result, restricted to the
+  // candidate ids — one row per candidate, checked ones included), NOT a
+  // min/max normalise within the <=6 plotted players and NOT the whole scope.
+  // So "80 on the Strike Rate axis" means "faster than 80% of the selected
+  // players", the same reading on every mini.
   //
   // Per-metric distribution: every pool value that passes §8.1 hasMetricData
   // (a NULL/0 rate is genuine no-data, excluded from the ranking population),
@@ -1054,9 +1056,11 @@ export function buildRadarSmallMultiples(canvas, chartRef, { metrics, players, p
     },
   };
 
-  // Honest note: axes are percentiles vs the whole filtered pool, not the
-  // plotted handful — say so, and say how big that pool is.
-  const note = poolCount > 0 ? `Axes show percentile rank against the ${poolCount} players in the current filter.` : null;
+  // Honest note (R6, owner fix 1 & 3): axes are percentiles vs the CANDIDATE
+  // SET — the players in the current selection (the "N" the roster is working
+  // with), not the plotted handful and not the whole gender/format/date scope.
+  // Say so, and say how big that pool actually is.
+  const note = poolCount > 0 ? `Axes show percentile rank against the ${poolCount} players in the current selection.` : null;
 
   return { excluded, note };
 }

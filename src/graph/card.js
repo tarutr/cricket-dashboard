@@ -55,39 +55,35 @@ function slugify(text) {
 }
 
 /**
- * Batch 3 part 2 (decision 43) — the title-honesty fix. Previously bar/donut/
- * radar titles said "top N" (or a bare "N players") purely from playerCount,
- * regardless of how the roster actually got to be N players — so a table
- * sorted by average, turned into a bar chart of Runs, still read "Runs — top
- * 15" even though the 15 shown are the top-15-BY-AVERAGE, not top-15-by-runs.
+ * Honest roster-count phrasing for the paper-card title (§8.4).
+ *
+ * R6 (owner fix 2): the Graph Builder auto-selects WHICH players to plot by
+ * whole-DB career games — the biggest names — NOT by the charted metric (see
+ * graph.js's deriveChecked). So a clean auto-picked roster is honestly "the
+ * most-capped players", never "top N by <metric>" (that old phrasing implied
+ * the N shown were top-BY-metric, which is no longer how they're chosen). This
+ * is true even though bar/donut still SORT their displayed bars/slices by the
+ * metric value for readability — that's display order, not who's included.
+ *
  * `roster` (passed in on config by graph.js, sourced from the selection
- * controller's dirty flag — players.js's createSelection — plus the metric
- * that ranked the last seed) makes the roster's provenance explicit instead
- * of inferred:
- *   - clean seed, ranked by the metric actually being charted -> "top N"
- *   - clean seed, ranked by a DIFFERENT metric -> "top N by <that metric>"
- *   - manually edited (or provenance unknown/unresolvable) -> "N players"
- * `displayedMetricKey` is the metric key this chart is ranking/showing (bar's
- * metric, donut's metric); radar has no single "displayed" metric (it shows
- * several chosen metric axes at once), so it passes null and always takes the
- * "by X" or "N players" branch — there's no metric it could coincidentally
- * match. Scatter makes no
- * count claim ("X vs Y") so it never calls this at all.
+ * controller's dirty flag plus how the checked set was chosen) makes the
+ * provenance explicit:
+ *   - clean auto-pick, "best" mode, pool bigger than the cap -> "N most-capped players"
+ *   - clean auto-pick, "worst" mode, pool bigger than the cap -> "N least-capped players"
+ *   - manually edited, OR everyone in the pool is plotted (no top-N selection
+ *     happened), OR provenance unknown -> "N players"
+ * `displayedMetricKey` is accepted for call-site stability (bar/donut pass their
+ * metric key) but is no longer used — selection is metric-independent now.
+ * Scatter makes no count claim ("X vs Y") so it never calls this at all.
  */
-function rankedCountPhrase(baseLabel, playerCount, roster, displayedMetricKey) {
+function rankedCountPhrase(baseLabel, playerCount, roster, _displayedMetricKey) {
   const dirty = roster ? Boolean(roster.dirty) : true; // unknown provenance = treat as dirty, never overclaim
-  const seedByMetric = roster ? roster.seedByMetric : null;
-  if (!dirty && seedByMetric) {
-    if (displayedMetricKey && seedByMetric.key === displayedMetricKey) {
-      return `${baseLabel} — top ${playerCount}`;
-    }
-    // Lowercase the whole label for mid-sentence use ("by batting average"),
-    // preserving all-caps tokens (SR, BBI) and non-alphabetic chunks as-is.
-    const lower = seedByMetric.label
-      .split(" ")
-      .map((w) => (/^[A-Z][a-z]/.test(w) ? w.charAt(0).toLowerCase() + w.slice(1) : w))
-      .join(" ");
-    return `${baseLabel} — top ${playerCount} by ${lower}`;
+  const rank = roster ? roster.careerGamesRank : null; // 'most' | 'least' | null
+  if (!dirty && rank === "most") {
+    return `${baseLabel} — ${playerCount} most-capped player${playerCount === 1 ? "" : "s"}`;
+  }
+  if (!dirty && rank === "least") {
+    return `${baseLabel} — ${playerCount} least-capped player${playerCount === 1 ? "" : "s"}`;
   }
   return `${baseLabel} — ${playerCount} player${playerCount === 1 ? "" : "s"}`;
 }

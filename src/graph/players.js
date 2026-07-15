@@ -196,6 +196,43 @@ export async function searchPlayers(store, searchText) {
 }
 
 /**
+ * Whole-database career games per player — the SAME "appearances" measure the
+ * omnisearch player search ranks by (playerData.js's searchPlayers:
+ * COUNT(DISTINCT match_id) over ALL player_matches rows for a player_id, every
+ * gender/format/date, NOT the current leaderboard scope). This is what the
+ * Graph Builder's auto-selection ranks candidates by so the biggest names are
+ * always the ones plotted when a chart has to choose which of many candidates
+ * to draw (R6, owner fix 2 — "we want the biggest names selected always").
+ *
+ * NOTE (numbers rule): this measures WHICH players get auto-selected, never
+ * what any metric computes for a player. It is deliberately scope-INDEPENDENT
+ * (whole-DB games, not filtered-scope games, not the charted metric) exactly
+ * as the owner specified and as the search ranking already works.
+ *
+ * The whole map is fetched ONCE per session and cached: it's a single small
+ * GROUP BY over player_matches (one row per player, a few thousand rows), and
+ * it never changes within a session (the Parquet is static), so every
+ * subsequent auto-pick is a pure in-memory lookup with no query latency.
+ * Returns a Map(player_id -> games:number); ids absent from the map (no
+ * player_matches rows at all — shouldn't happen for a real candidate) read as
+ * 0 at the call sites, sorting them last among candidates.
+ */
+let careerGamesCache = null;
+export async function fetchCareerGames() {
+  if (careerGamesCache) return careerGamesCache;
+  const sql = [
+    "SELECT player_id AS id, COUNT(DISTINCT match_id) AS n",
+    "FROM player_matches",
+    "GROUP BY player_id",
+  ].join("\n");
+  const { rows } = await query(sql);
+  const m = new Map();
+  for (const r of rows) m.set(r.id, Number(r.n) || 0);
+  careerGamesCache = m;
+  return m;
+}
+
+/**
  * Selection controller (Batch 8 rebuild, decision 44d — v1's two-list model):
  *
  *   - `candidates`: the FULL ordered pool ({id, name}). NEVER truncated by

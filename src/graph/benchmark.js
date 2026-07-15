@@ -9,12 +9,15 @@
 // fetchBenchmarkPool() reuses src/table.js's exported buildQuery() UNCHANGED —
 // the exact "wrap idiom" charts.js's fetchWindowMetric()/dumbbell.js's
 // fetchDumbbellSide() already use elsewhere in this codebase: clone the live
-// filter state, run buildQuery(), take the SQL as-is. The one difference from
-// those two: this query is never wrapped in an outer `WHERE id IN (...)` —
-// the benchmark's whole point is the FULL filtered pool (every player who
-// qualifies under the current scope), not just the checked roster. That pool
-// is otherwise identical to what the Compare Stats table itself would show,
-// gate-free since decision 44c (no base min-innings HAVING).
+// filter state, run buildQuery(), take the SQL as-is, then (R6, owner fix 1)
+// wrap it in an outer `SELECT * FROM (...) WHERE id IN (<candidate ids>)` —
+// the same id-restriction wrapper fetchWindowMetric() uses. The pool is NOT
+// the checked roster (still every candidate, checked or not) and NOT the whole
+// gender/format/date scope: it is the CANDIDATE SET — the "N" in the roster's
+// "X of N selected". When N was seeded from a filter the candidate ids ARE the
+// whole filtered scope, so the wrapper is a no-op and the pool matches what the
+// Compare Stats table would show; when N was set by search it is exactly those
+// searched players. Gate-free since decision 44c (no base min-innings HAVING).
 //
 // JUDGMENT CALL — matchup ("Vs") mode is deliberately ignored here, exactly
 // like every OTHER non-Dumbbell chart type in this file already does. Every
@@ -57,7 +60,7 @@
 // actually applied).
 
 import { hasMetricData } from "../metrics.js";
-import { eligibleMetrics } from "../state.js";
+import { eligibleMetrics, escSql as esc } from "../state.js";
 import { buildQuery } from "../table.js";
 import { query } from "../db.js";
 
@@ -134,16 +137,35 @@ export function defaultBenchmarkMetricKeys(discipline) {
 }
 
 /**
- * Run the Benchmark chart's ONE pool query: table.js's buildQuery(), for the
- * given metric keys, over the FULL filtered pool (never restricted to the
- * checked roster — see file header). `matchupVs` is force-cleared (see file
- * header's judgment call).
+ * Run the Benchmark/Radar pool query: table.js's buildQuery(), for the given
+ * metric keys, over the current scope — then (R6, owner fix 1) restricted to
+ * the CANDIDATE SET the Graph Builder is actually working with, via the exact
+ * "wrap the builder's SQL, filter in an outer SELECT ... WHERE id IN (...)"
+ * idiom charts.js's fetchWindowMetric() already uses.
+ *
+ * WHY the candidate restriction (owner bug): the comparison pool for both the
+ * Benchmark "field" and the Radar percentile axes must be the players the user
+ * is actually comparing — the N in the roster's "X of N selected" — NOT the
+ * whole gender/format/date scope. When N was SEEDED from a filter, the
+ * candidate ids ARE the whole filtered scope, so this restriction is a no-op
+ * and behaviour is unchanged from R5. When N was set by SEARCH (the user typed
+ * in a handful of players), the pool is exactly those searched players, so the
+ * Benchmark's "#1 other" is one of THEM (on-scale) and the Radar percentiles
+ * rank against THEM — never an obscure dataset-wide outlier.
+ *
+ * `restrictIds` null/empty → no restriction (the raw scope pool, R5 behaviour).
+ * `matchupVs` is force-cleared (see file header's judgment call).
  * @returns {Promise<Array<object>>} pool rows: {id, name, [key]}
  */
-export async function fetchBenchmarkPool(state, metricKeys) {
+export async function fetchBenchmarkPool(state, metricKeys, restrictIds = null) {
   const poolState = { ...state, matchupVs: null };
   const { sql } = buildQuery(poolState, metricKeys);
-  const { rows } = await query(sql);
+  let finalSql = sql;
+  if (restrictIds && restrictIds.length) {
+    const idsSql = restrictIds.map((id) => `'${esc(id)}'`).join(", ");
+    finalSql = `SELECT * FROM (\n${sql}\n) pool_q\nWHERE id IN (${idsSql})`;
+  }
+  const { rows } = await query(finalSql);
   return rows;
 }
 
