@@ -185,23 +185,37 @@ function applyOverlay(baseWhere, overlay, caps) {
 export async function searchPlayers(term) {
   const t = (term || "").trim();
   if (t.length < 2) return [];
-  const et = esc(t);
+  // Escape LIKE wildcards (\, %, _) so a literal '%' or '_' typed into the
+  // search box matches that character rather than acting as a pattern
+  // metacharacter; then SQL-quote-escape. Every ILIKE below pairs this with
+  // ESCAPE '\'. A plain-letters term has no wildcards, so this is a no-op for
+  // normal searches (the `%`/`%…%` positional wildcards are still added
+  // OUTSIDE `et`, so prefix/substring matching is unchanged).
+  const et = esc(t.replace(/([\\%_])/g, "\\$1"));
   const sql = [
     `WITH latest AS (`,
     `  SELECT player_id AS id, arg_max(player_name, match_date) AS name`,
     `  FROM player_matches GROUP BY player_id`,
-    `), appearances AS (`,
-    `  SELECT player_id AS id, COUNT(DISTINCT match_id) AS n`,
-    `  FROM player_matches GROUP BY player_id`,
     `), hits AS (`,
     `  SELECT player_id AS id,`,
     `    MIN(CASE`,
-    `      WHEN player_name ILIKE '${et}' THEN 0`,
-    `      WHEN player_name ILIKE '${et}%' THEN 1`,
+    `      WHEN player_name ILIKE '${et}' ESCAPE '\\' THEN 0`,
+    `      WHEN player_name ILIKE '${et}%' ESCAPE '\\' THEN 1`,
     `      ELSE 2`,
     `    END) AS tier`,
     `  FROM player_matches`,
-    `  WHERE player_name ILIKE '%${et}%'`,
+    `  WHERE player_name ILIKE '%${et}%' ESCAPE '\\'`,
+    `  GROUP BY player_id`,
+    // appearances is restricted to the players `hits` actually matched, so the
+    // COUNT(DISTINCT match_id) runs over a handful of ids per keystroke instead
+    // of the whole player_matches table. The final result only ever reads a.n
+    // for hit ids (FROM hits ... LEFT JOIN appearances), so the ranking —
+    // tier ASC, appearances DESC, name ASC — is byte-identical to computing it
+    // over all players.
+    `), appearances AS (`,
+    `  SELECT player_id AS id, COUNT(DISTINCT match_id) AS n`,
+    `  FROM player_matches`,
+    `  WHERE player_id IN (SELECT id FROM hits)`,
     `  GROUP BY player_id`,
     `)`,
     `SELECT l.id, l.name, pr.country AS country, pr.playing_role AS playing_role`,
