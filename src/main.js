@@ -128,12 +128,24 @@ export function openFiltersPopup() {
 
 /** Reset everything (F1a step 5): wipe the table back to the initial "Open
  * filters" prompt, reset ALL scope/filter controls to createInitialState
- * defaults, and clear pinned players. F2 wires the red toolbar button here. */
-export function clearAll() {
+ * defaults, and clear pinned players. F2 wires the red toolbar button here.
+ *
+ * `returnToTable` (R7 Wave 2, item 19): the graph's own "Clear filters" button
+ * shares this ONE reset path (the shared store means the graph's filters ARE
+ * the Stats filters) but passes `false` so the clear doesn't yank the user out
+ * of the Graphs tab — the view is left where it was and the graph re-renders
+ * its own empty state. The default (`true`, the Stats toolbar Clear) still
+ * lands on the blank table prompt exactly as before. Either way the cached
+ * table result is forgotten (showPrompt), so hasResults() honestly reports
+ * "nothing loaded" after a Clear from either side. */
+export function clearAll({ returnToTable = true } = {}) {
   if (!store) return;
   // Owner 1B-2: Clear returns to the initial state with the date UNSET (null) —
   // there is no default window; the user must pick one (or a preset) again.
   const fresh = createInitialState(null);
+  // Item 19: a graph-side Clear keeps the current view (createInitialState
+  // defaults view to "table"), so the user stays on Graphs.
+  if (!returnToTable) fresh.view = store.get().view;
   store.set(fresh); // full replace — createInitialState returns every key
   lastAppliedDefaults.batting = [...fresh.columns.batting];
   lastAppliedDefaults.bowling = [...fresh.columns.bowling];
@@ -148,8 +160,9 @@ export function clearAll() {
   if (drawerController) drawerController.sync();
   if (pillsController) pillsController.render();
   updateDrawerBadge();
-  // Empty the table back to the initial prompt, in the table view.
-  showTableView();
+  // Forget the cached result set and reset the table to its initial prompt.
+  // Only switch back to the table view when this was the Stats-side Clear.
+  if (returnToTable) showTableView();
   tableController.showPrompt();
 }
 
@@ -680,6 +693,9 @@ function boot() {
         // Graphs' own empty-state vs. seeding its player pool from the
         // current filtered set (see graph.js's onShow()/seedSelection()).
         hasStatsResults: () => tableController.hasResults(),
+        // R7 Wave 2 (item 19): the graph's "Clear filters" button clears the
+        // SHARED filters through the one reset path, staying in the Graphs tab.
+        onClearFilters: () => clearAll({ returnToTable: false }),
       });
 
       viewToggleEl.addEventListener("click", (e) => {

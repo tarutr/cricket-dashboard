@@ -10,7 +10,7 @@
 // buildScopeClauses (via charts.js/players.js), table.js's buildQuery (via
 // players.js, for seeding).
 
-import { eligibleMetrics, createStore, pruneIneligibleState } from "../state.js";
+import { eligibleMetrics, pruneIneligibleState } from "../state.js";
 import { getMetric, hasMetricData } from "../metrics.js";
 import { escHtml, escAttr } from "../html.js";
 import { getManifest, query } from "../db.js";
@@ -69,9 +69,8 @@ const CHART_TYPES = [
 
 // R5 Wave 1b (items 1 + 3): the ONE source of truth for every chart type's
 // plain-English "what it is / what it needs" copy. Consumed by three surfaces
-// so they can never drift: the empty-state RULES TABLE (item 1), the honest
-// invalid-metric / can't-render messages shown in the stage (item 3), and the
-// filter-driven recommendation reasoning below.
+// so they can never drift: the empty-state RULES TABLE (item 1) and the honest
+// invalid-metric / can't-render messages shown in the stage (item 3).
 //   • tagline — the one-line "what it needs / how to use it" for the rules
 //     table row (kept tight and accurate to THIS app's metric registry).
 //   • purpose — a full sentence stating what the chart is FOR.
@@ -158,27 +157,15 @@ function metricConditionKeys(state) {
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/** Deep-copy a store state snapshot for the graph-local scope store (item 1).
- * State is pure JSON (strings/numbers/arrays/plain objects/null), so a JSON
- * round-trip is a correct, dependency-free deep clone that shares no nested
- * references (profile / advanced.groups / columns / the filter arrays) with
- * the Stats state — a graph edit can therefore never reach back into it. */
-function cloneState(state) {
-  return JSON.parse(JSON.stringify(state));
-}
-
-// Seed the graph-local store from a Stats state. The Graph Builder does NOT
-// consume matchup ("Vs") mode anymore (R4 Wave 3 — the Dumbbell is a
-// time-window chart, the bridge no longer carries the Vs bucket, and there is
-// no matchup chart type), so a matchupVs carried over from the Stats clone is
-// stale: it would make store.describeScope() emit a dishonest "vs Spin" token
-// in the card footer/subtitle and route the seed query through the matchup
-// path. Strip it here so the graph ignores matchup mode end-to-end.
-function cloneStatsScopeForGraph(state) {
-  const clone = cloneState(state);
-  clone.matchupVs = null;
-  return clone;
-}
+// R7 Wave 2 (item 16): the graph-local scope clone is gone — the Graph Builder
+// now SHARES the Stats filter store (see mountGraph's `store`). The only thing
+// the old clone did beyond copying was strip matchupVs so the graph ignores
+// matchup ("Vs") mode end-to-end (there is no matchup chart type). That job now
+// lives in the shared-store read wrapper inside mountGraph, which nulls
+// matchupVs on read WITHOUT mutating the shared state — so query paths ignore
+// the "Vs" bucket while the Stats table keeps it. (describeScope already
+// view-guards the matchup token to the table view, so the card footer stays
+// honest on its own.)
 
 // ── Day-level date helpers (R3 Wave 3, item 10) ─────────────────────────────
 // The Slope/Dumbbell Window A/B pickers are now DAY-level native <input
@@ -318,41 +305,56 @@ const RADAR_MAX_METRICS = 10;
 // of mountGraph(), read by the two exported wrappers just below it.
 let currentInstance = null;
 
-export function mountGraph(container, statsStore, { hasStatsResults = () => false } = {}) {
-  // ── Graph-local scope store (R3 Wave 3, item 1) ──────────────────────────
-  // The Graph Builder owns its OWN filter scope, seeded (deep-copied) from the
-  // Stats state's applied scope at graph entry and INDEPENDENT thereafter:
-  // changing a graph filter mutates only this store, never `statsStore`, so it
-  // can never move the Stats table underneath the user. Every scope read below
-  // (`store.get()`, `store.describeScope()`, the seed/search queries) goes
-  // through this local store; only seeding (from `statsStore`) and the "Back to
-  // your table" link ever touch the Stats side. The clone is a pure-JSON deep
-  // copy (state is all strings/numbers/arrays/plain objects/null — no dates or
-  // functions), so it shares no nested references with the Stats state.
-  const store = createStore(cloneStatsScopeForGraph(statsStore.get()));
-  // The Stats scope-key we last seeded FROM. Re-seed rule (item 1): on each
-  // Graphs entry, if the Stats scope has changed since the last seed (i.e. a
-  // NEW Stats search happened), re-inherit it wholesale — discarding the
-  // graph's own filter edits and the scope-derived window defaults. If it is
-  // unchanged (a bare tab toggle, or only the graph's own filters moved), keep
-  // the graph's edits. Graph-filter edits never change this key because they
-  // write to `store`, not `statsStore`.
-  let lastStatsScopeKey = null;
-  // R4 Wave 1b (item 1 — standalone graph): true once the user has applied a
-  // VALID graph-local scope via "Apply to graph" at least once. The Graph
-  // Builder no longer depends on a prior Stats search: an applied graph scope
-  // is a first-class trigger for seeding the candidate pool (seedSelection's
-  // gate reads this OR hasStatsResults), and it re-words the empty-state so a
-  // fresh load points at the graph's own Filters button rather than dead-ending
-  // on "Run a search on the Stats tab first."
-  let graphScopeApplied = false;
+export function mountGraph(container, statsStore, { hasStatsResults = () => false, onClearFilters = () => {} } = {}) {
+  // ── Shared Stats filter store (R7 Wave 2, item 16) ───────────────────────
+  // The Graph Builder now SHARES the Stats filter state, bidirectionally. It
+  // reads AND writes the SAME store main.js owns — no graph-local clone, no
+  // re-seed/re-inherit dance. A filter edited in the graph's own Filters popup
+  // lands on the Stats side, and a filter set on the Stats side is already in
+  // effect here: it's a shortcut to edit the same filters without leaving the
+  // tab, NOT a separate scope.
+  //
+  // The one thing the old clone did that must survive: the graph ignores
+  // matchup ("Vs") mode (there is no matchup chart type). So `store` is a thin
+  // read-through wrapper over `statsStore` that nulls matchupVs ON READ only —
+  // the shared state itself is never mutated, so the Stats table keeps its "Vs"
+  // bucket. `set` passes straight through, so every graph filter edit is a real
+  // write to the shared store (that's what makes sharing bidirectional). The
+  // shallow spread preserves every nested reference (advanced.groups, profile,
+  // the filter arrays), so drawer.js's in-place condition mutation still reaches
+  // the shared store exactly as before.
+  const readScope = () => {
+    const s = statsStore.get();
+    return s.matchupVs == null ? s : { ...s, matchupVs: null };
+  };
+  const store = {
+    get: readScope,
+    set: statsStore.set,
+    subscribe: statsStore.subscribe,
+    // Describe the SAME matchupVs-nulled scope the graph queries against, so the
+    // card footer (§8.4) never states a matchup/positions filter the query
+    // didn't apply.
+    describeScope: () => statsStore.describeScope(readScope()),
+  };
+  // Item 16: seeding is gated on whether a scope has actually been committed —
+  // a Stats search (hasStatsResults) OR the graph's own "Apply to graph". This
+  // flag tracks the latter so the graph can seed from the shared filters even
+  // when the Stats table was never searched (standalone graph use). It is NOT a
+  // separate scope — the filters it applies are the shared ones — only a record
+  // that the user has committed a scope from inside the graph. Preserves the
+  // empty state: before EITHER trigger, opening Graphs directly shows the
+  // rules-table empty state and runs no query of its own.
+  let graphFiltersApplied = false;
 
   container.innerHTML = `
     <div class="graph-builder">
       <div class="graph-builder__controls">
         <div class="graph-builder__topbar">
           <button type="button" class="link-btn graph-back-link" data-role="graph-back">← Back to your table</button>
-          <button type="button" class="btn btn--ghost graph-filters-btn" data-role="graph-filters-open">Filters</button>
+          <div class="graph-topbar-actions">
+            <button type="button" class="btn btn--ghost graph-filters-btn" data-role="graph-filters-open">Filters</button>
+            <button type="button" class="btn btn--ghost graph-clear-btn" data-role="graph-clear">Clear filters</button>
+          </div>
         </div>
         <div class="graph-control-group">
           <span class="graph-control-label">Chart type</span>
@@ -374,6 +376,19 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           <div class="graph-control-group__head">
             <span class="graph-control-label">Players</span>
           </div>
+          <!-- R7 Wave 2 (item 21): the roster-mode control is surfaced HERE in
+               the controls (was buried inside the "N of N selected" dropdown,
+               owner couldn't find it) so Top names | Best | Worst | Manual is
+               visible and directly switchable. -->
+          <div class="graph-roster-mode-row" data-role="roster-mode-row" hidden>
+            <span class="graph-control-label">Show</span>
+            <div class="segmented segmented--small graph-roster-mode" data-role="roster-mode" role="group" aria-label="Show">
+              <button type="button" class="segmented__btn" data-value="topnames">Top names</button>
+              <button type="button" class="segmented__btn" data-value="best">Best</button>
+              <button type="button" class="segmented__btn" data-value="worst">Worst</button>
+              <button type="button" class="segmented__btn" data-value="manual">Manual</button>
+            </div>
+          </div>
           <div class="graph-player-search">
             <input type="text" class="input" data-role="player-search" placeholder="Add a player…" aria-label="Search players to add" />
             <div class="graph-player-search__results" data-role="player-search-results" hidden></div>
@@ -381,12 +396,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           <div class="dropdown graph-roster-dropdown" data-role="roster-dropdown">
             <button type="button" class="select dropdown__toggle graph-roster-toggle" data-role="roster-toggle" aria-haspopup="true" aria-expanded="false"></button>
             <div class="dropdown__panel graph-roster-panel" data-role="roster-panel" hidden>
-              <div class="segmented segmented--small graph-roster-mode" data-role="roster-mode" role="group" aria-label="Show" hidden>
-                <button type="button" class="segmented__btn" data-value="topnames">Top names</button>
-                <button type="button" class="segmented__btn" data-value="best">Best</button>
-                <button type="button" class="segmented__btn" data-value="worst">Worst</button>
-                <button type="button" class="segmented__btn" data-value="manual">Manual</button>
-              </div>
               <div class="graph-roster-filter" data-role="roster-filter-wrap" hidden>
                 <input type="text" class="input graph-roster-filter__input" data-role="roster-filter" placeholder="Filter players…" aria-label="Filter the player list" />
               </div>
@@ -423,6 +432,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     playerSearchResults: container.querySelector('[data-role="player-search-results"]'),
     rosterToggle: container.querySelector('[data-role="roster-toggle"]'),
     rosterPanel: container.querySelector('[data-role="roster-panel"]'),
+    rosterModeRow: container.querySelector('[data-role="roster-mode-row"]'),
     rosterMode: container.querySelector('[data-role="roster-mode"]'),
     rosterFilterWrap: container.querySelector('[data-role="roster-filter-wrap"]'),
     rosterFilter: container.querySelector('[data-role="roster-filter"]'),
@@ -459,8 +469,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   //    own key only when it's valid for that type; otherwise that type renders
   //    an honest "choose another metric" message rather than silently swapping.
   //  • metricEverChosen — has the user explicitly chosen ANY metric/group/
-  //    family/axis this session? Gates the "Recommended" chart-type tag, which
-  //    must not appear until a metric is chosen (no auto-pick, no auto-render).
+  //    family/axis this session? Distinguishes "no metric picked yet" from
+  //    "picked a metric that's invalid on THIS chart type" in the honest
+  //    invalid-metric guidance (noMetricGuidance) — nothing to do with any
+  //    auto-pick (item 18: the Recommended engine is gone).
   let chosenMetricKey = null;
   let metricEverChosen = false;
   function markMetricChosen(key) {
@@ -549,16 +561,17 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   let lastRankMetricKey = null;
   let lastRankMetricDiscipline = null;
 
-  // decision 46f: the CHECKED-set cap before any chart type is picked — the
-  // classic "top 15", same number Bar's own cap always was. Once a type is
-  // picked, activeMaxCap() switches to that type's own CHART_CAPS entry.
-  // NOTE (owner point 13): this caps only what's CHECKED/plotted, never the
-  // candidate POOL — the pool is the entire filtered set (seedFromFilteredSet
-  // no longer takes a cap). deriveChecked() picks the top N of the full pool
-  // by rank up to this cap.
-  const DEFAULT_PRETYPE_CAP = 15;
+  // R7 Wave 2 (item 17b): NO premature player cap. Before a chart type is
+  // picked the roster is UNCAPPED (Infinity) — the full selected/candidate set
+  // is kept, never pre-truncated to 15. The cap kicks in only when a chart type
+  // that actually caps the pool is chosen, at which point activeMaxCap()
+  // switches to that type's own CHART_CAPS.max and deriveChecked() (re-run on
+  // the type click) trims the checked set down to it.
+  // NOTE (owner point 13): even then this caps only what's CHECKED/plotted,
+  // never the candidate POOL — the pool is the entire filtered set
+  // (seedFromFilteredSet no longer takes a cap).
   function activeMaxCap() {
-    return chartType ? CHART_CAPS[chartType].max : DEFAULT_PRETYPE_CAP;
+    return chartType ? CHART_CAPS[chartType].max : Infinity;
   }
   /** "this chart type"/"the initial roster" — whichever the cap messages
    * above should call the thing capped at activeMaxCap(), depending on
@@ -576,14 +589,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * eligibility/floor checks take over from there). */
   function poolStatusReason() {
     if (selection.candidateCount() > 0) return null;
-    // The pool always seeds from the GRAPH-LOCAL scope (seedFromFilteredSet
-    // reads `store`), so an empty pool has exactly two honest causes:
+    // The pool seeds from the SHARED scope (seedFromFilteredSet reads `store`,
+    // the shared filter state), so an empty pool has exactly two honest causes:
     //  • a scope has been searched (Stats search, or a graph "Apply to graph")
     //    but matches nobody -> tell the user to adjust and search/apply again;
     //  • nothing has ever been searched -> point at BOTH entry points (the
     //    Stats tab AND this graph's own Filters button — item 1: the empty
     //    state must no longer dead-end on Stats alone).
-    if (hasStatsResults() || graphScopeApplied) {
+    if (hasStatsResults() || graphFiltersApplied) {
       return "No players match the current filters — adjust them and apply again, or search on the Stats tab.";
     }
     return "Run a search on the Stats tab first, or set filters here and apply.";
@@ -607,9 +620,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * with no metric conditions it does nothing (and the empty rules-table state
    * shows), and clearing the conditions later reverts (maybeAutoSelect…). It
    * sets the SAME per-type metric variables a manual pick would, so everything
-   * downstream (persistence, the card title, the Recommended tag) behaves
-   * identically. Returns the chosen chart type, or null if it couldn't derive
-   * one (no valid metric keys for the discipline).
+   * downstream (persistence, the card title) behaves identically. Returns the
+   * chosen chart type, or null if it couldn't derive one (no valid metric keys
+   * for the discipline).
    */
   function applyAutoSelect(keys, state) {
     const discipline = state.discipline;
@@ -733,14 +746,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // type's controls don't depend on the roster shape, so this is scoped
       // to benchmark only.
       if (chartType === "benchmark") renderMetricControls();
-      // The recommend engine's ok/disabled state and "Recommended" tag
-      // (task 2) depend on selection.candidateCount() — every candidate-pool
-      // change (a fresh seed landing async, a manual add/remove, a Best/
-      // Worst re-derivation) must re-sync the chart-type picker too, not just
-      // the roster dropdown, or the buttons freeze at whatever their
-      // pre-seed/pre-edit state happened to be (e.g. every type reading
-      // "disabled" on first paint, before the initial seed's candidates ever
-      // arrive, and never recovering).
+      // evaluateTypeStatus()'s ok/greyed state depends on
+      // selection.candidateCount() — every candidate-pool change (a fresh seed
+      // landing async, a manual add/remove, a Best/Worst re-derivation) must
+      // re-sync the chart-type picker too, not just the roster dropdown, or the
+      // tiles freeze at whatever their pre-seed/pre-edit state happened to be
+      // (e.g. every type reading "greyed" on first paint, before the initial
+      // seed's candidates ever arrive, and never recovering).
       syncChartTypeButtons();
       scheduleRender({ paramsChanged: true });
     },
@@ -1027,14 +1039,35 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   }
 
   function renderMetricControls() {
-    // decision 46f: nothing to show before a chart type is picked.
-    if (!chartType) {
-      els.metricControls.innerHTML = "";
-      return;
-    }
     const state = store.get();
     const discipline = state.discipline;
     const formats = state.formats;
+
+    // R7 Wave 2 (item 17a): a metric is pickable BEFORE any chart type. With no
+    // type chosen, show a plain "Metric" select over every eligible metric for
+    // the scope; picking one sets the SHARED chosenMetricKey, which then persists
+    // and is adopted (adoptChosenMetric) into whichever chart type is chosen
+    // next — so the flow is order-independent (metric first OR chart first). No
+    // chart renders yet (renderChart still shows the rules-table empty state
+    // until a type is picked); this only records the intended metric.
+    if (!chartType) {
+      const metrics = eligibleMetrics(discipline, formats);
+      const selected = adoptChosenMetric(metrics);
+      els.metricControls.innerHTML = `
+        <span class="graph-control-label">Metric</span>
+        <select class="select graph-metric-select" data-role="pretype-metric" aria-label="Metric">
+          ${metricOptionsHTML(metrics, selected)}
+        </select>
+      `;
+      els.metricControls.querySelector('[data-role="pretype-metric"]').addEventListener("change", (e) => {
+        const key = e.target.value || null;
+        if (key) markMetricChosen(key);
+        else chosenMetricKey = null;
+        // Re-sync only — no chart to render without a type yet.
+        syncChartTypeButtons();
+      });
+      return;
+    }
 
     if (chartType === "bar") {
       const metrics = eligibleMetrics(discipline, formats);
@@ -1426,8 +1459,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       if (anchorSel) {
         anchorSel.addEventListener("change", (e) => {
           benchmarkAnchorId = e.target.value || null;
-          // item 4: an explicit benchmark configuration counts as "a metric
-          // chosen" for the Recommended-tag gate (benchmark has no single
+          // An explicit benchmark configuration counts as "a metric chosen"
+          // for the honest invalid-metric guidance (benchmark has no single
           // metric — anchor + the metric set together specify it).
           metricEverChosen = true;
           syncChartTypeButtons();
@@ -1563,10 +1596,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     els.rosterToggle.textContent = `${checkedCount} of ${total} selected`;
     els.rosterToggle.title = mode !== "manual" ? `Auto-selected: ${rosterModeLabel(mode)}` : "";
 
-    // "Show: Top names | Best | Worst | Manual" only once there's an actual
-    // choice to make (more candidates than this chart type can plot).
-    const showModeSwitch = total > cap;
-    els.rosterMode.hidden = !showModeSwitch;
+    // R7 Wave 2 (item 21): the "Show: Top names | Best | Worst | Manual" row is
+    // visible whenever there's a roster at all (total > 0) — surfaced in the
+    // controls, not hidden behind a "more candidates than the cap" gate as
+    // before, so the user can always see and switch the roster mode directly.
+    // (`cap` is retained below for the per-row checkbox at-cap disabling.)
+    const showModeSwitch = total > 0;
+    els.rosterModeRow.hidden = !showModeSwitch;
     if (showModeSwitch) {
       els.rosterMode.querySelectorAll(".segmented__btn").forEach((btn) => {
         btn.classList.toggle("is-active", btn.dataset.value === mode);
@@ -1758,20 +1794,16 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
   // ── Chart type switching ──────────────────────────────────────────────────
 
-  // ── Recommend engine (Batch 8, task 2 — v1's recommend()) ──────────────────
+  // ── Chart-type availability engine (R7 Wave 2, item 18) ────────────────────
   //
-  // v1's own recommend() ranks chart types by how many METRICS the user has
-  // checked in a single shared multi-select (1 metric -> Bar, exactly 2
-  // rate/pct metrics -> Scatter, 3+ -> Radar, all-"total" -> Donut, …) — that
-  // has no analogue here: every chart type in this app owns ITS OWN metric
-  // picker (bar's one select, scatter's X+Y, radar's whole group, …), so
-  // there is no single shared "how many metrics are checked" signal to rank
-  // by. The dimension that actually varies chart-type fit in THIS app is the
-  // PLAYER pool (each type's CHART_CAPS min/max) plus whether a metric/group/
-  // family even exists for the type under the current discipline/format
-  // scope — so this port keeps v1's STRUCTURE (ok/disabled + a reason per
-  // type; one "exactly fits" type gets a Recommended tag) but re-derives the
-  // ranking from player count + metric/group/family availability instead.
+  // The old "Recommend" engine — which nudged the user toward one "best-fit"
+  // chart type with a Recommended badge — was REMOVED entirely (owner: it kept
+  // tagging Scatter and was unwanted). What survives is the HONEST availability
+  // check below: evaluateTypeStatus() decides whether a chart type CAN render
+  // under the current scope/pool and, if not, gives one plain-English reason
+  // (surfaced in the stage on click, and as a passive "greyed" hint on the
+  // tile). It never picks a type for the user — the user picks freely, in any
+  // order relative to the metric.
 
   /** ok/disabled + an honest one-line reason for `typeKey` under the CURRENT
    * scope/candidate pool. The player-count floor uses the CANDIDATE pool
@@ -1832,81 +1864,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     return { ok: true, reason: null };
   }
 
-  /**
-   * The single best-fit type among the OK ones (R4 Wave 1b, item 2 — genuinely
-   * METRIC-AWARE, replacing the old count-only ranking that recommended Scatter
-   * for any pool of >=10 and so effectively tagged Scatter forever, since a
-   * Stats-seeded pool is almost always large). The recommendation now derives
-   * from what the user has actually chosen to MEASURE, with pool size only as a
-   * tie-breaker inside a metric family. Rules, first satisfied wins, each gated
-   * on the type being OK for the current scope:
-   *
-   *   A. INTENT OVERRIDES (the user has already configured a specialized lens
-   *      in a way only that lens honours — confirm it, don't nudge away):
-   *        • radar, once >=3 axes are selected — a multi-metric shape read.
-   *        • slope / dumbbell, once BOTH of their windows are fully set — a
-   *          before/after read across two time windows (task 2: "two time
-   *          windows -> Slope/Dumbbell only make sense with windows").
-   *   B. METRIC-DRIVEN NUDGE (the shared chosen metric's KIND decides the
-   *      family; pool size N picks within it):
-   *        • rate/percent metric: big crowd (N >= 12) -> Scatter (a rate across
-   *          many players reads as a distribution; the other axis pairs a second
-   *          rate); otherwise -> Bar (compare a rate across a handful).
-   *        • additive TOTAL metric: modest pool (N <= 8) -> Donut (a literal
-   *          share-of-total, every player its own slice); otherwise -> Bar
-   *          (rank many totals).
-   *        • anything else with one value per player (e.g. a peak like High
-   *          score / Best): -> Bar.
-   *   C. NO CLEAR WINNER: return null (show NO tag) rather than a constant one —
-   *      e.g. only a scatter X-axis or a phase family was chosen, so there's no
-   *      single metric to reason a nudge from.
-   *
-   * Only ever returns an OK type (see `rec()`), and only runs at all once a
-   * metric has been chosen (syncChartTypeButtons gates on metricEverChosen).
-   */
-  function recommendedChartType(state, statuses) {
-    const okKeys = new Set(CHART_TYPES.map((t) => t.key).filter((k) => statuses[k].ok));
-    if (okKeys.size === 0) return null;
-    const N = selection.candidateCount();
-    const rec = (k) => (okKeys.has(k) ? k : null);
-
-    // A. Intent overrides.
-    if (chartType === "radar" && radarMetricKeys.length >= RADAR_MIN_METRICS && okKeys.has("radar")) return "radar";
-    const slopeReady = Boolean(slopeWindowA?.from && slopeWindowA?.to && slopeWindowB?.from && slopeWindowB?.to);
-    const dumbbellReady = Boolean(dumbbellWindowA?.from && dumbbellWindowA?.to && dumbbellWindowB?.from && dumbbellWindowB?.to);
-    if (chartType === "slope" && slopeReady && okKeys.has("slope")) return "slope";
-    if (chartType === "dumbbell" && dumbbellReady && okKeys.has("dumbbell")) return "dumbbell";
-
-    // B. Metric-driven nudge, keyed off the shared chosen metric's kind.
-    const metric = chosenMetricKey ? getMetric(chosenMetricKey, state.discipline) : null;
-    if (metric) {
-      if (metric.kind === "rate" || metric.kind === "percent") {
-        if (N >= 12 && okKeys.has("scatter")) return "scatter";
-        return rec("bar");
-      }
-      if (metric.additive === true) {
-        // Item 5: only nudge Donut when the scope is pinned to ONE team — a
-        // donut across multiple teams is meaningless (see the donut render
-        // branch's single-team gate), so recommending it there would be a
-        // dead-end nudge. Otherwise rank the total on a bar.
-        if (N <= 8 && (state.teams || []).length === 1 && okKeys.has("donut")) return "donut";
-        return rec("bar");
-      }
-      return rec("bar"); // peak / non-additive single-value metric
-    }
-
-    // C. No single chosen metric to reason from -> no tag.
-    return null;
-  }
-
   function syncChartTypeButtons() {
     const state = store.get();
     const statuses = {};
     for (const t of CHART_TYPES) statuses[t.key] = evaluateTypeStatus(t.key, state);
-    // item 4: the "Recommended" tag appears only AFTER a metric has been chosen
-    // — never on first paint, so a chart type is never nudged before the user
-    // has expressed what they want to measure.
-    const recommended = metricEverChosen ? recommendedChartType(state, statuses) : null;
 
     els.chartType.querySelectorAll(".segmented__btn").forEach((btn) => {
       const key = btn.dataset.value;
@@ -1918,10 +1879,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // actual explanation is a full sentence in the STAGE, written the
       // moment the user clicks the tile (see renderChart()'s evaluateTypeStatus
       // guard) — never a title-only tooltip, so no reason text lives here.
+      // Item 18: no "Recommended" badge — the label is the label, nothing more.
       btn.disabled = false;
       btn.title = "";
       btn.classList.toggle("is-unavailable", !status.ok);
-      btn.innerHTML = `${type.label}${key === recommended ? '<span class="graph-chart-type-rec">Recommended</span>' : ""}`;
+      btn.textContent = type.label;
     });
   }
 
@@ -1995,15 +1957,16 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     els.exportStatus.textContent = result.ok ? "Copied to clipboard" : `Copy failed: ${result.error?.message ?? "unknown error"}`;
   });
 
-  // ── Graph-local Filters popup (R3 Wave 3, items 1 + 2) ──────────────────────
+  // ── Graph Filters popup (R7 Wave 2, items 16 + 2) ───────────────────────────
   // The graph gets its OWN Filters popup, REUSING the Stats popup's section
-  // factories (mountFilters / mountFilterDrawer) bound to the graph-local
-  // `store` above — no fork of their internals. The shell is created and
-  // appended to <body> by THIS module (index.html / main.js are untouched —
-  // document.body append is the established popover pattern, e.g. filters.js's
-  // wirePortalDropdown). Changing a graph filter here writes only to the
-  // graph-local store; the trigger button ("Apply to graph") applies the graph
-  // scope and re-renders the current chart via onScopeChanged().
+  // factories (mountFilters / mountFilterDrawer) bound to the SHARED `store`
+  // above — no fork of their internals. The shell is created and appended to
+  // <body> by THIS module (index.html / main.js are untouched — document.body
+  // append is the established popover pattern, e.g. filters.js's
+  // wirePortalDropdown). Item 16: changing a filter here writes to the SHARED
+  // store, so the edit is reflected on the Stats side too (and vice-versa); the
+  // trigger button ("Apply to graph") re-seeds + re-renders the current chart
+  // via onScopeChanged().
   const DEFAULT_SORT_KEY = { batting: "runs", bowling: "wickets" };
   const gpopEl = document.createElement("div");
   gpopEl.className = "filters-popup";
@@ -2063,11 +2026,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     });
   });
 
-  // The two shared section factories, bound to the graph-local store. Their
-  // control changes write to `store` (graph-local) immediately; nothing
-  // queries until "Apply to graph" runs onScopeChanged() below. onChange here
-  // is a no-op (the graph has no pills/subtitle inside the popup — the card's
-  // own footer, via store.describeScope(), is refreshed on apply/render).
+  // The two shared section factories, bound to the SHARED store (item 16).
+  // Their control changes write to `store` (the shared filter state)
+  // immediately — so the Stats pills/badge track them live — but nothing in the
+  // GRAPH re-queries until "Apply to graph" runs onScopeChanged() below.
+  // onChange here is a no-op (the graph has no pills/subtitle inside the popup —
+  // the card's own footer, via store.describeScope(), is refreshed on
+  // apply/render).
   const graphFilterController = mountFilters(
     gfpop.filterBar,
     store,
@@ -2108,23 +2073,26 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       return;
     }
     if (!graphDrawerController.validate()) return;
-    // Keep the graph-local store coherent after scope edits, exactly as the
-    // Stats side does: drop columns/conditions the new scope orphaned, and fall
-    // back the sort key when it no longer resolves in the (possibly switched)
+    // Keep the SHARED store coherent after scope edits, exactly as the Stats
+    // side does: drop columns/conditions the new scope orphaned, and fall back
+    // the sort key when it no longer resolves in the (possibly switched)
     // discipline — seedFromFilteredSet ranks by state.sort, so a stale key
-    // would break the seed query.
+    // would break the seed query. (These are the same corrections main.js runs
+    // on its own Search, so applying from either side leaves the shared store
+    // in the same coherent shape.)
     pruneIneligibleState(store);
     const gs = store.get();
     if (!getMetric(gs.sort.key, gs.discipline)) {
       store.set({ sort: { key: DEFAULT_SORT_KEY[gs.discipline] || "runs", dir: "desc" } });
     }
-    // R4 Wave 1b (item 1): a valid graph scope has now been applied — this is a
+    // Item 16: filters have now been committed from inside the graph — a
     // first-class seed trigger, so onScopeChanged() -> seedSelection() will
-    // populate the candidate pool from the graph scope even if Stats was never
-    // searched. (Invalid/missing inputs never reach here — validateDate() /
-    // graphDrawerController.validate() above both surface a VISIBLE message in
-    // the popup and return early, so the failure is never silent.)
-    graphScopeApplied = true;
+    // populate the candidate pool from the shared scope even if the Stats table
+    // was never searched. (Invalid/missing inputs never reach here —
+    // validateDate() / graphDrawerController.validate() above both surface a
+    // VISIBLE message in the popup and return early, so the failure is never
+    // silent.)
+    graphFiltersApplied = true;
     closeGraphPopup();
     onScopeChanged();
   }
@@ -2139,6 +2107,29 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // The "Filters" button in the graph controls (item 2).
   container.querySelector('[data-role="graph-filters-open"]').addEventListener("click", openGraphPopup);
 
+  // "Clear filters" (R7 Wave 2, item 19): resets the SHARED filters to defaults
+  // — the same reset the Stats "Clear" runs — then drops the graph back to its
+  // fresh empty state (stale pool cleared, seed gate re-armed) WITHOUT leaving
+  // the Graphs tab (onClearFilters passes returnToTable:false). The chart type
+  // / metric the user picked are left alone (persistence rule) — this button
+  // clears FILTERS, not the whole graph — so the stage honestly shows the
+  // "set filters here and apply, or search on the Stats tab" empty state.
+  container.querySelector('[data-role="graph-clear"]').addEventListener("click", () => {
+    onClearFilters(); // reset the shared store to defaults (view stays on Graphs)
+    graphFiltersApplied = false; // back behind the empty-state seed gate
+    seeded = false;
+    lastSeedKey = null;
+    clearCapNote();
+    // Drop the now-stale pool AND its checked set -> honest empty state.
+    // setChecked([]) clamps to the (now empty) candidate ids and fires the
+    // selection onChange, which re-renders the roster + chart-type tiles + stage.
+    selection.setCandidates([]);
+    selection.setChecked([], { dirty: false });
+    // Metric eligibility may differ under the reset scope — refresh explicitly
+    // (onChange only refreshes the metric controls for the benchmark type).
+    renderMetricControls();
+  });
+
   // "← Back to your table" (item 5): return to the Stats view with the existing
   // table intact. main.js/index.html are off-limits, so this drives the
   // existing Stats view toggle button — whose main.js handler restores the
@@ -2148,26 +2139,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     const statsBtn = document.querySelector('[data-role="view"] .segmented__btn[data-value="table"]');
     if (statsBtn) statsBtn.click();
   });
-
-  /** Re-inherit the Stats scope into the graph-local store when a NEW Stats
-   * search has changed it since the last seed (item 1's re-seed rule). Returns
-   * true when it actually re-seeded. A re-seed discards the graph's own filter
-   * edits AND the scope-derived window defaults (so Slope/Dumbbell windows
-   * re-initialise from the fresh date range); it deliberately keeps the chosen
-   * chart type + metric (decision 46f: scope never silently swaps the type). */
-  function seedGraphScopeFromStats() {
-    const statsState = statsStore.get();
-    const key = scopeSeedKey(statsState);
-    if (key === lastStatsScopeKey) return false;
-    lastStatsScopeKey = key;
-    store.set(cloneStatsScopeForGraph(statsState));
-    slopeWindowA = null;
-    slopeWindowB = null;
-    dumbbellWindowA = null;
-    dumbbellWindowB = null;
-    graphFilterController.render();
-    return true;
-  }
 
   // ── Seeding ───────────────────────────────────────────────────────────────
 
@@ -2205,18 +2176,29 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   }
 
   async function seedSelection({ force = false } = {}) {
-    // decision 46f + R4 Wave 1b (item 1): seed the pool once a scope has
-    // actually been searched — either a Stats search (hasStatsResults) OR a
-    // graph-local "Apply to graph" (graphScopeApplied). Before EITHER, Graphs
-    // sits in the empty-state and runs no query of its own; the guidance line
-    // explains why (poolStatusReason()). This is what makes the Graph Builder
-    // work standalone: applyGraphFilters() sets graphScopeApplied then calls
-    // onScopeChanged() -> seedSelection(), which now seeds from the graph scope
+    // decision 46f + item 16: seed the pool once a scope has actually been
+    // committed — either a Stats search (hasStatsResults) OR the graph's own
+    // "Apply to graph" (graphFiltersApplied). Before EITHER, Graphs sits in the
+    // empty-state and runs no query of its own; the guidance line explains why
+    // (poolStatusReason()). This is what makes the Graph Builder work
+    // standalone: applyGraphFilters() sets graphFiltersApplied then calls
+    // onScopeChanged() -> seedSelection(), which seeds from the shared scope
     // instead of silently no-opping.
-    if (!hasStatsResults() && !graphScopeApplied) return;
+    if (!hasStatsResults() && !graphFiltersApplied) return;
     const state = store.get();
     const key = scopeSeedKey(state);
     if (!force && seeded && key === lastSeedKey) return;
+    // Item 16: a genuine scope change (new date range, discipline, …) resets the
+    // Slope/Dumbbell Window A/B defaults so they re-derive from the fresh range
+    // — the same reset the old Stats re-inherit (seedGraphScopeFromStats) did.
+    // A force-reseed of the SAME scope ("Reset to filtered set") leaves the
+    // user's own picked windows alone.
+    if (key !== lastSeedKey) {
+      slopeWindowA = null;
+      slopeWindowB = null;
+      dumbbellWindowA = null;
+      dumbbellWindowB = null;
+    }
     try {
       // The candidate POOL is the ENTIRE filtered result set (owner point 13 —
       // no 15-cap): the roster dropdown filters/renders a slice of it and each
@@ -3052,19 +3034,21 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * instead (poolStatusReason()). Chart type / metrics / roster edits from an
    * earlier visit are never reset here — only explicit user actions change
    * them (requirement 2's persistence rule).
+   *
+   * Item 16 (shared store): there is no scope to re-inherit anymore — the graph
+   * already reads the shared Stats scope live. seedSelection() detects whether
+   * that scope has moved since the last seed (via scopeSeedKey) and re-seeds the
+   * pool only when it actually changed, so a fresh Stats search is picked up on
+   * entry and a bare tab toggle is a no-op — the same net behaviour as before.
    */
   async function onShow() {
-    // Item 1: re-inherit the Stats scope into the graph-local store when a new
-    // Stats search has changed it since the last seed; a bare tab toggle (or a
-    // graph that only changed its OWN filters) leaves the graph's scope alone.
-    seedGraphScopeFromStats();
     syncChartTypeButtons();
     syncBarStyleVisibility();
     renderMetricControls();
     await seedSelection();
-    // Item 1: after the pool is seeded, auto-select a chart type + metric(s)
-    // from any applied metric conditions (or revert if they've been cleared).
-    // Runs post-seed so the archetype's #players tie-breaks read the real pool.
+    // After the pool is seeded, auto-select a chart type + metric(s) from any
+    // applied metric conditions (or revert if they've been cleared). Runs
+    // post-seed so the archetype's #players tie-breaks read the real pool.
     maybeAutoSelectFromFilters();
     scheduleRender({ paramsChanged: true });
   }
@@ -3257,13 +3241,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       else if (newType === "slope") slopeMetricKey = metricKey;
       else if (newType === "byyear") byYearMetricKey = metricKey;
       else if (newType === "dumbbell") dumbbellMetricKey = metricKey;
-      markMetricChosen(metricKey); // item 4: chooser pick persists + arms Recommended
+      markMetricChosen(metricKey); // item 4: chooser pick persists across type switches
     } else {
       // radar/phases/benchmark: no single metric to pick. The chooser is an
       // EXPLICIT type confirm, so seed a sensible default axis set / family
       // (item 3's no-auto-pick applies to the Builder's own controls; a
       // deliberate chooser confirm still lands on a drawn chart) and count it
-      // as a metric choice for the Recommended-tag gate. Benchmark
+      // as a metric choice for the honest invalid-metric guidance. Benchmark
       // self-configures.
       const gs = store.get();
       if (newType === "radar") {

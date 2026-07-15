@@ -2412,9 +2412,18 @@ a { color: var(--color-accent); }
   flex-wrap: wrap;
 }
 .graph-back-link { padding-left: 0; }
-.graph-filters-btn { flex: 0 0 auto; }
+/* R7 Wave 2 (items 19 + 2): Filters + Clear filters sit together at the right
+   of the graph topbar. They wrap under the back-link on a narrow (~380px)
+   sidebar rather than overflow. */
+.graph-topbar-actions { display: flex; align-items: center; gap: var(--space-2); flex: 0 0 auto; flex-wrap: wrap; }
+.graph-filters-btn,
+.graph-clear-btn { flex: 0 0 auto; }
 
 .graph-control-group { display: flex; flex-direction: column; gap: var(--space-2); }
+
+/* R7 Wave 2 (item 21): the roster-mode segmented (Top names | Best | Worst |
+   Manual) surfaced into the controls (was buried in the roster dropdown). */
+.graph-roster-mode-row { display: flex; flex-direction: column; gap: var(--space-2); }
 
 .graph-control-group__head {
   display: flex;
@@ -2437,8 +2446,7 @@ a { color: var(--color-accent); }
    which only handled row 2's left edge — to :nth-child(3n + 1), which handles
    the first button of EVERY row regardless of how many chart types there are.
    Font-size/padding are tighter than the base `.segmented__btn` (own rule,
-   not `--small`, since the Recommended tag underneath needs its own separate
-   text size): at the 300px sidebar's ~72px-wide tile, the base 16px size
+   not `--small`): at the 300px sidebar's ~72px-wide tile, the base 16px size
    clipped the longest labels ("Benchmark" rendered as "Benchmar", owner
    report) because <button> text doesn't wrap by default — text-sm2 leaves
    enough margin for every label to fit on one line at both desktop and
@@ -2543,11 +2551,11 @@ a { color: var(--color-accent); }
   padding: var(--space-2);
 }
 
-/* R6b: four segments (Top names | Best | Worst | Manual) — display:flex +
-   width:100% so they share the panel's width and shrink to fit at ~380px
-   (the base .segmented is inline-flex, which would otherwise size to content
-   and could overflow the narrow roster panel). */
-.graph-roster-mode { margin-bottom: var(--space-2); display: flex; width: 100%; }
+/* R6b / R7 Wave 2 (item 21): four segments (Top names | Best | Worst | Manual)
+   — display:flex + width:100% so they share the controls-column width and
+   shrink to fit at ~380px (the base .segmented is inline-flex, which would
+   otherwise size to content and could overflow the narrow controls column). */
+.graph-roster-mode { display: flex; width: 100%; }
 .graph-roster-mode .segmented__btn { flex: 1; white-space: nowrap; }
 
 /* Owner point 13: filter-as-you-type box + "type to narrow" note for the
@@ -2640,23 +2648,7 @@ a { color: var(--color-accent); }
 .graph-player-actions { display: flex; gap: var(--space-3); }
 .graph-cap-note { font-size: var(--text-sm2); color: var(--color-accent); margin: 0; }
 
-/* Recommend engine (Batch 8, task 2 — v1's recommend()): a small tag on the
-   single best-fit chart type button. */
-.graph-chart-type-rec {
-  display: block;
-  font-size: 0.58rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--color-accent);
-  /* One word ("Recommended") inside a tile whose button allows word-break as
-     a clip fallback — without these two lines it broke mid-word ("RECOMMEND
-     ED") at the 300px sidebar's tile width. */
-  word-break: keep-all;
-  white-space: nowrap;
-}
-
-/* Unusable/unrecommended chart-type tiles (decision 46f) — greyed as a
+/* Unusable chart-type tiles (decision 46f) — greyed as a
    PASSIVE hint only. Unlike the shared `:disabled` recolor rule above
    (styles.css's "One disabled language" block), these tiles are never
    HTML-disabled: they stay clickable, and clicking one writes a full

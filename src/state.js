@@ -540,9 +540,16 @@ export function createStore(initial) {
   /**
    * Honest plain-English scope sentence (§8.4) — only mentions filters that are
    * actually applied. e.g. "Women's T20s (international), Jul 2023 – Jul 2026, min 10 innings"
+   *
+   * `stateOverride` (R7 Wave 2, item 16): the Graph Builder shares this store
+   * but ignores matchup ("Vs") mode for its queries, so it passes a matchupVs-
+   * nulled view of the state here to keep its card footer honest — otherwise a
+   * "Vs" bucket still set on the shared store would flip the positions token's
+   * phrasing (or hide the R. Pos. token) even though the graph query ran plain.
+   * Existing callers pass nothing and get the live store state exactly as before.
    */
-  function describeScope() {
-    const s = state;
+  function describeScope(stateOverride) {
+    const s = stateOverride || state;
     const parts = [];
 
     const genderWord = GENDER_LABELS[s.gender] ?? "";
