@@ -15,6 +15,7 @@
 import { getMetric, DISMISSAL_KINDS, matchupBucketLabel } from "./metrics.js";
 import { formatValue } from "./table.js";
 import { escHtml, escAttr } from "./html.js";
+import { FORMAT_BUCKETS } from "./state.js";
 
 // ── Months (shared by the header's scope line and playerFilters.js's date
 // pickers — one copy so both read "Jul 2023" identically). ─────────────────
@@ -24,6 +25,18 @@ export function monthLabel(yyyymm) {
   if (!yyyymm) return null;
   const [y, m] = yyyymm.split("-").map(Number);
   return `${MONTH_NAMES[m - 1]} ${y}`;
+}
+
+/** Day-precision label for the popup's scope sentence (R5 Wave 2: "1 Jan
+ * 2020"), as opposed to monthLabel's month-only granularity above (still used
+ * by the drawer's date pickers). Reads the same "YYYY-MM-DD" values
+ * state.dateFrom/dateTo always store (src/state.js's shape comment; native
+ * <input type="date"> writes this shape everywhere in current code). */
+export function fullDateLabel(yyyymmdd) {
+  if (!yyyymmdd) return null;
+  const [y, m, d] = yyyymmdd.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  return `${d} ${MONTH_NAMES[m - 1]} ${y}`;
 }
 
 /** Same option-list shape as filters.js's monthOptionsHTML (duplicated on
@@ -408,13 +421,20 @@ export function wholeTabUnsupportedHTML(tabLabel, dims) {
 
 // ── Scope line + overlay pills ───────────────────────────────────────────────
 
-export const TEAM_TYPE_LABELS = { international: "International cricket", club: "Domestic cricket", both: "All cricket" };
+// R5 Wave 2: these three strings feed directly into scopeLine's "Data for...
+// (team type)" sentence below — not a general-purpose "cricket" noun phrase
+// anymore (that was the pre-R5-Wave-2 wording), so keep them short nouns.
+// Local to this file only (grepped repo-wide before this change) — safe to
+// repurpose without touching any other consumer.
+export const TEAM_TYPE_LABELS = { international: "International", club: "Domestic", both: "International + Domestic" };
 
 /** Extra plain-English tokens for whatever the popup's filters-drawer overlay
- * is currently narrowing — appended to the page's own honest scope sentence
- * (§8.4: state only filters actually applied). Mirrored by overlayPillsHTML's
- * removable pills below; both read the same overlay object so they can never
- * disagree. */
+ * is currently narrowing. Pre-R5-Wave-2, scopeLine() appended these to its own
+ * sentence; the reworded scopeLine no longer does (see its own comment) since
+ * overlayPillsHTML's removable pills already show the same information right
+ * below it. Kept exported/unused rather than deleted — same shape as
+ * overlayPillsHTML's own per-dim logic, still the one place this mapping is
+ * spelled out, in case a future caller wants the plain-English form again. */
 export function overlayTokens(overlay) {
   if (!overlay) return [];
   const tokens = [];
@@ -432,37 +452,44 @@ export function overlayTokens(overlay) {
   return tokens;
 }
 
-/** Honest scope sentence: the page's own three filters (Format/Date/Team
- * type, unchanged from pre-B7) plus the overlay's tokens, plus a trailing
- * caveat.
+/** Honest scope sentence (R5 Wave 2 reword, owner point 3): a single plain
+ * sentence — "Data for [format] ([team type]) from [start date] to [end
+ * date]" — replacing the old pipe-separated fragments-plus-caveat shape.
+ * `state` is whichever scope the popup is actually using: playerPage.js's
+ * effectiveState() (the table's live scope for a table-row popup, or the
+ * frozen fixedScopeState for a header-search popup — see that file's header
+ * comment) — so the same sentence shape is honest for BOTH entry paths
+ * without needing its own caveat/suffix per path any more (the old
+ * `fixedDefault`-keyed suffix this replaced is gone; the param is kept, now
+ * unused, so playerPage.js's one call site needs no change).
  *
- * `fixedDefault` (R4 Wave 2, owner ruling): true for header-search-opened
- * popups, whose Format/Date/Team type are a FIXED full-history default —
- * never the table's applied filters (see playerPage.js's
- * buildFixedScopeState/effectiveState). The original caveat
- * ("leaderboard-only filters don't apply here") was written for the case
- * where Format/Date/Team type themselves DO still come from the table's
- * scope strip and only the drawer's OWN extra filters (team, min innings,
- * profile, position/opposition, stat conditions) don't apply — true of
- * table-row entry, still the default here. That framing would be
- * incomplete for a fixed-default popup, where the scope strip itself is
- * ALSO not the table's — so this case gets its own, still 100% honest,
- * wording instead of silently reusing one that only tells half the story. */
+ * [format]: joins the state's format bucket(s) by their FORMAT_BUCKETS
+ * `.label` (never hardcoded — SPEC §8.2, one metrics/vocabulary source),
+ * ordered by FORMAT_BUCKETS' own order rather than whatever order
+ * state.formats happens to hold. [team type]: TEAM_TYPE_LABELS above.
+ * [start]/[end]: fullDateLabel's day-precision "1 Jan 2020" reading of
+ * state.dateFrom/dateTo directly (both always populated by the time a
+ * popup is open to render this — src/state.js never lets a search run with
+ * dateFrom unset, and buildFixedScopeState always fills both).
+ *
+ * The overlay's own extra narrowing (date/positions/opposition/vs) is
+ * intentionally NOT folded into this sentence any more — it already has its
+ * own removable-pills row directly below (overlayPillsHTML, rendered by
+ * playerPage.js's renderScopeArea right after this line), so restating it
+ * here would just duplicate that UI, not add honesty this sentence needs.
+ */
 export function scopeLine(state, overlay, { fixedDefault = false } = {}) {
-  const parts = [];
-  if (state.formats && state.formats.length) parts.push(state.formats.join(" + "));
-  const fromLbl = monthLabel(state.dateFrom);
-  const toLbl = monthLabel(state.dateTo);
-  if (fromLbl && toLbl) parts.push(`${fromLbl} – ${toLbl}`);
-  else if (toLbl) parts.push(`through ${toLbl}`);
-  else if (fromLbl) parts.push(`from ${fromLbl}`);
-  const teamTypeStr = TEAM_TYPE_LABELS[state.teamType];
-  if (teamTypeStr) parts.push(teamTypeStr);
-  for (const t of overlayTokens(overlay)) parts.push(t);
-  const suffix = fixedDefault
-    ? "fixed default view, not the table's filters — narrow with Filters below"
-    : "leaderboard-only filters don't apply here";
-  return parts.length ? `${parts.join(" · ")} · ${suffix}` : suffix;
+  const formatLabel = FORMAT_BUCKETS.filter((b) => state.formats && state.formats.includes(b.key))
+    .map((b) => b.label)
+    .join(", ");
+  const teamTypeStr = TEAM_TYPE_LABELS[state.teamType] || state.teamType || "";
+  const fromLbl = fullDateLabel(state.dateFrom);
+  const toLbl = fullDateLabel(state.dateTo);
+  let dateStr = "";
+  if (fromLbl && toLbl) dateStr = ` from ${fromLbl} to ${toLbl}`;
+  else if (fromLbl) dateStr = ` from ${fromLbl}`;
+  else if (toLbl) dateStr = ` through ${toLbl}`;
+  return `Data for ${formatLabel || "all formats"} (${teamTypeStr})${dateStr}`;
 }
 
 // ── Discipline grid composition (re-composition of existing sections) ───────

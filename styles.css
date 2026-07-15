@@ -3424,10 +3424,11 @@ a { color: var(--color-accent); }
 
 /* "Graph this player" (Batch 3 part 2, decision 43) — right of the back link
  * in the sticky header row (see .player-page__header-row's flex layout
- * below). Compact horizontal padding, not the standard .btn--ghost space-5,
- * so both controls fit together at ~380px without wrapping; height keeps the
- * standard .btn 40px tap target (decision 42) since only min-height/padding-x
- * are overridden.
+ * below). Compact horizontal padding, not the standard .btn--ghost space-5.
+ * R5 Wave 2: the padding/min-height below are now superseded by the more
+ * specific `.player-page__header-row .btn` rule above (0,2,0 beats this
+ * rule's 0,1,0), which shrunk every control in the row further — kept here
+ * only as the pre-existing declaration, harmless but no longer load-bearing.
  *
  * Made INERT (owner note 17, fix round): the button stays visible but does
  * nothing (feature deferred to a later design phase) — playerPopup.js's
@@ -3458,32 +3459,63 @@ a { color: var(--color-accent); }
    protects every wrapped line, not just the first — content can wrap onto as
    many lines as it needs at ~380px (see the media query further down) and it
    will never sit under the close button. */
+/* R5 Wave 2 (owner point 3): the row was reading as too tall/heavy — top/
+   bottom padding shrunk from space-4/space-3 to space-2/space-2 and the
+   inter-cluster gap from space-3 to space-2. The negative top/side margins
+   above are untouched: they only cancel the PARENT's padding to keep the row
+   flush against the popup's scrollport edge, and don't depend on this row's
+   own padding values. Controls inside get their own compact sizing just
+   below (`.player-page__header-row .btn` etc.) so the row's real height
+   drops from ~68px to ~46px, not just its padding. */
 .player-page__header-row {
   position: sticky;
   top: 0;
   z-index: 2;
   margin: calc(-1 * var(--space-6)) calc(-1 * var(--space-6)) 0;
-  padding: var(--space-4) 3.5rem var(--space-3) var(--space-6);
+  padding: var(--space-2) 3.5rem var(--space-2) var(--space-6);
   background: var(--color-bg);
   border-bottom: 1px solid var(--color-line);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
 .player-page__header-row-group {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+/* Compact control sizing, SCOPED to this row only (never touches the shared
+   .btn/.segmented__btn/.link-btn rules other popups and the leaderboard
+   table use — SPEC §8.3, this task owns the player-popup header region
+   only). Ancestor-qualified selectors (0,2,0 specificity) beat the plain
+   .btn/.player-page__filters-btn/.player-page__graph-btn rules (0,1,0) that
+   set padding/min-height elsewhere, so this wins without !important. */
+.player-page__header-row .btn,
+.player-page__header-row .segmented__btn {
+  min-height: 30px;
+  font-size: var(--text-sm2);
+}
+
+.player-page__header-row .btn {
+  padding: var(--space-1) var(--space-3);
+}
+
+.player-page__header-row .segmented__btn {
+  padding: var(--space-1) var(--space-3);
+}
+
+.player-page__header-row .link-btn {
+  font-size: var(--text-sm2);
 }
 
 .player-page__discipline-toggle { flex-shrink: 0; }
 
 .player-page__filters-btn {
-  padding: var(--space-2) var(--space-3);
   white-space: nowrap;
   flex-shrink: 0;
   display: inline-flex;
@@ -3495,10 +3527,16 @@ a { color: var(--color-accent); }
   font-size: 0.95rem;
 }
 
+/* R5 Wave 2: margin-top on top of .player-page's own space-5 flex gap (see
+   .player-page above) gives the identity block a bit of EXTRA breathing room
+   under the now-shorter toolbar row — added to the whole header (not just
+   .player-page__name) so the photo and the name/meta text block move down
+   together, keeping their align-items: center relationship intact. */
 .player-page__header {
   display: flex;
   align-items: center;
   gap: var(--space-4);
+  margin-top: var(--space-2);
 }
 
 /* Identity photo (B7, decision 44a): a real headshot (has_real_headshot) is an
