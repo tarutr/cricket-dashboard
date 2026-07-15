@@ -478,3 +478,26 @@ REMAINING R7 Wave 2: graph rework (#15 shared-filter Graph button, #16 bidirecti
 shared filter store, #17 metric-before-chart + no premature 15-cap, #18 REMOVE
 Recommended entirely, #19 graph Clear button, #21 expose Best/Worst) ‖ #20 opposition
 popup "show everything" (remove intl gate + cap). Awaiting owner go + #5 answer.
+
+## ROUND 7 Wave 2 DONE + VERIFIED (2026-07-15).
+Commits: 59970e2 (graph shared-filters rework), ab57bbc (opposition popup show-all),
+df4a0ac (in-popup opposition-narrowing un-gated), 5fe0d7a (opposition picker =
+searchTeams total-games, orchestrator fix), 99a1842 (orchestrator fix: Search
+Conditions controls re-sync on popup open — shared-store display bug), 690fb83/
+5930772 (Wave 1 table + filters).
+VERIFIED LIVE: #16 SHARED bidirectional filters — set graph→Bowling, Stats table
+returned BOWLING (2,049 baseline, Wkts/Econ/BBI cols) AND after the 99a1842 fix the
+Stats popup discipline select now shows "Bowling" too (was stale). #15 Graph button
+carries filters (pool 2810 of 2813, not empty). #18 no "Recommended" anywhere (grep
+clean). #17 Metric selector visible BEFORE chart type; roster NOT cut to 15 pre-chart
+(2810 of 2813); metric persists across types. #19 "Clear filters" button in graph
+topbar. #21 Top names|Best|Worst|Manual visible in Players controls. #20 opposition
+"show everything": Kohli batting vs-opposition = 24 opponents incl. IPL franchises
+(Gujarat Titans/CSK/Mumbai Indians/KKR…) + international, no cap/gate; bowling vs-opp
+shows Hong Kong (was gated). #5 opposition picker = searchTeams (India/England/
+Australia by total games). Console clean.
+MINOR CONSEQUENCE flagged: header player-popup now opens on whatever discipline the
+shared store holds (opened on Bowling after a bowling graph), not always Batting —
+popup has Batting|Bowling toggle so recoverable; owner to weigh.
+STATUS: ROUND 7 COMPLETE (all of #1-#21) — AWAITING OWNER REVIEW on localhost:8000.
+Merge to main still owner-gated.
