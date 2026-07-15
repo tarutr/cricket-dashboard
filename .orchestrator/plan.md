@@ -262,7 +262,30 @@ VERIFIED LIVE: SA Yadav header popup = 205/6,345/36.05/159.90/HS 117 +
 vs manual search T20/Since-2020/both-team-types (6,126 players, his row
 identical digit-for-digit); table-click popup keeps old suffix + table
 scope; console clean. playerSections.js now 638 lines (over cap, noted).
-STATUS: R4 W2 DONE — awaiting owner gate for W3 (cleanup batch).
+R4 W3 (cleanup) DONE + VERIFIED (2026-07-15, e2652e9 + partials): (1) graph
+footer stale matchup token fixed via cloneStatsScopeForGraph() stripping
+matchupVs (state.js describeScope untouched); graph seed now always plain
+query path (correct "graph ignores matchup"); (2) dead benchmark anchorMuted
+branch + orphaned .benchmark-anchor-value--thin CSS removed (benchmarkFloorNotes
+still live, kept); (3) dead splitBy/Group-rows plumbing removed across
+state.js/main.js/table.js + CSS (all provably unreachable — nothing set
+splitBy after R3 UI removal); (4) search appearances CTE limited to hit ids
+(ranking identical); (5) LIKE-wildcard escaping (%/_ now literal, ESCAPE '\');
+(6) numeric R.Pos (m:r_pos kind:position) excluded from +Add condition
+dropdown via eligibleMetrics filter in drawer.js — c:rpos Player FILTER kept;
+(7) in-popup Find-another-player threads fixedScope. VERIFIED LIVE: baseline
+2,813 holds; graph footer no vs-token (Bar/Runs "Runs — top 15"); benchmark
+renders (#2 Waseem Muhammad 80.6%, off-scale outliers present = no-floors
+consequence); "kohli"→V Kohli first; "ko%li"→literal no-match; R.Pos absent
+from condition metrics, "Regular position" present as Player filter; in-popup
+Kohli from SA Yadav popup kept fixed scope (149/5,304/43.83/137.37 full T20
+since 2020); console clean. Agent also committed previously-untracked
+review/FIX_ROUND_SCREENSHOTS/ (harmless). ROUND 4 COMPLETE (item 10 no-floors
+= confirmed already-built; items 1-9,11 built+verified across W1/W2/W3).
+STATUS: ROUND 4 COMPLETE — AWAITING OWNER REVIEW on localhost:8000. Deferred
+(not this round): literal-today vs data-max for Since-2020; radar rates-only
+question; file splits (graph.js/table.js/metrics.js/playerSections.js over
+cap). Merge to main stays owner-gated.
 TOOLING NOTES: preview_start by launch.json name intermittently fails ('no
 launch.json' despite valid file) — fallback: Bash `python3 -m http.server 8000`
 run_in_background + preview_start {url:'http://localhost:8000'}. Browser caches ES
