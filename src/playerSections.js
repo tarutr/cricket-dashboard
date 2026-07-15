@@ -471,9 +471,11 @@ export function scopeLine(state, overlay, { fixedDefault = false } = {}) {
 // builders, just discipline-specific ones, same category as everything else
 // in this file.
 
-/** Owner's red-ball exception: Test/MDM-only scopes swap SR for balls-per-dismissal. */
+/** Owner's red-ball exception: Red Ball (Test/MDM) scopes swap SR for balls-per-dismissal.
+ *  R5: format buckets collapsed to Red Ball / 50 Over / T20, so this now keys on the
+ *  "Red Ball" bucket rather than the retired "Test"/"MDM" bucket keys. */
 export function isRedBallOnly(state) {
-  return state.formats.length > 0 && state.formats.every((f) => f === "Test" || f === "MDM");
+  return state.formats.length > 0 && state.formats.every((f) => f === "Red Ball");
 }
 
 /** Normalizes fetchBattingCore's two possible shapes (plain row, or the
