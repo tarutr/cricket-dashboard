@@ -95,10 +95,11 @@ const SINGLETON_TYPES = [
   { key: "venue", label: "Venue", group: "Match", menOnly: false },
 ];
 
-// Dropdown OPTION order per group (R5 Wave 1a, item 7). "bowling" is
-// deliberately absent from PLAYER_ADD_ORDER — no standalone add entry — while
-// "rpos" is injected into the Basic-metrics optgroup right after "Innings".
-const PLAYER_ADD_ORDER = ["name", "team", "opposition", "hand", "role"];
+// Dropdown OPTION order per group (R5 Wave 1a, item 7; "bowling" re-added R5
+// Wave 2 per owner — his Player list omitted it only because he was thinking of
+// batting filters). "rpos" is injected into the Basic-metrics optgroup right
+// after "Innings".
+const PLAYER_ADD_ORDER = ["name", "team", "opposition", "hand", "bowling", "role"];
 const MATCH_ADD_ORDER = ["event", "venue"];
 
 /**
