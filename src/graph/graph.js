@@ -243,19 +243,31 @@ function wireDropdown(toggleEl, panelEl) {
     panelEl.hidden = false;
     toggleEl.setAttribute("aria-expanded", "true");
   }
-  toggleEl.addEventListener("click", (e) => {
+  function onToggleClick(e) {
     e.stopPropagation();
     if (panelEl.hidden) open();
     else close();
-  });
-  document.addEventListener("click", (e) => {
+  }
+  function onDocClick(e) {
     if (panelEl.hidden) return;
     if (panelEl.contains(e.target) || e.target === toggleEl) return;
     close();
-  });
-  document.addEventListener("keydown", (e) => {
+  }
+  function onDocKeydown(e) {
     if (e.key === "Escape" && !panelEl.hidden) close();
-  });
+  }
+  toggleEl.addEventListener("click", onToggleClick);
+  document.addEventListener("click", onDocClick);
+  document.addEventListener("keydown", onDocKeydown);
+  // Returns a teardown that removes the EXACT listeners this call added, so a
+  // caller that rebuilds its dropdown nodes can dispose the previous wiring
+  // (which otherwise pins detached DOM on `document` for the page's life). The
+  // roster dropdown (wired once over static markup) simply ignores this return.
+  return function teardown() {
+    toggleEl.removeEventListener("click", onToggleClick);
+    document.removeEventListener("click", onDocClick);
+    document.removeEventListener("keydown", onDocKeydown);
+  };
 }
 
 // NOTE: the Dumbbell chart used to be batting+men-only (a matchup "vs Pace/vs
@@ -526,7 +538,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // identity key (scope + metric keys + candidate id set — R6 owner fix 1: the
   // pool is restricted to the candidate set, so a change to it must invalidate
   // the cache) so switching the ANCHOR alone re-renders without a refetch (task
-  // brief) — see renderChart()'s benchmark branch.
+  // brief) — see renderChart()'s benchmark branch. The RADAR branch shares this
+  // same cache (NIT4): its pool has the identical key shape, so an unchanged
+  // scope/metrics/candidates re-render skips the refetch there too.
   let benchmarkAnchorId = null;
   let benchmarkMetricKeys = null;
   let benchmarkPoolCache = null; // { key, rows } | null
@@ -1039,7 +1053,19 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     return chosenMetricKey && metrics.some((m) => m.key === chosenMetricKey) ? chosenMetricKey : null;
   }
 
+  // Holds the teardown for whichever dropdown the LAST renderMetricControls()
+  // wired inside els.metricControls (radar or benchmark — mutually exclusive,
+  // at most one at a time). renderMetricControls() replaces metricControls'
+  // innerHTML on every rebuild, so before wiring fresh nodes we dispose the
+  // previous call's document listeners here (A2 leak fix). The roster dropdown
+  // is separate (static markup, wired once at 1689) and untouched by this.
+  let metricControlsDropdownTeardown = null;
+
   function renderMetricControls() {
+    if (metricControlsDropdownTeardown) {
+      metricControlsDropdownTeardown();
+      metricControlsDropdownTeardown = null;
+    }
     const state = store.get();
     const discipline = state.discipline;
     const formats = state.formats;
@@ -1223,10 +1249,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         });
       });
 
-      // Same rebuilt-each-render caveat as the Benchmark dropdown (see its
-      // JUDGMENT CALL note): wireDropdown() re-attaches document listeners on
-      // the fresh nodes; the previous rebuild's detached ones are inert no-ops.
-      if (radarToggle && radarPanel && eligible.length) wireDropdown(radarToggle, radarPanel);
+      // wireDropdown() attaches fresh document listeners on the new nodes; the
+      // previous rebuild's listeners were already removed at the top of
+      // renderMetricControls() via metricControlsDropdownTeardown (A2 leak fix).
+      if (radarToggle && radarPanel && eligible.length) metricControlsDropdownTeardown = wireDropdown(radarToggle, radarPanel);
     } else if (chartType === "phases") {
       const families = eligiblePhaseFamilies(discipline, formats);
       // item 4: no auto-pick — require an explicit family choice.
@@ -1521,19 +1547,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         });
       });
 
-      // JUDGMENT CALL (flagged): unlike the roster dropdown (static markup,
-      // wired once), this panel is rebuilt fresh on every renderMetricControls()
-      // call while Benchmark is active (chart-type switch, scope change, or a
-      // roster change via the onChange hook above) — each rebuild calls
-      // wireDropdown() again on the FRESH toggle/panel nodes, which attaches
-      // new document-level click/Escape listeners without tearing down the
-      // previous rebuild's (now-detached) ones. Those stale listeners are
-      // inert no-ops (a detached panel can never `.contains()` a live click
-      // target) and bounded by "how many times this session rebuilds this
-      // one dropdown" — not unbounded growth, and not a correctness bug — so
-      // this is accepted rather than adding a teardown API to the shared
-      // wireDropdown() helper for one control.
-      if (metricsToggle && metricsPanel) wireDropdown(metricsToggle, metricsPanel);
+      // Unlike the roster dropdown (static markup, wired once), this panel is
+      // rebuilt fresh on every renderMetricControls() call while Benchmark is
+      // active (chart-type switch, scope change, or a roster change via the
+      // onChange hook above). The previous rebuild's document listeners were
+      // removed at the top of renderMetricControls() via
+      // metricControlsDropdownTeardown (A2 leak fix); here we wire the fresh
+      // nodes and record their teardown for the next rebuild.
+      if (metricsToggle && metricsPanel) metricControlsDropdownTeardown = wireDropdown(metricsToggle, metricsPanel);
     }
   }
 
@@ -1816,7 +1837,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * over-supply of candidates never disables a type here, it just leaves
    * some unchecked (players.js's cap-clamp), unlike v1 where exceeding a
    * metric-count max was a hard disqualifier. */
-  function evaluateTypeStatus(typeKey, state, { candidateCountOverride, poolReasonOverride } = {}) {
+  function evaluateTypeStatus(typeKey, state, { candidateCountOverride, poolReasonOverride, eligibleMetricsForScope } = {}) {
     // decision 46f: an empty pool (never searched Stats, or a real search
     // that matched nobody) blocks EVERY type the same honest way, before any
     // type-specific check runs — see poolStatusReason()'s doc comment.
@@ -1828,6 +1849,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // reasons/strings).
     const poolReason = poolReasonOverride !== undefined ? poolReasonOverride : poolStatusReason();
     if (poolReason) return { ok: false, reason: poolReason };
+    // NIT5: the base scope-eligible metric list is identical across the
+    // slope/byyear/dumbbell branches below (all keyed on state.discipline +
+    // state.formats). syncChartTypeButtons() computes it ONCE and threads it in
+    // here so a single sync pass doesn't rebuild it per type; other callers
+    // (the "Graph this player" chooser) omit the override and recompute exactly
+    // as before. Note: the donut/radar/benchmark branches read their own
+    // wrapper predicates (benchmarkEligibleMetrics lives in benchmark.js,
+    // outside this file), so those are intentionally left untouched.
+    const eligibleForScope = eligibleMetricsForScope !== undefined ? eligibleMetricsForScope : eligibleMetrics(state.discipline, state.formats);
     if (typeKey === "donut" && donutEligibleMetrics(state.discipline, state.formats).length === 0) {
       return { ok: false, reason: "Needs a countable stat" };
     }
@@ -1837,13 +1867,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     if (typeKey === "phases" && eligiblePhaseFamilies(state.discipline, state.formats).length === 0) {
       return { ok: false, reason: "No phase metric families available for this scope" };
     }
-    if (typeKey === "slope" && eligibleMetrics(state.discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent").length === 0) {
+    if (typeKey === "slope" && eligibleForScope.filter((m) => m.kind === "rate" || m.kind === "percent").length === 0) {
       return { ok: false, reason: "No rate/percent metric available for this scope" };
     }
-    if (typeKey === "byyear" && eligibleMetrics(state.discipline, state.formats).filter((m) => timeseriesSupported(m)).length === 0) {
+    if (typeKey === "byyear" && eligibleForScope.filter((m) => timeseriesSupported(m)).length === 0) {
       return { ok: false, reason: "No year-by-year metric available for this scope" };
     }
-    if (typeKey === "dumbbell" && eligibleMetrics(state.discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent").length === 0) {
+    if (typeKey === "dumbbell" && eligibleForScope.filter((m) => m.kind === "rate" || m.kind === "percent").length === 0) {
       return { ok: false, reason: "No rate/percent metric available for this scope" };
     }
     // B8b (decision 44e): needs >=1 checked player (the anchor — covered by
@@ -1867,8 +1897,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
   function syncChartTypeButtons() {
     const state = store.get();
+    // NIT5: compute the scope-eligible metric base ONCE and reuse it across
+    // every evaluateTypeStatus() call in this pass (identical discipline +
+    // formats for the whole loop) instead of rebuilding it in each type branch.
+    const eligibleForScope = eligibleMetrics(state.discipline, state.formats);
     const statuses = {};
-    for (const t of CHART_TYPES) statuses[t.key] = evaluateTypeStatus(t.key, state);
+    for (const t of CHART_TYPES) statuses[t.key] = evaluateTypeStatus(t.key, state, { eligibleMetricsForScope: eligibleForScope });
 
     els.chartType.querySelectorAll(".segmented__btn").forEach((btn) => {
       const key = btn.dataset.value;
@@ -2898,8 +2932,20 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         }
         const radarMetricKeyList = metrics.map((m) => m.key);
         const candidateIds = selection.getFull().map((p) => p.id);
-        const poolRows = await fetchBenchmarkPool(state, radarMetricKeyList, candidateIds);
-        if (token !== loadToken) return;
+        // NIT4: route radar's pool fetch through the SAME benchmarkPoolCache the
+        // benchmark branch uses — identical key shape (scope + metric keys +
+        // candidate id set), so an unchanged scope/metrics/candidates render
+        // (e.g. a pure roster re-check) skips the redundant refetch, while any
+        // key change still refetches. The rows and their use are unchanged.
+        const poolKey = JSON.stringify([scopeSeedKey(state), radarMetricKeyList.slice().sort(), candidateIds.slice().sort()]);
+        let poolRows;
+        if (benchmarkPoolCache && benchmarkPoolCache.key === poolKey) {
+          poolRows = benchmarkPoolCache.rows;
+        } else {
+          poolRows = await fetchBenchmarkPool(state, radarMetricKeyList, candidateIds);
+          if (token !== loadToken) return;
+          benchmarkPoolCache = { key: poolKey, rows: poolRows };
+        }
         hideStatus();
 
         const canvas = card.getCanvas();

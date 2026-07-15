@@ -719,6 +719,17 @@ const STICKY_COL_MIN_PX = 96; // 6rem @ 16px root — same floor the old mobile 
 const STICKY_COL_MAX_PX = 224; // 14rem @ 16px root (task 4's "sane max")
 
 let measureProbe = null; // { table, td } — built once, reused for every measurement
+let measureCanvasCtx = null; // cached 2d context for layout-free text-width ranking
+
+/** A canvas 2d context set to the probe cell's exact computed font, for cheap
+ * (no-reflow) width RANKING of candidate names. The winning names are then
+ * re-measured against the real DOM probe for the exact box width. */
+function nameRankingCtx(td) {
+  if (!measureCanvasCtx) measureCanvasCtx = document.createElement("canvas").getContext("2d");
+  const cs = getComputedStyle(td);
+  measureCanvasCtx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  return measureCanvasCtx;
+}
 
 function ensureMeasureProbe() {
   if (measureProbe) return measureProbe;
@@ -748,9 +759,30 @@ function ensureMeasureProbe() {
  * measurement identical to the constrained box instead of the natural one). */
 function widestNameColWidthPx(names) {
   const { td } = ensureMeasureProbe();
+  if (!names.length) return 0;
+  // Rank all candidates by canvas text width (no layout), then DOM-measure only
+  // the few widest for the exact box width. A cell's rendered width is monotonic
+  // in its text width, so the true widest is always among the top canvas-ranked
+  // names — same result as measuring every row, but the reflow-forcing DOM reads
+  // are bounded to a constant instead of one per row (which made "Show More",
+  // ~2,800 rows, thrash layout).
+  const ctx = nameRankingCtx(td);
+  const TOP_K = 5;
+  const top = []; // { name, w }, kept sorted widest-first, length <= TOP_K
+  for (const raw of names) {
+    const name = raw || "";
+    const w = ctx.measureText(name).width;
+    if (top.length < TOP_K) {
+      top.push({ name, w });
+      top.sort((a, b) => b.w - a.w);
+    } else if (w > top[TOP_K - 1].w) {
+      top[TOP_K - 1] = { name, w };
+      top.sort((a, b) => b.w - a.w);
+    }
+  }
   let max = 0;
-  for (const name of names) {
-    td.textContent = name || "";
+  for (const { name } of top) {
+    td.textContent = name;
     const w = td.getBoundingClientRect().width;
     if (w > max) max = w;
   }
