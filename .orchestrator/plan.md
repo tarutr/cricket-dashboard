@@ -177,7 +177,31 @@ NOT-yet-built table items remain: muting removal, top-50 pagination + 'Show More
 (N players)', R.Pos column option, dynamic name-col width, preset-button page-jump
 fix, drag live-shuffle, column separator lines, no-striping (Wave 2 covers), search
 relevance ordering + header-search clear-on-pick + pinned-pill colour/placement.
-Those table items need their own wave(s) after R3 Wave 4 — confirm scope with owner.
+R3 Wave 5 DONE + VERIFIED (2026-07-15, cb7b7d0): muting fully removed (metrics/
+table/benchmark; benchmarkFloorNotes stubbed; benchmark best-other can now be a
+thin-sample outlier — FLAGGED to owner for review round; benchmarkChart.js dead
+branch + .paper-card__benchmark-anchor-value--thin orphaned, cleanup later);
+top-50 + Show More (N); R.Pos column (mode, tie→lowest, CORE-scope CTE only —
+by design, matches filter; verified SA Yadav=4 + row anchors exact); dynamic
+sticky width (offscreen probe, 96-224px clamp, ≤640px fixed 6rem); indented
+names root-cause = button UA text-align:center; preset-jump fixed (overlay over
+visible table instead of hidden); separators .data-table-only; drag live DOM
+shuffle. Verified live: 2,813 + top-row values byte-identical, Show More
+(2,763), scrollY stable on preset click, drag 6s→before-Runs stuck, console
+clean. R.Pos condition in drawer dropdown is honestly-inapplicable (excluded
+via conditionApplicability) — cleaner drawer-side exclusion deferred.
+R3 Wave 6 DONE + VERIFIED (2026-07-15, 074cec2): relevance ranking lives in
+playerData.js searchPlayers (NOT db.js — brief's file map was stale; pills in
+pills.js not table.js): tier CASE (exact/prefix/substring over player_matches
+name history) + whole-DB appearances CTE tiebreak; header clear-on-pick in
+main.js onOpenPlayer (synthetic input event resets omnisearch state); pin pills
+render last + .pill--pinned accent tint. Verified live: "kohli"→V Kohli first →
+popup opens + header input cleared; pin SA Yadav under Runs≥5000 → pills
+[Runs ≥ 5000][+ SA Yadav(tinted)] + row 60/1,544/29.13/150.34 EXACT; unpin →
+instant requery to 0 players; console clean. Pre-existing quirk flagged: esc()
+doesn't escape LIKE wildcards (%/_) in search terms.
+ALL R3 BUILD WAVES COMPLETE → final fresh-eyes review (opus, read-only) over
+the whole round, orchestrator fixes, then owner GATE presentation.
 TOOLING NOTES: preview_start by launch.json name intermittently fails ('no
 launch.json' despite valid file) — fallback: Bash `python3 -m http.server 8000`
 run_in_background + preview_start {url:'http://localhost:8000'}. Browser caches ES
