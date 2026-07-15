@@ -371,3 +371,37 @@ orchestrator against raw R2.
   * Dumbbell rebuild is cheaper than feared: keep dumbbellChart.js's dot-bar-dot renderer;
     only repoint data from fetchDumbbellSide(Pace/Spin) to slope's fetchWindowMetric(Win
     A/B) + reuse slope's window pickers. Works both disciplines via buildQuery.
+
+## ROUND 5 (owner verdicts 2026-07-15, 15 items → refined). Wave 1 DONE + VERIFIED.
+Format restructure to 3 buckets (Red Ball=Test+MDM, 50 Over=ODI+ODM, T20=T20+IT20;
+verified those 6 match_types are the complete set). Team type STAYS in Search
+Conditions (reverses point-15 move). Point 15 diagnosis: ODM+International=14 is
+CORRECT DATA (associate-nation internationals — ICC World Cricket League, CWC
+Challenge League, WC Qualifiers), NOT a bug — the 3-bucket model resolves the naming.
+- W1a 5d4a98e + companion 8f604cb (orchestrator fixed isRedBallOnly in playerSections
+  to key on "Red Ball"): format 5→3, date end-default=max-date/start-blank-required,
+  preset-label persists, +Add-condition restructure (Player: Name/Team/Opposition/
+  Batting hand/Role; Match: Event/Venue; Basic w/ Regular position after Innings;
+  Dismissal type drops "Out " prefix), narrower one-row Search Conditions + narrower
+  condition rows, helper prose removed.
+- W1b ffedba8: graph empty-state RULES TABLE (no default graph); filter-driven
+  auto-select (metric condition keys → select metric(s) + recommend chart: ≥3 radar-
+  valid→radar, 2→scatter, 1 additive+single-team→donut, else→bar, 0→rules table);
+  radar metric persistence across type switch; radar percentile over FULL filtered
+  pool (fetchBenchmarkPool); donut single-team-only w/ rich guidance; richer invalid
+  messages (what chart is for + what metric needed); no floors (timeseries per-year
+  greyer is decision-43, untouched).
+VERIFIED LIVE 2026-07-15: baseline 2,813 EXACT (Karanbir Singh 2,454/54.53/175.29) —
+format restructure numerically clean; 3 format buckets w/ T20 default; end-date
+prefilled 13/07/2026 + start blank; preset "Year to date" label persists + fills
+2026-01-01→2026-07-13; Advanced dropdown groups+order exact incl. Regular position
+after Innings + dismissal labels sans "Out"; graph empty rules table (all 9 charts);
+Runs≥300 filter → auto Runs+Bar "Runs — top 15" (pool 434); radar 3 axes survive
+Bar↔Radar switch; radar footer "percentile rank against the 434 players"; donut
+multi-team → single-team guidance; console clean.
+OPEN QUESTIONS for owner: (a) Bowling style dropped as a standalone +Add-condition
+entry (owner's Player list omitted it; still reachable via Role→Bowler) — re-add?
+(b) auto-select also fires from an inherited Stats scope that already has metric
+conditions (consistent w/ filter-driven rule; manual chart click disables it) — OK?
+REMAINING R5: Wave 2 = player-popup shrink + scope-line "Data for [format] ([team
+type]) from [start] to [end]" (point 3). Point 12 no-floors = confirmed.
