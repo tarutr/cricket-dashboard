@@ -805,52 +805,54 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   }
 
   /**
-   * Slope's Window A/B defaults (owner ruling, decision 43): "Window A = first
-   * half of the current scope's date range, Window B = second half." Computed
-   * ONCE — the first time the Slope chart type is used this session — from
-   * the live filter scope's dateFrom/dateTo (falling back to the dataset's
-   * full min/max if the scope isn't date-bounded yet). Never recomputed after
-   * that, even if the scope's date range later moves: these are the user's
-   * OWN pickers from that point on, not a mirror of the filter bar's.
+   * Split the GRAPH scope's date range into two halves — "Window A = first
+   * half, Window B = second half" (owner ruling, decision 43). Reads the live
+   * scope's EXACT dateFrom/dateTo (day level), falling back to the dataset's
+   * full min/max if the scope isn't date-bounded yet. Pure — returns
+   * `{ a, b }` day-window pairs, or `null` when bounds aren't known yet (leave
+   * pickers blank, user must pick both ends). Shared by the Slope and Dumbbell
+   * default seeders below.
+   */
+  function computeHalfSplitWindows() {
+    const state = store.get();
+    const { minDay, maxDay } = datasetDayBounds();
+    const from = toDay(state.dateFrom) || minDay;
+    const to = toDay(state.dateTo) || maxDay;
+    if (!from || !to) return null;
+    const fromMs = dayToMs(from);
+    const toMs = dayToMs(to);
+    const midMs = fromMs + Math.floor((toMs - fromMs) / 2);
+    const secondFromMs = Math.min(midMs + (toMs > fromMs ? DAY_MS : 0), toMs);
+    return {
+      a: { from, to: msToDay(midMs) },
+      b: { from: msToDay(secondFromMs), to },
+    };
+  }
+
+  /**
+   * Slope's Window A/B defaults. Computed ONCE — the first time the Slope chart
+   * type is used this session. Never recomputed after that, even if the scope's
+   * date range later moves: these are the user's OWN pickers from that point
+   * on, not a mirror of the filter bar's.
    */
   function ensureSlopeWindowDefaults() {
     if (slopeWindowA && slopeWindowB) return;
-    const state = store.get();
-    const { minDay, maxDay } = datasetDayBounds();
-    // Item 10: initialise from the GRAPH scope's EXACT dateFrom/dateTo (day
-    // level), falling back to the dataset's full range if the scope isn't
-    // date-bounded yet.
-    const from = toDay(state.dateFrom) || minDay;
-    const to = toDay(state.dateTo) || maxDay;
-    if (!from || !to) return; // bounds not known yet — leave blank, user must pick both ends
-    const fromMs = dayToMs(from);
-    const toMs = dayToMs(to);
-    const midMs = fromMs + Math.floor((toMs - fromMs) / 2);
-    slopeWindowA = { from, to: msToDay(midMs) };
-    const secondFromMs = Math.min(midMs + (toMs > fromMs ? DAY_MS : 0), toMs);
-    slopeWindowB = { from: msToDay(secondFromMs), to };
+    const w = computeHalfSplitWindows();
+    if (!w) return;
+    slopeWindowA = w.a;
+    slopeWindowB = w.b;
   }
 
-  /** Dumbbell's Window A/Window B defaults — IDENTICAL logic to
-   * ensureSlopeWindowDefaults() above (first half of the scope's date range
-   * vs second half), since the rebuilt Dumbbell is Slope's data drawn as
-   * dumbbells. Kept as its own function (not shared with the slope one) so
-   * each chart type owns its own independent, separately-repickable windows —
-   * exactly as they were separate before, just both now date windows rather
-   * than Slope=windows / Dumbbell=Vs-buckets. Set ONCE, then owner-picked. */
+  /** Dumbbell's Window A/Window B defaults — same first-half/second-half split
+   * as Slope (the rebuilt Dumbbell is Slope's data drawn as dumbbells). Kept as
+   * its own seeder with its own variables so each chart type owns independent,
+   * separately-repickable windows. Set ONCE, then owner-picked. */
   function ensureDumbbellWindowDefaults() {
     if (dumbbellWindowA && dumbbellWindowB) return;
-    const state = store.get();
-    const { minDay, maxDay } = datasetDayBounds();
-    const from = toDay(state.dateFrom) || minDay;
-    const to = toDay(state.dateTo) || maxDay;
-    if (!from || !to) return; // bounds not known yet — leave blank, user must pick both ends
-    const fromMs = dayToMs(from);
-    const toMs = dayToMs(to);
-    const midMs = fromMs + Math.floor((toMs - fromMs) / 2);
-    dumbbellWindowA = { from, to: msToDay(midMs) };
-    const secondFromMs = Math.min(midMs + (toMs > fromMs ? DAY_MS : 0), toMs);
-    dumbbellWindowB = { from: msToDay(secondFromMs), to };
+    const w = computeHalfSplitWindows();
+    if (!w) return;
+    dumbbellWindowA = w.a;
+    dumbbellWindowB = w.b;
   }
 
   // ── Selection model: three auto-select sources (R6b) ────────────────────────
