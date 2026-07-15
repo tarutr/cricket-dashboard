@@ -497,7 +497,11 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
       const matchupsOverlay = ov && ov.vs ? { ...ov, vs: null } : ov;
       const [positions, opposition, matchups] = await Promise.all([
         isVs ? Promise.resolve([]) : fetchBattingPositions(playerId, state, ov),
-        isVs || state.teamType !== "international" ? Promise.resolve(null) : fetchBattingOpposition(playerId, state, ov),
+        // Owner task #20: "Vs opposition" now shows for EVERY team type (was
+        // international-only, decision 20's gate removed) — the ONLY
+        // remaining refusal is `isVs` (opposition can't split under a
+        // Vs/matchup scope, unrelated to team type).
+        isVs ? Promise.resolve(null) : fetchBattingOpposition(playerId, state, ov),
         fetchBattingMatchups(playerId, state, matchupsOverlay),
       ]);
       return { core: coreNorm, positions, opposition, matchups };
@@ -506,8 +510,10 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
     if (!core || Array.isArray(core.unsupported) || Number(core.innings) === 0) {
       return { core, opposition: null, matchups: { coverage: null, hands: [] } };
     }
+    // Owner task #20: "Vs opposition" now shows for EVERY team type — bowling
+    // has no isVs-style refusal at all, so the fetch always runs.
     const [opposition, matchups] = await Promise.all([
-      state.teamType === "international" ? fetchBowlingOpposition(playerId, state, ov) : Promise.resolve(null),
+      fetchBowlingOpposition(playerId, state, ov),
       fetchBowlingMatchups(playerId, state, ov),
     ]);
     return { core, opposition, matchups };

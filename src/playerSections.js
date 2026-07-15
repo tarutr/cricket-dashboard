@@ -210,34 +210,22 @@ export function positionsTableHTML(rows) {
   return miniTableHTML(["Pos", "Inns", "Runs", "Avg", "SR"], body);
 }
 
-/** Owner decision 46 (column rebalance): the "Vs opposition" table used to
- * run on for every opponent ever faced, making the right column of the
- * popup's two-col grid far longer than the left column (position table +
- * wicket-type bars + progression cards). Trimmed here, in JS, over rows the
- * query already fetched — no SQL change. Capped BY INNINGS (not by the
- * table's own runs/wickets sort) since "opponents faced most often" is the
- * honest criterion for "top", independent of which metric the columns show.
- * N=8 balances the right column against the left column's ~3 sections at the
- * popup's ~920px desktop width (owner's "around 8-10" range). */
-export const OPPOSITION_CAP = 8;
-
-/** "Vs opposition" is international-only (decision 20); `rows` is null when
- * not fetched. `cap`, when given, trims to the top `cap` opponents by
- * innings and appends an honest "Top N of M" note (SPEC §8.4) — omitted
- * entirely when the fetched rows already fit within the cap. */
-export function oppositionSectionHTML(state, discipline, rows, cap = null) {
-  if (state.teamType !== "international") {
-    return `<p class="player-page__note player-page__note--muted">Opposition splits are international-only for now.</p>`;
-  }
+/** "Vs opposition" (owner task #20): shows every team type (was
+ * international-only, decision 20 — that gate is REMOVED) and every
+ * opponent the player has faced, no cap (decision 46's OPPOSITION_CAP=8
+ * top-N-by-innings trim is REMOVED too — the popup scrolls freely now, so
+ * a long list is no longer a layout problem). `rows` is always an array by
+ * the time this renders (the one remaining refusal — opposition can't split
+ * under a Vs/matchup scope — is handled one level up: battingGridHTML's isVs
+ * branch never renders this section at all, so `rows` being empty here is
+ * always the genuine "no opponents in this scope" case, which miniTableHTML
+ * already renders honestly as "No rows in this scope"). */
+export function oppositionSectionHTML(discipline, rows) {
   const keys = discipline === "batting" ? ["innings", "runs", "average", "strike_rate"] : ["innings", "wickets", "average", "economy"];
   const headers = discipline === "batting" ? ["Team", "Inns", "Runs", "Avg", "SR"] : ["Team", "Inns", "Wkts", "Avg", "Econ"];
   const metrics = keys.map((k) => getMetric(k, discipline));
-  const all = rows || [];
-  const isTrimmed = Boolean(cap) && all.length > cap;
-  const shown = isTrimmed ? [...all].sort((a, b) => (Number(b.innings) || 0) - (Number(a.innings) || 0)).slice(0, cap) : all;
-  const body = shown.map((r) => [escHtml(r.team), ...metrics.map((m) => escHtml(formatValue(m, r[m.key])))]);
-  const capNoteHTML = isTrimmed ? `<p class="player-page__footnote">Top ${cap} of ${all.length} opponents by innings</p>` : "";
-  return `${miniTableHTML(headers, body)}${capNoteHTML}`;
+  const body = (rows || []).map((r) => [escHtml(r.team), ...metrics.map((m) => escHtml(formatValue(m, r[m.key])))]);
+  return miniTableHTML(headers, body);
 }
 
 /** A mini-table with its own small label above it, for grouping two tables under one section. */
@@ -583,14 +571,14 @@ export function battingGridHTML(state, coreNorm, extra) {
       ["SR, balls 21+", getMetric("sr_21plus", "batting"), coreNorm.progression.sr_21plus],
     ]);
     // Column rebalance (decision 46): LEFT = position table, Wicket Type,
-    // Progressive Scoring stacked top-to-bottom; RIGHT = Vs opposition alone
-    // (capped — see OPPOSITION_CAP) so it doesn't run past the left column's
-    // length. Matchups (below, outside this grid) is unchanged.
+    // Progressive Scoring stacked top-to-bottom; RIGHT = Vs opposition, now
+    // showing every opponent, uncapped (owner task #20 — the popup scrolls
+    // freely). Matchups (below, outside this grid) is unchanged.
     const leftColHTML = `${sectionOrUnsupported("By batting position", extra.positions, positionsTableHTML)}
       ${sectionHTML(wicketTypeTitle, howOutBody)}
       ${sectionHTML("Progressive Scoring", progressionBody)}`;
     const rightColHTML = sectionOrUnsupported("Vs opposition", extra.opposition, (rows) =>
-      oppositionSectionHTML(state, "batting", rows, OPPOSITION_CAP)
+      oppositionSectionHTML("batting", rows)
     );
     bodyHTML = `<div class="player-page__two-col">
       <div class="player-page__col">${leftColHTML}</div>
@@ -622,15 +610,13 @@ export function bowlingGridHTML(state, core, extra) {
     ["SR", getMetric("strike_rate", "bowling"), core.strike_rate],
     ["BBI", getMetric("best", "bowling"), core.best],
   ]);
-  // Same cap as batting's Vs-opposition table (decision 46) — same helper,
-  // same reason (a long opponent list shouldn't stretch this column past its
-  // neighbour); bowling's own column only ever holds the one section, so
-  // there's no length mismatch to balance, but the honest "Top N of M" note
-  // and clipping fix apply identically here.
+  // Same helper as batting's Vs-opposition table, now uncapped for the same
+  // reason (owner task #20 — the popup scrolls freely, so a long opponent
+  // list is no longer trimmed).
   const twoColA = `<div class="player-page__two-col">
     <div class="player-page__col">${sectionHTML("Wicket types", wicketTypesHTML(core))}</div>
     <div class="player-page__col">${sectionOrUnsupported("Vs opposition", extra.opposition, (rows) =>
-      oppositionSectionHTML(state, "bowling", rows, OPPOSITION_CAP)
+      oppositionSectionHTML("bowling", rows)
     )}</div>
   </div>`;
   const matchupsHTML = sectionOrUnsupported("Matchups", extra.matchups, bowlingMatchupsHTML);

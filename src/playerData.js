@@ -480,7 +480,11 @@ export async function fetchBattingPositions(playerId, state, overlay = null) {
   return rows;
 }
 
-/** International only (decision 20) — callers gate on teamType and grey otherwise. */
+/** Every team type (owner task #20 — was international-only, decision 20;
+ * that gate lived in the CALLER, playerPage.js's fetchDisciplineData, and has
+ * been removed there, not here — this query itself never cared about team
+ * type: `pageScopeClauses`/`whereFor` already apply whatever teamType the
+ * page scope carries, same as every other player-page query). */
 export async function fetchBattingOpposition(playerId, state, overlay = null) {
   const base = whereFor(state, "batter_id", playerId);
   const ov = applyOverlay(base, overlay, { positionCol: "batting_position", oppositionCol: "bowling_team" });
@@ -517,7 +521,9 @@ export async function fetchBowlingCore(playerId, state, overlay = null) {
   return rows[0] ?? null;
 }
 
-/** International only (decision 20) — callers gate on teamType and grey otherwise. */
+/** Every team type (owner task #20 — was international-only, decision 20;
+ * see fetchBattingOpposition's comment above — same story, this query
+ * already scopes by whatever teamType the page carries). */
 export async function fetchBowlingOpposition(playerId, state, overlay = null) {
   const base = whereFor(state, "bowler_id", playerId);
   const ov = applyOverlay(base, overlay, { positionCol: null, oppositionCol: "batting_team" });
