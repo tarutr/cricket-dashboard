@@ -525,6 +525,11 @@ function boot() {
 
       function openPopup() {
         filtersPopupEl.hidden = false;
+        // R7 #16: filters are now shared bidirectionally with the graph, so the
+        // Search Conditions controls must re-sync from the (shared) store on
+        // every open — otherwise a discipline/format/etc. change made on the
+        // graph side would leave these selects showing a stale value here.
+        filterController.render();
         drawerController.onShow(); // re-derive team mode, snapshot advanced, refresh option lists
         fpopPanelEl.focus();
       }
