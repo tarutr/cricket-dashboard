@@ -405,3 +405,25 @@ entry (owner's Player list omitted it; still reachable via Role→Bowler) — re
 conditions (consistent w/ filter-driven rule; manual chart click disables it) — OK?
 REMAINING R5: Wave 2 = player-popup shrink + scope-line "Data for [format] ([team
 type]) from [start] to [end]" (point 3). Point 12 no-floors = confirmed.
+
+## R5 Wave 2 DONE + VERIFIED (2026-07-15) + Bowling style re-add.
+- 1aee520: Bowling style re-added to Player +Add-condition group (owner: he'd only
+  been thinking of batting filters). Order now Name/Team/Opposition/Batting hand/
+  Bowling style/Role — verified in dropdown.
+- 3ed9208: player-popup header shrunk (toolbar row ~69px→~47px, controls 40→30px min-
+  height, name gets margin above) + scope line reworded to "Data for [format] ([team
+  type]) from [start] to [end]" (scopeLine() in playerSections.js, FORMAT_BUCKETS
+  labels, both entry paths; old "leaderboard-only…"/"fixed default view…" suffixes
+  dropped). playerPage.js untouched (CSS + scopeLine only).
+VERIFIED LIVE: header-search popup = "Data for T20 (International + Domestic) from
+1 Jan 2020 to 13 Jul 2026" + visibly tighter toolbar + name breathing room; table-
+click popup = "Data for T20 (International) from 1 Jul 2023 to 13 Jul 2026" (reflects
+table scope); console clean.
+CLEANUP-DEBT noted by agent (defer): scopeLine fixedDefault param now unused;
+overlayTokens() now unused-but-exported; header controls 30px min-height below the
+40-44px tap-target guidance (owner asked for compact — eyeball mobile).
+ROUND 5 COMPLETE — all 15 items across W1+W2 built + browser-verified. Baseline
+2,813 exact throughout. AWAITING OWNER REVIEW on localhost:8000. Merge to main
+still owner-gated. Deferred to a later "player graphs" effort: single-player
+composition donuts (dismissal types, 1s/2s/…/6s). Open non-blocking: header tap-
+target size on mobile.
