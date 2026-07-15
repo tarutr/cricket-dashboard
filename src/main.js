@@ -89,6 +89,36 @@ let filtersPopup = null; // { open, close, isOpen } — the Filters popup contro
 let maxDate = null; // manifest max match date "YYYY-MM-DD" — reference for date presets + input max (1B-2)
 let minDate = null; // manifest min match date "YYYY-MM-DD" — input min bound
 
+// R7 Wave B (item 4): the APPLIED filter state — a snapshot of the store as of
+// the last query the table actually reflects (Search, or an immediate-apply
+// action while the popup is closed: toolbar Vs/presets, pin add/remove, pill
+// removal, omnisearch "filter the table"). The pills row and the Filters-button
+// badge — both rendered inside the table area since F2 — render from THIS, not
+// the live store, so editing a condition inside the Filters popup updates only
+// the pending store and never moves the table area before Search. Advanced by
+// runSearch() and by the store.subscribe hook while the popup is closed.
+let appliedState = null;
+
+const DATA_DATE_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Deep snapshot of the store for `appliedState` (item 4). Plain JSON clone —
+ * the state is fully JSON-serializable, and a deep copy is required because
+ * drawer.js mutates advanced-condition objects in place before store.set, so a
+ * shallow copy would still see those pending edits. */
+function snapshotAppliedState() {
+  return JSON.parse(JSON.stringify(store.get()));
+}
+
+/** Format a "YYYY-MM-DD" data date as "13 Jul 2026" (item 3 — the footer's
+ * "Data as of" date). Parsed by parts, not `new Date(str)`, to avoid the
+ * UTC-midnight-in-a-negative-timezone off-by-one-day drift. */
+function formatDataDate(ymd) {
+  if (!ymd) return "";
+  const [y, m, d] = ymd.split("-").map(Number);
+  if (!y || !m || !d) return ymd;
+  return `${d} ${DATA_DATE_MONTHS[m - 1]} ${y}`;
+}
+
 /** Open the Filters popup (F1a). Exported for the table's empty-state prompt
  * button (via onOpenFilters) and F2's toolbar "Filters" button. No-op until
  * boot() wires the popup controller. */
@@ -154,7 +184,9 @@ function reapplyDefaultColumnsIfUnmodified() {
 function updateDrawerBadge() {
   const countEl = tableAreaEl.querySelector('[data-role="toolbar-filters-count"]');
   if (!countEl || !drawerController) return;
-  const n = drawerController.activeCount();
+  // Count the APPLIED snapshot (item 4), so the badge tracks what's actually
+  // narrowing the table — not pending popup edits — and agrees with the pills.
+  const n = drawerController.activeCount(appliedState || store.get());
   countEl.hidden = n === 0;
   countEl.textContent = String(n);
 }
@@ -360,9 +392,19 @@ function mountTableToolbarExtras({ searchInputEl, searchResultsEl, pillsHostEl }
   // requery, so a single callback covers both (mountPills defaults onPinChange
   // to onChange). The query builders are untouched — for a given state the SQL
   // is byte-identical; only WHEN load() runs changed.
-  pillsController = mountPills(pillsHostEl, store, () => {
-    onFiltersChanged({ requery: true });
-  });
+  pillsController = mountPills(
+    pillsHostEl,
+    store,
+    () => {
+      onFiltersChanged({ requery: true });
+    },
+    undefined,
+    // item 4: pills DISPLAY the applied snapshot, not the live store, so a
+    // pending popup edit never shows as a pill before Search. Removal handlers
+    // still mutate the live store (see pills.js) — applied === live whenever the
+    // pills are visible (popup closed), so the two never disagree at click time.
+    () => appliedState || store.get()
+  );
   pillsController.render();
 
   // Table search (task 3b): Stats-view-only box, now inside the toolbar.
@@ -391,17 +433,17 @@ function boot() {
       const initial = store.get();
       lastAppliedDefaults.batting = [...initial.columns.batting];
       lastAppliedDefaults.bowling = [...initial.columns.bowling];
+      appliedState = snapshotAppliedState(); // item 4: nothing applied yet — pills/badge start empty
 
       initStatusEl.innerHTML = "";
       appContentEl.hidden = false;
 
-      if (manifest?.generated_at) {
-        const d = new Date(manifest.generated_at);
-        footerDataDateEl.textContent = `Data as of ${d.toLocaleDateString(undefined, {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-        })}`;
+      // R7 Wave B (item 3): the footer reads the LATEST MATCH DATE in the data
+      // (the same manifest max-date bound the presets + default end date use),
+      // NOT the wall-clock/generated-at date — the honest "data as of" line is
+      // "how current is the cricket," not "when did the build run."
+      if (maxDate) {
+        footerDataDateEl.textContent = `Data as of ${formatDataDate(maxDate)}`;
       }
 
       filterController = mountFilters(
@@ -494,6 +536,14 @@ function boot() {
           return;
         }
         closePopup();
+        // item 4: Search is the moment the popup's pending edits BECOME applied.
+        // Commit the snapshot and refresh the pills + badge from it (closePopup
+        // itself never queries), then load the table. In graph view there's no
+        // table load — the graph already follows scope live — but committing the
+        // snapshot keeps the pills/badge correct for a later switch back to Stats.
+        appliedState = snapshotAppliedState();
+        if (pillsController) pillsController.render();
+        updateDrawerBadge();
         if (store.get().view === "table") tableController.load();
       }
 
@@ -519,6 +569,14 @@ function boot() {
       // position filter inert, so its pill and badge count must drop
       // immediately).
       store.subscribe(() => {
+        // R7 Wave B (item 4): advance the applied snapshot ONLY for changes that
+        // apply immediately — i.e. while the Filters popup is CLOSED (toolbar Vs/
+        // presets, pin add/remove, pill removal, omnisearch "filter the table").
+        // While the popup is OPEN every store mutation is a PENDING edit that
+        // must not touch the table area until Search, so the snapshot (and thus
+        // the pills + badge, which render from it) stays frozen. The graph has
+        // its own local scope store, so its popup edits never reach this hook.
+        if (!(filtersPopup && filtersPopup.isOpen())) appliedState = snapshotAppliedState();
         if (pillsController) pillsController.render();
         updateDrawerBadge();
         // The popup's filter content too: toolbar presentation controls (Vs,

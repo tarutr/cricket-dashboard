@@ -394,12 +394,27 @@ a { color: var(--color-accent); }
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-5) var(--space-6);
+  /* R7 Wave B (item 1): tighter column gap so Gender · Discipline · Format ·
+     Team type · Date From–To–Preset read as one compact row at desktop. */
+  gap: var(--space-4) var(--space-5);
   /* flex-start (was flex-end): the date block grew taller in R4 (stacked
      inputs + preset select), and bottom-aligning left dead space above the
      short selects. Top-align so all labels sit on one line. */
   align-items: flex-start;
 }
+
+/* R7 Wave B (item 1): drop the control type a notch (0.9rem → 0.8rem) inside
+   the Search Conditions bar so the whole row stays compact; scoped to
+   .filter-bar so nothing else that reuses .select/.input shrinks. min-height
+   (tap target) is untouched. */
+.filter-bar .select,
+.filter-bar .input { font-size: var(--text-sm2); }
+
+/* R7 Wave B (item 1): Gender / Discipline selects hug their own short text
+   ("Men" / "Batting") instead of stretch-filling the flex column, so they read
+   as narrow boxes at the head of the row. */
+.filter-group--gender .select,
+.filter-group--discipline .select { align-self: flex-start; }
 
 .filter-group {
   display: flex;
@@ -3379,9 +3394,20 @@ a { color: var(--color-accent); }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.filters-popup .filter-group--dates .date-range__input { flex: 0 1 8rem; }
-.filters-popup .filter-group--dates .date-presets { margin-top: var(--space-1); }
-.filters-popup .date-preset-select { min-height: 30px; max-width: 10rem; }
+/* R7 Wave B (item 1): From · To · Preset now share ONE row inside .date-range
+   (the preset select moved in from its old stacked .date-presets wrapper).
+   Narrower date boxes + a narrower preset keep that row compact. nowrap is
+   applied at desktop only (media block below) so ~380px phones still wrap the
+   three controls gracefully rather than overflowing. */
+.filters-popup .filter-group--dates .date-range__input { flex: 0 1 7.5rem; min-width: 0; }
+.filters-popup .date-preset-select { min-height: 30px; max-width: 9rem; flex: 0 1 auto; }
+
+@media (min-width: 900px) {
+  .filters-popup .filter-group--dates .date-range {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+}
 
 /* ── ROUND 3 (task 7): numeric condition GROUP cards ─────────────────────────
    A single-group / single-condition builder still reads as one plain row (no

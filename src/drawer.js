@@ -357,13 +357,14 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   }
 
   // Display-only override for the "+ Add condition…" dropdown OPTION label
-  // (R4 Wave 1a, owner decision): "R. Pos." reads as jargon in that menu.
-  // Everything else that shows this condition type — the row's own type label
-  // (syncSingletonRows sets it to "R. Pos." / "Batting position"), pills, and
-  // the metric label elsewhere — is untouched; SINGLETON_TYPES.rpos.label
-  // ("R. Pos.") stays as-is and still drives those. Scoped to this one builder
-  // function rather than renaming the shared type label globally.
-  const ADD_CONDITION_LABEL_OVERRIDES = { rpos: "Regular position" };
+  // (R4 Wave 1a; relabelled again R7 Wave B item 6 → "Reg. Batting Position"):
+  // "R. Pos." reads as jargon in that menu. Everything else that shows this
+  // condition type — the row's own type label (syncSingletonRows sets it to
+  // "R. Pos." / "Batting position"), pills, and the metric label elsewhere — is
+  // untouched; SINGLETON_TYPES.rpos.label ("R. Pos.") stays as-is and still
+  // drives those. Scoped to this one builder function rather than renaming the
+  // shared type label globally.
+  const ADD_CONDITION_LABEL_OVERRIDES = { rpos: "Reg. Batting Position" };
 
   // Dismissal-type dropdown labels drop the leading "Out " (R5 Wave 1a, item 7:
   // "Caught" not "Out Caught"). Display-only — the metric KEYS/labels in
@@ -690,9 +691,13 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   }
 
   /** Badge count: only filters ACTUALLY applied right now (inert selections
-   * don't count, matching the pills). */
-  function activeCount() {
-    const s = store.get();
+   * don't count, matching the pills). `stateOverride` (R7 Wave B item 4) lets
+   * main.js count the APPLIED snapshot rather than the live store, so pending
+   * popup edits don't bump the toolbar badge before Search — the badge and the
+   * pills then agree on the same applied state. Defaults to the live store for
+   * any other caller. */
+  function activeCount(stateOverride) {
+    const s = stateOverride || store.get();
     let n = 0;
     if ((s.teams || []).length > 0) n++;
     if (s.gender !== "female") {

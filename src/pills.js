@@ -57,9 +57,18 @@ function conditionPillLabel(cond, state) {
  * anything — and every caller now that the two paths are identical — needs to
  * pass only one callback.
  */
-export function mountPills(container, store, onChange, onPinChange = onChange) {
+export function mountPills(container, store, onChange, onPinChange = onChange, getState = () => store.get()) {
+  // `getState` (R7 Wave B item 4): the state the pills DISPLAY. main.js passes
+  // the APPLIED-filter snapshot here so pending edits made inside the Filters
+  // popup (still un-searched) never surface as pills in the table area before
+  // Search — the pills reflect what's actually narrowing the table, matching
+  // the honest-scope rule (§8.4). Pill REMOVAL still mutates the live `store`
+  // (removing an applied pill is an immediate, honest edit that re-queries):
+  // when pills render, the popup is closed and applied === live, so the indices
+  // read off `getState()` are valid against the live store the handlers touch.
+  // Defaults to the live store, so any other caller is unaffected.
   function render() {
-    const s = store.get();
+    const s = getState();
     const pills = []; // { label, remove(), requery? }
 
     // "Current team" mode (owner decision 46): one removable pill per team,

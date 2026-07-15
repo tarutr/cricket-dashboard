@@ -462,12 +462,14 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
 
     <div class="filter-group filter-group--dates">
       <span class="filter-label">Date range</span>
+      <!-- R7 Wave B (item 1): From · To · Preset now live on ONE row inside
+           .date-range (the preset select used to sit stacked below in its own
+           .date-presets wrapper). The data-role="date-presets" hook is
+           unchanged, so the lookup + wiring below are unaffected by the move. -->
       <div class="date-range">
         <input type="date" class="input date-range__input" data-role="dateFrom" aria-label="From date" />
         <span class="date-range__sep">–</span>
         <input type="date" class="input date-range__input" data-role="dateTo" aria-label="To date" />
-      </div>
-      <div class="date-presets" data-role="date-presets-wrap">
         <select class="select date-preset-select" data-role="date-presets" aria-label="Date preset">
           <option value="">Preset…</option>
           <option value="last-month">Last month</option>
@@ -599,6 +601,14 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
     syncFormatDropdown();
     syncTeamTypeDropdown();
     syncDateInputs();
+    // R7 Wave B (item 14 — "Clear must reset the preset label"): a preset label
+    // only means anything while a full date window is set. "Clear all filters"
+    // nulls both dates (clearAll → render() runs with dateFrom = dateTo = null,
+    // BEFORE setDateBounds re-applies the default end date), so reset the preset
+    // dropdown to its "Preset…" placeholder instead of leaving a stale label
+    // (e.g. "Year to date"). Guarded to the both-null case so a plain re-render
+    // (e.g. a gender switch, which keeps the dates) never wipes a live preset.
+    if (!state.dateFrom && !state.dateTo) els.datePresets.value = "";
   }
 
   /** Date is REQUIRED (owner 1B-2 — the data isn't all-time, so an unbounded

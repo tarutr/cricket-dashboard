@@ -206,6 +206,14 @@ export function mountRegularPositions(container, store, onChange, { embedded = f
  * Distinct opposition team names under the current scope. The opposition filter
  * never narrows its own option list (buildScopeClauses called without
  * oppositionColumn here).
+ *
+ * R7 Wave B (item 5): options are ranked by MATCHES PLAYED against each opponent
+ * within the current scope (most-played first), like the Team picker's
+ * games-desc order — not alphabetical. `games` = COUNT(DISTINCT match_id), the
+ * honest "how many matches this opponent appears in" for the same scope the
+ * option list already reflects; ties break to team name ASC for determinism.
+ * This changes the option ORDER only — the same set of distinct teams appears,
+ * and no leaderboard/table query is touched (baseline unaffected).
  */
 async function fetchOppositionOptions(state) {
   const view = state.discipline === "batting" ? "batting" : "bowling";
@@ -214,7 +222,7 @@ async function fetchOppositionOptions(state) {
   const oppCol = state.discipline === "batting" ? "bowling_team" : "batting_team";
   const clauses = buildScopeClauses(state, { includeTeams: true, teamColumn: teamCol, idColumn: idCol });
   const where = clauses.length ? clauses.join(" AND ") : "TRUE";
-  const sql = `SELECT DISTINCT ${oppCol} AS team FROM ${view} WHERE ${where} AND ${oppCol} IS NOT NULL ORDER BY team`;
+  const sql = `SELECT ${oppCol} AS team, COUNT(DISTINCT match_id) AS games FROM ${view} WHERE ${where} AND ${oppCol} IS NOT NULL GROUP BY ${oppCol} ORDER BY games DESC, team ASC`;
   const { rows } = await query(sql);
   return rows.map((r) => r.team);
 }
