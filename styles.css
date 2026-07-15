@@ -3472,9 +3472,12 @@ a { color: var(--color-accent); }
    below (`.player-page__header-row .btn` etc.) so the row's real height
    drops from ~68px to ~46px, not just its padding. */
 .player-page__header-row {
-  position: sticky;
-  top: 0;
-  z-index: 2;
+  /* R6: was position: sticky (pinned while the body scrolled). Owner wants it
+     to scroll away with the content — position: static so the whole popup body,
+     toolbar included, scrolls as one. The negative margins still pull the row
+     flush to the scrollport's top edge on first paint; they don't depend on
+     sticky. The × close button (on .player-popup__panel) stays put as before. */
+  position: static;
   margin: calc(-1 * var(--space-6)) calc(-1 * var(--space-6)) 0;
   padding: var(--space-2) 3.5rem var(--space-2) var(--space-6);
   background: var(--color-bg);
@@ -3540,7 +3543,10 @@ a { color: var(--color-accent); }
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  margin-top: var(--space-2);
+  /* R6: space-2 → space-5. On top of .player-page's own space-5 flex gap that's
+     ~3rem of clear air under the toolbar/divider, so the big player name no
+     longer reads as cramped against the header row (owner). */
+  margin-top: var(--space-5);
 }
 
 /* Identity photo (B7, decision 44a): a real headshot (has_real_headshot) is an
