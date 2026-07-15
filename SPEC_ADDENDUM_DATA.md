@@ -38,15 +38,17 @@ may ever depend on the owner running something manually.
   sheet (and other future data). Direct-download form: replace `dl=0` with `dl=1`.
 - `reference/db_reference.md` — the owner's validated database reference document.
   Its validated facts and calculation rules are authoritative.
-- `v1_pipeline/` — copies of the old repo's ingestion scripts (ingest.py,
-  download_db.py, upload_db.py) for migration in D0.
+- `v1_pipeline/` — held copies of the old repo's ingestion scripts (ingest.py,
+  download_db.py, upload_db.py) for migration in D0. Ported into `pipeline/` and
+  removed 2026-07-16; the originals remain in git history if ever needed.
 
 ## Phase D0 — Pipeline ownership migration
 
 Goal: move Cricsheet ingestion into this repo, then decommission the old pipeline.
 
 1. Port `ingest.py`, `download_db.py`, `upload_db.py` from v1_pipeline/ into this
-   repo's `pipeline/` directory. Preserve ingestion logic EXACTLY — it is validated
+   repo's `pipeline/` directory. *(Done; v1_pipeline/ since removed — see the
+   inventory note above.)* Preserve ingestion logic EXACTLY — it is validated
    and battle-tested (incremental, per-file transactions). No "improvements" to
    ingestion logic without flagging to the owner first. Modernize only paths/wiring.
 2. New single workflow `pipeline.yml` (daily cron + manual dispatch) replacing the
