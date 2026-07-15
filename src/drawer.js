@@ -72,19 +72,34 @@ function orderBy(present, order) {
   return [...ranked, ...rest];
 }
 
-// The singleton (non-numeric) condition types, in row/dropdown order. menOnly
-// types are profile-sheet-derived → hidden on the Women view (decision 21).
+// The singleton (non-numeric) condition types. menOnly types are profile-sheet-
+// derived → hidden on the Women view (decision 21). R5 Wave 1a (item 7)
+// restructured the "+ Add condition" dropdown: the old standalone "Team" subset
+// is dissolved into "Player" (Played for → "Team", Against opposition →
+// "Opposition"); Bowling style is no longer a standalone dropdown entry (it is
+// reachable via Role → Bowler, which exposes the fine bowling styles and writes
+// the SAME profile.bowlingType); and R. Pos. relocates into the Basic-metrics
+// group after "Innings". The DROPDOWN order/grouping is driven by the explicit
+// order arrays in addSelectOptionsHTML below (not by this array's order or the
+// `group` field, which is now documentation only). This array's order drives the
+// applied-ROW render order in the singleton-rows container.
 const SINGLETON_TYPES = [
-  { key: "role", label: "Role", group: "Player", menOnly: true },
+  { key: "name", label: "Name", group: "Player", menOnly: false },
+  { key: "team", label: "Team", group: "Player", menOnly: false },
+  { key: "opposition", label: "Opposition", group: "Player", menOnly: false },
   { key: "hand", label: "Batting hand", group: "Player", menOnly: true },
   { key: "bowling", label: "Bowling style", group: "Player", menOnly: true },
-  { key: "rpos", label: "R. Pos.", group: "Player", menOnly: false },
-  { key: "name", label: "Name", group: "Player", menOnly: false },
-  { key: "team", label: "Played for", group: "Team", menOnly: false },
-  { key: "opposition", label: "Against opposition", group: "Team", menOnly: false },
+  { key: "role", label: "Role", group: "Player", menOnly: true },
+  { key: "rpos", label: "R. Pos.", group: "Basic", menOnly: false },
   { key: "event", label: "Event", group: "Match", menOnly: false },
   { key: "venue", label: "Venue", group: "Match", menOnly: false },
 ];
+
+// Dropdown OPTION order per group (R5 Wave 1a, item 7). "bowling" is
+// deliberately absent from PLAYER_ADD_ORDER — no standalone add entry — while
+// "rpos" is injected into the Basic-metrics optgroup right after "Innings".
+const PLAYER_ADD_ORDER = ["name", "team", "opposition", "hand", "role"];
+const MATCH_ADD_ORDER = ["event", "venue"];
 
 /**
  * Mount the condition builder into `advancedHost` (the Advanced Filters section
@@ -117,8 +132,6 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
         <!-- R. Pos. and the matchup striker-position control share the R.Pos
              editor host; each self-hides in the other mode (drawerInnings.js). -->
       </div>
-      <p class="cond-builder__note profile-note" data-role="women-note" hidden>Role, batting hand and bowling style filters are available for men only.</p>
-      <p class="cond-builder__empty profile-note" data-role="empty-note" hidden>No filters added yet — use "Add condition" below.</p>
       <div class="cond-builder__numeric" data-role="numeric-rows"></div>
     </div>`;
 
@@ -131,8 +144,6 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     editorHosts[t.key] = advancedHost.querySelector(`[data-role="editor-${t.key}"]`);
   }
   const numericEl = advancedHost.querySelector('[data-role="numeric-rows"]');
-  const emptyNoteEl = advancedHost.querySelector('[data-role="empty-note"]');
-  const womenNoteEl = advancedHost.querySelector('[data-role="women-note"]');
 
   // ── Profile options + editors (men-only) ───────────────────────────────────
   let profileOptions = { roleGroups: [], subByGroup: {}, bowlingTypes: [], battingHands: [] };
@@ -353,6 +364,12 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   // function rather than renaming the shared type label globally.
   const ADD_CONDITION_LABEL_OVERRIDES = { rpos: "Regular position" };
 
+  // Dismissal-type dropdown labels drop the leading "Out " (R5 Wave 1a, item 7:
+  // "Caught" not "Out Caught"). Display-only — the metric KEYS/labels in
+  // metrics.js are untouched; this strips the prefix at render time only. The
+  // bowling wkt_* labels have no "Out " prefix, so this is a no-op for them.
+  const stripOutPrefix = (label) => label.replace(/^Out\s+/, "");
+
   function addSelectOptionsHTML(s) {
     const ns = effectiveNamespace(s);
     const women = s.gender === "female";
@@ -361,43 +378,56 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     // conditionApplicability already drops it silently). Exclude position-kind
     // metrics from the "+ Add condition…" numeric lists so it never appears as
     // an addable numeric condition. The R.Pos FILTER is unaffected — that's the
-    // separate "Regular position" Player-group singleton (c:rpos, the
-    // modal-position editor from commit e71530d), still listed via groupOpts.
+    // separate "Regular position" singleton (c:rpos, the modal-position editor),
+    // injected into the Basic-metrics group after "Innings" below.
     const numericMetrics = eligibleMetrics(ns, s.formats).filter((m) => m.kind !== "position");
     const { basic, dismissal, advanced } = partitionFilterMetrics(numericMetrics);
     // A singleton already showing is disabled in every group's dropdown (at most
     // one each); presence re-enables it the moment its row is removed.
     const present = SINGLETON_TYPES.filter((t) => isPresent(t, s)).map((t) => t.key);
-    const groupOpts = (groupName) =>
-      SINGLETON_TYPES.filter((t) => t.group === groupName && !(t.menOnly && women))
-        .map(
-          (t) =>
-            `<option value="c:${t.key}"${present.includes(t.key) ? " disabled" : ""}>${escHtml(
-              ADD_CONDITION_LABEL_OVERRIDES[t.key] || t.label
-            )}</option>`
-        )
-        .join("");
-    const metricOpts = (list) => list.map((m) => `<option value="m:${escAttr(m.key)}">${escHtml(m.label)}</option>`).join("");
+    const singletonOpt = (key) => {
+      const t = SINGLETON_TYPES.find((x) => x.key === key);
+      if (!t || (t.menOnly && women)) return "";
+      return `<option value="c:${t.key}"${present.includes(t.key) ? " disabled" : ""}>${escHtml(
+        ADD_CONDITION_LABEL_OVERRIDES[t.key] || t.label
+      )}</option>`;
+    };
+    const singletonOpts = (order) => order.map(singletonOpt).join("");
+    const metricOpt = (m, label) => `<option value="m:${escAttr(m.key)}">${escHtml(label ?? m.label)}</option>`;
+    const metricOpts = (list) => list.map((m) => metricOpt(m)).join("");
+    // Basic metrics group: standard metric options, with the "Regular position"
+    // singleton (c:rpos) injected right after the "Innings" option (item 7).
+    const basicOpts = () => {
+      const parts = [];
+      let injected = false;
+      for (const m of basic) {
+        parts.push(metricOpt(m));
+        if (m.key === "innings") {
+          parts.push(singletonOpt("rpos"));
+          injected = true;
+        }
+      }
+      if (!injected) parts.push(singletonOpt("rpos")); // no Innings option (edge) — append
+      return parts.join("");
+    };
+    const dismissalOpts = dismissal.map((m) => metricOpt(m, stripOutPrefix(m.label))).join("");
     return `
       <option value="">+ Add condition…</option>
-      <optgroup label="Player">${groupOpts("Player")}</optgroup>
-      <optgroup label="Team">${groupOpts("Team")}</optgroup>
-      <optgroup label="Match">${groupOpts("Match")}</optgroup>
-      ${dismissal.length ? `<optgroup label="Dismissal type">${metricOpts(dismissal)}</optgroup>` : ""}
-      ${basic.length ? `<optgroup label="Basic metrics">${metricOpts(basic)}</optgroup>` : ""}
-      ${advanced.length ? `<optgroup label="Advanced metrics">${metricOpts(advanced)}</optgroup>` : ""}`;
+      <optgroup label="Player">${singletonOpts(PLAYER_ADD_ORDER)}</optgroup>
+      <optgroup label="Match">${singletonOpts(MATCH_ADD_ORDER)}</optgroup>
+      <optgroup label="Basic metrics">${basicOpts()}</optgroup>
+      ${advanced.length ? `<optgroup label="Advanced metrics">${metricOpts(advanced)}</optgroup>` : ""}
+      ${dismissal.length ? `<optgroup label="Dismissal type">${dismissalOpts}</optgroup>` : ""}`;
   }
 
   // ── Singleton rows: show/hide + editor sync ─────────────────────────────────
   function syncSingletonRows() {
     const s = store.get();
-    const women = s.gender === "female";
     for (const t of SINGLETON_TYPES) {
       rowEls[t.key].hidden = !isPresent(t, s);
     }
     // R. Pos. row label reflects which control is live (plain vs matchup).
     typeLabelEls.rpos.textContent = matchupVsActive(s) ? "Batting position" : "R. Pos.";
-    womenNoteEl.hidden = !women;
 
     regularPositionController.sync();
     matchupPositionController.sync();
@@ -408,7 +438,6 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     // Keep the Name input in sync without clobbering the caret while typing here.
     if (document.activeElement !== nameEl) nameEl.value = s.search || "";
     renderProfileEditors();
-    updateEmptyNote(s);
   }
 
   // ── Numeric condition GROUPS (multi-group AND/OR — ROUND 3 task 7) ──────────
@@ -498,16 +527,10 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       </div>`;
   }
 
-  function updateEmptyNote(s) {
-    const anySingleton = SINGLETON_TYPES.some((t) => isPresent(t, s));
-    emptyNoteEl.hidden = anySingleton || totalNumericConds(s) > 0;
-  }
-
   function renderNumeric(s, force = false) {
     const ns = effectiveNamespace(s);
     const key = structuralKey(s);
     if (!force && key === lastNumericKey) {
-      updateEmptyNote(s);
       return;
     }
     lastNumericKey = key;
@@ -524,7 +547,6 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
         : "";
     numericEl.innerHTML = cards + addGroupBtn;
     wireNumeric();
-    updateEmptyNote(s);
   }
 
   function wireNumeric() {

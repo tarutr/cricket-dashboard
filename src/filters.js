@@ -271,47 +271,22 @@ function teamTypeSummaryLabel(teamType) {
 }
 
 /**
- * Format picker DISPLAY-ONLY renames + order (R4 Wave 1a, owner decision —
- * same precedent as the Club→Domestic team-type display rename above). The
- * shared FORMAT_BUCKETS (state.js) still drives the underlying data values,
- * match_type expansion, and every other consumer (expandFormats,
- * describeScope, …) untouched — this is a display-only view used ONLY for
- * rendering the checklist below and the closed-button summary label, so it
- * lives here rather than in state.js. Order requested: Test, ODI, T20,
- * First Class (MDM), Domestic Limited Overs (ODM).
- */
-const FORMAT_DISPLAY_ORDER = ["Test", "ODI", "T20", "MDM", "ODM"];
-const FORMAT_DISPLAY_LABELS = { MDM: "First Class", ODM: "Domestic Limited Overs" };
-
-function formatDisplayLabel(key) {
-  return FORMAT_DISPLAY_LABELS[key] || key;
-}
-
-/** FORMAT_BUCKETS re-ordered per FORMAT_DISPLAY_ORDER (falls back to appending
- * any bucket not named there, so a future new bucket still renders somewhere
- * rather than silently vanishing). */
-function orderedFormatBuckets() {
-  const byKey = new Map(FORMAT_BUCKETS.map((b) => [b.key, b]));
-  const ordered = FORMAT_DISPLAY_ORDER.map((k) => byKey.get(k)).filter(Boolean);
-  for (const b of FORMAT_BUCKETS) if (!FORMAT_DISPLAY_ORDER.includes(b.key)) ordered.push(b);
-  return ordered;
-}
-
-/**
  * Live summary label for the Format dropdown button. Rule chosen (flagged
  * per task): "first selected + N more" rather than a full comma-join once
  * more than one bucket is selected — the comma-join reads cleaner at exactly
- * two ("T20, ODI") but grows unbounded at three-plus ("T20, ODI, ODM, Test"),
- * which defeats the point of a compact strip on mobile. "+N" stays a fixed
- * short width regardless of how many buckets are picked, so it's used
- * uniformly for every "more than one" case, not just the crowded ones.
+ * two ("T20, 50 Over") but grows unbounded at three, which defeats the point
+ * of a compact strip on mobile. "+N" stays a fixed short width regardless of
+ * how many buckets are picked, so it's used uniformly for every "more than
+ * one" case. R5 Wave 1a: the three buckets (Red Ball / 50 Over / T20) now
+ * carry their display labels DIRECTLY on FORMAT_BUCKETS, in display order, so
+ * the old display-rename/reorder layer is gone — this reads FORMAT_BUCKETS.
  */
 function formatSummaryLabel(formats) {
-  const ordered = orderedFormatBuckets().filter((b) => formats.includes(b.key)).map((b) => b.key);
+  const ordered = FORMAT_BUCKETS.filter((b) => formats.includes(b.key));
   if (ordered.length === 0) return "None"; // guarded against below — should not be reachable
   if (ordered.length === FORMAT_BUCKETS.length) return "All formats";
-  if (ordered.length === 1) return formatDisplayLabel(ordered[0]);
-  return `${formatDisplayLabel(ordered[0])} +${ordered.length - 1}`;
+  if (ordered.length === 1) return ordered[0].label;
+  return `${ordered[0].label} +${ordered.length - 1}`;
 }
 
 /**
@@ -457,10 +432,10 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
         <button type="button" class="select dropdown__toggle" data-role="format-toggle" aria-haspopup="true" aria-expanded="false"></button>
         <div class="dropdown__panel" data-role="format-panel" hidden>
           <div class="dropdown__list" data-role="format-list">
-            ${orderedFormatBuckets().map(
+            ${FORMAT_BUCKETS.map(
               (b) => `<label class="dropdown__item">
                 <input type="checkbox" data-format="${b.key}" />
-                <span>${formatDisplayLabel(b.key)}</span>
+                <span>${b.label}</span>
               </label>`
             ).join("")}
           </div>
@@ -704,21 +679,24 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
 
   els.dateFrom.addEventListener("change", () => {
     store.set({ dateFrom: els.dateFrom.value || null });
+    els.datePresets.value = ""; // a manual edit no longer matches any preset — reset the label
     validateDate();
     onChange();
   });
   els.dateTo.addEventListener("change", () => {
     store.set({ dateTo: els.dateTo.value || null });
+    els.datePresets.value = ""; // a manual edit no longer matches any preset — reset the label
     validateDate();
     onChange();
   });
   // Preset dropdown (R4 Wave 1a — replaces the old 4 preset buttons): choosing
   // an option fills From/To (pending state, same as typing them — Search is
-  // still the only query trigger), then resets to the "Preset…" placeholder
-  // so the control always reads as an action, not a persistent selection.
+  // still the only query trigger). R5 Wave 1a (item 5): the chosen preset's
+  // NAME now PERSISTS in the closed dropdown (no reset to "Preset…"), so the
+  // control shows which window is active. A subsequent manual date edit clears
+  // it back to the placeholder (see the From/To change handlers above).
   els.datePresets.addEventListener("change", () => {
     const preset = els.datePresets.value;
-    els.datePresets.value = "";
     if (preset) applyPreset(preset);
   });
 
@@ -741,6 +719,14 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
         els.dateTo.max = maxDate;
       }
       els.datePresets.disabled = !maxDate;
+      // R5 Wave 1a (item 4): the END date defaults to the latest match date in
+      // the dataset (the SAME max-date bound the presets use) whenever it is
+      // still unset — at boot and after "Clear all filters". The START date is
+      // left blank on purpose and stays REQUIRED (validateDate blocks Search
+      // until the user picks one), so an unbounded search is still impossible.
+      if (maxDate && !store.get().dateTo) {
+        store.set({ dateTo: maxDate });
+      }
       syncDateInputs();
     },
   };

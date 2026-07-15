@@ -25,13 +25,23 @@
 
 import { metricsFor, matchupBucketLabel, getMetric } from "./metrics.js";
 
-/** The five format buckets surfaced in the UI, and the match_type values each expands to. */
+/**
+ * The three format buckets surfaced in the UI, and the match_type values each
+ * expands to (R5 Wave 1a, owner-approved). These six match_type values are the
+ * COMPLETE set in the live data, so the three buckets cover everything:
+ *   Red Ball → Test + MDM (first-class)
+ *   50 Over  → ODI + ODM (List-A one-day)
+ *   T20      → T20 + IT20
+ * This is the single source of truth — expandFormats and every format-keyed
+ * consumer derives from it, and the bucket labels are now correct DIRECTLY (no
+ * separate display-rename layer). team_type stays a separate scope dimension, so
+ * the men's-T20-international baseline (2,813 batting) is unchanged: the T20
+ * bucket is still exactly T20 + IT20.
+ */
 export const FORMAT_BUCKETS = [
+  { key: "Red Ball", label: "Red Ball", matchTypes: ["Test", "MDM"] },
+  { key: "50 Over", label: "50 Over", matchTypes: ["ODI", "ODM"] },
   { key: "T20", label: "T20", matchTypes: ["T20", "IT20"] },
-  { key: "ODI", label: "ODI", matchTypes: ["ODI"] },
-  { key: "ODM", label: "ODM", matchTypes: ["ODM"] },
-  { key: "Test", label: "Test", matchTypes: ["Test"] },
-  { key: "MDM", label: "MDM", matchTypes: ["MDM"] },
 ];
 
 // ── Profile filters (D4.2) ────────────────────────────────────────────────────
@@ -252,21 +262,19 @@ const DEFAULT_MATCHUP_COLUMNS = {
   matchup_bowling: ["innings", "balls", "wickets", "runs_conceded", "economy", "average", "strike_rate", "dot_pct"],
 };
 
-function monthsAgo(yyyymm, months) {
-  const [y, m] = yyyymm.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1, 1));
-  d.setUTCMonth(d.getUTCMonth() - months);
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
 /**
  * Build the initial state. `maxMonth` ("YYYY-MM") comes from the manifest's
- * max match_date once known; until then dateFrom/dateTo are null and the
- * filter bar should treat that as "not yet bounded" (no date predicate).
+ * max match_date once known; until then dateTo is null and the filter bar
+ * should treat that as "not yet bounded" (no date predicate). The START date
+ * (dateFrom) is ALWAYS blank at init and still REQUIRED — a search with no
+ * start date stays blocked (R5 Wave 1a, item 4). Only the END date gains a
+ * default, applied in filters.js's setDateBounds from the manifest max-date
+ * bound (the same source the presets use) so the pre-fill and the presets
+ * agree on one "latest match date".
  */
 export function createInitialState(maxMonth) {
   const dateTo = maxMonth ?? null;
-  const dateFrom = maxMonth ? monthsAgo(maxMonth, 36) : null;
+  const dateFrom = null;
   return {
     view: "table", // "table" | "graph" (SPEC §6 Graph Builder)
     discipline: "batting",
@@ -312,9 +320,9 @@ export function createInitialState(maxMonth) {
 }
 
 export function defaultColumnsFor(discipline, formats) {
-  if (discipline === "batting" && formats.length > 0 && formats.every((f) => f === "Test" || f === "MDM")) {
-    // Owner exception: Test/MDM batting swaps strike_rate for balls_per_dismissal,
-    // and leads with runs, average, balls_per_dismissal.
+  if (discipline === "batting" && formats.length > 0 && formats.every((f) => f === "Red Ball")) {
+    // Owner exception: Red Ball (Test/MDM) batting swaps strike_rate for
+    // balls_per_dismissal, and leads with runs, average, balls_per_dismissal.
     return ["matches", "innings", "runs", "average", "balls_per_dismissal", "high_score", "fours", "sixes"];
   }
   return [...DEFAULT_COLUMNS[discipline]];
@@ -350,7 +358,7 @@ export const COLUMN_PRESET_DEFS = {
       columns: (formats) => {
         if (formats.length === 1 && formats[0] === "T20")
           return ["innings", "runs", "strike_rate", "pp_strike_rate", "mid_strike_rate", "death_strike_rate"];
-        if (formats.length > 0 && formats.every((f) => f === "ODI" || f === "ODM"))
+        if (formats.length === 1 && formats[0] === "50 Over")
           return ["innings", "runs", "strike_rate", "odi_pp_strike_rate", "odi_mid_strike_rate", "odi_death_strike_rate"];
         return null;
       },
@@ -379,7 +387,7 @@ export const COLUMN_PRESET_DEFS = {
       columns: (formats) => {
         if (formats.length === 1 && formats[0] === "T20")
           return ["innings", "wickets", "pp_economy", "death_economy", "pp_wickets", "death_wickets"];
-        if (formats.length > 0 && formats.every((f) => f === "ODI" || f === "ODM"))
+        if (formats.length === 1 && formats[0] === "50 Over")
           return ["innings", "wickets", "odi_pp_economy", "odi_death_economy", "odi_pp_wickets", "odi_death_wickets"];
         return null;
       },
@@ -401,9 +409,10 @@ export function activePresetKey(discipline, formats, columns) {
 /**
  * True if a phase metric is currently eligible to be shown/offered (SPEC §8.9):
  * T20-range phase metrics only when formats is exactly ["T20"] (the T20+IT20
- * bucket); ODI-range phase metrics only when formats is a non-empty subset of
- * {"ODI", "ODM"}. Non-phase metrics are always eligible. Shared by the table's
- * column picker and the advanced-filter metric picker so both stay in sync.
+ * bucket); ODI-range phase metrics only when formats is exactly ["50 Over"]
+ * (the ODI+ODM bucket). Non-phase metrics are always eligible. Shared by the
+ * table's column picker and the advanced-filter metric picker so both stay in
+ * sync.
  */
 export function phaseMetricAllowed(metric, formats) {
   if (!metric.isPhaseMetric) return true;
@@ -411,8 +420,7 @@ export function phaseMetricAllowed(metric, formats) {
     return formats.length === 1 && formats[0] === "T20";
   }
   if (metric.isPhaseMetric === "odi") {
-    if (formats.length === 0) return false;
-    return formats.every((f) => f === "ODI" || f === "ODM");
+    return formats.length === 1 && formats[0] === "50 Over";
   }
   return true;
 }
