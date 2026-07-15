@@ -1452,20 +1452,6 @@ a { color: var(--color-accent); }
 
 .data-table thead th.data-table__th--sticky { z-index: 3; }
 
-/* Split-value column (D4 Piece 3) — subtle tint so the breakdown row reads as
-   distinct from the player's regular metric columns. */
-.data-table__th--split { color: var(--color-accent-strong); }
-
-.data-table__td--split {
-  font-style: italic;
-  color: var(--color-muted);
-  background: var(--color-accent-tint);
-}
-
-.data-table tbody tr:nth-child(even) .data-table__td--split {
-  background: var(--color-accent-tint);
-}
-
 .data-table__td:first-child {
   font-weight: 600;
   color: var(--color-fg);
@@ -2960,11 +2946,6 @@ a { color: var(--color-accent); }
   min-width: 3.5rem;
   text-align: right;
 }
-/* Thin-sample muting (decision 44c's cell-honesty rule, reused verbatim here
-   — table.js's own ".data-table__td--thin-sample" idiom, same title-text
-   phrasing "Based on N <unit>"). */
-.paper-card__benchmark-anchor-value--thin { color: var(--paper-sub); font-style: italic; }
-
 .paper-card__benchmark-anchor-rank {
   font-weight: 700;
   color: var(--paper-sub);

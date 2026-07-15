@@ -5,7 +5,7 @@
 // and do the initial render.
 
 import { initDB, getManifest } from "./db.js";
-import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, splitAllowed } from "./state.js";
+import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState } from "./state.js";
 import { mountFilters } from "./filters.js";
 import { mountFilterDrawer } from "./drawer.js";
 import { mountPills } from "./pills.js";
@@ -223,13 +223,6 @@ function onFiltersChanged({ requery = false } = {}) {
   // Drop columns/conditions orphaned by the new scope BEFORE anything renders,
   // so the drawer, badge, pills, and query all agree (§8.4 honesty).
   pruneIneligibleState(store);
-  // A row grouping the new scope disallows (position/dismissal grouping in the
-  // bowling view; opposition grouping outside international) resets to None —
-  // never a ghost mode the controls can't show honestly.
-  const s = store.get();
-  if (s.splitBy && !splitAllowed(s, s.splitBy)) {
-    store.set({ splitBy: null });
-  }
   // Sync the popup's filter content only while the popup is VISIBLE (Batch 3
   // fix 2): syncing hidden content is wasted work, and syncing while open used
   // to rebuild the advanced panel's innerHTML on each keystroke, killing focus.

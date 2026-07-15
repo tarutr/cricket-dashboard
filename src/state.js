@@ -105,62 +105,17 @@ function profileScopeTokens(state) {
   return tokens;
 }
 
-// ── Free splits (D4 Piece 3) ─────────────────────────────────────────────────
-// Two innings-level filters (batting position, opposition) plus a table-only
-// "Split by" breakdown. Opposition is INTERNATIONAL cricket only (decision 20 —
-// club team names are unnormalized), so both the filter and the opposition
-// split apply ONLY while teamType === "international"; the controls grey out
-// elsewhere (decision-21 treatment: inert, never silently wrong). Positions
-// are a batting concept and apply only in the batting discipline.
-
-/** The three split dimensions. sqlExpr must be valid in both the SELECT and GROUP BY of the innings views. */
-export const SPLIT_DIMENSIONS = {
-  position: {
-    key: "position",
-    label: "Batting position",
-    columnLabel: "Pos",
-    disciplines: ["batting"],
-    internationalOnly: false,
-    numeric: true,
-    sqlExpr: () => "batting_position",
-  },
-  opposition: {
-    key: "opposition",
-    label: "Opposition",
-    columnLabel: "Opposition",
-    disciplines: ["batting", "bowling"],
-    internationalOnly: true,
-    numeric: false,
-    sqlExpr: (discipline) => (discipline === "batting" ? "bowling_team" : "batting_team"),
-  },
-  dismissal: {
-    key: "dismissal",
-    label: "Dismissal",
-    columnLabel: "Dismissal",
-    disciplines: ["batting"],
-    internationalOnly: false,
-    numeric: false,
-    // Retired hurt / retired not out are not dismissals — they read "not out",
-    // matching the dismissed flag (and the batting-average denominator).
-    sqlExpr: () => "CASE WHEN dismissed = 1 THEN dismissal_kind ELSE 'not out' END",
-  },
-};
-
-/** True if this split dimension may apply under the current discipline + team type. */
-export function splitAllowed(state, key) {
-  const dim = SPLIT_DIMENSIONS[key];
-  if (!dim) return false;
-  if (!dim.disciplines.includes(state.discipline)) return false;
-  if (dim.internationalOnly && state.teamType !== "international") return false;
-  if (matchupVsActive(state)) return false; // no row-grouping in matchup mode (R3)
-  return true;
-}
-
-/** The active split dimension object, or null if none is set / it isn't allowed right now. */
-export function activeSplit(state) {
-  if (!state.splitBy) return null;
-  return splitAllowed(state, state.splitBy) ? SPLIT_DIMENSIONS[state.splitBy] : null;
-}
+// ── Innings-level filters (D4 Piece 3) ───────────────────────────────────────
+// Two innings-level filters (batting position, opposition). Opposition is
+// INTERNATIONAL cricket only (decision 20 — club team names are unnormalized),
+// so the filter applies ONLY while teamType === "international"; the controls
+// grey out elsewhere (decision-21 treatment: inert, never silently wrong).
+// Positions are a batting concept and apply only in the batting discipline.
+//
+// The old table-only "Split by" breakdown (SPLIT_DIMENSIONS / splitAllowed /
+// activeSplit) was removed in R4 Wave 3: the Group-rows UI had already been
+// deleted in R3 and nothing ever set state.splitBy off its initial null, so
+// the whole path was dead.
 
 /** True if the MATCHUP-ONLY batting-position filter (`state.positions`) is
  * currently narrowing the set. Owner decision 46 split the old position filter
@@ -336,7 +291,6 @@ export function createInitialState(maxMonth) {
                // eventFilterActive() and filters.js buildScopeClauses' gender-scoped matches join.
     venue: [], // venue values (Batch 1B, task 1B-1); [] = no predicate. See venueFilterActive() and
                // filters.js buildScopeClauses' gender-scoped matches join.
-    splitBy: null, // null | "position" | "opposition" | "dismissal" — table-only breakdown
     matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)
     pinnedPlayers: [], // [{id, name}] — owner decision 46 task 3b: players ADDED to the table's
                    // result set regardless of the other leaderboard-only filters (team/opposition/
@@ -655,14 +609,6 @@ export function createStore(initial) {
 
     if (s.search && s.search.trim()) {
       parts.push(`matching "${s.search.trim()}"`);
-    }
-
-    // Row grouping shapes the TABLE only (the graph ignores it), so the token
-    // appears only while the table view is active — the graph card's
-    // subtitle/footer read describeScope() and must stay honest (§8.4).
-    const split = activeSplit(s);
-    if (s.view === "table" && split) {
-      parts.push(`grouped by ${split.label.toLowerCase()}`);
     }
 
     return parts.filter(Boolean).join(", ");

@@ -15,7 +15,6 @@ import { activeGroups } from "./advanced.js";
 import { escHtml, escAttr } from "./html.js";
 import {
   eligibleMetrics,
-  activeSplit,
   positionsFilterActive,
   oppositionFilterActive,
   COLUMN_PRESET_DEFS,
@@ -76,7 +75,7 @@ function effectiveDiscipline(state) {
  * namespace's column list (a column edit made in the other discipline/
  * matchup namespace while away doesn't change what's currently on screen).
  * Every field here is either read directly by buildQuery/buildScopeClauses,
- * or governs rendering shape (columns, sort, splitBy/matchupVs) — the same
+ * or governs rendering shape (columns, sort, matchupVs) — the same
  * fields lastLoadedState's snapshot needs to stay correct for.
  */
 function serializeQueryState(state) {
@@ -94,7 +93,6 @@ function serializeQueryState(state) {
     positions: state.positions,
     regularPositions: state.regularPositions,
     opposition: state.opposition,
-    splitBy: state.splitBy,
     matchupVs: state.matchupVs,
     pinnedPlayers: state.pinnedPlayers,
     search: state.search,
@@ -400,7 +398,7 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     `WHERE ${finalWhereParts.join(" AND ")}`,
   ].join("\n");
 
-  return { sql, matchesSql: null, splitDim: null, coverageSql: null };
+  return { sql, matchesSql: null, coverageSql: null };
 }
 
 /** Build a HAVING/WHERE predicate for one advanced condition, honoring §8.1
@@ -532,7 +530,7 @@ function regularPositionCteSql(state) {
 
 /**
  * Build the main grouped SQL query for the current state + visible columns.
- * Returns { sql, matchesSql, splitDim } — matchesSql is null unless "matches"
+ * Returns { sql, matchesSql } — matchesSql is null unless "matches"
  * is visible AND still answerable from player_matches (see below). While a
  * matchup "Vs" selection is active, delegates to buildMatchupQuery (C1: one
  * merged scan carrying both the stat columns and the coverage N-of-M
@@ -541,18 +539,14 @@ function regularPositionCteSql(state) {
  * load() turns into each row's `coverage` object, in place of the second
  * query this used to require.
  *
- * `split: true` (the table) additionally groups by the active split dimension,
- * adding a `split_value` column — one row per (player, split value). Callers
- * that need per-player totals (the graph seed) leave it off.
- *
  * "Matches" honesty (D4 Piece 3): player_matches has no opposition or
- * batting-position columns, so whenever an innings-level filter or a split is
+ * batting-position columns, so whenever an innings-level filter is
  * active, "matches" switches to COUNT(DISTINCT match_id) over the filtered
  * innings rows — matches in which the player actually batted/bowled within
  * the slice. Otherwise the player_matches source is kept (it also counts
  * matches where the player didn't bat/bowl).
  */
-export function buildQuery(state, visibleColumns, { split = false } = {}) {
+export function buildQuery(state, visibleColumns) {
   const discipline = state.discipline;
 
   if (matchupVsActive(state)) {
@@ -563,9 +557,6 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
   const idCol = ID_COL[discipline];
   const nameCol = NAME_COL[discipline];
   const teamCol = TEAM_COL[discipline];
-
-  const splitDim = split ? activeSplit(state) : null;
-  const splitExpr = splitDim ? splitDim.sqlExpr(discipline) : null;
 
   const inningsMetrics = visibleColumns
     .map((key) => getMetric(key, discipline))
@@ -589,7 +580,6 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
   const wantsRPos = discipline === "batting" && inningsMetrics.some((m) => m.key === "r_pos");
 
   const selectParts = [`${idCol} AS id`, `${nameCol} AS name`];
-  if (splitExpr) selectParts.push(`${splitExpr} AS split_value`);
   for (const m of inningsMetrics) {
     if (m.key === "r_pos") {
       // Constant per (idCol) group (regularPositionCteSql guarantees at most
@@ -661,13 +651,12 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
         : havingParts.join(" AND ");
 
   const wantsMatches = visibleColumns.includes("matches");
-  const inningsLevel = positionsFilterActive(state) || oppositionFilterActive(state) || Boolean(splitDim);
+  const inningsLevel = positionsFilterActive(state) || oppositionFilterActive(state);
   if (wantsMatches && inningsLevel) {
     selectParts.push(`COUNT(DISTINCT match_id) AS matches`);
   }
 
   const groupBy = [idCol, nameCol];
-  if (splitExpr) groupBy.push(splitExpr);
 
   // r_pos_cte's join column is deliberately NOT named "batter_id"/"bowler_id"
   // (i.e. not idCol) — this view and the CTE would then both carry a column
@@ -710,7 +699,7 @@ export function buildQuery(state, visibleColumns, { split = false } = {}) {
     ].join("\n");
   }
 
-  return { sql, matchesSql, splitDim };
+  return { sql, matchesSql };
 }
 
 // ── Dynamic sticky Player column width (task 4, R3 Wave 5 polish) ──────────
@@ -900,17 +889,6 @@ function compareRows(a, b, metric, dir) {
   return dir === "asc" ? va - vb : vb - va;
 }
 
-/** Sort comparator for the split_value column (numeric for position, string otherwise). NULLS LAST. */
-function compareSplitRows(a, b, splitDim, dir) {
-  const va = a.split_value;
-  const vb = b.split_value;
-  if (va == null && vb == null) return 0;
-  if (va == null) return 1;
-  if (vb == null) return -1;
-  const d = splitDim.numeric ? Number(va) - Number(vb) : String(va).localeCompare(String(vb));
-  return dir === "asc" ? d : -d;
-}
-
 // ── Table controller ─────────────────────────────────────────────────────────
 
 export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, onOpenFilters, onClear, onSkeletonReady } = {}) {
@@ -936,10 +914,6 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
   // correctly falls back to the blank prompt rather than resurrecting
   // whatever was loaded before Clear.
   let lastLoadedState = null;
-  // The split dimension the CURRENT lastRows were queried with (null = no
-  // split). Rendering and split-column sorting must use this, not live state —
-  // the state may have moved on while the table still shows the old result.
-  let lastSplitDim = null;
   // The distinct bowling_type values (matchup mode's fine "Bowling type"
   // optgroup), fetched once from ./db.js and cached — small, format-agnostic
   // lookup that never changes at runtime.
@@ -1135,7 +1109,6 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     lastRows = [];
     lastQueryStateKey = null;
     lastLoadedState = null;
-    lastSplitDim = null;
     visibleRowCount = PAGE_SIZE;
     container.innerHTML = `
       <div class="table-prompt">
@@ -1209,11 +1182,8 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     </th>`;
   }
 
-  /** Sort `rows` by the store's current sort (metric or the "__split" column). */
+  /** Sort `rows` by the store's current sort (metric column). */
   function applySort(rows, s) {
-    if (s.sort.key === "__split" && lastSplitDim) {
-      return rows.slice().sort((a, b) => compareSplitRows(a, b, lastSplitDim, s.sort.dir));
-    }
     const metric = getMetric(s.sort.key, effectiveDiscipline(s));
     return metric ? rows.slice().sort((a, b) => compareRows(a, b, metric, s.sort.dir)) : rows;
   }
@@ -1254,20 +1224,11 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     `;
   }
 
-  /** The split dimension actually in effect for rendering — null in matchup
-   * mode (no row-grouping there) regardless of a leftover state.splitBy. */
-  function effectiveSplitDim(state) {
-    return matchupVsActive(state) ? null : lastSplitDim;
-  }
-
-  /** Row-count slot text. `rows === null` means "still loading". Split rows
-   * are (player × split value), so "players" would be dishonest there.
+  /** Row-count slot text. `rows === null` means "still loading".
    * Thousands separators throughout (Batch 1 mechanical fix). */
-  function rowCountLabel(rows, splitDim) {
+  function rowCountLabel(rows) {
     if (rows === null) return "Loading…";
-    return splitDim
-      ? `${rows.length.toLocaleString()} row${rows.length === 1 ? "" : "s"} (split by ${splitDim.label.toLowerCase()})`
-      : `${rows.length.toLocaleString()} player${rows.length === 1 ? "" : "s"}`;
+    return `${rows.length.toLocaleString()} player${rows.length === 1 ? "" : "s"}`;
   }
 
   // ── Column drag-to-reorder (task 2, owner decision 46) ────────────────────
@@ -1275,9 +1236,8 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
   // a VIEW change only: it must never trigger a requery (the column picker's
   // checked set is unchanged), so this re-renders the already-cached
   // `lastRows` in place instead of calling load(). The sticky Player column
-  // and the structural split/coverage columns are never wired (see
-  // renderLoaded's call site below — only `.data-table__th--draggable`
-  // headers, which excludes the "__split" key too).
+  // and the structural coverage column are never wired (see renderLoaded's
+  // call site below — only `.data-table__th--draggable` headers).
 
   /** Reorder `ns`'s column-key array: pull `fromKey` out and reinsert it
    * immediately before/after `overKey` (or at the end when `overKey` is
@@ -1471,7 +1431,6 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
   function renderToolbar(state, rows, bowlingTypes) {
     const matchupOn = matchupVsActive(state);
     const ns = effectiveDiscipline(state);
-    const splitDim = effectiveSplitDim(state);
 
     // Position filters DO apply in both modes now (D4-R4) — only the honest
     // stat-condition applicability note remains conditional.
@@ -1509,10 +1468,8 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     // "Group rows" UI control removed (R3 Wave 4, owner decision): the
     // toolbar's row-grouping <select> (No grouping / Batting position /
     // Opposition / Dismissal) and its wiring are gone. The underlying
-    // splitBy/SPLIT_DIMENSIONS/splitAllowed plumbing (state.js, and
-    // effectiveSplitDim/rowCountLabel etc. below in this file) is untouched
-    // and still consulted at render/query time — state.splitBy just never
-    // changes from its initial null now that nothing in the UI sets it.
+    // splitBy/SPLIT_DIMENSIONS/splitAllowed plumbing was removed in R4 Wave 3
+    // (it was dead — nothing set state.splitBy off its initial null).
     const columnsBtnHTML = `<button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>`;
 
     // "Graph" bridge button (Batch 3 part 2, decision 43; matchup mode enabled
@@ -1563,7 +1520,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     // (~380px) viewports without losing the "flush right" placement of
     // Graph/Columns/Clear.
     toolbarEl.innerHTML = `
-      <div class="table-toolbar__row-count">${rowCountLabel(rows, splitDim)}</div>
+      <div class="table-toolbar__row-count">${rowCountLabel(rows)}</div>
       ${presetsBlockHTML}
       <div class="table-toolbar__actions">
         <div class="table-toolbar__controls">
@@ -1669,16 +1626,9 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
 
     const matchupOn = matchupVsActive(state);
     const ns = effectiveDiscipline(state);
-    const splitDim = effectiveSplitDim(state);
     const colKeys = state.columns[ns];
     const cols = colKeys.map((key) => getMetric(key, ns)).filter(Boolean);
 
-    const splitSorted = state.sort.key === "__split";
-    const splitTh = splitDim
-      ? `<th data-key="__split" class="data-table__th data-table__th--split ${splitSorted ? "is-sorted" : ""}" scope="col">
-          <button type="button" class="data-table__sort-btn">${escHtml(splitDim.columnLabel)}${splitSorted ? (state.sort.dir === "asc" ? " ▲" : " ▼") : ""}</button>
-        </th>`
-      : "";
     const coverageTh = matchupOn
       ? `<th class="data-table__th data-table__th--coverage" scope="col">Coverage</th>`
       : "";
@@ -1687,7 +1637,6 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
       <tr>
         <th class="data-table__th data-table__th--sticky" scope="col">Player</th>
         ${coverageTh}
-        ${splitTh}
         ${cols.map((m) => headerCellHTML(m, state)).join("")}
       </tr>`;
 
@@ -1698,9 +1647,6 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
       .map((row) => {
         const coverageTd = matchupOn
           ? `<td class="data-table__td data-table__td--coverage">${coverageLabel(row.coverage)}</td>`
-          : "";
-        const splitTd = splitDim
-          ? `<td class="data-table__td data-table__td--split">${row.split_value == null ? "—" : escHtml(row.split_value)}</td>`
           : "";
         const cells = cols.map((m) => dataCellHTML(m, row)).join("");
         // Player names link to the player page (R2, decision 29). The full
@@ -1713,7 +1659,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         const nameCell = onPlayerClick
           ? `<button type="button" class="player-link" data-player-id="${escAttr(row.id ?? "")}" title="${escAttr(fullName)}">${escHtml(fullName)}</button>`
           : `<span title="${escAttr(fullName)}">${escHtml(fullName)}</span>`;
-        return `<tr><td class="data-table__td data-table__td--sticky">${nameCell}</td>${coverageTd}${splitTd}${cells}</tr>`;
+        return `<tr><td class="data-table__td data-table__td--sticky">${nameCell}</td>${coverageTd}${cells}</tr>`;
       })
       .join("");
 
@@ -1739,9 +1685,6 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         const s = store.get();
         if (s.sort.key === key) {
           store.set({ sort: { key, dir: s.sort.dir === "asc" ? "desc" : "asc" } });
-        } else if (key === "__split") {
-          // Position/opposition/dismissal read most naturally ascending.
-          store.set({ sort: { key, dir: "asc" } });
         } else {
           const metric = getMetric(key, effectiveDiscipline(s));
           const defaultDir = metric.higherIsBetter === false ? "asc" : "desc";
@@ -2047,7 +1990,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     const state = store.get();
     const ns = effectiveDiscipline(state);
     const cols = state.columns[ns];
-    const { sql, matchesSql, splitDim } = buildQuery(state, cols, { split: true });
+    const { sql, matchesSql } = buildQuery(state, cols);
     const token = ++loadToken;
     renderLoadingState(state);
     try {
@@ -2057,7 +2000,6 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         bowlingTypesCache ? Promise.resolve(bowlingTypesCache) : ensureBowlingTypes(),
       ]);
       if (token !== loadToken) return; // a newer load superseded this one
-      lastSplitDim = splitDim ?? null;
       lastBowlingTypes = bowlingTypes;
 
       let merged = rows;
@@ -2075,8 +2017,6 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         }));
       }
 
-      // A stale "__split" sort (split since turned off) falls back to unsorted;
-      // applySort handles both metric and split-column sorts.
       const sorted = applySort(merged, state);
 
       lastRows = sorted;

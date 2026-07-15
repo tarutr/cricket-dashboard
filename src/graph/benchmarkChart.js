@@ -74,10 +74,6 @@ function buildRow(r, anchorName) {
 
   // Anchor value + rank (always shown, regardless of whether a bar could be drawn).
   anchorValueEl.textContent = labelForValue(r.metric, r.anchorValue);
-  if (r.anchorMuted) {
-    anchorValueEl.classList.add("paper-card__benchmark-anchor-value--thin");
-    anchorValueEl.title = `Based on ${Number(r.anchorSample).toLocaleString()} ${r.unit}`;
-  }
   rankEl.textContent = `#${r.anchorRank}`;
   rankEl.title = `#${r.anchorRank} of ${r.poolSize} qualifying player${r.poolSize === 1 ? "" : "s"}`;
 
