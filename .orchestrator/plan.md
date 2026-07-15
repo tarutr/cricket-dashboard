@@ -451,3 +451,30 @@ radar footer "against the N players in the current selection"; popup name has cl
 space; toolbar scrolls away on scroll, × stays; baseline 2,813 exact; console clean.
 STATUS: R6 COMPLETE — AWAITING OWNER REVIEW on localhost:8000. Merge to main still
 owner-gated.
+
+## ROUND 7 Wave 1 DONE + VERIFIED (2026-07-15). Wave A=690fb83 (table), Wave B=5930772 (filters/footer).
+VERIFIED LIVE: #7 rank column (follows sort, continues past Show More); #8 center-align
++ content-width cols (name left); #9 no zebra + dense ~16 rows/screen; #12 frozen bold
+centered darker header (Wave A capped .table-scroll max-height 65vh → body scrolls
+internally; header th sticky top:0); #13 Player column sortable (▲/▼, rank renumbers);
+#1 date From·To·Preset one row + narrower Gender/Discipline/date boxes; #3 footer "Data
+as of 13 Jul 2026" = manifest max_match_date (not today); #4 advanced-condition edit +
+close-via-× no longer changes table/pill/badge (root cause was pills/badge rendering
+live from store, not a re-query — fixed via appliedState snapshot); #6 "Reg. Batting
+Position" label; #14 Clear resets preset dropdown to "Preset…". Baseline 2,813 exact;
+console clean.
+OPEN QUESTION #5 (opposition ordering): the loader IS games-desc, but by IN-SCOPE
+games — in a men's-T20I window associate nations (Indonesia 105, Bahrain 84) genuinely
+outrank India (73)/Pakistan (71) because they play more qualifier matches. Owner's
+wording "most games in THE DATASET" + their consistent "total dataset not filtered"
+preference suggests they want WHOLE-DATASET games ranking (big nations top). ASK owner
+before changing.
+FLAG for owner manual check (automation can't cleanly drive pointer-drag): #10 column
+drag drop-index (root cause fixed: null overKey→append replaced w/ midpoint scan) and
+#11 mobile double-click name-expand.
+DESIGN CALLS to confirm: table body now scrolls internally (65vh cap) so the header can
+freeze; header is darker bg + bold dark text (departs from old muted editorial header).
+REMAINING R7 Wave 2: graph rework (#15 shared-filter Graph button, #16 bidirectional
+shared filter store, #17 metric-before-chart + no premature 15-cap, #18 REMOVE
+Recommended entirely, #19 graph Clear button, #21 expose Best/Worst) ‖ #20 opposition
+popup "show everything" (remove intl gate + cap). Awaiting owner go + #5 answer.
