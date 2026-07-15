@@ -2577,6 +2577,58 @@ a { color: var(--color-accent); }
   border-radius: var(--radius-md);
 }
 
+/* Empty-state RULES TABLE (R5 Wave 1b, item 1) — the infographic shown in the
+   stage (inside .graph-stage-guidance) when no chart type is selected and no
+   metric conditions are applied: one row per chart type with a tight "what it
+   needs / how to use it" line. A calm, non-error affordance like the guidance
+   note it replaces. Works at ~380px (the table stacks label over hint on
+   narrow widths via the block layout below). */
+.graph-rules { text-align: left; }
+.graph-rules__lead {
+  margin: 0 0 var(--space-3);
+  color: var(--color-muted);
+  font-size: 1rem;
+  text-align: center;
+}
+.graph-rules__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-md);
+}
+.graph-rules__caption {
+  caption-side: top;
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: var(--space-2);
+  font-size: var(--text-md);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.graph-rules__table th,
+.graph-rules__table td {
+  padding: var(--space-2) var(--space-2);
+  border-bottom: 1px solid var(--color-line);
+  vertical-align: top;
+  text-align: left;
+}
+.graph-rules__table th {
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+  width: 1%;
+}
+.graph-rules__table td { color: var(--color-muted); }
+.graph-rules__table tr:last-child th,
+.graph-rules__table tr:last-child td { border-bottom: 0; }
+@media (max-width: 460px) {
+  /* Stack chart name over its hint so nothing is cramped at ~380px. */
+  .graph-rules__table th,
+  .graph-rules__table td { display: block; width: auto; white-space: normal; }
+  .graph-rules__table th { border-bottom: 0; padding-bottom: 0; }
+  .graph-rules__table td { padding-top: var(--space-1); }
+}
+
 .graph-exclusions {
   font-size: var(--text-md);
   color: var(--color-muted);

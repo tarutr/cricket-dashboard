@@ -66,6 +66,95 @@ const CHART_TYPES = [
   { key: "benchmark", label: "Benchmark" },
 ];
 
+// R5 Wave 1b (items 1 + 3): the ONE source of truth for every chart type's
+// plain-English "what it is / what it needs" copy. Consumed by three surfaces
+// so they can never drift: the empty-state RULES TABLE (item 1), the honest
+// invalid-metric / can't-render messages shown in the stage (item 3), and the
+// filter-driven recommendation reasoning below.
+//   • tagline — the one-line "what it needs / how to use it" for the rules
+//     table row (kept tight and accurate to THIS app's metric registry).
+//   • purpose — a full sentence stating what the chart is FOR.
+//   • needs   — a full sentence stating what metric(s)/inputs it needs.
+// The invalid message shown when a chart can't render is `${purpose} ${needs}`
+// (optionally prefixed with "<metric> can't be shown here." — see
+// noMetricGuidance()), giving the two-part "what it's for + what it needs"
+// message the owner asked for in item 3.
+const CHART_RULES = {
+  bar: {
+    tagline: "Ranks players on one metric.",
+    purpose: "A bar chart ranks players on one metric.",
+    needs: "Pick one metric.",
+  },
+  donut: {
+    tagline: "One team's share of a total — runs or wickets.",
+    purpose: "A donut chart shows how one team's total splits between its players.",
+    needs: "Filter to a single team, then pick an additive total (runs or wickets).",
+  },
+  scatter: {
+    tagline: "Two metrics plotted across the whole field.",
+    purpose: "A scatter plot maps every player on two metrics.",
+    needs: "Pick an X metric and a Y metric.",
+  },
+  radar: {
+    tagline: "Three or more metrics as percentile axes, up to 6 players.",
+    purpose: "A radar chart compares players across several metrics as percentile axes.",
+    needs: "Pick at least 3 metrics (up to 10).",
+  },
+  phases: {
+    tagline: "Powerplay, middle and death splits of a metric.",
+    purpose: "A phases chart breaks a metric family into powerplay, middle and death.",
+    needs: "Pick a metric family.",
+  },
+  slope: {
+    tagline: "One metric across two time windows.",
+    purpose: "A slope chart compares one metric across two time windows.",
+    needs: "Pick a per-innings rate or average, then set Window A and Window B.",
+  },
+  byyear: {
+    tagline: "One metric tracked over time.",
+    purpose: "A line chart tracks one metric over the seasons.",
+    needs: "Pick a metric that recombines by year.",
+  },
+  dumbbell: {
+    tagline: "One metric across two time windows, drawn as a gap.",
+    purpose: "A dumbbell chart compares one metric across two time windows.",
+    needs: "Pick a per-innings rate or average, then set Window A and Window B.",
+  },
+  benchmark: {
+    tagline: "One player measured against the whole field.",
+    purpose: "A benchmark chart measures one player against the whole field.",
+    needs: "Pick at least 4 metrics.",
+  },
+};
+
+/** The two-part "what it's for / what it needs" sentence for a chart type
+ * (item 3), optionally prefixed with the reason a specific chosen metric was
+ * rejected. ONE builder so every stage message reads the same way. */
+function chartPurposeMessage(typeKey, rejectedMetricLabel) {
+  const rule = CHART_RULES[typeKey];
+  if (!rule) return "This chart type isn't available right now.";
+  const base = `${rule.purpose} ${rule.needs}`;
+  return rejectedMetricLabel ? `${rejectedMetricLabel} can't be shown here. ${base}` : base;
+}
+
+/** R5 Wave 1b (item 1): the distinct metric keys named by the graph scope's
+ * applied advanced conditions (state.advanced.groups[].conds[].metricKey), in
+ * first-seen order. This is what "metric condition(s) applied" means for the
+ * empty-state / auto-select gate. Reads the state shape documented in
+ * state.js: advanced = { op, groups:[{ op, conds:[{metricKey, operator, v1,
+ * v2}] }] }. Conditions reaching an APPLIED graph scope are already validated
+ * (applyGraphFilters -> graphDrawerController.validate()), so a present
+ * metricKey is a real, complete "measure this" intent. */
+function metricConditionKeys(state) {
+  const keys = [];
+  for (const g of (state.advanced && state.advanced.groups) || []) {
+    for (const c of g.conds || []) {
+      if (c && c.metricKey && !keys.includes(c.metricKey)) keys.push(c.metricKey);
+    }
+  }
+  return keys;
+}
+
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** Deep-copy a store state snapshot for the graph-local scope store (item 1).
@@ -376,6 +465,18 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     if (key) chosenMetricKey = key;
     metricEverChosen = true;
   }
+  // R5 Wave 1b (item 1 — filter-driven auto-select): true iff the CURRENT
+  // chart type + metric selection was auto-derived from the graph scope's
+  // metric conditions (and not since manually overridden). It gates two
+  // behaviours: (a) clearing all metric conditions reverts to the empty
+  // rules-table state ONLY when the config was auto (a hand-built chart is
+  // left alone); (b) auto-select re-derives only while the user hasn't taken
+  // over (see maybeAutoSelectFromFilters()). Any manual chart-type click or
+  // metric-control change flips it false via noteManualChartEdit().
+  let autoSelectedFromFilters = false;
+  function noteManualChartEdit() {
+    autoSelectedFromFilters = false;
+  }
   let barStyle = "bars"; // "bars" | "dots" (lollipop) — bar chart only
   let barMetricKey = null;
   let donutMetricKey = null;
@@ -486,6 +587,138 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       return "No players match the current filters — adjust them and apply again, or search on the Stats tab.";
     }
     return "Run a search on the Stats tab first, or set filters here and apply.";
+  }
+
+  /**
+   * R5 Wave 1b (item 1) — FILTER-DRIVEN AUTO-SELECT.
+   *
+   * The archetype rule table (#metrics × #players -> chart type), keyed off the
+   * metric keys the graph scope's applied advanced conditions name:
+   *
+   *   #metrics | condition                              | chart type
+   *   ---------+----------------------------------------+-----------------
+   *      >= 3  | (radar-valid subset, capped to 10)     | radar
+   *        2   | —                                      | scatter (X,Y)
+   *        1   | additive total AND scope pinned to 1 team | donut
+   *        1   | otherwise                              | bar
+   *        0   | —                                      | (no auto-select)
+   *
+   * This is derived ENTIRELY from the applied filters — it is NOT a default:
+   * with no metric conditions it does nothing (and the empty rules-table state
+   * shows), and clearing the conditions later reverts (maybeAutoSelect…). It
+   * sets the SAME per-type metric variables a manual pick would, so everything
+   * downstream (persistence, the card title, the Recommended tag) behaves
+   * identically. Returns the chosen chart type, or null if it couldn't derive
+   * one (no valid metric keys for the discipline).
+   */
+  function applyAutoSelect(keys, state) {
+    const discipline = state.discipline;
+    const valid = keys.filter((k) => getMetric(k, discipline));
+    if (!valid.length) return null;
+
+    let type;
+    if (valid.length >= 3) {
+      // Radar needs radar-VALID axes (a defined better-direction). Fall back to
+      // the 2-/1-metric archetypes if fewer than 3 of the conditions qualify.
+      const eligible = radarEligibleMetrics(discipline, state.formats);
+      const radarKeys = valid.filter((k) => eligible.some((m) => m.key === k)).slice(0, RADAR_MAX_METRICS);
+      if (radarKeys.length >= RADAR_MIN_METRICS) {
+        type = "radar";
+        radarMetricKeys = radarKeys;
+        metricEverChosen = true;
+      } else if (valid.length >= 2) {
+        type = "scatter";
+        scatterXKey = valid[0];
+        scatterYKey = valid[1];
+        markMetricChosen(valid[1]);
+      } else {
+        type = "bar";
+        barMetricKey = valid[0];
+        markMetricChosen(valid[0]);
+      }
+    } else if (valid.length === 2) {
+      type = "scatter";
+      scatterXKey = valid[0];
+      scatterYKey = valid[1];
+      markMetricChosen(valid[1]);
+    } else {
+      // Exactly one metric condition.
+      const m = getMetric(valid[0], discipline);
+      if (m && m.additive === true && (state.teams || []).length === 1) {
+        type = "donut";
+        donutMetricKey = valid[0];
+      } else {
+        type = "bar";
+        barMetricKey = valid[0];
+      }
+      markMetricChosen(valid[0]);
+    }
+
+    chartType = type;
+    return type;
+  }
+
+  /** Run (or revert) filter-driven auto-select against the current graph scope.
+   * Called after every seed that follows a scope change (graph "Apply to
+   * graph", or an inherited Stats scope). Idempotent and safe: it only acts
+   * when there ARE metric conditions and the user hasn't manually taken over,
+   * and only reverts when the conditions are gone AND the last config was auto.
+   * Never overrides a hand-built chart. */
+  function maybeAutoSelectFromFilters() {
+    const state = store.get();
+    const keys = metricConditionKeys(state).filter((k) => getMetric(k, state.discipline));
+    if (keys.length === 0) {
+      // Conditions cleared. Revert to the empty rules-table state only if the
+      // current config was itself auto-derived (a hand-built chart is left
+      // exactly as the user made it).
+      if (autoSelectedFromFilters) {
+        chartType = null;
+        chosenMetricKey = null;
+        metricEverChosen = false;
+        barMetricKey = donutMetricKey = scatterXKey = scatterYKey = null;
+        slopeMetricKey = byYearMetricKey = dumbbellMetricKey = phaseFamilyId = null;
+        radarMetricKeys = [];
+        autoSelectedFromFilters = false;
+        syncChartTypeButtons();
+        syncBarStyleVisibility();
+        renderMetricControls();
+      }
+      return;
+    }
+    // Conditions present. Auto-select unless the user has manually taken over
+    // (picked/edited a chart by hand since the last auto/clear).
+    if (chartType && !autoSelectedFromFilters) return;
+    const picked = applyAutoSelect(keys, state);
+    if (!picked) return;
+    autoSelectedFromFilters = true;
+    syncChartTypeButtons();
+    syncBarStyleVisibility();
+    renderMetricControls();
+    renderPlayerList();
+  }
+
+  /** R5 Wave 1b (item 1) — the empty-state infographic RULES TABLE, shown in
+   * the stage IN PLACE OF the paper card when no chart type is selected and no
+   * metric conditions are applied (fresh load, or after Clear). One row per
+   * chart type with a tight, accurate "what it needs / how to use it" line
+   * from CHART_RULES. `leadText` (optional) is a single sentence shown above
+   * the table — used to surface poolStatusReason() when the pool isn't ready
+   * so the empty state still tells the user how to get data. */
+  function showStageRulesTable(leadText) {
+    els.exportRow.hidden = true;
+    els.cardHost.hidden = true;
+    const rows = CHART_TYPES.map(
+      (t) => `<tr><th scope="row">${escHtml(t.label)}</th><td>${escHtml(CHART_RULES[t.key] ? CHART_RULES[t.key].tagline : "")}</td></tr>`
+    ).join("");
+    els.stageGuidance.innerHTML = `
+      <div class="graph-rules">
+        <p class="graph-rules__lead">${escHtml(leadText || "Pick a chart type below, or apply a metric filter to auto-build one.")}</p>
+        <table class="graph-rules__table">
+          <caption class="graph-rules__caption">What each chart is for</caption>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    els.stageGuidance.hidden = false;
   }
 
   const selection = createSelection({
@@ -762,6 +995,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         </select>
       `;
       els.metricControls.querySelector('[data-role="bar-metric"]').addEventListener("change", (e) => {
+        noteManualChartEdit(); // item 1: user is refining by hand, not auto
         barMetricKey = e.target.value || null;
         if (barMetricKey) markMetricChosen(barMetricKey);
         syncChartTypeButtons();
@@ -779,6 +1013,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const sel = els.metricControls.querySelector('[data-role="donut-metric"]');
       if (sel) {
         sel.addEventListener("change", (e) => {
+          noteManualChartEdit();
           donutMetricKey = e.target.value || null;
           if (donutMetricKey) markMetricChosen(donutMetricKey);
           syncChartTypeButtons();
@@ -803,12 +1038,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         </select>
       `;
       els.metricControls.querySelector('[data-role="scatter-x"]').addEventListener("change", (e) => {
+        noteManualChartEdit();
         scatterXKey = e.target.value || null;
         if (scatterXKey) metricEverChosen = true;
         syncChartTypeButtons();
         scheduleRender({ paramsChanged: true });
       });
       els.metricControls.querySelector('[data-role="scatter-y"]').addEventListener("change", (e) => {
+        noteManualChartEdit();
         scatterYKey = e.target.value || null;
         if (scatterYKey) markMetricChosen(scatterYKey);
         syncChartTypeButtons();
@@ -890,6 +1127,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           } else {
             set.delete(k);
           }
+          noteManualChartEdit();
           // Preserve catalogue order so axes are stable regardless of tick order.
           radarMetricKeys = eligible.map((m) => m.key).filter((mk) => set.has(mk));
           if (radarMetricKeys.length) metricEverChosen = true;
@@ -921,6 +1159,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const sel = els.metricControls.querySelector('[data-role="phase-family"]');
       if (sel) {
         sel.addEventListener("change", (e) => {
+          noteManualChartEdit();
           phaseFamilyId = e.target.value || null;
           if (phaseFamilyId) metricEverChosen = true;
           syncChartTypeButtons();
@@ -957,6 +1196,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const metricSel = els.metricControls.querySelector('[data-role="slope-metric"]');
       if (metricSel) {
         metricSel.addEventListener("change", (e) => {
+          noteManualChartEdit();
           slopeMetricKey = e.target.value || null;
           if (slopeMetricKey) markMetricChosen(slopeMetricKey);
           syncChartTypeButtons();
@@ -995,6 +1235,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const sel = els.metricControls.querySelector('[data-role="byyear-metric"]');
       if (sel) {
         sel.addEventListener("change", (e) => {
+          noteManualChartEdit();
           byYearMetricKey = e.target.value || null;
           if (byYearMetricKey) markMetricChosen(byYearMetricKey);
           syncChartTypeButtons();
@@ -1036,6 +1277,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const metricSel = els.metricControls.querySelector('[data-role="dumbbell-metric"]');
       if (metricSel) {
         metricSel.addEventListener("change", (e) => {
+          noteManualChartEdit();
           dumbbellMetricKey = e.target.value || null;
           if (dumbbellMetricKey) markMetricChosen(dumbbellMetricKey);
           syncChartTypeButtons();
@@ -1590,7 +1832,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         return rec("bar");
       }
       if (metric.additive === true) {
-        if (N <= 8 && okKeys.has("donut")) return "donut";
+        // Item 5: only nudge Donut when the scope is pinned to ONE team — a
+        // donut across multiple teams is meaningless (see the donut render
+        // branch's single-team gate), so recommending it there would be a
+        // dead-end nudge. Otherwise rank the total on a bar.
+        if (N <= 8 && (state.teams || []).length === 1 && okKeys.has("donut")) return "donut";
         return rec("bar");
       }
       return rec("bar"); // peak / non-additive single-value metric
@@ -1656,6 +1902,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // of a chart; see evaluateTypeStatus()).
     if (!btn || btn.dataset.value === chartType) return;
     chartType = btn.dataset.value;
+    // Item 1: a deliberate chart-type pick is the user taking over from any
+    // filter-driven auto-selection — so clearing metric conditions later won't
+    // wipe their chart.
+    noteManualChartEdit();
     syncChartTypeButtons();
     syncBarStyleVisibility();
     clearCapNote();
@@ -1970,17 +2220,20 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     return { dirty: selection.isDirty(), seedByMetric: resolveSeedMetric(discipline) };
   }
 
-  /** Item 4: honest "no metric chosen / chosen metric invalid here" sentence
-   * for a single-metric chart type. Reached only when eligible metrics DO
-   * exist for the type (evaluateTypeStatus already blocks metric-starved
-   * scopes with their own reasons), so this is always about the user's own
-   * pick — never a silent auto-swap. */
-  function noMetricGuidance(typeLabel) {
+  /** Item 3 (richer invalid-metric messaging): the honest "no metric chosen /
+   * chosen metric invalid here" sentence for a single-metric chart type, now a
+   * two-part "what the chart is FOR + what metric it needs" message drawn from
+   * CHART_RULES (never the old terse "X can't be shown on a dumbbell chart —
+   * choose another metric."). Reached only when eligible metrics DO exist for
+   * the type (evaluateTypeStatus already blocks metric-starved scopes with
+   * their own reasons), so this is always about the user's own pick — never a
+   * silent auto-swap. `typeKey` is a CHART_RULES key. */
+  function noMetricGuidance(typeKey) {
     if (metricEverChosen && chosenMetricKey) {
       const m = getMetric(chosenMetricKey, store.get().discipline);
-      return `${m ? m.label : "That metric"} can't be shown on ${typeLabel} — choose another metric.`;
+      return chartPurposeMessage(typeKey, m ? m.label : "That metric");
     }
-    return `Choose a metric to draw ${typeLabel}.`;
+    return chartPurposeMessage(typeKey, null);
   }
 
   /** Show a one-line guidance sentence in the stage IN PLACE OF a chart (item 4
@@ -2169,7 +2422,18 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         chartRef.current = null;
       }
       renderExclusions([]);
-      showStageGuidance(poolStatusReason() || "Pick a chart type to get started.");
+      // R5 Wave 1b (item 1): with no chart type AND no metric conditions
+      // applied (fresh load, or after Clear), show the infographic RULES TABLE
+      // rather than a one-line sentence. When there ARE metric conditions but
+      // still no type (auto-select couldn't derive one — e.g. an empty pool),
+      // fall back to the honest pool/guidance sentence. The pool-status reason,
+      // when present, leads the rules table so the empty state still says how
+      // to get data.
+      if (metricConditionKeys(store.get()).length === 0) {
+        showStageRulesTable(poolStatusReason());
+      } else {
+        showStageGuidance(poolStatusReason() || "Pick a chart type to get started.");
+      }
       return;
     }
 
@@ -2253,7 +2517,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
         const metric = metrics.find((m) => m.key === slopeMetricKey); // item 4: no auto-pick
         if (!metric) {
-          showChartGuidance(noMetricGuidance("a slope chart"));
+          showChartGuidance(noMetricGuidance("slope"));
           return;
         }
         const windowsReady = Boolean(slopeWindowA?.from && slopeWindowA?.to && slopeWindowB?.from && slopeWindowB?.to);
@@ -2333,7 +2597,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         const metrics = eligibleMetrics(discipline, state.formats).filter((m) => timeseriesSupported(m));
         const metric = metrics.find((m) => m.key === byYearMetricKey); // item 4: no auto-pick
         if (!metric) {
-          showChartGuidance(noMetricGuidance("a line chart"));
+          showChartGuidance(noMetricGuidance("byyear"));
           return;
         }
 
@@ -2395,7 +2659,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
         const metric = metrics.find((m) => m.key === dumbbellMetricKey); // item 4: no auto-pick
         if (!metric) {
-          showChartGuidance(noMetricGuidance("a dumbbell chart"));
+          showChartGuidance(noMetricGuidance("dumbbell"));
           return;
         }
         ensureDumbbellWindowDefaults();
@@ -2547,44 +2811,92 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         return;
       }
 
+      // Radar (R5 Wave 1b, item 4): its own branch, like Slope/Benchmark
+      // above — it needs a SEPARATE query for the FULL filtered pool so each
+      // axis can be a PERCENTILE RANK over that pool (not a min/max normalise
+      // within the <=6 plotted players). Reuses benchmark.js's
+      // fetchBenchmarkPool() (the exact whole-pool query the Benchmark chart
+      // runs — table.js's buildQuery over the scope, matchupVs cleared); the
+      // plotted players' own raw values are read from that same pool (every
+      // in-scope player, checked ones included), so no second per-player query
+      // is needed. Percentiles are computed client-side in
+      // buildRadarSmallMultiples — the values themselves are unchanged, just
+      // ranked (numbers rule).
+      if (chartType === "radar") {
+        const eligible = radarEligibleMetrics(discipline, state.formats);
+        const metrics = radarMetricKeys.map((k) => getMetric(k, discipline)).filter((m) => m && eligible.some((e) => e.key === m.key));
+        if (metrics.length < RADAR_MIN_METRICS) {
+          showChartGuidance(chartPurposeMessage("radar", null));
+          return;
+        }
+        const radarMetricKeyList = metrics.map((m) => m.key);
+        const poolRows = await fetchBenchmarkPool(state, radarMetricKeyList);
+        if (token !== loadToken) return;
+        hideStatus();
+
+        const canvas = card.getCanvas();
+        const result = buildRadarSmallMultiples(canvas, chartRef, { metrics, players, poolRows });
+        renderExclusions(result?.excluded ?? [], result?.note);
+
+        const excludedCount = result?.excluded?.length ?? 0;
+        const config = {
+          type: "radar",
+          discipline,
+          metricKeys: radarMetricKeyList,
+          metrics,
+          playerCount: Math.max(0, players.length - excludedCount),
+          roster: excludedCount > 0 ? { ...roster, dirty: true } : roster,
+        };
+        if (pendingRegenerate) {
+          card.regenerate(config, buildFooterScope(config));
+          pendingRegenerate = false;
+        } else {
+          card.updateFooterScope(buildFooterScope(config));
+        }
+        return;
+      }
+
       let metricKeys = [];
       let config;
 
       if (chartType === "bar") {
         const metric = getMetric(barMetricKey, discipline); // item 4: no auto-pick
-        if (!metric) { showChartGuidance(noMetricGuidance("a bar chart")); return; }
+        if (!metric) { showChartGuidance(noMetricGuidance("bar")); return; }
         metricKeys = [metric.key];
         config = { type: "bar", discipline, metric, playerCount: players.length, style: barStyle, roster };
       } else if (chartType === "donut") {
         const metric = getMetric(donutMetricKey, discipline); // item 4: no auto-pick
-        if (!metric) { showChartGuidance(noMetricGuidance("a donut chart")); return; }
+        if (!metric) { showChartGuidance(noMetricGuidance("donut")); return; }
+        // R5 Wave 1b (item 5): a donut compares players WITHIN a single team's
+        // additive total (runs/wickets) — see charts.js buildDonutChart and
+        // v1's "#4". Across multiple teams (or with no team filter) the pie is
+        // meaningless: players from different teams don't share one total. The
+        // additive-metric half of the rule is already enforced by
+        // donutEligibleMetrics(); this enforces the single-team half. Keyed off
+        // the graph scope's own team filter (state.teams — the pool is seeded
+        // from that scope, and manual adds go through the same scope), so
+        // exactly one team => every plotted player belongs to it.
+        if ((state.teams || []).length !== 1) {
+          showChartGuidance(chartPurposeMessage("donut", null));
+          return;
+        }
         metricKeys = [metric.key];
         config = { type: "donut", discipline, metric, playerCount: players.length, roster };
       } else if (chartType === "scatter") {
         const metricX = getMetric(scatterXKey, discipline);
         const metricY = getMetric(scatterYKey, discipline);
         if (!metricX || !metricY) {
-          // item 4: scatter needs BOTH axes chosen — one honest sentence, no plot.
-          showChartGuidance(metricEverChosen ? "Choose both an X and a Y metric to draw a scatter plot." : "Choose an X and a Y metric to draw a scatter plot.");
+          // item 3: scatter needs BOTH axes — the rich what-it's-for message.
+          showChartGuidance(chartPurposeMessage("scatter", null));
           return;
         }
         metricKeys = [metricX.key, metricY.key];
         config = { type: "scatter", discipline, metricX, metricY, playerCount: players.length, roster };
-      } else if (chartType === "radar") {
-        // item 3: draw ONE radar from the individually-checked radar metrics.
-        const eligible = radarEligibleMetrics(discipline, state.formats);
-        const metrics = radarMetricKeys.map((k) => getMetric(k, discipline)).filter((m) => m && eligible.some((e) => e.key === m.key));
-        if (metrics.length < RADAR_MIN_METRICS) {
-          showChartGuidance(`Choose at least ${RADAR_MIN_METRICS} metrics to draw a radar chart.`);
-          return;
-        }
-        metricKeys = metrics.map((m) => m.key);
-        config = { type: "radar", discipline, metricKeys, metrics, playerCount: players.length, roster };
       } else if (chartType === "phases") {
         const families = eligiblePhaseFamilies(discipline, state.formats);
         const family = families.find((f) => f.id === phaseFamilyId); // item 4: no auto-pick
         if (!family) {
-          showChartGuidance("Choose a metric family to draw a phases chart.");
+          showChartGuidance(chartPurposeMessage("phases", null));
           return;
         }
         const metrics = family.members.map((mm) => getMetric(mm.key, discipline)).filter(Boolean);
@@ -2604,8 +2916,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         result = buildDonutChart(canvas, chartRef, { metric: config.metric, rowsById, players });
       } else if (config.type === "scatter") {
         result = buildScatterChart(canvas, chartRef, { metricX: config.metricX, metricY: config.metricY, rowsById, players });
-      } else if (config.type === "radar") {
-        result = buildRadarSmallMultiples(canvas, chartRef, { metrics: config.metrics, rowsById, players });
       } else if (config.type === "phases") {
         result = buildPhasesChart(canvas, chartRef, { family: config.family, metrics: config.metrics, rowsById, players });
       }
@@ -2666,6 +2976,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     syncBarStyleVisibility();
     renderMetricControls();
     await seedSelection();
+    // Item 1: after the pool is seeded, auto-select a chart type + metric(s)
+    // from any applied metric conditions (or revert if they've been cleared).
+    // Runs post-seed so the archetype's #players tie-breaks read the real pool.
+    maybeAutoSelectFromFilters();
     scheduleRender({ paramsChanged: true });
   }
 
@@ -2835,6 +3149,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     await seedSelection();
 
     chartType = newType;
+    noteManualChartEdit(); // item 1: an explicit chooser confirm is a manual pick
     clearCapNote();
     selection.clampToCap(); // shrink an oversized checked set inherited from a roomier previous chart type
 
@@ -2905,7 +3220,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // no-ops both if Stats has never been searched (still no query — the
     // empty-state stays honest) and if the filtered set's identity key hasn't
     // actually changed.
-    seedSelection().then(() => scheduleRender({ paramsChanged: true }));
+    seedSelection().then(() => {
+      // Item 1: filter-driven auto-select/revert, post-seed (same as onShow).
+      maybeAutoSelectFromFilters();
+      scheduleRender({ paramsChanged: true });
+    });
   }
 
   const controller = {

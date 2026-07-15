@@ -885,13 +885,16 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
  * 6) in a responsive grid, each labelled with the player's name underneath;
  * ONE shared honest footer (card.js's, untouched) and NO per-mini legends.
  *
- * All minis share ONE scale: the same per-metric min-max normalisation the
- * old overlay radar used (0.1-1.0, inverting lower-is-better metrics so
- * outward always means better) — computed ONCE across every CHARTED player,
- * exactly as before, just rendered as N single-dataset charts instead of one
- * multi-dataset chart. Tooltips still show the REAL (unscaled) values. A
- * player missing hasMetricData for ANY of the selected metrics is excluded
- * from the whole grid (visible note, same rule as before).
+ * All minis share ONE scale: each axis is a PERCENTILE RANK (0-100) over the
+ * ENTIRE filtered pool (R5 Wave 1b, item 4 — `poolRows`, benchmark.js's
+ * fetchBenchmarkPool result), inverting lower-is-better metrics so outward
+ * always means better. So the same spoke means the same thing on every mini,
+ * and it's a rank against the whole field (e.g. all 120 matching players), not
+ * a normalise within the <=6 plotted. Tooltips still show the REAL value plus
+ * its percentile. A player missing hasMetricData for ANY of the selected
+ * metrics is excluded from the whole grid (visible note, same rule as before);
+ * their raw values are read from the SAME pool (every in-scope player is in
+ * it), so no second per-player query runs.
  *
  * R4 Wave 1b (item 3): `metrics` is now the user's individually-checked radar
  * metric set (up to 10), not a fixed group's members — this renderer never
@@ -908,39 +911,66 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
  * destroyIfExists(chartRef)) cleans this up for free, no special-casing
  * needed elsewhere.
  */
-export function buildRadarSmallMultiples(canvas, chartRef, { metrics, rowsById, players }) {
+export function buildRadarSmallMultiples(canvas, chartRef, { metrics, players, poolRows }) {
   destroyIfExists(chartRef);
 
   const chartArea = canvas.parentElement;
   canvas.hidden = true;
 
+  // R5 Wave 1b (item 4): each axis is a PERCENTILE RANK over the ENTIRE
+  // filtered pool (`poolRows` = benchmark.js's fetchBenchmarkPool result — one
+  // row per in-scope player, checked ones included), NOT a min/max normalise
+  // within the <=6 plotted players. So "80 on the Strike Rate axis" means
+  // "faster than 80% of the filtered field", the same reading on every mini.
+  //
+  // Per-metric distribution: every pool value that passes §8.1 hasMetricData
+  // (a NULL/0 rate is genuine no-data, excluded from the ranking population),
+  // sorted ascending. Direction is honoured — for a lower-is-better metric a
+  // SMALLER raw value is the better percentile — so outward always = better.
+  poolRows = poolRows || [];
+  const distributions = metrics.map((m) =>
+    poolRows
+      .map((r) => Number(r[m.key]))
+      .filter((v, i) => hasMetricData(m, poolRows[i][m.key]))
+      .sort((a, b) => a - b)
+  );
+  const poolCount = poolRows.length;
+
+  /** Percentile (0-100) of `rawValue` for metric index `mi` within the full
+   * pool distribution. 100 = best in the field; scales so outward = better
+   * regardless of the metric's direction. Returns null if the pool has no
+   * data for this metric (defensive — the caller only plots players who pass
+   * hasMetricData for every axis, and such a player is themselves in the
+   * pool, so the distribution is non-empty in practice). */
+  function percentileFor(mi, rawValue) {
+    const dist = distributions[mi];
+    const n = dist.length;
+    if (!n) return null;
+    let atOrBetter;
+    if (metrics[mi].higherIsBetter === false) {
+      // lower is better: count pool values >= rawValue (rawValue is among the best)
+      atOrBetter = dist.filter((v) => v >= rawValue).length;
+    } else {
+      // higher is better: count pool values <= rawValue
+      atOrBetter = dist.filter((v) => v <= rawValue).length;
+    }
+    return (atOrBetter / n) * 100;
+  }
+
+  // Plotted players' own raw values come from the SAME pool (every in-scope
+  // player is in it) — no separate per-player query. A player missing
+  // hasMetricData for ANY selected axis is excluded from the whole grid.
+  const poolById = new Map(poolRows.map((r) => [r.id, r]));
   const included = [];
   const excluded = [];
   for (const p of players) {
-    const row = rowsById.get(p.id);
+    const row = poolById.get(p.id);
     const ok = row && metrics.every((m) => hasMetricData(m, row[m.key]));
     if (ok) {
       included.push({ id: p.id, name: p.name, row });
     } else {
       excluded.push(p.name);
     }
-  }
-
-  // Per-metric min/max across ALL charted (included) players — shared by
-  // every mini, so the same spoke means the same thing on every one of them.
-  const ranges = metrics.map((m) => {
-    const values = included.map((r) => Number(r.row[m.key]));
-    const min = values.length ? Math.min(...values) : 0;
-    const max = values.length ? Math.max(...values) : 0;
-    return { min, max };
-  });
-
-  function scaledValue(metric, range, rawValue) {
-    const { min, max } = range;
-    if (max === min) return 0.55; // flat metric across selection -> mid scale
-    let t = (rawValue - min) / (max - min); // 0..1, higher raw = higher t
-    if (metric.higherIsBetter === false) t = 1 - t; // invert so outward = better
-    return 0.1 + t * 0.9; // 0.1 - 1.0
   }
 
   const pal = palette();
@@ -973,7 +1003,7 @@ export function buildRadarSmallMultiples(canvas, chartRef, { metrics, rowsById, 
         labels: metrics.map((m) => m.shortLabel),
         datasets: [
           {
-            data: metrics.map((m, mi) => scaledValue(m, ranges[mi], Number(r.row[m.key]))),
+            data: metrics.map((m, mi) => percentileFor(mi, Number(r.row[m.key])) ?? 0),
             borderColor: pal.accent,
             backgroundColor: pal.accent + "33",
             pointBackgroundColor: pal.accent,
@@ -988,19 +1018,25 @@ export function buildRadarSmallMultiples(canvas, chartRef, { metrics, rowsById, 
           legend: { display: false }, // no per-mini legends — the name below IS the legend
           tooltip: {
             callbacks: {
+              // Tooltip shows the REAL value plus the percentile it maps to,
+              // so the reader sees both "SR 142.0" and "89th pct of the field".
               label: (ctx) => {
                 const metric = metrics[ctx.dataIndex];
                 const raw = Number(r.row[metric.key]);
-                return `${metric.label}: ${labelForValue(metric, raw)}`;
+                const pct = percentileFor(ctx.dataIndex, raw);
+                const pctText = pct == null ? "" : ` — ${Math.round(pct)}th pct`;
+                return `${metric.label}: ${labelForValue(metric, raw)}${pctText}`;
               },
             },
           },
         },
         scales: {
           r: {
+            // Percentile scale, 0-100 (item 4). No sample floor — a player at
+            // the pool minimum simply sits near the centre.
             min: 0,
-            max: 1,
-            ticks: { display: false, stepSize: 0.2 },
+            max: 100,
+            ticks: { display: false, stepSize: 20 },
             grid: { color: pal.line },
             angleLines: { color: pal.line },
             pointLabels: { color: pal.ink, font: { size: 9 } },
@@ -1018,5 +1054,9 @@ export function buildRadarSmallMultiples(canvas, chartRef, { metrics, rowsById, 
     },
   };
 
-  return { excluded };
+  // Honest note: axes are percentiles vs the whole filtered pool, not the
+  // plotted handful — say so, and say how big that pool is.
+  const note = poolCount > 0 ? `Axes show percentile rank against the ${poolCount} players in the current filter.` : null;
+
+  return { excluded, note };
 }
