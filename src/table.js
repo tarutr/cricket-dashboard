@@ -50,6 +50,12 @@ const MATCHUP_BALLS_COL = { batting: "balls_faced", bowling: "balls" };
 const MATCHUP_GROUP_COL = { batting: "bowling_group", bowling: "batting_hand" };
 const MATCHUP_NS = { batting: "matchup_batting", bowling: "matchup_bowling" };
 
+// Escape LIKE wildcards (\ % _) then SQL-quote a name-search term, so a literal
+// '%' or '_' typed into the table search matches that character instead of
+// acting as a pattern metacharacter. Mirrors playerData.js's searchPlayers;
+// pair with ESCAPE '\\' at each use site. A plain-letters term is unaffected.
+const escSearch = (s) => esc(s.replace(/([\\%_])/g, "\\$1"));
+
 /** Effective metrics namespace for getMetric() lookups — matchup_* while a Vs
  * selection is active and applicable, otherwise the plain discipline. Every
  * render/sort lookup must go through this so matchup columns format/sort
@@ -330,7 +336,7 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   };
 
   const searchClause =
-    state.search && state.search.trim() ? `${nameCol} ILIKE '%${esc(state.search.trim())}%'` : null;
+    state.search && state.search.trim() ? `${nameCol} ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'` : null;
 
   // C1: WHERE no longer includes the bucket predicate — scope + search only,
   // identical to the old standalone coverageSql's WHERE. The bucket predicate
@@ -598,7 +604,7 @@ export function buildQuery(state, visibleColumns) {
     includePositions: true,
   });
   if (state.search && state.search.trim()) {
-    whereClauses.push(`${nameCol} ILIKE '%${esc(state.search.trim())}%'`);
+    whereClauses.push(`${nameCol} ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
   }
 
   // Pinned players (task 3b, owner decision 46): additive OR, plain mode
@@ -679,7 +685,7 @@ export function buildQuery(state, visibleColumns) {
     const pmFull = buildScopeClauses(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
     const pmExtra = pmFull.slice(buildCoreScopeClauses(state).length);
     if (state.search && state.search.trim()) {
-      pmExtra.push(`player_name ILIKE '%${esc(state.search.trim())}%'`);
+      pmExtra.push(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
     }
     let pmWhereSql;
     if (pins.length > 0) {

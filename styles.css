@@ -1,8 +1,9 @@
 /* styles.css
    cricdb — Compare Stats. Editorial design pass, north star: Guardian player
    guides. Off-white paper, ink-navy text, one deep-red accent used sparingly.
-   All colors live as custom properties on :root with a [data-theme="dark"]
-   override set below, so a light/dark toggle is a one-attribute change.
+   All colors live as custom properties on :root; a future theme (e.g. a
+   [data-theme] override block) is just a matter of re-declaring those
+   variables — the brand kit will supply the real palette(s) when ported over.
    Selectors are the stable contract handed down from the structural pass —
    nothing renamed, only styled.
 */
@@ -87,30 +88,6 @@
   --text-sm: 0.78rem;
   --text-sm2: 0.8rem;
   --text-md: 0.85rem;
-}
-
-[data-theme="dark"] {
-  --color-bg: #14181f;
-  --color-bg-raised: #1b212b;
-  --color-fg: #ece6da;
-  --color-muted: #9a9fa8;
-  --color-line: #333a46;
-  --color-line-strong: #454d5c;
-  --color-panel: #1c222c;
-
-  --color-accent: #e2735a;
-  --color-accent-strong: #ef8b74;
-  --color-accent-tint: #3a2420;
-
-  --color-bad: #e2735a;
-  --color-bad-bg: #3a2420;
-
-  --color-active-bg: #ece6da;
-  --color-active-fg: #14181f;
-
-  --color-focus-ring: #e2735a;
-
-  --shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
 /* ── Base ──────────────────────────────────────────────────────────────────── */
@@ -1344,12 +1321,6 @@ a { color: var(--color-accent); }
   border-bottom: 1px solid var(--color-line-strong);
 }
 
-/* Darker-than-body in dark mode too: --color-line is LIGHTER than the raised
-   row background there, so drop to the base background for the header band. */
-[data-theme="dark"] .data-table thead th {
-  background: var(--color-bg);
-}
-
 /* The corner cells (rank + Player headers) are sticky both ways — pin them
    above the body's sticky first columns. */
 .data-table thead th.data-table__th--sticky,
@@ -1724,14 +1695,6 @@ a { color: var(--color-accent); }
   position: absolute;
   inset: 0;
   background: rgba(27, 36, 48, 0.45);
-}
-
-[data-theme="dark"] .filter-drawer__backdrop,
-[data-theme="dark"] .player-popup__backdrop,
-[data-theme="dark"] .filters-popup__backdrop,
-[data-theme="dark"] .player-filters-drawer__backdrop,
-[data-theme="dark"] .player-graph-chooser__backdrop {
-  background: rgba(0, 0, 0, 0.6);
 }
 
 .drawer__close {
@@ -2395,7 +2358,7 @@ a { color: var(--color-accent); }
   caption-side: top;
   text-align: left;
   font-weight: 600;
-  color: var(--color-text);
+  color: var(--color-fg);
   margin-bottom: var(--space-2);
   font-size: var(--text-md);
   text-transform: uppercase;
@@ -2410,7 +2373,7 @@ a { color: var(--color-accent); }
 }
 .graph-rules__table th {
   font-weight: 600;
-  color: var(--color-text);
+  color: var(--color-fg);
   white-space: nowrap;
   width: 1%;
 }

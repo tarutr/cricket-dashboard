@@ -180,7 +180,9 @@ export async function searchPlayers(store, searchText) {
     includePositions: discipline === "batting",
   });
   const term = (searchText || "").trim();
-  if (term) whereClauses.push(`${nameCol} ILIKE '%${esc(term)}%'`);
+  // Escape LIKE wildcards (\ % _) so a literal '%'/'_' in the roster name search
+  // matches that character, not a pattern (mirrors playerData.js searchPlayers).
+  if (term) whereClauses.push(`${nameCol} ILIKE '%${esc(term.replace(/([\\%_])/g, "\\$1"))}%' ESCAPE '\\'`);
 
   const sql = [
     `SELECT ${idCol} AS id, ${nameCol} AS name, COUNT(*) AS n`,
