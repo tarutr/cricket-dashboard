@@ -427,3 +427,27 @@ ROUND 5 COMPLETE — all 15 items across W1+W2 built + browser-verified. Baselin
 still owner-gated. Deferred to a later "player graphs" effort: single-player
 composition donuts (dismissal types, 1s/2s/…/6s). Open non-blocking: header tap-
 target size on mobile.
+
+## ROUND 6 (owner 2026-07-15, 4 issues) — DONE + VERIFIED.
+NOTE: the first popup agent (spacing+scroll) died with a CLEAN tree (no commit) —
+orchestrator did that fix inline instead. Owner correction mid-round: do NOT
+unilaterally carve out scope; take requests literally & ask before building if
+genuinely unsure (see [[feedback-no-unilateral-scoping]]).
+- f116a48 (orchestrator): player popup — more space above name (.player-page__header
+  margin-top space-2→space-5, ~3rem clear air) + header row non-sticky
+  (.player-page__header-row position sticky→static; scrolls away with body, × stays).
+- 41b88b7 + 51d925a: graph fixes. #2/#3 benchmark FIELD + radar percentile pool =
+  the CANDIDATE set (fetchBenchmarkPool restrictIds = selection.getFull() ids), not a
+  whole-scope query — fixes "random players" (Anthony Hillman/M Stoman) appearing when
+  only a few players were searched. #4 auto-select DEFAULT = biggest names by whole-DB
+  career games (fetchCareerGames). CORRECTION 51d925a: Best/Worst RESTORED to metric
+  ranking (recovered from ffedba8); ONLY the default auto-select uses biggest-names —
+  new 4th mode "Top names" (default) alongside Best|Worst|Manual.
+VERIFIED LIVE 2026-07-15: default entry "Runs — 15 most-capped players" = Buttler/de
+Kock/Maxwell/Miller/Warner/Kohli/Sharma/Williamson…; Best → "Runs — top 15" (top
+scorers); Worst → "Runs — bottom 15"; 3 searched players (Kohli/Rohit/Dhoni) →
+Benchmark "V Kohli vs the field" compares ONLY vs Dhoni/Rohit (no random names);
+radar footer "against the N players in the current selection"; popup name has clear
+space; toolbar scrolls away on scroll, × stays; baseline 2,813 exact; console clean.
+STATUS: R6 COMPLETE — AWAITING OWNER REVIEW on localhost:8000. Merge to main still
+owner-gated.
