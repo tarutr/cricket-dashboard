@@ -200,8 +200,27 @@ popup opens + header input cleared; pin SA Yadav under Runs≥5000 → pills
 [Runs ≥ 5000][+ SA Yadav(tinted)] + row 60/1,544/29.13/150.34 EXACT; unpin →
 instant requery to 0 players; console clean. Pre-existing quirk flagged: esc()
 doesn't escape LIKE wildcards (%/_) in search terms.
-ALL R3 BUILD WAVES COMPLETE → final fresh-eyes review (opus, read-only) over
-the whole round, orchestrator fixes, then owner GATE presentation.
+ALL R3 BUILD WAVES COMPLETE. FRESH-EYES REVIEW DONE (2026-07-15, opus
+read-only over 2f847ee..HEAD): NO CRITICAL/HIGH defects. Verified clean:
+R.Pos LEFT JOIN provably can't perturb aggregates (unique-key CTE, rn=1);
+R.Pos column/filter share byte-identical tie-break; __sample removal complete
+(zero live refs); search ranking reorders only, esc() blocks injection; no
+id collisions between the two .filters-popup shells (all container-scoped);
+measure probe inert (all table queries container-scoped); loadToken guards
+mid-flight pill removal; back-link selector resolves. Orchestrator verified
+900-1150px toolbar wrap live (1024px = graceful 2-row wrap, no overflow).
+OPEN ITEMS for owner at gate: benchmark best-other can be thin-sample outlier
+(sanctioned but confirm); graph card footer can show stale "vs Spin" token
+from cloned matchup state (cosmetic); graph popup lacks focus trap (a11y
+parity question). CLEANUP TICKET (defer): benchmarkChart.js:76-79 dead
+anchorMuted branch + .paper-card__benchmark-anchor-value--thin orphaned CSS;
+main.js:230 splitAllowed/SPLIT_DIMENSIONS dead import + splitBy plumbing +
+describeScope "grouped by" token (describeScope itself LIVE via graph.js:1952
+footer); search appearances CTE = full player_matches aggregate per keystroke
+(could restrict to hit ids); esc() LIKE-wildcard quirk (%/_); R.Pos condition
+exclusion belongs in drawer dropdown; file splits (graph.js ~2600,
+table.js ~2136). STATUS: ROUND 3 COMPLETE — AWAITING OWNER GATE (review on
+localhost:8000; merge to main stays owner-gated).
 TOOLING NOTES: preview_start by launch.json name intermittently fails ('no
 launch.json' despite valid file) — fallback: Bash `python3 -m http.server 8000`
 run_in_background + preview_start {url:'http://localhost:8000'}. Browser caches ES
