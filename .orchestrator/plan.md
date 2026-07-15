@@ -247,8 +247,22 @@ search) solo; W3 = item 11 cleanup batch (stale graph footer matchupVs
 token, benchmarkChart dead branch + orphaned CSS, splitBy plumbing +
 dead splitAllowed import, appearances-CTE perf restrict-to-hit-ids, esc()
 %/_ note, R.Pos condition exclusion from drawer dropdown) solo. Item 10 =
-no floors anywhere CONFIRMED (already built state). STATUS: R4 W1 DONE —
-awaiting owner gate for W2.
+no floors anywhere CONFIRMED (already built state). R4 W2 DONE + VERIFIED (2026-07-15, 0ab5483): header-search popups use fixed
+scope (2020-01-01→data max, T20 default, BOTH team types, player's own
+gender via fetchPlayerGender — NOTE gender was already inert in popup
+queries, player_id filters it); fork = {fixedScope:true} opt from main.js
+onOpenPlayer → playerPage effectiveState() (fixedScopeState || store.get());
+table-click + in-popup Find-another-player unchanged (in-popup search
+reverts to TABLE scope — flagged, one-line change if owner wants fixed
+scope to persist); scope line honest per path ("fixed default view, not
+the table's filters — narrow with Filters below" vs old suffix);
+playerFilters toMonthValue() fixes latent day-date→month-select gap.
+VERIFIED LIVE: SA Yadav header popup = 205/6,345/36.05/159.90/HS 117 +
+"Opposition splits are international-only for now" note; EQUIVALENCE EXACT
+vs manual search T20/Since-2020/both-team-types (6,126 players, his row
+identical digit-for-digit); table-click popup keeps old suffix + table
+scope; console clean. playerSections.js now 638 lines (over cap, noted).
+STATUS: R4 W2 DONE — awaiting owner gate for W3 (cleanup batch).
 TOOLING NOTES: preview_start by launch.json name intermittently fails ('no
 launch.json' despite valid file) — fallback: Bash `python3 -m http.server 8000`
 run_in_background + preview_start {url:'http://localhost:8000'}. Browser caches ES
