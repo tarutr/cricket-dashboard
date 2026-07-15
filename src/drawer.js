@@ -356,7 +356,15 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   function addSelectOptionsHTML(s) {
     const ns = effectiveNamespace(s);
     const women = s.gender === "female";
-    const { basic, dismissal, advanced } = partitionFilterMetrics(eligibleMetrics(ns, s.formats));
+    // R. Pos. (kind:"position") is a position-MODE value, not a numeric
+    // quantity, so it can never be a numeric stat-condition (table.js's
+    // conditionApplicability already drops it silently). Exclude position-kind
+    // metrics from the "+ Add condition…" numeric lists so it never appears as
+    // an addable numeric condition. The R.Pos FILTER is unaffected — that's the
+    // separate "Regular position" Player-group singleton (c:rpos, the
+    // modal-position editor from commit e71530d), still listed via groupOpts.
+    const numericMetrics = eligibleMetrics(ns, s.formats).filter((m) => m.kind !== "position");
+    const { basic, dismissal, advanced } = partitionFilterMetrics(numericMetrics);
     // A singleton already showing is disabled in every group's dropdown (at most
     // one each); presence re-enables it the moment its row is removed.
     const present = SINGLETON_TYPES.filter((t) => isPresent(t, s)).map((t) => t.key);

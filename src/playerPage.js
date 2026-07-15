@@ -73,10 +73,11 @@ function cacheKeyFor(state, overlay) {
 // showPlayer() below; `fixedScopeState`, once resolved, becomes the ONE
 // object every scope-consuming call in this file reads instead of
 // store.get() — see effectiveState(). Table-row entry (main.js's
-// onPlayerClick, no opts) and the popup's own "Find another player" search
-// (showPlayer() called with no opts either, same code path as a fresh
-// player) never set fixedScope, so they read the live global store exactly
-// as before — byte-identical to pre-R4-Wave-2 behaviour.
+// onPlayerClick, no opts) never sets fixedScope, so it reads the live global
+// store exactly as before — byte-identical to pre-R4-Wave-2 behaviour. The
+// popup's own "Find another player" search (R4 Wave 3) now PRESERVES the
+// current popup's fixedScope for the next player: a header-search popup stays
+// fixed-scope across in-popup navigation, a table-row popup stays table-scoped.
 
 /**
  * The fixed full-history default: Since-2020-to-the-data's-max-date (same
@@ -424,7 +425,13 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
       })
       .join("");
     resultsEl.querySelectorAll(".player-page-search__item").forEach((btn) => {
-      btn.addEventListener("click", () => showPlayer(btn.dataset.id, btn.dataset.name));
+      // Keep the CURRENT popup's scope mode for the next player (R4 Wave 3):
+      // a popup opened in fixedScope mode (header search — since-2020/T20/both
+      // team types) stays in fixedScope when the user picks another player via
+      // this in-popup search, instead of silently reverting to the table's
+      // scope. A table-row-opened popup has fixedScope=false, so this passes
+      // { fixedScope: false } and its behavior is unchanged.
+      btn.addEventListener("click", () => showPlayer(btn.dataset.id, btn.dataset.name, { fixedScope }));
     });
   }
 
@@ -577,12 +584,13 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
   // ---------- Public API ----------
 
   /**
-   * `opts.fixedScope` (R4 Wave 2): set only by main.js's header-search
-   * onOpenPlayer wiring, via playerPopup.js's `open(id, name, opts)`. Every
-   * other caller — main.js's onPlayerClick (table-row entry), and this
-   * file's own "Find another player" search result buttons just above,
-   * neither of which pass opts — leaves it false, so effectiveState()
-   * degrades to store.get() and this popup behaves exactly as it always
+   * `opts.fixedScope` (R4 Wave 2): set by main.js's header-search onOpenPlayer
+   * wiring (via playerPopup.js's `open(id, name, opts)`), and — R4 Wave 3 —
+   * carried forward by this file's own "Find another player" search result
+   * buttons, which pass the CURRENT popup's `fixedScope` so in-popup navigation
+   * preserves whichever scope the popup was opened in. main.js's onPlayerClick
+   * (table-row entry) passes no opts, leaving it false, so effectiveState()
+   * degrades to store.get() and a table-row popup behaves exactly as it always
    * has: scoped to the table's currently applied Format/Date/Team type.
    */
   function showPlayer(id, name, opts = {}) {
