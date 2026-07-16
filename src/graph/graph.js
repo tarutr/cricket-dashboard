@@ -1077,6 +1077,52 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     return rows.map((r) => r.team).filter((t) => t != null);
   }
 
+  /** Owner correction (Wave 2 follow-up): the donut draws the TEAM's OWN
+   * players within the current scope — every player with a qualifying row for
+   * `donutTeamId` under `teamState`, sized by the one donut metric — NOT the
+   * shared Players roster (Top Names/Best/Worst/Manual) intersected with the
+   * team. The Players section is simply ignored for donut now.
+   *
+   * Same query SHAPE as fetchDonutTeamOptions just above (and charts.js's
+   * fetchSelectedPlayerMetrics), minus any id restriction — duplicated rather
+   * than imported, since this batch's ownership is src/graph/graph.js only
+   * (same precedent as this file's own wireDropdown() copy of filters.js's
+   * helper); charts.js itself is untouched. Deliberately does NOT route
+   * through table.js's buildQuery/benchmark.js's fetchBenchmarkPool: those
+   * special-case the "Matches" metric (source: player_matches) into a SEPARATE
+   * matchesSql query that a caller must merge in — skipping that merge would
+   * silently zero out "Matches" as a donut metric (players.js's own doc
+   * comment on the exact same trap). Projecting `metric.sqlExpression`
+   * straight off the innings view instead (this function, and every OTHER
+   * chart type via fetchSelectedPlayerMetrics) sidesteps it entirely and keeps
+   * "Matches" behaving identically across every chart type.
+   *
+   * buildDonutChart itself already caps the DRAWING at top-7 + "Other" — this
+   * just hands it the team's whole in-scope pool to rank.
+   * Returns [{id, name, [metric.key]: value}]. */
+  async function fetchDonutTeamPool(teamState, metric) {
+    const discipline = teamState.discipline;
+    const view = discipline;
+    const idCol = discipline === "batting" ? "batter_id" : "bowler_id";
+    const nameCol = discipline === "batting" ? "batter_name" : "bowler_name";
+    const teamCol = discipline === "batting" ? "batting_team" : "bowling_team";
+    const whereClauses = buildScopeClauses(teamState, {
+      includeTeams: true,
+      teamColumn: teamCol,
+      idColumn: idCol,
+      oppositionColumn: discipline === "batting" ? "bowling_team" : "batting_team",
+      includePositions: discipline === "batting",
+    });
+    const sql = [
+      `SELECT ${idCol} AS id, ${nameCol} AS name, ${metric.sqlExpression} AS ${metric.key}`,
+      `FROM ${view}`,
+      `WHERE ${whereClauses.join(" AND ")}`,
+      `GROUP BY ${idCol}, ${nameCol}`,
+    ].join("\n");
+    const { rows } = await query(sql);
+    return rows;
+  }
+
   // Guards a stale team-options fetch (renderMetricControls may rebuild the
   // donut panel before an earlier fetch returns) — same idiom as loadToken.
   let donutTeamsToken = 0;
@@ -2435,7 +2481,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     }
     if (chartType === "donut") {
       const metric = getMetric(donutMetricKey, discipline);
-      return metric ? { type: "donut", discipline, metric, playerCount, roster } : null;
+      // Donut ignores the Players section entirely (owner ruling) — always the
+      // honest plain "N players" title, never "top N"/"most-capped" (which
+      // would misattribute provenance to a selection donut no longer reads).
+      return metric ? { type: "donut", discipline, metric, donutTeam: donutTeamId, playerCount, roster: { dirty: true } } : null;
     }
     if (chartType === "scatter") {
       const metricX = getMetric(scatterXKey, discipline);
@@ -2637,7 +2686,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
     const players = selection.get();
 
-    if (players.length === 0) {
+    // Owner correction (Wave 2 follow-up): the donut chart now IGNORES the
+    // Players section (Top Names/Best/Worst/Manual) entirely — it draws the
+    // TEAM's own full in-scope pool (see the donut branch below), not the
+    // checked roster. So the checked-roster zero/min-cap gates below, which
+    // exist to stop Bar/Scatter/etc. from trying to draw with too few CHECKED
+    // players, must not apply to donut — they'd otherwise block the donut on
+    // an empty/undersized Players selection that donut no longer reads at all.
+    if (players.length === 0 && chartType !== "donut") {
       hideStatus();
       card.hidePlaceholder();
       if (chartRef.current) {
@@ -2658,9 +2714,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // shows a short note in place of a chart rather than attempting to draw
     // e.g. a 1-bar "ranking". (For radar, min is 1, so this is already
     // subsumed by the players.length === 0 branch above — kept anyway so the
-    // rule reads the same for every chart type.)
+    // rule reads the same for every chart type.) Donut is exempt — see above.
     const capDef = CHART_CAPS[chartType];
-    if (players.length < capDef.min) {
+    if (chartType !== "donut" && players.length < capDef.min) {
       hideStatus();
       if (chartRef.current) {
         chartRef.current.destroy();
@@ -3053,15 +3109,17 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         return;
       }
 
-      // Donut (item 5, Wave 2): its own branch — like Slope/Radar above —
-      // because it needs a TEAM-SCOPED value query the shared bar/scatter/phases
-      // path below doesn't do. A donut shows how ONE team's additive total
-      // (runs/wickets) splits between its players, so it needs a single team.
-      // Owner change: the team comes from the donut-local `donutTeamId` picker
-      // (never the shared state.teams). We overlay it onto a scope CLONE and run
-      // the SAME team-scoped fetch state.teams would have driven — so the values
-      // are identical to the old single-team-filter donut — then filter the
-      // roster to the players who actually appear for that team in scope.
+      // Donut (item 5, Wave 2; corrected per owner ruling): its own branch —
+      // like Slope/Radar above — because it needs a TEAM-SCOPED, roster-
+      // INDEPENDENT value query the shared bar/scatter/phases path below
+      // doesn't do. A donut shows how ONE team's additive total (runs/wickets)
+      // splits between ITS OWN PLAYERS in the current scope — not the shared
+      // Players roster (Top Names/Best/Worst/Manual) intersected with the
+      // team. The Players section is simply ignored here (the checked-roster
+      // zero/min-cap gates above are also bypassed for donut — see there). The
+      // team comes from the donut-local `donutTeamId` picker (never the
+      // shared state.teams); we overlay it onto a scope CLONE (never mutating
+      // the shared store) and fetch the team's WHOLE in-scope pool.
       if (chartType === "donut") {
         const metric = getMetric(donutMetricKey, discipline); // item 4: no auto-pick
         if (!metric) { showChartGuidance(noMetricGuidance("donut")); return; }
@@ -3074,45 +3132,41 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         }
         setDonutTeamNeedsInput(false);
         // Team-scoped scope CLONE — NEVER mutate the shared store (isolation).
-        // fetchSelectedPlayerMetrics reads teams off the state it's handed, so
-        // this applies `teamColumn = donutTeamId` exactly the way state.teams
-        // would — the donut-team shortcut === the old global-team-filter result.
         const teamState = { ...state, teams: [donutTeamId] };
-        const rowsById = await fetchSelectedPlayerMetrics(teamState, players.map((p) => p.id), [metric.key]);
+        const poolRows = await fetchDonutTeamPool(teamState, metric);
         if (token !== loadToken) return;
         hideStatus();
-        // Filter the roster to the players who actually appear for this team in
-        // scope (a team-scoped row exists). Players NOT on the team aren't "no
-        // data" — they simply aren't on this team — so drop them rather than
-        // list them under "Excluded (no data)".
-        const teamPlayers = players.filter((p) => rowsById.has(p.id));
-        if (teamPlayers.length === 0) {
+        if (poolRows.length === 0) {
           if (chartRef.current) {
             chartRef.current.destroy();
             chartRef.current = null;
           }
-          card.showPlaceholder(`None of the selected players appear for ${donutTeamId} in this scope. Pick players from that team, or choose another team.`);
+          card.showPlaceholder(`No players found for ${donutTeamId} in this scope. Choose another team, or widen the filters.`);
           renderExclusions([]);
           const titleCfg = buildTitleOnlyConfig(0);
           if (titleCfg) card.regenerate(titleCfg, buildFooterScope(titleCfg));
           return;
         }
+        const rowsById = new Map(poolRows.map((r) => [r.id, r]));
+        const poolPlayers = poolRows.map((r) => ({ id: r.id, name: r.name }));
         const canvas = card.getCanvas();
-        const result = buildDonutChart(canvas, chartRef, { metric, rowsById, players: teamPlayers });
+        // buildDonutChart itself ranks by value and caps the DRAWING at top-7 +
+        // "Other" — poolPlayers is the team's WHOLE in-scope pool, unrestricted.
+        const result = buildDonutChart(canvas, chartRef, { metric, rowsById, players: poolPlayers });
         renderExclusions(result?.excluded ?? [], result?.note);
         const excludedCount = result?.excluded?.length ?? 0;
-        const drawn = Math.max(0, teamPlayers.length - excludedCount);
-        // Dropping non-team players (or no-data ones) means the drawn set is no
-        // longer exactly the seeded "top N by X" — force honest "N players"
-        // phrasing (§8.4).
-        const donutDirty = excludedCount > 0 || teamPlayers.length !== players.length;
+        const drawn = Math.max(0, poolPlayers.length - excludedCount);
         const config = {
           type: "donut",
           discipline,
           metric,
           donutTeam: donutTeamId,
           playerCount: drawn,
-          roster: donutDirty ? { ...roster, dirty: true } : roster,
+          // The Players section (Top Names/Best/Worst/Manual) plays no part in
+          // this set anymore — it's always the team's own full pool, never a
+          // provenance the shared roster can claim — so the title is always
+          // the honest plain "N players" (never "top N"/"most-capped").
+          roster: { dirty: true },
         };
         if (pendingRegenerate) {
           card.regenerate(config, buildFooterScope(config));
