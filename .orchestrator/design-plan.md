@@ -50,4 +50,16 @@ control change; Update chart draws; dirty indicator behaves.
   filter button; the new button gates chart type / metric / players / windows.
 - Q4 red-outline: **the empty required control** (date-window inputs, donut team select).
 
-## STATUS: Wave 1 spawned.
+## STATUS: Wave 1 DONE + verified + committed (658c5ad). Wave 2 spawned.
+Class contract for item 6: graph.js adds class `needs-input` to the empty required
+control (date-window inputs / donut team select); styles.css styles `.needs-input`
+with a red border/outline. Donut team select wrapper class: `graph-donut-team`.
+Known W1 gap (owner deferred): ~375px mobile residual outer scroll.
+
+## Wave 2 DONE + verified (awaiting commit + owner decision on donut set).
+4a: slope/dumbbell windows start blank (auto-fill removed; dead helpers deleted). 6:
+`needs-input` red outline on empty windows (4/4) + empty donut team select, clears on
+fill. 5: donut team picker (106 in-scope teams, blank-first); values EXACT (India
+249/127/51 vs DuckDB); isolation OK (Stats 2,813, Bar full-scope, no team leak). OPEN
+DECISION: donut currently shows shared-roster ∩ team (India w/ default top-15 roster =
+only 3 players). Likely owner wants team's-own-players (proper composition). Flagged.

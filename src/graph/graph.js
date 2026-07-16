@@ -14,7 +14,7 @@ import { eligibleMetrics, pruneIneligibleState } from "../state.js";
 import { getMetric, hasMetricData } from "../metrics.js";
 import { escHtml, escAttr } from "../html.js";
 import { getManifest, query } from "../db.js";
-import { mountFilters } from "../filters.js";
+import { mountFilters, buildScopeClauses } from "../filters.js";
 import { mountFilterDrawer } from "../drawer.js";
 import {
   CHART_CAPS,
@@ -87,7 +87,7 @@ const CHART_RULES = {
   donut: {
     tagline: "One team's share of a total — runs or wickets.",
     purpose: "A donut chart shows how one team's total splits between its players.",
-    needs: "Filter to a single team, then pick an additive total (runs or wickets).",
+    needs: "Pick an additive total (runs or wickets) and choose a team.",
   },
   scatter: {
     tagline: "Two metrics plotted across the whole field.",
@@ -175,23 +175,12 @@ const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Se
 // dateFrom/dateTo (filters.js's isDayDate branch) — so no query shape changes,
 // only the granularity of the two dates handed to it. All arithmetic is UTC
 // (never local time) so it can never drift a day across a DST boundary.
-const DAY_MS = 86400000;
-function dayToMs(d) {
-  const [y, m, dd] = d.split("-").map(Number);
-  return Date.UTC(y, m - 1, dd);
-}
-function msToDay(ms) {
-  const d = new Date(ms);
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
-}
-/** Coerce a stored date to a day-shaped "YYYY-MM-DD" ("" for a month-shaped
- * legacy value pads to the 1st; null/blank -> null). */
-function toDay(v) {
-  if (!v) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
-  if (/^\d{4}-\d{2}$/.test(v)) return `${v}-01`;
-  return null;
-}
+// NOTE (Wave 2, item 4a): the Slope/Dumbbell Window A/B pickers no longer
+// auto-fill from a half-split of the scope's date range — they START EMPTY and
+// the user must pick both ends, exactly like a metric that must be chosen. The
+// old half-split seeder (computeHalfSplitWindows) and its UTC day-arithmetic
+// helpers (dayToMs/msToDay/toDay/DAY_MS) were removed with that behaviour;
+// only dayLabel (the picker VALUE -> label formatter) survives below.
 /** "YYYY-MM-DD" -> "D Mon YYYY", or null. */
 function dayLabel(ymd) {
   if (!ymd) return null;
@@ -504,6 +493,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   let barStyle = "bars"; // "bars" | "dots" (lollipop) — bar chart only
   let barMetricKey = null;
   let donutMetricKey = null;
+  // Wave 2 (item 5): the donut-ONLY team pick. A donut compares players within
+  // ONE team's additive total, so it needs a single team — but instead of the
+  // GLOBAL Team filter (state.teams), a donut-local <select> supplies it. This
+  // is a per-type closure var (the isolation pattern every chart type follows):
+  // it is NEVER written into the shared store/state.js, so choosing a donut team
+  // leaves the Stats table and every other chart type untouched. Holds a team
+  // NAME (matching the strings state.teams carries — see buildScopeClauses's
+  // `teamColumn IN (...)`), or null until the user picks one.
+  let donutTeamId = null;
   let scatterXKey = null;
   let scatterYKey = null;
   // R4 Wave 1b (item 3): radar no longer uses fixed metric GROUPS. The user
@@ -515,17 +513,18 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   let radarMetricKeys = [];
   let phaseFamilyId = null;
   let slopeMetricKey = null;
-  // {from,to} "YYYY-MM" pairs, or null until ensureSlopeWindowDefaults() first
-  // sets them (Batch 4 part 1, decision 43) — owner-picked after that, never
-  // silently recomputed out from under the user.
+  // {from,to} day-pairs ("YYYY-MM-DD"), or null. Wave 2 (item 4a): these START
+  // null and STAY null until the user edits a date input — no half-split
+  // auto-fill anymore. Owner-picked from the first edit on, never silently
+  // recomputed out from under the user.
   let slopeWindowA = null;
   let slopeWindowB = null;
   // Batch 4 wave 2 (the last two chart types).
   let byYearMetricKey = null;
   let dumbbellMetricKey = null;
-  // Dumbbell is a time-window chart (owner correction): {from,to} "YYYY-MM"
-  // pairs, mirroring slopeWindowA/B exactly — null until
-  // ensureDumbbellWindowDefaults() first sets them (default half-split), then
+  // Dumbbell is a time-window chart (owner correction): {from,to} day-pairs,
+  // mirroring slopeWindowA/B exactly. Wave 2 (item 4a): START null and STAY
+  // null until the user edits a date input — no half-split auto-fill; then
   // owner-picked, never silently recomputed.
   let dumbbellWindowA = null;
   let dumbbellWindowB = null;
@@ -672,6 +671,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       if (m && m.additive === true && (state.teams || []).length === 1) {
         type = "donut";
         donutMetricKey = valid[0];
+        // Wave 2 (item 5): this archetype fires precisely when the scope is
+        // pinned to ONE team, so adopt that team as the donut's own pick — keeps
+        // the filter-driven donut drawing now that the donut needs an explicit
+        // team (donutTeamId), without ever reading state.teams at draw time.
+        donutTeamId = state.teams[0];
       } else {
         type = "bar";
         barMetricKey = valid[0];
@@ -817,56 +821,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     if (btn) btn.addEventListener("click", retryFn);
   }
 
-  /**
-   * Split the GRAPH scope's date range into two halves — "Window A = first
-   * half, Window B = second half" (owner ruling, decision 43). Reads the live
-   * scope's EXACT dateFrom/dateTo (day level), falling back to the dataset's
-   * full min/max if the scope isn't date-bounded yet. Pure — returns
-   * `{ a, b }` day-window pairs, or `null` when bounds aren't known yet (leave
-   * pickers blank, user must pick both ends). Shared by the Slope and Dumbbell
-   * default seeders below.
-   */
-  function computeHalfSplitWindows() {
-    const state = store.get();
-    const { minDay, maxDay } = datasetDayBounds();
-    const from = toDay(state.dateFrom) || minDay;
-    const to = toDay(state.dateTo) || maxDay;
-    if (!from || !to) return null;
-    const fromMs = dayToMs(from);
-    const toMs = dayToMs(to);
-    const midMs = fromMs + Math.floor((toMs - fromMs) / 2);
-    const secondFromMs = Math.min(midMs + (toMs > fromMs ? DAY_MS : 0), toMs);
-    return {
-      a: { from, to: msToDay(midMs) },
-      b: { from: msToDay(secondFromMs), to },
-    };
-  }
-
-  /**
-   * Slope's Window A/B defaults. Computed ONCE — the first time the Slope chart
-   * type is used this session. Never recomputed after that, even if the scope's
-   * date range later moves: these are the user's OWN pickers from that point
-   * on, not a mirror of the filter bar's.
-   */
-  function ensureSlopeWindowDefaults() {
-    if (slopeWindowA && slopeWindowB) return;
-    const w = computeHalfSplitWindows();
-    if (!w) return;
-    slopeWindowA = w.a;
-    slopeWindowB = w.b;
-  }
-
-  /** Dumbbell's Window A/Window B defaults — same first-half/second-half split
-   * as Slope (the rebuilt Dumbbell is Slope's data drawn as dumbbells). Kept as
-   * its own seeder with its own variables so each chart type owns independent,
-   * separately-repickable windows. Set ONCE, then owner-picked. */
-  function ensureDumbbellWindowDefaults() {
-    if (dumbbellWindowA && dumbbellWindowB) return;
-    const w = computeHalfSplitWindows();
-    if (!w) return;
-    dumbbellWindowA = w.a;
-    dumbbellWindowB = w.b;
-  }
+  // Wave 2 (item 4a): the Slope/Dumbbell Window A/B defaults are GONE. The
+  // windows start empty (slopeWindowA/B and dumbbellWindowA/B stay null on
+  // entry) and stay null until the user actually edits a date input — the owner
+  // wants both windows PICKED, like a metric, never pre-filled from a
+  // half-split of the scope. renderChart()'s `windowsReady` guards already show
+  // "Pick both date windows to draw this chart." while they're null, so no
+  // seeder is needed anymore (the old computeHalfSplitWindows /
+  // ensureSlope/DumbbellWindowDefaults helpers were removed with this change).
 
   // ── Selection model: three auto-select sources (R6b) ────────────────────────
   //
@@ -1060,6 +1022,91 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // is separate (static markup, wired once at 1689) and untouched by this.
   let metricControlsDropdownTeardown = null;
 
+  // ── Item 6: "needs input" red outline ──────────────────────────────────────
+  // A chart that can't draw because a REQUIRED control is empty red-outlines
+  // exactly that control (the stylist styles `.needs-input`). ONE class string
+  // everywhere; toggled wherever the control renders/changes and re-checked at
+  // render time so it clears the instant the field is filled.
+  function setNeedsInput(el, on) {
+    if (el) el.classList.toggle("needs-input", !!on);
+  }
+  /** Red-outline the donut team <select> when no team is chosen (item 6). */
+  function setDonutTeamNeedsInput(on) {
+    setNeedsInput(els.metricControls.querySelector('[data-role="donut-team"]'), on);
+  }
+  /** Red-outline whichever of a Slope/Dumbbell window's 4 date inputs are still
+   * empty (item 6). `prefix` is "slope" | "dumbbell". Re-run on render and on
+   * every window-input change so an input clears its outline as soon as it's
+   * filled. */
+  function syncWindowNeedsInput(prefix) {
+    for (const role of [`${prefix}-a-from`, `${prefix}-a-to`, `${prefix}-b-from`, `${prefix}-b-to`]) {
+      const el = els.metricControls.querySelector(`[data-role="${role}"]`);
+      setNeedsInput(el, el && !el.value);
+    }
+  }
+
+  // ── Item 5: donut-only team options ────────────────────────────────────────
+  // Distinct teams present in the ALREADY-FILTERED player set — the teams the
+  // in-scope players actually appear under. Sourced from the discipline view
+  // with the SAME scope clauses the pool/search use (players.js's searchPlayers
+  // pattern: gender/format/date/team-type/opposition/positions/profile), so the
+  // options track the current scope exactly. No team-specific literal is
+  // injected (buildScopeClauses self-escapes state.teams), so this is inert to
+  // SQL injection. Ordered most-represented first, name as tiebreak.
+  async function fetchDonutTeamOptions() {
+    const state = store.get();
+    const discipline = state.discipline;
+    const view = discipline;
+    const teamCol = discipline === "batting" ? "batting_team" : "bowling_team";
+    const idCol = discipline === "batting" ? "batter_id" : "bowler_id";
+    const whereClauses = buildScopeClauses(state, {
+      includeTeams: true,
+      teamColumn: teamCol,
+      idColumn: idCol,
+      oppositionColumn: discipline === "batting" ? "bowling_team" : "batting_team",
+      includePositions: discipline === "batting",
+    });
+    const sql = [
+      `SELECT ${teamCol} AS team, COUNT(*) AS n`,
+      `FROM ${view}`,
+      `WHERE ${whereClauses.join(" AND ")}`,
+      `GROUP BY ${teamCol}`,
+      `ORDER BY n DESC, team ASC`,
+    ].join("\n");
+    const { rows } = await query(sql);
+    return rows.map((r) => r.team).filter((t) => t != null);
+  }
+
+  // Guards a stale team-options fetch (renderMetricControls may rebuild the
+  // donut panel before an earlier fetch returns) — same idiom as loadToken.
+  let donutTeamsToken = 0;
+  /** Fill the donut team <select> async, preserving the current donutTeamId
+   * selection and pruning it if the team has fallen out of scope (honest — the
+   * team isn't in the current pool anymore). */
+  async function populateDonutTeamOptions(teamSel) {
+    if (!teamSel) return;
+    const myToken = ++donutTeamsToken;
+    let teams = [];
+    try {
+      teams = await fetchDonutTeamOptions();
+    } catch {
+      teams = []; // never crash the panel; the picker just shows no teams
+    }
+    if (myToken !== donutTeamsToken) return; // superseded by a later render
+    if (!teamSel.isConnected) return; // panel was swapped to another chart type
+    // Drop a pick that's no longer in scope — don't silently query a team the
+    // options no longer offer.
+    const pruned = donutTeamId && !teams.includes(donutTeamId);
+    if (pruned) donutTeamId = null;
+    teamSel.innerHTML =
+      `<option value="">Choose a team…</option>` +
+      teams.map((t) => `<option value="${escAttr(t)}" ${t === donutTeamId ? "selected" : ""}>${escHtml(t)}</option>`).join("");
+    setDonutTeamNeedsInput(!donutTeamId);
+    // If the prune cleared the pick, the donut can no longer draw — refresh so
+    // the stage shows the "choose a team" guidance instead of a stale chart.
+    if (pruned) scheduleRender({ paramsChanged: true });
+  }
+
   function renderMetricControls() {
     if (metricControlsDropdownTeardown) {
       metricControlsDropdownTeardown();
@@ -1114,11 +1161,23 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     } else if (chartType === "donut") {
       const metrics = donutEligibleMetrics(discipline, formats);
       donutMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
+      // Item 5: a donut-only Team <select> (a shortcut for the single team the
+      // donut needs, WITHOUT touching the shared state.teams filter). Its
+      // options are the in-scope teams (populated async below). We seed it with
+      // a placeholder + the current pick so the selection survives an immediate
+      // re-render before the async options land.
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric (total)</span>
         <select class="select graph-metric-select" data-role="donut-metric">
           ${metrics.length ? metricOptionsHTML(metrics, donutMetricKey) : `<option value="">No additive totals available</option>`}
         </select>
+        <span class="graph-control-label">Team</span>
+        <div class="graph-donut-team">
+          <select class="select" data-role="donut-team" aria-label="Team">
+            <option value="">Choose a team…</option>
+            ${donutTeamId ? `<option value="${escAttr(donutTeamId)}" selected>${escHtml(donutTeamId)}</option>` : ""}
+          </select>
+        </div>
       `;
       const sel = els.metricControls.querySelector('[data-role="donut-metric"]');
       if (sel) {
@@ -1130,6 +1189,16 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           onRankMetricChanged();
         });
       }
+      const teamSel = els.metricControls.querySelector('[data-role="donut-team"]');
+      if (teamSel) {
+        teamSel.addEventListener("change", (e) => {
+          donutTeamId = e.target.value || null; // per-type var ONLY — never state.teams
+          setDonutTeamNeedsInput(!donutTeamId); // item 6: clears the outline once picked
+          scheduleRender({ paramsChanged: true });
+        });
+      }
+      setDonutTeamNeedsInput(!donutTeamId); // item 6: outline until a team is chosen
+      populateDonutTeamOptions(teamSel); // async fill from the in-scope teams
     } else if (chartType === "scatter") {
       const metrics = eligibleMetrics(discipline, formats);
       // item 4: no auto-pick. The Y axis carries the shared chosen metric; X is
@@ -1280,7 +1349,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     } else if (chartType === "slope") {
       const metrics = eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent");
       slopeMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
-      ensureSlopeWindowDefaults();
+      // Item 4a: no window auto-fill — the inputs render blank (value="") until
+      // the user picks both ends.
       const slopeDayAttrs = dayInputAttrs();
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
@@ -1319,6 +1389,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         if (el) {
           el.addEventListener("change", (e) => {
             setter(e.target.value);
+            syncWindowNeedsInput("slope"); // item 6: clear the outline as inputs fill
             scheduleRender({ paramsChanged: true });
           });
         }
@@ -1327,6 +1398,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       bindWindowSelect("slope-a-to", (v) => (slopeWindowA = { ...slopeWindowA, to: v }));
       bindWindowSelect("slope-b-from", (v) => (slopeWindowB = { ...slopeWindowB, from: v }));
       bindWindowSelect("slope-b-to", (v) => (slopeWindowB = { ...slopeWindowB, to: v }));
+      syncWindowNeedsInput("slope"); // item 6: outline the empty date inputs on render
     } else if (chartType === "byyear") {
       // Batch 4 wave 2, task 1: metrics whose sqlExpression recombines
       // cleanly per (player, year) — timeseries.js's own whitelist (kind
@@ -1361,7 +1433,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // no availability gate.
       const metrics = eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent");
       dumbbellMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
-      ensureDumbbellWindowDefaults();
+      // Item 4a: no window auto-fill — the inputs render blank (value="") until
+      // the user picks both ends.
       const dumbbellDayAttrs = dayInputAttrs();
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
@@ -1400,6 +1473,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         if (el) {
           el.addEventListener("change", (e) => {
             setter(e.target.value);
+            syncWindowNeedsInput("dumbbell"); // item 6: clear the outline as inputs fill
             scheduleRender({ paramsChanged: true });
           });
         }
@@ -1408,6 +1482,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       bindWindowSelect("dumbbell-a-to", (v) => (dumbbellWindowA = { ...dumbbellWindowA, to: v }));
       bindWindowSelect("dumbbell-b-from", (v) => (dumbbellWindowB = { ...dumbbellWindowB, from: v }));
       bindWindowSelect("dumbbell-b-to", (v) => (dumbbellWindowB = { ...dumbbellWindowB, to: v }));
+      syncWindowNeedsInput("dumbbell"); // item 6: outline the empty date inputs on render
     } else if (chartType === "benchmark") {
       // B8b (decision 44e). Anchor picker: a plain <select> over the CHECKED
       // roster ONLY (task brief) — unlike every other chart type, the pool
@@ -2460,6 +2535,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * of that chart the global scope sentence knows nothing about). */
   function buildFooterScope(config) {
     const base = store.describeScope();
+    if (config && config.type === "donut" && config.donutTeam) {
+      // Item 5 (§8.4 honesty): the donut IS scoped to donutTeam, so the footer
+      // must say so. The GLOBAL Team filter, if somehow also set, is already in
+      // `base` (describeScope reads state.teams) — only add the donut-local team
+      // when it isn't already there, so the sentence never doubles up.
+      const teams = store.get().teams || [];
+      return teams.includes(config.donutTeam) ? base : `${base} · Team: ${config.donutTeam}`;
+    }
     if (config && config.type === "slope") {
       const a = config.windowALabel ?? windowLabel(config.windowA);
       const b = config.windowBLabel ?? windowLabel(config.windowB);
@@ -2757,7 +2840,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           showChartGuidance(noMetricGuidance("dumbbell"));
           return;
         }
-        ensureDumbbellWindowDefaults();
+        // Item 4a: no window auto-fill here either — an empty window falls
+        // straight through to the windowsReady guard below (empty-state).
         const windowsReady = Boolean(dumbbellWindowA?.from && dumbbellWindowA?.to && dumbbellWindowB?.from && dumbbellWindowB?.to);
         if (!windowsReady) {
           hideStatus();
@@ -2969,6 +3053,76 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         return;
       }
 
+      // Donut (item 5, Wave 2): its own branch — like Slope/Radar above —
+      // because it needs a TEAM-SCOPED value query the shared bar/scatter/phases
+      // path below doesn't do. A donut shows how ONE team's additive total
+      // (runs/wickets) splits between its players, so it needs a single team.
+      // Owner change: the team comes from the donut-local `donutTeamId` picker
+      // (never the shared state.teams). We overlay it onto a scope CLONE and run
+      // the SAME team-scoped fetch state.teams would have driven — so the values
+      // are identical to the old single-team-filter donut — then filter the
+      // roster to the players who actually appear for that team in scope.
+      if (chartType === "donut") {
+        const metric = getMetric(donutMetricKey, discipline); // item 4: no auto-pick
+        if (!metric) { showChartGuidance(noMetricGuidance("donut")); return; }
+        if (!donutTeamId) {
+          // No team chosen yet — guide to the in-panel team picker (item 5) and
+          // red-outline it (item 6).
+          setDonutTeamNeedsInput(true);
+          showChartGuidance(chartPurposeMessage("donut", null));
+          return;
+        }
+        setDonutTeamNeedsInput(false);
+        // Team-scoped scope CLONE — NEVER mutate the shared store (isolation).
+        // fetchSelectedPlayerMetrics reads teams off the state it's handed, so
+        // this applies `teamColumn = donutTeamId` exactly the way state.teams
+        // would — the donut-team shortcut === the old global-team-filter result.
+        const teamState = { ...state, teams: [donutTeamId] };
+        const rowsById = await fetchSelectedPlayerMetrics(teamState, players.map((p) => p.id), [metric.key]);
+        if (token !== loadToken) return;
+        hideStatus();
+        // Filter the roster to the players who actually appear for this team in
+        // scope (a team-scoped row exists). Players NOT on the team aren't "no
+        // data" — they simply aren't on this team — so drop them rather than
+        // list them under "Excluded (no data)".
+        const teamPlayers = players.filter((p) => rowsById.has(p.id));
+        if (teamPlayers.length === 0) {
+          if (chartRef.current) {
+            chartRef.current.destroy();
+            chartRef.current = null;
+          }
+          card.showPlaceholder(`None of the selected players appear for ${donutTeamId} in this scope. Pick players from that team, or choose another team.`);
+          renderExclusions([]);
+          const titleCfg = buildTitleOnlyConfig(0);
+          if (titleCfg) card.regenerate(titleCfg, buildFooterScope(titleCfg));
+          return;
+        }
+        const canvas = card.getCanvas();
+        const result = buildDonutChart(canvas, chartRef, { metric, rowsById, players: teamPlayers });
+        renderExclusions(result?.excluded ?? [], result?.note);
+        const excludedCount = result?.excluded?.length ?? 0;
+        const drawn = Math.max(0, teamPlayers.length - excludedCount);
+        // Dropping non-team players (or no-data ones) means the drawn set is no
+        // longer exactly the seeded "top N by X" — force honest "N players"
+        // phrasing (§8.4).
+        const donutDirty = excludedCount > 0 || teamPlayers.length !== players.length;
+        const config = {
+          type: "donut",
+          discipline,
+          metric,
+          donutTeam: donutTeamId,
+          playerCount: drawn,
+          roster: donutDirty ? { ...roster, dirty: true } : roster,
+        };
+        if (pendingRegenerate) {
+          card.regenerate(config, buildFooterScope(config));
+          pendingRegenerate = false;
+        } else {
+          card.updateFooterScope(buildFooterScope(config));
+        }
+        return;
+      }
+
       let metricKeys = [];
       let config;
 
@@ -2977,24 +3131,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         if (!metric) { showChartGuidance(noMetricGuidance("bar")); return; }
         metricKeys = [metric.key];
         config = { type: "bar", discipline, metric, playerCount: players.length, style: barStyle, roster };
-      } else if (chartType === "donut") {
-        const metric = getMetric(donutMetricKey, discipline); // item 4: no auto-pick
-        if (!metric) { showChartGuidance(noMetricGuidance("donut")); return; }
-        // R5 Wave 1b (item 5): a donut compares players WITHIN a single team's
-        // additive total (runs/wickets) — see charts.js buildDonutChart and
-        // v1's "#4". Across multiple teams (or with no team filter) the pie is
-        // meaningless: players from different teams don't share one total. The
-        // additive-metric half of the rule is already enforced by
-        // donutEligibleMetrics(); this enforces the single-team half. Keyed off
-        // the graph scope's own team filter (state.teams — the pool is seeded
-        // from that scope, and manual adds go through the same scope), so
-        // exactly one team => every plotted player belongs to it.
-        if ((state.teams || []).length !== 1) {
-          showChartGuidance(chartPurposeMessage("donut", null));
-          return;
-        }
-        metricKeys = [metric.key];
-        config = { type: "donut", discipline, metric, playerCount: players.length, roster };
       } else if (chartType === "scatter") {
         const metricX = getMetric(scatterXKey, discipline);
         const metricY = getMetric(scatterYKey, discipline);
@@ -3025,8 +3161,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const canvas = card.getCanvas();
       if (config.type === "bar") {
         result = buildBarChart(canvas, chartRef, { metric: config.metric, rowsById, players, style: config.style });
-      } else if (config.type === "donut") {
-        result = buildDonutChart(canvas, chartRef, { metric: config.metric, rowsById, players });
       } else if (config.type === "scatter") {
         result = buildScatterChart(canvas, chartRef, { metricX: config.metricX, metricY: config.metricY, rowsById, players });
       } else if (config.type === "phases") {

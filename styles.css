@@ -2208,6 +2208,42 @@ a { color: var(--color-accent); }
 
 .graph-metric-select { width: 100%; }
 
+/* B1 Wave 2 (item 5): donut-only team picker — graph.js renders it in the
+   metric-controls area of the donut chart-type branch, wrapped in
+   .graph-donut-team so it doesn't collide with the shared multi-team
+   .team-dropdown used by the scope strip. The inner <select> is the app's
+   standard `.select`, so it already inherits this panel's denser sizing
+   (the .graph-builder__controls .select override above) for free — this
+   just gives the wrapper the same full-width footprint and vertical rhythm
+   as its sibling metric controls (.graph-metric-select, above). */
+.graph-donut-team { width: 100%; }
+.graph-donut-team .select { width: 100%; }
+
+/* B1 Wave 2 (item 6): "needs input" red outline. graph.js toggles this class
+   directly on a required control (a date-window <input> or the donut team
+   <select> above) when it's empty and the current chart can't draw without
+   it. Compounded with .select/.input (rather than a bare .needs-input rule)
+   so it reliably outranks both the plain .select/.input border AND their
+   :hover state — a bare class of equal specificity would lose to
+   `.select:hover` on mouse-over and the red would vanish mid-interaction.
+   Reads as a validation hint (thin red border + faint red tint + soft ring)
+   rather than an error explosion; strengthens slightly on real focus. */
+.graph-builder__controls .select.needs-input,
+.graph-builder__controls .input.needs-input {
+  border-color: var(--color-bad);
+  background: var(--color-bad-bg);
+  box-shadow: 0 0 0 3px rgba(156, 43, 43, 0.16);
+}
+.graph-builder__controls .select.needs-input:hover,
+.graph-builder__controls .input.needs-input:hover {
+  border-color: var(--color-bad);
+}
+.graph-builder__controls .select.needs-input:focus-visible,
+.graph-builder__controls .input.needs-input:focus-visible {
+  outline-color: var(--color-bad);
+  box-shadow: 0 0 0 3px rgba(156, 43, 43, 0.28);
+}
+
 /* Slope / Dumbbell Window A/B pickers — now DAY-level native <input
    type="date"> controls (R3 Wave 3, item 10; were month <select>s). Same
    `.date-range` markup as the scope strip (and shared verbatim by the
