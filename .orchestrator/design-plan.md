@@ -80,3 +80,27 @@ casing "Top names" drift (cosmetic). Gating verified: scheduleRender reachable o
 renderAndClearDirty (1 site); 6 live-draw paths clear the gate; no stuck/over-gated
 path. DESIGN PHASE BUILD COMPLETE — awaiting owner audit of all 3 waves on localhost.
 Deferred: ~375px mobile one-screen fit (owner); export-while-dirty (left working).
+
+## ===== DESIGN ROUND 2 (owner 2026-07-16, 11 items) =====
+Owner answers: layout wireframe APPROVED w/ constraint = entire LEFT COLUMN (To Stats/
+Filters/Clear top row -> toolbar card -> Update chart -> Export/Copy PNG) must fit
+within the HEIGHT of the chart card (Graphs tab = one screen, no scroll). #7 search
+unification = EVERYTHING incl. short metric dropdowns (build 1 reusable searchable
+dropdown, single+multi variants, apply to ALL selects/searches). #9 calendar = LEAVE
+NATIVE (browser limitation, accept quirk — no work). #10 added out-of-filter players
+scoped under the SEARCH CONDITIONS (gender/format/date/team-type), exempt from narrowing
+filters (team/opp/advanced/position).
+Waves: R2-1 layout restructure (#1,2,3,4,5,8,11) frontend/Opus-high; R2-2 search
+unification + donut team fix #6 (frontend/Opus-high, big); R2-3 add out-of-filter #10
+(frontend/Opus-xhigh, fetch-scoping).
+Key file refs (from exploration): .graph-builder grid styles.css:2068 (300px+1fr ->
+wider toolbar); .graph-builder__controls internal-scroll styles.css:2085-2095 (REMOVE);
+topbar graph.js:352-358 (move OUT top; "Back to your table" graph.js:353 -> "To Stats");
+chart-type grid graph.js:361-363 + handler 2078-2106 + syncChartTypeButtons 2028-2053
+(-> dropdown; native select interim in R2-1, custom component in R2-2); export-row in
+.graph-builder__stage graph.js:425-429 (move to left col below toolbar); update-bar
+graph.js:415-417 (move OUT bottom); app-main top pad styles.css:270 --space-5 (reduce);
+slope date row .graph-slope-range (stack->row); donut team fetch graph.js:1066-1088 (use
+buildQuery for HAVING-correct set); add-player players.js:165-198 (unscope) +
+fetchSelectedPlayerMetrics charts.js:37-81 (relaxed-scope fetch for added ids).
+## R2-1 spawned.

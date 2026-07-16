@@ -346,74 +346,96 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // rules-table empty state and runs no query of its own.
   let graphFiltersApplied = false;
 
+  // R2 Wave R2-1 (owner layout restructure): the LEFT column is a normal
+  // top-to-bottom stack — an action row (To Stats / Filters / Clear) ABOVE the
+  // card, the toolbar CARD (a plain bordered card, no internal scroll), the
+  // "Update chart" button BELOW the card, and the Export/Copy PNG row below
+  // that. The whole column is sized to fit within ONE screen height alongside
+  // the chart card (no outer scroll, no internal scroll). Chart type is now a
+  // native <select> (was a 9-tile grid) to save vertical space; a later wave
+  // swaps every dropdown for a custom searchable component.
   container.innerHTML = `
     <div class="graph-builder">
-      <div class="graph-builder__controls">
+      <div class="graph-builder__left">
         <div class="graph-builder__topbar">
-          <button type="button" class="link-btn graph-back-link" data-role="graph-back">← Back to your table</button>
+          <button type="button" class="link-btn graph-back-link" data-role="graph-back">To Stats</button>
           <div class="graph-topbar-actions">
             <button type="button" class="btn btn--ghost graph-filters-btn" data-role="graph-filters-open">Filters</button>
             <button type="button" class="btn btn--ghost graph-clear-btn" data-role="graph-clear">Clear filters</button>
           </div>
         </div>
-        <div class="graph-control-group">
-          <span class="graph-control-label">Chart type</span>
-          <div class="segmented graph-chart-type" data-role="chart-type" role="group" aria-label="Chart type">
-            ${CHART_TYPES.map((t) => `<button type="button" class="segmented__btn" data-value="${t.key}">${t.label}</button>`).join("")}
-          </div>
-          <div class="graph-bar-style" data-role="bar-style" hidden>
-            <span class="graph-control-label">Style</span>
-            <div class="segmented segmented--small" data-role="bar-style-toggle" role="group" aria-label="Bar style">
-              <button type="button" class="segmented__btn" data-value="bars">Bars</button>
-              <button type="button" class="segmented__btn" data-value="dots">Dots</button>
-            </div>
-          </div>
-        </div>
 
-        <div class="graph-control-group" data-role="metric-controls"></div>
-
-        <div class="graph-control-group">
-          <div class="graph-control-group__head">
-            <span class="graph-control-label">Players</span>
-          </div>
-          <!-- R7 Wave 2 (item 21): the roster-mode control is surfaced HERE in
-               the controls (was buried inside the "N of N selected" dropdown,
-               owner couldn't find it) so Top names | Best | Worst | Manual is
-               visible and directly switchable. -->
-          <div class="graph-roster-mode-row" data-role="roster-mode-row" hidden>
-            <div class="segmented segmented--small graph-roster-mode" data-role="roster-mode" role="group" aria-label="Show">
-              <button type="button" class="segmented__btn" data-value="topnames">Top Names</button>
-              <button type="button" class="segmented__btn" data-value="best">Best</button>
-              <button type="button" class="segmented__btn" data-value="worst">Worst</button>
-              <button type="button" class="segmented__btn" data-value="manual">Manual</button>
-            </div>
-          </div>
-          <div class="graph-player-search">
-            <input type="text" class="input" data-role="player-search" placeholder="Add a player…" aria-label="Search players to add" />
-            <div class="graph-player-search__results" data-role="player-search-results" hidden></div>
-          </div>
-          <div class="dropdown graph-roster-dropdown" data-role="roster-dropdown">
-            <button type="button" class="select dropdown__toggle graph-roster-toggle" data-role="roster-toggle" aria-haspopup="true" aria-expanded="false"></button>
-            <div class="dropdown__panel graph-roster-panel" data-role="roster-panel" hidden>
-              <div class="graph-roster-filter" data-role="roster-filter-wrap" hidden>
-                <input type="text" class="input graph-roster-filter__input" data-role="roster-filter" placeholder="Filter players…" aria-label="Filter the player list" />
+        <div class="graph-builder__controls">
+          <div class="graph-control-group">
+            <span class="graph-control-label">Chart type</span>
+            <select class="select graph-chart-type-select" data-role="chart-type" aria-label="Chart type">
+              <option value="">Choose a chart type…</option>
+              ${CHART_TYPES.map((t) => `<option value="${t.key}">${t.label}</option>`).join("")}
+            </select>
+            <div class="graph-bar-style" data-role="bar-style" hidden>
+              <span class="graph-control-label">Style</span>
+              <div class="segmented segmented--small" data-role="bar-style-toggle" role="group" aria-label="Bar style">
+                <button type="button" class="segmented__btn" data-value="bars">Bars</button>
+                <button type="button" class="segmented__btn" data-value="dots">Dots</button>
               </div>
-              <div class="dropdown__list graph-roster-list" data-role="roster-list"></div>
             </div>
           </div>
-          <div class="graph-player-actions">
-            <button type="button" class="link-btn" data-role="reset-players">Reset to filtered set</button>
+
+          <div class="graph-control-group" data-role="metric-controls"></div>
+
+          <div class="graph-control-group">
+            <div class="graph-control-group__head">
+              <span class="graph-control-label">Players</span>
+            </div>
+            <!-- R7 Wave 2 (item 21): the roster-mode control is surfaced HERE in
+                 the controls (was buried inside the "N of N selected" dropdown,
+                 owner couldn't find it) so Top names | Best | Worst | Manual is
+                 visible and directly switchable. -->
+            <div class="graph-roster-mode-row" data-role="roster-mode-row" hidden>
+              <div class="segmented segmented--small graph-roster-mode" data-role="roster-mode" role="group" aria-label="Show">
+                <button type="button" class="segmented__btn" data-value="topnames">Top Names</button>
+                <button type="button" class="segmented__btn" data-value="best">Best</button>
+                <button type="button" class="segmented__btn" data-value="worst">Worst</button>
+                <button type="button" class="segmented__btn" data-value="manual">Manual</button>
+              </div>
+            </div>
+            <div class="graph-player-search">
+              <input type="text" class="input" data-role="player-search" placeholder="Add a player…" aria-label="Search players to add" />
+              <div class="graph-player-search__results" data-role="player-search-results" hidden></div>
+            </div>
+            <div class="dropdown graph-roster-dropdown" data-role="roster-dropdown">
+              <button type="button" class="select dropdown__toggle graph-roster-toggle" data-role="roster-toggle" aria-haspopup="true" aria-expanded="false"></button>
+              <div class="dropdown__panel graph-roster-panel" data-role="roster-panel" hidden>
+                <div class="graph-roster-filter" data-role="roster-filter-wrap" hidden>
+                  <input type="text" class="input graph-roster-filter__input" data-role="roster-filter" placeholder="Filter players…" aria-label="Filter the player list" />
+                </div>
+                <div class="dropdown__list graph-roster-list" data-role="roster-list"></div>
+              </div>
+            </div>
+            <div class="graph-player-actions">
+              <button type="button" class="link-btn" data-role="reset-players">Reset to filtered set</button>
+            </div>
+            <p class="graph-cap-note" data-role="cap-note" hidden></p>
           </div>
-          <p class="graph-cap-note" data-role="cap-note" hidden></p>
         </div>
 
-        <!-- Owner item 7: in-panel control edits are now PENDING (they update
-             the controls UI live but don't redraw the chart) — only this button
-             draws. Sticky at the bottom of the internally-scrolling controls
-             column so it's always reachable; the graph's own "Apply to graph"
-             filter button is separate and keeps drawing on its own. -->
+        <!-- Owner item 7 (Wave 3): in-panel control edits are PENDING (they
+             update the controls UI live but don't redraw the chart) — only this
+             button draws. R2-1: it now sits BELOW the card as a normal in-flow
+             button (was a sticky bar inside the internally-scrolling column).
+             The graph's own "Apply to graph" filter button is separate and keeps
+             drawing on its own. -->
         <div class="graph-update-bar">
           <button type="button" class="btn btn--primary graph-update-btn" data-role="graph-update" disabled>Update chart</button>
+        </div>
+
+        <!-- R2-1: the Export/Copy PNG row lives in the LEFT column now (was in
+             the stage). It still exports the chart card rendered in the stage —
+             card.js's exportPNG/copyPNG target that card, not this row. -->
+        <div class="graph-export" data-role="export-row">
+          <button type="button" class="btn btn--primary" data-role="export-png">Export PNG</button>
+          <button type="button" class="btn btn--ghost" data-role="copy-png" hidden>Copy PNG</button>
+          <span class="graph-export__status" data-role="export-status"></span>
         </div>
       </div>
 
@@ -422,11 +444,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         <div class="graph-stage-guidance" data-role="stage-guidance" hidden></div>
         <div class="graph-card-host" data-role="card-host"></div>
         <div class="graph-exclusions" data-role="exclusions" hidden></div>
-        <div class="graph-export" data-role="export-row">
-          <button type="button" class="btn btn--primary" data-role="export-png">Export PNG</button>
-          <button type="button" class="btn btn--ghost" data-role="copy-png" hidden>Copy PNG</button>
-          <span class="graph-export__status" data-role="export-status"></span>
-        </div>
       </div>
     </div>
   `;
@@ -2034,21 +2051,22 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     const statuses = {};
     for (const t of CHART_TYPES) statuses[t.key] = evaluateTypeStatus(t.key, state, { eligibleMetricsForScope: eligibleForScope });
 
-    els.chartType.querySelectorAll(".segmented__btn").forEach((btn) => {
-      const key = btn.dataset.value;
-      const type = CHART_TYPES.find((t) => t.key === key);
-      const status = statuses[key];
-      btn.classList.toggle("is-active", key === chartType);
-      // decision 46f: NEVER html-disabled — every tile stays clickable.
-      // "Greyed" is a passive CSS hint only (is-unavailable, styles.css); the
-      // actual explanation is a full sentence in the STAGE, written the
-      // moment the user clicks the tile (see renderChart()'s evaluateTypeStatus
-      // guard) — never a title-only tooltip, so no reason text lives here.
-      // Item 18: no "Recommended" badge — the label is the label, nothing more.
-      btn.disabled = false;
-      btn.title = "";
-      btn.classList.toggle("is-unavailable", !status.ok);
-      btn.textContent = type.label;
+    // R2-1: chart type is a native <select> now (was a 9-tile segmented grid).
+    // Reflect the current pick — null maps to the "Choose a chart type…"
+    // placeholder (value="") so the honest empty state survives (decision 46f:
+    // nothing is pre-selected). Every real option stays SELECTABLE and never
+    // html-disabled: clicking an unavailable type still selects it, and the
+    // stage then shows the honest why-not sentence on the next draw
+    // (renderChart()'s evaluateTypeStatus guard — unchanged). Since a native
+    // <option> can't be reliably greyed the way the old tiles were, a passive
+    // "(unavailable)" suffix on the label is the only availability cue here.
+    els.chartType.value = chartType || "";
+    els.chartType.querySelectorAll("option").forEach((opt) => {
+      if (!opt.value) return; // the placeholder — leave it as-is
+      const type = CHART_TYPES.find((t) => t.key === opt.value);
+      if (!type) return;
+      const status = statuses[opt.value];
+      opt.textContent = status.ok ? type.label : `${type.label} (unavailable)`;
     });
   }
 
@@ -2075,13 +2093,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     markDirty();
   });
 
-  els.chartType.addEventListener("click", (e) => {
-    const btn = e.target.closest(".segmented__btn");
-    // decision 46f: tiles are never disabled — clicking an unusable one still
-    // selects it (renderChart() then shows the honest stage sentence instead
-    // of a chart; see evaluateTypeStatus()).
-    if (!btn || btn.dataset.value === chartType) return;
-    chartType = btn.dataset.value;
+  // R2-1: chart type is a native <select> now — a "change" event (not the old
+  // tile "click"). decision 46f survives: unavailable types are never disabled,
+  // so selecting one still sets it (renderChart() then shows the honest stage
+  // sentence instead of a chart; see evaluateTypeStatus()). Re-selecting the
+  // placeholder (value="") clears the type back to the empty state.
+  els.chartType.addEventListener("change", (e) => {
+    const val = e.target.value || null;
+    if (val === chartType) return;
+    chartType = val;
     // Item 1: a deliberate chart-type pick is the user taking over from any
     // filter-driven auto-selection — so clearing metric conditions later won't
     // wipe their chart.
@@ -2097,12 +2117,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // real async re-derivation (which re-ranks from the UNTOUCHED candidate
     // pool under the new cap/metric — this is what makes "switch to a bigger
     // chart type brings hidden players back" still true, see players.js's
-    // class doc comment) replaces it moments later.
-    if (selection.getMode() === "manual") {
-      selection.clampToCap();
-    } else {
-      selection.clampToCap({ silent: true });
-      deriveChecked(selection.getMode());
+    // class doc comment) replaces it moments later. Skipped when the placeholder
+    // was re-selected (no type -> no cap): activeMaxCap() is Infinity then.
+    if (chartType) {
+      if (selection.getMode() === "manual") {
+        selection.clampToCap();
+      } else {
+        selection.clampToCap({ silent: true });
+        deriveChecked(selection.getMode());
+      }
     }
     renderPlayerList();
     markDirty({ paramsChanged: true });

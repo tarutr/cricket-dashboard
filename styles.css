@@ -269,7 +269,13 @@ a { color: var(--color-accent); }
 
 .app-main {
   flex: 1;
-  padding: var(--space-5) var(--space-6) var(--space-7);
+  /* R2-1 (item 5 + one-screen constraint): tighter top gap between the slim
+     header and the first card (Stats table / Graph toolbar) — space-4 instead
+     of space-5 — and a trimmed bottom (space-6 instead of space-7) so the
+     Graphs tab's taller control stacks (Slope/Dumbbell windows) get more of the
+     viewport before it scrolls. Both still breathe under the header/above the
+     footer. */
+  padding: var(--space-4) var(--space-6) var(--space-6);
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
@@ -2067,76 +2073,101 @@ a { color: var(--color-accent); }
 
 .graph-builder {
   display: grid;
-  grid-template-columns: 300px 1fr;
+  /* R2-1 (item 1): wider control column (was 300px), narrower stage. The extra
+     width lets the toolbar controls breathe and puts the Slope/Dumbbell date
+     pair back side by side (item 8). */
+  grid-template-columns: 23rem 1fr;
   gap: var(--space-5);
   align-items: start;
 }
 
-/* B1 Wave 1 (item 2b): this column used to grow with its content and scroll
-   with the whole page — on a long control stack (chart type + metric +
-   players + windows) that pushed the Graph view well past one viewport.
-   max-height + overflow-y: auto turns it into its own scroll region (same
-   calc()-based budget as .table-scroll above, since the chrome around it —
-   header + main padding + footer — is the same), so this panel scrolls
-   internally and the Graph page itself doesn't grow taller than one screen.
-   A later wave adds a pinned "Update chart" button at the bottom of this
-   column — deliberately not pre-structuring a separate scroll/pinned-footer
-   split here, this stays ONE scroll region for now. */
+/* R2-1 (owner layout restructure): the LEFT column is a plain top-to-bottom
+   stack — action row ABOVE the card, the toolbar card, the "Update chart"
+   button BELOW it, then the Export row — NOT a single internally-scrolling
+   panel with a sticky footer (that was round 1, now reverted). The whole
+   column is sized to fit within one screen height beside the chart card, so it
+   grows in-flow and never scrolls on its own. */
+.graph-builder__left {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* R2-1 (item 11): the toolbar is a normal bordered card again — the round-1
+   max-height + overflow-y internal scroll is GONE. It holds the chart-type
+   dropdown, the per-type metric controls, and the Players section, and simply
+   grows with its content (kept short enough to fit one screen by the compact
+   sizing below). */
 .graph-builder__controls {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--space-3);
   border: 1px solid var(--color-line);
   border-radius: var(--radius-md);
   background: var(--color-panel);
-  padding: var(--space-4) var(--space-4) var(--space-5);
-  max-height: max(280px, calc(100vh - 240px));
-  overflow-y: auto;
+  padding: var(--space-3) var(--space-4);
+}
+
+/* R2-1 (item 3 + one-screen constraint): controls needn't stretch the full card
+   width — cap each control group at 20rem and left-align it so there's a
+   tasteful right-hand gutter inside the card (reads as intentional form layout,
+   not edge-to-edge). The cap is wide enough to keep the Slope/Dumbbell date pair
+   (item 8) side by side without clipping. A tight label -> control gap keeps the
+   dense metric area (Slope/Dumbbell stack a metric select plus two Window A/B
+   date rows) within one screen. Popups (roster/radar/benchmark panels) are
+   position-fixed/absolute and unaffected. */
+.graph-builder__controls .graph-control-group {
+  max-width: 20rem;
+  gap: var(--space-1);
 }
 
 /* B1 Wave 1 (item 4b, "make all fonts smaller" — SCOPED to graph controls
    only, per owner: the Stats table and every other view keep their current
-   type sizes). Two techniques combined:
+   type sizes). R2-1: broadened from the toolbar CARD to the whole LEFT COLUMN
+   (.graph-builder__left) so the compact type now also covers the action row
+   (To Stats / Filters / Clear), the "Update chart" button and the Export row —
+   all of which R2-1 moved OUT of the card — keeping the whole column visually
+   dense and one-screen. Still nowhere near the Stats table (a separate
+   subtree), so the owner's "graph controls only" scoping holds. Two techniques:
    1. Re-declaring the --text-xs/sm/sm2/md tokens on this container shrinks
       every descendant that already reads one of those custom properties
-      (labels, captions, notes, the chart-type/roster-mode tiles below) —
-      free, and can't miss a selector the way an explicit list could.
+      (labels, captions, notes, the roster-mode tiles below) — free, and can't
+      miss a selector the way an explicit list could.
    2. .select/.input/.btn/.link-btn/.segmented__btn hard-code a literal
       0.9rem/inherited-1rem in their base rules (not a token), so those need
       an explicit override here to shrink too. More specific rules further
-      down (e.g. .graph-chart-type/.graph-roster-mode .segmented__btn) still
-      win ties by source order and shrink further still for the tile grids. */
-.graph-builder__controls {
+      down (e.g. .graph-roster-mode .segmented__btn) still win ties by source
+      order and shrink further still for the roster tile grid. */
+.graph-builder__left {
   --text-xs: 0.64rem;
   --text-sm: 0.68rem;
   --text-sm2: 0.7rem;
   --text-md: 0.74rem;
 }
-.graph-builder__controls .select,
-.graph-builder__controls .input,
-.graph-builder__controls .btn,
-.graph-builder__controls .link-btn,
-.graph-builder__controls .segmented__btn {
+.graph-builder__left .select,
+.graph-builder__left .input,
+.graph-builder__left .btn,
+.graph-builder__left .link-btn,
+.graph-builder__left .segmented__btn {
   font-size: var(--text-md);
 }
 
-/* B1 Wave 3 (owner item 7): the "Update chart" gate. The controls column
-   scrolls internally (item 2b above), so this button is pinned to the BOTTOM of
-   that scroll region — position: sticky keeps it reachable no matter how far the
-   control stack is scrolled. The negative margins bleed the bar to the panel's
-   inner edges and cancel the column's own bottom padding so it sits flush; the
-   panel-coloured fill + a top border let the control stack scroll cleanly under
-   it. This mirrors how the Stats side gates every redraw behind its "Search". */
-.graph-update-bar {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-5));
-  padding: var(--space-3) var(--space-4);
-  background: var(--color-panel);
-  border-top: 1px solid var(--color-line);
+/* R2-1 (owner item 7 restyle): the "Update chart" gate button. Round 1 pinned
+   this as a sticky bar bleeding to the edges of an internally-scrolling column
+   (removed with that scroll region). R2-1 makes it a plain in-flow row directly
+   BELOW the toolbar card — compact (reduced height via tighter vertical
+   padding) and capped to the same 20rem width as the controls above so it lines
+   up with them rather than spanning the whole column. The gating BEHAVIOUR
+   (is-dirty emphasis, disabled at-rest) is unchanged — see graph.js
+   updateUpdateBtn(). */
+.graph-update-bar { display: flex; }
+.graph-update-btn {
+  width: 100%;
+  max-width: 20rem;
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
 }
-.graph-update-btn { width: 100%; }
 /* Dirty (un-applied in-panel edits pending): the button lifts out of its
    at-rest look into the editorial red accent so it reads as "action needed" —
    the same red the cap-note and links use. When the chart is already up to date
@@ -2153,9 +2184,11 @@ a { color: var(--color-accent); }
   opacity: 1;
 }
 
-/* R3 Wave 3: graph controls top bar — "Back to your table" link + graph-local
-   "Filters" button. The Filters popup itself reuses the shared .filters-popup
-   classes (defined once, below), so only this small bar is graph-specific. */
+/* Graph controls top action row — "To Stats" link + graph-local "Filters" /
+   "Clear filters" buttons. R2-1: this row now sits ABOVE the toolbar card (was
+   the card's first child). The Filters popup itself reuses the shared
+   .filters-popup classes (defined below), so only this small bar is
+   graph-specific. */
 .graph-builder__topbar {
   display: flex;
   align-items: center;
@@ -2168,8 +2201,14 @@ a { color: var(--color-accent); }
    of the graph topbar. They wrap under the back-link on a narrow (~380px)
    sidebar rather than overflow. */
 .graph-topbar-actions { display: flex; align-items: center; gap: var(--space-2); flex: 0 0 auto; flex-wrap: wrap; }
+/* R2-1 (item 1): reduced-height action buttons — tighter vertical padding than
+   the base .btn so the row above the card stays slim. */
 .graph-filters-btn,
-.graph-clear-btn { flex: 0 0 auto; }
+.graph-clear-btn {
+  flex: 0 0 auto;
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+}
 
 .graph-control-group { display: flex; flex-direction: column; gap: var(--space-2); }
 
@@ -2191,19 +2230,22 @@ a { color: var(--color-accent); }
   color: var(--color-muted);
 }
 
-/* Nine chart types: a 3-per-row wrapped grid inside the segmented pill (one
-   row clips at the sidebar's width). Row borders are hand-managed because the
-   base `.segmented__btn + .segmented__btn { border-left }` rule assumes one
-   row. Generalised (Batch 4 wave 2) from a hardcoded 3×2/nth-child(4) rule —
-   which only handled row 2's left edge — to :nth-child(3n + 1), which handles
-   the first button of EVERY row regardless of how many chart types there are.
-   Font-size/padding are tighter than the base `.segmented__btn` (own rule,
-   not `--small`): at the 300px sidebar's ~72px-wide tile, the base 16px size
-   clipped the longest labels ("Benchmark" rendered as "Benchmar", owner
-   report) because <button> text doesn't wrap by default — text-sm2 leaves
-   enough margin for every label to fit on one line at both desktop and
-   375px, and white-space/word-break are kept as a wrap fallback rather than
-   a silent clip if a future label is added that doesn't fit either. */
+/* R2-1 (item 11): the Graph Builder panel's chart type is a native <select>
+   now — a plain `.select` (inheriting the compact type from .graph-builder__left
+   above), full-width within its capped control group. A later wave swaps this
+   for a custom searchable dropdown. */
+.graph-chart-type-select { width: 100%; }
+
+/* The nine-tile chart-type grid. NO LONGER used by the Graph Builder panel
+   (item 11 replaced it with the <select> above), but STILL used verbatim by the
+   "Graph this player" chooser modal (src/playerGraphChooser.js, decision 46),
+   which renders its own `.segmented.graph-chart-type` grid — so these rules are
+   retained for that consumer. 3-per-row wrapped grid; row borders are
+   hand-managed because the base `.segmented__btn + .segmented__btn` border-left
+   rule assumes one row. :nth-child(3n + 1) resets the left edge of every row's
+   first tile; :nth-child(n + 4) draws the top border of rows 2+. Tighter
+   font/padding than the base tile so the longest labels ("Benchmark") fit on
+   one line, with white-space/word-break as a wrap fallback. */
 .graph-chart-type { display: flex; flex-wrap: wrap; }
 .graph-chart-type .segmented__btn {
   flex: 1 1 33.33%;
@@ -2277,28 +2319,27 @@ a { color: var(--color-accent); }
   box-shadow: 0 0 0 3px rgba(156, 43, 43, 0.28);
 }
 
-/* Slope / Dumbbell Window A/B pickers — now DAY-level native <input
-   type="date"> controls (R3 Wave 3, item 10; were month <select>s). Same
-   `.date-range` markup as the scope strip (and shared verbatim by the
-   dumbbell controls further down — both use this same class, not a separate
-   .graph-dumbbell-range).
+/* Slope / Dumbbell Window A/B pickers — DAY-level native <input type="date">
+   controls (R3 Wave 3, item 10). Same `.date-range` markup as the scope strip
+   (shared verbatim by the dumbbell controls — both use this class).
 
-   B1 Wave 1 (item 4b): side-by-side (flex: 1 1 0) clipped the native
-   "dd/mm/yyyy" text + calendar icon at the ~110-130px each input got in a
-   300px sidebar. Stacked vertically instead — each input gets the FULL
-   column width, which is what actually fixes the clipping (this is a
-   layout problem, not a font-size problem). The "–" separator is dropped
-   since a stacked pair reads fine as two full-width rows without it. */
+   R2-1 (item 8): back to ONE ROW, two date inputs side by side with the "–"
+   separator between them (round 1 stacked them vertically because they clipped
+   at the old 300px sidebar). The control column is now ~23rem wide and this
+   group is capped at 20rem, so each input gets ~9rem — enough for the native
+   "dd/mm/yyyy" text + the shrunk calendar icon below without clipping.
+   flex-wrap stays on (inherited from .date-range) as a safety net at the
+   narrowest widths. */
 .graph-slope-range {
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--space-1);
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
 }
-.graph-slope-range .date-range__sep { display: none; }
+.graph-slope-range .date-range__sep { display: inline; }
 .graph-slope-range .select,
 .graph-slope-range .input {
-  flex: 1 1 auto;
-  width: 100%;
+  flex: 1 1 0;
+  width: auto;
   min-width: 0;
 }
 
@@ -2479,13 +2520,16 @@ a { color: var(--color-accent); }
 .graph-player-actions { display: flex; gap: var(--space-3); }
 .graph-cap-note { font-size: var(--text-sm2); color: var(--color-accent); margin: 0; }
 
-/* Unusable chart-type tiles (decision 46f) — greyed as a
-   PASSIVE hint only. Unlike the shared `:disabled` recolor rule above
-   (styles.css's "One disabled language" block), these tiles are never
-   HTML-disabled: they stay clickable, and clicking one writes a full
-   plain-English sentence into the stage guidance below instead of doing
-   nothing — so this class carries the same muted recolor minus
-   cursor:not-allowed. */
+/* Unusable chart-type tiles (decision 46f) — greyed as a PASSIVE hint only.
+   The Graph Builder panel no longer uses this (R2-1 item 11: its chart type is
+   a <select> now, which signals availability with a "(unavailable)" suffix on
+   the option label — see graph.js syncChartTypeButtons), but the "Graph this
+   player" chooser modal (src/playerGraphChooser.js) still renders tiles with
+   this class, so it's retained for that consumer. Unlike the shared `:disabled`
+   recolor, these tiles are never HTML-disabled: they stay clickable, and
+   clicking one writes a full plain-English sentence into the stage/chooser
+   guidance instead of doing nothing — so this class carries the same muted
+   recolor minus cursor:not-allowed. */
 .graph-chart-type .segmented__btn.is-unavailable {
   background: var(--color-panel);
   color: var(--color-muted);
@@ -2574,7 +2618,16 @@ a { color: var(--color-accent); }
 }
 .graph-exclusions p { margin: 0 0 var(--space-1); }
 
-.graph-export { display: flex; align-items: center; gap: var(--space-3); }
+/* R2-1 (item 4): the Export / Copy PNG row lives in the LEFT column now (below
+   the Update button) instead of under the chart in the stage. flex-wrap keeps
+   the two buttons + status from overflowing the ~23rem column; the buttons are
+   content-width (never stretched), which reads intentional. It still exports
+   the chart card in the stage (card.js targets that card, not this row). */
+.graph-export { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+/* No flex-basis:100% here — an empty status must not reserve its own line (that
+   added ~17px of dead height to the row and pushed the left column past the
+   chart-card height). It sits inline after the buttons and wraps only when its
+   text ("Saved …png") actually needs a second line. */
 .graph-export__status { font-size: var(--text-md); color: var(--color-muted); }
 
 /* The paper card: fixed light "printed artifact" palette regardless of theme. */
