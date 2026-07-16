@@ -500,6 +500,7 @@ a { color: var(--color-accent); }
 .columns-popover,
 .graph-player-search__results,
 .dropdown__panel,
+.search-select__panel,
 .omnisearch__results {
   z-index: 20;
   background: var(--color-bg-raised);
@@ -2286,11 +2287,12 @@ a { color: var(--color-accent); }
 /* B1 Wave 2 (item 5): donut-only team picker — graph.js renders it in the
    metric-controls area of the donut chart-type branch, wrapped in
    .graph-donut-team so it doesn't collide with the shared multi-team
-   .team-dropdown used by the scope strip. The inner <select> is the app's
-   standard `.select`, so it already inherits this panel's denser sizing
-   (the .graph-builder__controls .select override above) for free — this
-   just gives the wrapper the same full-width footprint and vertical rhythm
-   as its sibling metric controls (.graph-metric-select, above). */
+   .team-dropdown used by the scope strip. R2-2a: the picker is now the shared
+   searchable dropdown (.search-select below); its toggle carries the standard
+   `.select` class, so it inherits this panel's denser sizing (the
+   .graph-builder__controls .select override above) and the .search-select root
+   fills the wrapper — this just gives the wrapper the same full-width footprint
+   and vertical rhythm as its sibling metric controls (.graph-metric-select). */
 .graph-donut-team { width: 100%; }
 .graph-donut-team .select { width: 100%; }
 
@@ -2317,6 +2319,98 @@ a { color: var(--color-accent); }
 .graph-builder__controls .input.needs-input:focus-visible {
   outline-color: var(--color-bad);
   box-shadow: 0 0 0 3px rgba(156, 43, 43, 0.28);
+}
+
+/* ── Searchable single-select dropdown (src/searchSelect.js, R2-2a) ───────────
+   The ONE reusable "type-to-filter" dropdown the owner asked for everywhere
+   (mimics the header player search). Structure: a `.select`-styled toggle
+   button (so it looks exactly like a native <select> / .select in every
+   context), and a popover joining the shared popover base above (border,
+   radius, shadow, raised bg) that holds a filter input + a scrollable list of
+   options. Kept context-neutral so later waves can drop it into the filter
+   drawers and popup — the graph consumers just add their existing width classes
+   (.graph-chart-type-select / .graph-metric-select / .graph-donut-team) around
+   it, and the graph's `.needs-input` rule above styles the toggle's outline. */
+.search-select { position: relative; width: 100%; }
+.search-select__toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  text-align: left;
+  cursor: pointer;
+}
+.search-select__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.search-select__value--placeholder { color: var(--color-muted); }
+/* Caret matches the muted, downward chevron a native <select> shows; flips when
+   the popover is open so the control reads as expanded. */
+.search-select__caret {
+  flex: 0 0 auto;
+  color: var(--color-muted);
+  font-size: 0.7em;
+  line-height: 1;
+  transition: transform 0.12s ease;
+}
+.search-select__caret::before { content: "\25BE"; } /* ▾ */
+.search-select__toggle[aria-expanded="true"] .search-select__caret { transform: rotate(180deg); }
+
+.search-select__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 100%;
+  max-width: min(24rem, 92vw);
+  padding: var(--space-2);
+}
+.search-select__filter {
+  width: 100%;
+  margin-bottom: var(--space-2);
+}
+.search-select__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 15rem;
+  overflow-y: auto;
+}
+.search-select__option {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  /* Long metric labels wrap rather than overflow the narrow graph sidebar. */
+  white-space: normal;
+}
+.search-select__option:hover,
+.search-select__option.is-active { background: var(--color-panel); }
+.search-select__option.is-selected .search-select__opt-label { font-weight: 600; }
+.search-select__option.is-disabled { color: var(--color-muted); cursor: not-allowed; }
+/* The synthetic "clear" row (allowEmptyLabel) — reads as the muted placeholder
+   choice, not a real option. */
+.search-select__option--empty { color: var(--color-muted); font-style: italic; }
+.search-select__opt-label { min-width: 0; }
+/* The "(unavailable)" chart-type cue (and any future hint suffix) — muted and
+   set slightly smaller so it reads as an annotation, not part of the name. */
+.search-select__hint {
+  flex: 0 0 auto;
+  font-size: var(--text-sm2, 0.75rem);
+  color: var(--color-muted);
+}
+.search-select__empty {
+  font-size: 0.9rem;
+  color: var(--color-muted);
+  padding: var(--space-2);
+  margin: 0;
 }
 
 /* Slope / Dumbbell Window A/B pickers — DAY-level native <input type="date">

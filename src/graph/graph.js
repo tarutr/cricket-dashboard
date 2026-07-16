@@ -16,6 +16,13 @@ import { escHtml, escAttr } from "../html.js";
 import { getManifest, query } from "../db.js";
 import { mountFilters, buildScopeClauses } from "../filters.js";
 import { mountFilterDrawer } from "../drawer.js";
+import { mountSearchSelect } from "../searchSelect.js";
+// R2-2a (#6b): the donut team picker's option list is the DISTINCT teams of the
+// ACTUAL qualifying player set (WHERE + HAVING/advancedToHaving), not every team
+// present in the raw scope. buildQuery is table.js's "leaderboard player set" —
+// the exact same set the Stats table shows — reused here as an id subquery so
+// the two can never disagree about who qualifies.
+import { buildQuery } from "../table.js";
 import {
   CHART_CAPS,
   createSelection,
@@ -368,10 +375,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         <div class="graph-builder__controls">
           <div class="graph-control-group">
             <span class="graph-control-label">Chart type</span>
-            <select class="select graph-chart-type-select" data-role="chart-type" aria-label="Chart type">
-              <option value="">Choose a chart type…</option>
-              ${CHART_TYPES.map((t) => `<option value="${t.key}">${t.label}</option>`).join("")}
-            </select>
+            <!-- R2-2a: chart type is now the shared searchable dropdown
+                 (src/searchSelect.js), mounted into this host below. Options
+                 stay SELECTABLE even when unavailable (decision 46f) — an
+                 "(unavailable)" hint suffix is the only availability cue. -->
+            <div class="graph-chart-type-select" data-role="chart-type"></div>
             <div class="graph-bar-style" data-role="bar-style" hidden>
               <span class="graph-control-label">Style</span>
               <div class="segmented segmented--small" data-role="bar-style-toggle" role="group" aria-label="Bar style">
@@ -488,6 +496,18 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // tab switches / chart-type re-picks for the rest of the session once set,
   // same as every other control below.
   let chartType = null;
+  // R2-2a (searchable dropdowns): live handles for the shared searchSelect
+  // component (src/searchSelect.js). `chartTypeSelect` is mounted ONCE (static
+  // control, persists for the panel's life). `metricControlSelects` are the
+  // per-render metric pickers inside els.metricControls — rebuilt on every
+  // renderMetricControls(), so each is destroy()'d before the next rebuild (they
+  // each hold a document click listener, exactly like the radar/benchmark
+  // dropdowns' metricControlsDropdownTeardown). `donutTeamSelectHandle` is the
+  // donut-only team picker (also pushed into metricControlSelects for teardown),
+  // kept separately so setDonutTeamNeedsInput() can toggle its red outline.
+  let chartTypeSelect = null;
+  let metricControlSelects = [];
+  let donutTeamSelectHandle = null;
   // R3 Wave 3, item 4 (no defaults / honest graph state):
   //  • chosenMetricKey — the ONE metric the user has picked, shared across the
   //    single-metric chart types (bar/donut/slope/byyear/dumbbell + scatter's Y
@@ -1023,14 +1043,39 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
   // ── Metric controls (rebuilt per chart type) ──────────────────────────────
 
-  /** <option>s for a single-metric select, with a "Choose a metric…"
-   * placeholder first (item 4 — no auto-pick). `selectedKey` may be null. */
-  function metricOptionsHTML(metrics, selectedKey) {
-    const placeholder = `<option value="" ${!selectedKey ? "selected" : ""}>Choose a metric…</option>`;
-    return (
-      placeholder +
-      metrics.map((m) => `<option value="${escAttr(m.key)}" ${m.key === selectedKey ? "selected" : ""}>${escHtml(m.label)}</option>`).join("")
-    );
+  /** R2-2a: searchSelect options for a single-metric picker (value = metric
+   * key, label from the catalogue). No placeholder ROW — the component's own
+   * placeholder text covers the "no metric picked yet" state (item 4: no
+   * auto-pick). */
+  function metricSelectOptions(metrics) {
+    return metrics.map((m) => ({ value: m.key, label: m.label }));
+  }
+
+  /** R2-2a: mount a per-type metric searchSelect into the metric-controls host
+   * carrying `role`, register it for teardown, and return the handle. When the
+   * scope offers no eligible metric the control renders DISABLED showing
+   * `emptyLabel` — the same honest dead-end the old `<option>No … available…`
+   * gave, but as a greyed, non-openable control. `onChangeVal(value|null)` is
+   * the per-type change handler (identical body to the old select's `change`). */
+  function mountMetricSelect(role, metrics, value, onChangeVal, { placeholder = "Choose a metric…", ariaLabel = "Metric", emptyLabel = null } = {}) {
+    const host = els.metricControls.querySelector(`[data-role="${role}"]`);
+    if (!host) return null;
+    const hasMetrics = metrics.length > 0;
+    const handle = mountSearchSelect(host, {
+      options: hasMetrics ? metricSelectOptions(metrics) : [],
+      value: hasMetrics ? value : null,
+      placeholder: hasMetrics ? placeholder : (emptyLabel || placeholder),
+      filterPlaceholder: "Search metrics…",
+      ariaLabel,
+      disabled: !hasMetrics,
+      // Native-<select> parity: a clear row back to "no metric picked" (item 4:
+      // no auto-pick). Only when there ARE metrics — the disabled empty state
+      // has no list to open.
+      allowEmptyLabel: hasMetrics ? placeholder : null,
+      onChange: onChangeVal,
+    });
+    metricControlSelects.push(handle);
+    return handle;
   }
 
   /** Adopt the shared chosen metric (item 4) into a per-type key ONLY when it's
@@ -1057,9 +1102,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   function setNeedsInput(el, on) {
     if (el) el.classList.toggle("needs-input", !!on);
   }
-  /** Red-outline the donut team <select> when no team is chosen (item 6). */
+  /** Red-outline the donut team picker when no team is chosen (item 6). R2-2a:
+   * the picker is a searchSelect now, so the outline lives on its toggle — the
+   * component's setInvalid() toggles `.needs-input` there (its toggle carries
+   * class `select`, so the existing `.select.needs-input` CSS still applies). */
   function setDonutTeamNeedsInput(on) {
-    setNeedsInput(els.metricControls.querySelector('[data-role="donut-team"]'), on);
+    if (donutTeamSelectHandle) donutTeamSelectHandle.setInvalid(on);
   }
   /** Red-outline whichever of a Slope/Dumbbell window's 4 date inputs are still
    * empty (item 6). `prefix` is "slope" | "dumbbell". Re-run on render and on
@@ -1072,13 +1120,20 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     }
   }
 
-  // ── Item 5: donut-only team options ────────────────────────────────────────
-  // Distinct teams present in the ALREADY-FILTERED player set — the teams the
-  // in-scope players actually appear under. Sourced from the discipline view
-  // with the SAME scope clauses the pool/search use (players.js's searchPlayers
-  // pattern: gender/format/date/team-type/opposition/positions/profile), so the
-  // options track the current scope exactly. No team-specific literal is
-  // injected (buildScopeClauses self-escapes state.teams), so this is inert to
+  // ── Item 5 + R2-2a #6b: donut-only team options ─────────────────────────────
+  // Distinct teams the ACTUAL QUALIFYING PLAYERS appear under — NOT every team
+  // with any row in the raw scope. The raw-scope version listed all
+  // international teams even when the filters (an advanced metric condition, a
+  // team/opposition/position narrowing) restricted the player set to, say, only
+  // Indian + Sri Lankan players; the owner wants the picker to offer only those
+  // players' teams (#6b). The qualifying set is table.js's buildQuery(state, [])
+  // — the EXACT leaderboard player set (WHERE + HAVING/advancedToHaving), the
+  // same rows the Stats table shows — reused here as an id subquery so the two
+  // can never disagree. The outer query still runs over the discipline view with
+  // the SAME scope clauses the pool draw (fetchDonutTeamPool) uses, so the team
+  // strings match what the draw expects; only the id restriction is new. No
+  // team-specific literal is injected (buildScopeClauses self-escapes
+  // state.teams; buildQuery self-escapes its own inputs), so this stays inert to
   // SQL injection. Ordered most-represented first, name as tiebreak.
   async function fetchDonutTeamOptions() {
     const state = store.get();
@@ -1093,10 +1148,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       oppositionColumn: discipline === "batting" ? "bowling_team" : "batting_team",
       includePositions: discipline === "batting",
     });
+    // buildQuery(state, []) projects `id`/`name` only (no metric columns, no
+    // matchesSql), grouped per player, gated by the advanced HAVING — exactly
+    // the qualifying id set. Embedded as `idCol IN (SELECT id FROM (…))`.
+    const { sql: qualifyingSql } = buildQuery(state, []);
     const sql = [
       `SELECT ${teamCol} AS team, COUNT(*) AS n`,
       `FROM ${view}`,
       `WHERE ${whereClauses.join(" AND ")}`,
+      `  AND ${idCol} IN (SELECT id FROM (${qualifyingSql}) AS qualifying_set)`,
       `GROUP BY ${teamCol}`,
       `ORDER BY n DESC, team ASC`,
     ].join("\n");
@@ -1150,33 +1210,22 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     return rows;
   }
 
-  // Guards a stale team-options fetch (renderMetricControls may rebuild the
-  // donut panel before an earlier fetch returns) — same idiom as loadToken.
-  let donutTeamsToken = 0;
-  /** Fill the donut team <select> async, preserving the current donutTeamId
-   * selection and pruning it if the team has fallen out of scope (honest — the
-   * team isn't in the current pool anymore). */
-  async function populateDonutTeamOptions(teamSel) {
-    if (!teamSel) return;
-    const myToken = ++donutTeamsToken;
-    let teams = [];
-    try {
-      teams = await fetchDonutTeamOptions();
-    } catch {
-      teams = []; // never crash the panel; the picker just shows no teams
+  /** R2-2a: called by the donut team searchSelect's onLoad once its async option
+   * fetch resolves (the component owns the stale-fetch/torn-down guards now —
+   * its own fetchToken + destroyed flag). Here we only reconcile app state: drop
+   * a pick that's fallen out of the fresh option set (honest — the team isn't in
+   * the qualifying pool anymore), keep the red "needs input" outline in step,
+   * and — if the prune cleared the pick — mark the chart dirty so the stage shows
+   * the "choose a team" guidance instead of a stale chart. The component itself
+   * already falls its toggle back to the placeholder when the value no longer
+   * resolves, so no setValue is needed here. */
+  function reconcileDonutTeam(teamValues) {
+    const pruned = donutTeamId && !teamValues.includes(donutTeamId);
+    if (pruned) {
+      donutTeamId = null;
+      if (donutTeamSelectHandle) donutTeamSelectHandle.setValue(null);
     }
-    if (myToken !== donutTeamsToken) return; // superseded by a later render
-    if (!teamSel.isConnected) return; // panel was swapped to another chart type
-    // Drop a pick that's no longer in scope — don't silently query a team the
-    // options no longer offer.
-    const pruned = donutTeamId && !teams.includes(donutTeamId);
-    if (pruned) donutTeamId = null;
-    teamSel.innerHTML =
-      `<option value="">Choose a team…</option>` +
-      teams.map((t) => `<option value="${escAttr(t)}" ${t === donutTeamId ? "selected" : ""}>${escHtml(t)}</option>`).join("");
     setDonutTeamNeedsInput(!donutTeamId);
-    // If the prune cleared the pick, the donut can no longer draw — refresh so
-    // the stage shows the "choose a team" guidance instead of a stale chart.
     if (pruned) markDirty({ paramsChanged: true });
   }
 
@@ -1185,6 +1234,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       metricControlsDropdownTeardown();
       metricControlsDropdownTeardown = null;
     }
+    // R2-2a: dispose the previous render's searchSelect pickers (each holds a
+    // document click listener — same leak class as metricControlsDropdownTeardown
+    // above) before their host nodes are replaced by the innerHTML rebuilds below.
+    for (const h of metricControlSelects) {
+      try { h.destroy(); } catch { /* already gone */ }
+    }
+    metricControlSelects = [];
+    donutTeamSelectHandle = null;
     const state = store.get();
     const discipline = state.discipline;
     const formats = state.formats;
@@ -1201,12 +1258,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const selected = adoptChosenMetric(metrics);
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
-        <select class="select graph-metric-select" data-role="pretype-metric" aria-label="Metric">
-          ${metricOptionsHTML(metrics, selected)}
-        </select>
+        <div class="graph-metric-select" data-role="pretype-metric"></div>
       `;
-      els.metricControls.querySelector('[data-role="pretype-metric"]').addEventListener("change", (e) => {
-        const key = e.target.value || null;
+      mountMetricSelect("pretype-metric", metrics, selected, (key) => {
         if (key) markMetricChosen(key);
         else chosenMetricKey = null;
         // Re-sync only — no chart to render without a type yet.
@@ -1220,13 +1274,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       barMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
-        <select class="select graph-metric-select" data-role="bar-metric">
-          ${metricOptionsHTML(metrics, barMetricKey)}
-        </select>
+        <div class="graph-metric-select" data-role="bar-metric"></div>
       `;
-      els.metricControls.querySelector('[data-role="bar-metric"]').addEventListener("change", (e) => {
+      mountMetricSelect("bar-metric", metrics, barMetricKey, (val) => {
         noteManualChartEdit(); // item 1: user is refining by hand, not auto
-        barMetricKey = e.target.value || null;
+        barMetricKey = val || null;
         if (barMetricKey) markMetricChosen(barMetricKey);
         syncChartTypeButtons();
         onRankMetricChanged();
@@ -1234,44 +1286,49 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     } else if (chartType === "donut") {
       const metrics = donutEligibleMetrics(discipline, formats);
       donutMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
-      // Item 5: a donut-only Team <select> (a shortcut for the single team the
-      // donut needs, WITHOUT touching the shared state.teams filter). Its
-      // options are the in-scope teams (populated async below). We seed it with
-      // a placeholder + the current pick so the selection survives an immediate
-      // re-render before the async options land.
+      // Item 5: a donut-only Team picker (a shortcut for the single team the
+      // donut needs, WITHOUT touching the shared state.teams filter). R2-2a: it
+      // is the shared searchable dropdown driven by fetchDonutTeamOptions (async
+      // option source), so it types-to-filter like every other control. The pick
+      // survives an immediate re-render before the async options land (the
+      // component seeds its toggle from `value: donutTeamId` right away).
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric (total)</span>
-        <select class="select graph-metric-select" data-role="donut-metric">
-          ${metrics.length ? metricOptionsHTML(metrics, donutMetricKey) : `<option value="">No additive totals available</option>`}
-        </select>
+        <div class="graph-metric-select" data-role="donut-metric"></div>
         <span class="graph-control-label">Team</span>
-        <div class="graph-donut-team">
-          <select class="select" data-role="donut-team" aria-label="Team">
-            <option value="">Choose a team…</option>
-            ${donutTeamId ? `<option value="${escAttr(donutTeamId)}" selected>${escHtml(donutTeamId)}</option>` : ""}
-          </select>
-        </div>
+        <div class="graph-donut-team" data-role="donut-team"></div>
       `;
-      const sel = els.metricControls.querySelector('[data-role="donut-metric"]');
-      if (sel) {
-        sel.addEventListener("change", (e) => {
-          noteManualChartEdit();
-          donutMetricKey = e.target.value || null;
-          if (donutMetricKey) markMetricChosen(donutMetricKey);
-          syncChartTypeButtons();
-          onRankMetricChanged();
+      mountMetricSelect("donut-metric", metrics, donutMetricKey, (val) => {
+        noteManualChartEdit();
+        donutMetricKey = val || null;
+        if (donutMetricKey) markMetricChosen(donutMetricKey);
+        syncChartTypeButtons();
+        onRankMetricChanged();
+      }, { emptyLabel: "No additive totals available" });
+      const teamHost = els.metricControls.querySelector('[data-role="donut-team"]');
+      if (teamHost) {
+        donutTeamSelectHandle = mountSearchSelect(teamHost, {
+          // #6b: teams of the ACTUAL qualifying player set (fetchDonutTeamOptions
+          // now restricts to buildQuery's ids), not every team in the raw scope.
+          fetchOptions: fetchDonutTeamOptions,
+          value: donutTeamId,
+          placeholder: "Choose a team…",
+          filterPlaceholder: "Search teams…",
+          ariaLabel: "Team",
+          allowEmptyLabel: "Choose a team…",
+          onChange: (val) => {
+            donutTeamId = val || null; // per-type var ONLY — never state.teams
+            setDonutTeamNeedsInput(!donutTeamId); // item 6: clears the outline once picked
+            markDirty({ paramsChanged: true });
+          },
+          // Fired after the async fetch resolves: reconcile the current pick
+          // against the fresh set (prune an out-of-scope team, honest — it's no
+          // longer in the pool) and keep the red "needs input" outline in step.
+          onLoad: (teamValues) => reconcileDonutTeam(teamValues),
         });
-      }
-      const teamSel = els.metricControls.querySelector('[data-role="donut-team"]');
-      if (teamSel) {
-        teamSel.addEventListener("change", (e) => {
-          donutTeamId = e.target.value || null; // per-type var ONLY — never state.teams
-          setDonutTeamNeedsInput(!donutTeamId); // item 6: clears the outline once picked
-          markDirty({ paramsChanged: true });
-        });
+        metricControlSelects.push(donutTeamSelectHandle);
       }
       setDonutTeamNeedsInput(!donutTeamId); // item 6: outline until a team is chosen
-      populateDonutTeamOptions(teamSel); // async fill from the in-scope teams
     } else if (chartType === "scatter") {
       const metrics = eligibleMetrics(discipline, formats);
       // item 4: no auto-pick. The Y axis carries the shared chosen metric; X is
@@ -1282,28 +1339,24 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       scatterXKey = scatterXKey && metrics.some((m) => m.key === scatterXKey) ? scatterXKey : null;
       els.metricControls.innerHTML = `
         <span class="graph-control-label">X axis</span>
-        <select class="select graph-metric-select" data-role="scatter-x">
-          ${metricOptionsHTML(metrics, scatterXKey)}
-        </select>
+        <div class="graph-metric-select" data-role="scatter-x"></div>
         <span class="graph-control-label">Y axis</span>
-        <select class="select graph-metric-select" data-role="scatter-y">
-          ${metricOptionsHTML(metrics, scatterYKey)}
-        </select>
+        <div class="graph-metric-select" data-role="scatter-y"></div>
       `;
-      els.metricControls.querySelector('[data-role="scatter-x"]').addEventListener("change", (e) => {
+      mountMetricSelect("scatter-x", metrics, scatterXKey, (val) => {
         noteManualChartEdit();
-        scatterXKey = e.target.value || null;
+        scatterXKey = val || null;
         if (scatterXKey) metricEverChosen = true;
         syncChartTypeButtons();
         markDirty({ paramsChanged: true });
-      });
-      els.metricControls.querySelector('[data-role="scatter-y"]').addEventListener("change", (e) => {
+      }, { ariaLabel: "X axis metric" });
+      mountMetricSelect("scatter-y", metrics, scatterYKey, (val) => {
         noteManualChartEdit();
-        scatterYKey = e.target.value || null;
+        scatterYKey = val || null;
         if (scatterYKey) markMetricChosen(scatterYKey);
         syncChartTypeButtons();
         onRankMetricChanged();
-      });
+      }, { ariaLabel: "Y axis metric" });
     } else if (chartType === "radar") {
       // R4 Wave 1b (item 3): a checkbox dropdown of INDIVIDUAL radar-valid
       // metrics (no more fixed groups), max RADAR_MAX_METRICS. Mirrors the
@@ -1400,24 +1453,27 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       if (phaseFamilyId && !families.some((f) => f.id === phaseFamilyId)) phaseFamilyId = null;
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric family</span>
-        <select class="select graph-metric-select" data-role="phase-family">
-          ${
-            families.length
-              ? `<option value="" ${!phaseFamilyId ? "selected" : ""}>Choose a metric family…</option>` +
-                families.map((f) => `<option value="${escAttr(f.id)}" ${f.id === phaseFamilyId ? "selected" : ""}>${escHtml(f.label)}</option>`).join("")
-              : `<option value="">No phase families available for this scope</option>`
-          }
-        </select>
+        <div class="graph-metric-select" data-role="phase-family"></div>
       `;
-      const sel = els.metricControls.querySelector('[data-role="phase-family"]');
-      if (sel) {
-        sel.addEventListener("change", (e) => {
-          noteManualChartEdit();
-          phaseFamilyId = e.target.value || null;
-          if (phaseFamilyId) metricEverChosen = true;
-          syncChartTypeButtons();
-          markDirty({ paramsChanged: true });
+      const phaseHost = els.metricControls.querySelector('[data-role="phase-family"]');
+      if (phaseHost) {
+        const handle = mountSearchSelect(phaseHost, {
+          options: families.map((f) => ({ value: f.id, label: f.label })),
+          value: phaseFamilyId,
+          placeholder: families.length ? "Choose a metric family…" : "No phase families available for this scope",
+          filterPlaceholder: "Search families…",
+          ariaLabel: "Metric family",
+          disabled: families.length === 0,
+          allowEmptyLabel: families.length ? "Choose a metric family…" : null,
+          onChange: (val) => {
+            noteManualChartEdit();
+            phaseFamilyId = val || null;
+            if (phaseFamilyId) metricEverChosen = true;
+            syncChartTypeButtons();
+            markDirty({ paramsChanged: true });
+          },
         });
+        metricControlSelects.push(handle);
       }
     } else if (chartType === "slope") {
       const metrics = eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent");
@@ -1427,13 +1483,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const slopeDayAttrs = dayInputAttrs();
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
-        <select class="select graph-metric-select" data-role="slope-metric">
-          ${
-            metrics.length
-              ? metricOptionsHTML(metrics, slopeMetricKey)
-              : `<option value="">No rate/percent metrics available for this scope</option>`
-          }
-        </select>
+        <div class="graph-metric-select" data-role="slope-metric"></div>
         <span class="graph-control-label">Window A</span>
         <div class="date-range graph-slope-range">
           <input type="date" class="input date-range__input" data-role="slope-a-from" aria-label="Window A from" value="${escAttr(slopeWindowA?.from ?? "")}" ${slopeDayAttrs} />
@@ -1447,16 +1497,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           <input type="date" class="input date-range__input" data-role="slope-b-to" aria-label="Window B to" value="${escAttr(slopeWindowB?.to ?? "")}" ${slopeDayAttrs} />
         </div>
       `;
-      const metricSel = els.metricControls.querySelector('[data-role="slope-metric"]');
-      if (metricSel) {
-        metricSel.addEventListener("change", (e) => {
-          noteManualChartEdit();
-          slopeMetricKey = e.target.value || null;
-          if (slopeMetricKey) markMetricChosen(slopeMetricKey);
-          syncChartTypeButtons();
-          markDirty({ paramsChanged: true });
-        });
-      }
+      mountMetricSelect("slope-metric", metrics, slopeMetricKey, (val) => {
+        noteManualChartEdit();
+        slopeMetricKey = val || null;
+        if (slopeMetricKey) markMetricChosen(slopeMetricKey);
+        syncChartTypeButtons();
+        markDirty({ paramsChanged: true });
+      }, { emptyLabel: "No rate/percent metrics available for this scope" });
       const bindWindowSelect = (role, setter) => {
         const el = els.metricControls.querySelector(`[data-role="${role}"]`);
         if (el) {
@@ -1480,24 +1527,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       byYearMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
-        <select class="select graph-metric-select" data-role="byyear-metric">
-          ${
-            metrics.length
-              ? metricOptionsHTML(metrics, byYearMetricKey)
-              : `<option value="">No year-by-year metric available for this scope</option>`
-          }
-        </select>
+        <div class="graph-metric-select" data-role="byyear-metric"></div>
       `;
-      const sel = els.metricControls.querySelector('[data-role="byyear-metric"]');
-      if (sel) {
-        sel.addEventListener("change", (e) => {
-          noteManualChartEdit();
-          byYearMetricKey = e.target.value || null;
-          if (byYearMetricKey) markMetricChosen(byYearMetricKey);
-          syncChartTypeButtons();
-          markDirty({ paramsChanged: true });
-        });
-      }
+      mountMetricSelect("byyear-metric", metrics, byYearMetricKey, (val) => {
+        noteManualChartEdit();
+        byYearMetricKey = val || null;
+        if (byYearMetricKey) markMetricChosen(byYearMetricKey);
+        syncChartTypeButtons();
+        markDirty({ paramsChanged: true });
+      }, { emptyLabel: "No year-by-year metric available for this scope" });
     } else if (chartType === "dumbbell") {
       // Time-window Dumbbell (owner correction — NOT a Pace/Spin chart): the
       // SAME controls as Slope — one rate/percent metric + a Window A/Window B
@@ -1511,13 +1549,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const dumbbellDayAttrs = dayInputAttrs();
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
-        <select class="select graph-metric-select" data-role="dumbbell-metric">
-          ${
-            metrics.length
-              ? metricOptionsHTML(metrics, dumbbellMetricKey)
-              : `<option value="">No rate/percent metric available for this scope</option>`
-          }
-        </select>
+        <div class="graph-metric-select" data-role="dumbbell-metric"></div>
         <span class="graph-control-label">Window A</span>
         <div class="date-range graph-slope-range">
           <input type="date" class="input date-range__input" data-role="dumbbell-a-from" aria-label="Window A from" value="${escAttr(dumbbellWindowA?.from ?? "")}" ${dumbbellDayAttrs} />
@@ -1531,16 +1563,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           <input type="date" class="input date-range__input" data-role="dumbbell-b-to" aria-label="Window B to" value="${escAttr(dumbbellWindowB?.to ?? "")}" ${dumbbellDayAttrs} />
         </div>
       `;
-      const metricSel = els.metricControls.querySelector('[data-role="dumbbell-metric"]');
-      if (metricSel) {
-        metricSel.addEventListener("change", (e) => {
-          noteManualChartEdit();
-          dumbbellMetricKey = e.target.value || null;
-          if (dumbbellMetricKey) markMetricChosen(dumbbellMetricKey);
-          syncChartTypeButtons();
-          markDirty({ paramsChanged: true });
-        });
-      }
+      mountMetricSelect("dumbbell-metric", metrics, dumbbellMetricKey, (val) => {
+        noteManualChartEdit();
+        dumbbellMetricKey = val || null;
+        if (dumbbellMetricKey) markMetricChosen(dumbbellMetricKey);
+        syncChartTypeButtons();
+        markDirty({ paramsChanged: true });
+      }, { emptyLabel: "No rate/percent metric available for this scope" });
       const bindWindowSelect = (role, setter) => {
         const el = els.metricControls.querySelector(`[data-role="${role}"]`);
         if (el) {
@@ -2042,6 +2071,19 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     return { ok: true, reason: null };
   }
 
+  /** searchSelect options for the chart-type picker under the current scope.
+   * Every type stays SELECTABLE (never `disabled`) so picking an unavailable one
+   * still shows the honest why-not sentence in the stage (decision 46f); an
+   * "(unavailable)" hintSuffix is the only availability cue — the exact same cue
+   * the R2-1 native <select> carried in its option text. */
+  function chartTypeOptions(statuses) {
+    return CHART_TYPES.map((t) => ({
+      value: t.key,
+      label: t.label,
+      hintSuffix: statuses && statuses[t.key] && !statuses[t.key].ok ? "(unavailable)" : "",
+    }));
+  }
+
   function syncChartTypeButtons() {
     const state = store.get();
     // NIT5: compute the scope-eligible metric base ONCE and reuse it across
@@ -2051,23 +2093,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     const statuses = {};
     for (const t of CHART_TYPES) statuses[t.key] = evaluateTypeStatus(t.key, state, { eligibleMetricsForScope: eligibleForScope });
 
-    // R2-1: chart type is a native <select> now (was a 9-tile segmented grid).
-    // Reflect the current pick — null maps to the "Choose a chart type…"
-    // placeholder (value="") so the honest empty state survives (decision 46f:
-    // nothing is pre-selected). Every real option stays SELECTABLE and never
-    // html-disabled: clicking an unavailable type still selects it, and the
-    // stage then shows the honest why-not sentence on the next draw
-    // (renderChart()'s evaluateTypeStatus guard — unchanged). Since a native
-    // <option> can't be reliably greyed the way the old tiles were, a passive
-    // "(unavailable)" suffix on the label is the only availability cue here.
-    els.chartType.value = chartType || "";
-    els.chartType.querySelectorAll("option").forEach((opt) => {
-      if (!opt.value) return; // the placeholder — leave it as-is
-      const type = CHART_TYPES.find((t) => t.key === opt.value);
-      if (!type) return;
-      const status = statuses[opt.value];
-      opt.textContent = status.ok ? type.label : `${type.label} (unavailable)`;
-    });
+    // R2-2a: chart type is the shared searchable dropdown now. Reflect the
+    // current pick (null -> "Choose a chart type…" placeholder, decision 46f:
+    // nothing is pre-selected) and refresh the "(unavailable)" hint suffixes.
+    if (chartTypeSelect) {
+      chartTypeSelect.setOptions(chartTypeOptions(statuses));
+      chartTypeSelect.setValue(chartType);
+    }
   }
 
   // "Bars ⇄ Dots" style toggle — bar chart only (lollipop rendering, same
@@ -2093,42 +2125,54 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     markDirty();
   });
 
-  // R2-1: chart type is a native <select> now — a "change" event (not the old
-  // tile "click"). decision 46f survives: unavailable types are never disabled,
-  // so selecting one still sets it (renderChart() then shows the honest stage
-  // sentence instead of a chart; see evaluateTypeStatus()). Re-selecting the
-  // placeholder (value="") clears the type back to the empty state.
-  els.chartType.addEventListener("change", (e) => {
-    const val = e.target.value || null;
-    if (val === chartType) return;
-    chartType = val;
-    // Item 1: a deliberate chart-type pick is the user taking over from any
-    // filter-driven auto-selection — so clearing metric conditions later won't
-    // wipe their chart.
-    noteManualChartEdit();
-    syncChartTypeButtons();
-    syncBarStyleVisibility();
-    clearCapNote();
-    renderMetricControls();
-    // The cap (and, for bar/donut/scatter, the ranking metric) just changed
-    // with the chart type. In "manual" mode, only trim any genuine overflow
-    // (never re-pick). In "best"/"worst" mode, a synchronous silent trim
-    // keeps the checked<=cap invariant true for the brief window before the
-    // real async re-derivation (which re-ranks from the UNTOUCHED candidate
-    // pool under the new cap/metric — this is what makes "switch to a bigger
-    // chart type brings hidden players back" still true, see players.js's
-    // class doc comment) replaces it moments later. Skipped when the placeholder
-    // was re-selected (no type -> no cap): activeMaxCap() is Infinity then.
-    if (chartType) {
-      if (selection.getMode() === "manual") {
-        selection.clampToCap();
-      } else {
-        selection.clampToCap({ silent: true });
-        deriveChecked(selection.getMode());
+  // R2-2a: chart type is the shared searchable dropdown now — its onChange
+  // (value string, or null for the "Choose a chart type…" placeholder) does
+  // EXACTLY what the R2-1 native <select>'s "change" handler did. decision 46f
+  // survives: unavailable types are never disabled, so picking one still sets it
+  // (renderChart() then shows the honest stage sentence instead of a chart; see
+  // evaluateTypeStatus()). Mounted here (once) rather than in the markup so the
+  // onChange can close over the controller functions below.
+  chartTypeSelect = mountSearchSelect(els.chartType, {
+    options: chartTypeOptions(null),
+    value: chartType,
+    placeholder: "Choose a chart type…",
+    filterPlaceholder: "Search chart types…",
+    ariaLabel: "Chart type",
+    // Native-<select> parity: a "Choose a chart type…" row clears the pick back
+    // to null → the honest empty rules-table state (decision 46f), same as
+    // re-selecting the old <select>'s placeholder option did.
+    allowEmptyLabel: "Choose a chart type…",
+    onChange: (val) => {
+      if (val === chartType) return;
+      chartType = val;
+      // Item 1: a deliberate chart-type pick is the user taking over from any
+      // filter-driven auto-selection — so clearing metric conditions later won't
+      // wipe their chart.
+      noteManualChartEdit();
+      syncChartTypeButtons();
+      syncBarStyleVisibility();
+      clearCapNote();
+      renderMetricControls();
+      // The cap (and, for bar/donut/scatter, the ranking metric) just changed
+      // with the chart type. In "manual" mode, only trim any genuine overflow
+      // (never re-pick). In "best"/"worst" mode, a synchronous silent trim
+      // keeps the checked<=cap invariant true for the brief window before the
+      // real async re-derivation (which re-ranks from the UNTOUCHED candidate
+      // pool under the new cap/metric — this is what makes "switch to a bigger
+      // chart type brings hidden players back" still true, see players.js's
+      // class doc comment) replaces it moments later. Skipped when the placeholder
+      // was re-selected (no type -> no cap): activeMaxCap() is Infinity then.
+      if (chartType) {
+        if (selection.getMode() === "manual") {
+          selection.clampToCap();
+        } else {
+          selection.clampToCap({ silent: true });
+          deriveChecked(selection.getMode());
+        }
       }
-    }
-    renderPlayerList();
-    markDirty({ paramsChanged: true });
+      renderPlayerList();
+      markDirty({ paramsChanged: true });
+    },
   });
 
   // Owner item 7: the ONE control that actually draws the pending in-panel
