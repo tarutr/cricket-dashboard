@@ -27,19 +27,12 @@ import { escSql as esc } from "../state.js";
 // export name itself is unchanged (task brief: don't rename it).
 export const CHART_CAPS = {
   bar: { min: 2, max: 15 },
-  // Batch 8 (task 3, decision 44f): widened 10 -> 20 — the donut now plots the
-  // top 7 CHECKED players by value plus one aggregated "Other (N players)"
-  // slice for the rest, so up to 20 can be checked/compared even though the
-  // chart itself never draws more than 8 slices (see charts.js buildDonutChart
-  // and CHART_CAPS's own consumers, which only ever read `.max`, so nothing
-  // downstream had to change shape for this).
-  donut: { min: 2, max: 20 },
   radar: { min: 1, max: 6 },
   scatter: { min: 5, max: 60 },
   // Batch 4 part 1 (decision 43): Phases (grouped bars, one group per player —
   // gets crowded fast, so a tighter ceiling than bar's) and Slope (a
   // two-column line-per-player chart — same "needs at least two to compare"
-  // floor as bar/donut, roomier ceiling since each player is just one line).
+  // floor as bar, roomier ceiling since each player is just one line).
   phases: { min: 2, max: 8 },
   slope: { min: 2, max: 12 },
   // Batch 4 wave 2: By year (a line per player — min 1 so a single player's

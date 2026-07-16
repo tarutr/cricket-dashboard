@@ -17,12 +17,6 @@ import { getManifest, query } from "../db.js";
 import { mountFilters, buildScopeClauses } from "../filters.js";
 import { mountFilterDrawer } from "../drawer.js";
 import { mountSearchSelect } from "../searchSelect.js";
-// R2-2a (#6b): the donut team picker's option list is the DISTINCT teams of the
-// ACTUAL qualifying player set (WHERE + HAVING/advancedToHaving), not every team
-// present in the raw scope. buildQuery is table.js's "leaderboard player set" —
-// the exact same set the Stats table shows — reused here as an id subquery so
-// the two can never disagree about who qualifies.
-import { buildQuery } from "../table.js";
 import {
   CHART_CAPS,
   createSelection,
@@ -34,7 +28,6 @@ import {
   fetchSelectedPlayerMetrics,
   fetchWindowMetric,
   buildBarChart,
-  buildDonutChart,
   buildScatterChart,
   buildRadarSmallMultiples,
   buildPhasesChart,
@@ -61,7 +54,6 @@ import { buildBenchmarkChart } from "./benchmarkChart.js";
 
 const CHART_TYPES = [
   { key: "bar", label: "Bar" },
-  { key: "donut", label: "Donut" },
   { key: "scatter", label: "Scatter" },
   { key: "radar", label: "Radar" },
   { key: "phases", label: "Phases" },
@@ -90,11 +82,6 @@ const CHART_RULES = {
     tagline: "Ranks players on one metric.",
     purpose: "A bar chart ranks players on one metric.",
     needs: "Pick one metric.",
-  },
-  donut: {
-    tagline: "One team's share of a total — runs or wickets.",
-    purpose: "A donut chart shows how one team's total splits between its players.",
-    needs: "Pick an additive total (runs or wickets) and choose a team.",
   },
   scatter: {
     tagline: "Two metrics plotted across the whole field.",
@@ -271,17 +258,6 @@ function wireDropdown(toggleEl, panelEl) {
 // here). It is now a time-window chart drawing Slope's exact data source, so
 // it works wherever Slope does — any gender, batting OR bowling — and needs no
 // availability gate at all. Both helpers were removed with that rebuild.
-
-/** Metrics eligible for the donut chart: additive totals only (Batch 3 fix 4 —
- * an explicit `additive: true` flag on the metric itself, set once in
- * metrics.js on genuinely summable counts/totals. Previously this inferred
- * additivity from format==="int" && zeroIsData===true, which let High Score
- * (MAX(runs), not a sum) slip in as a donut metric even though summing
- * several players' high scores is meaningless. Discipline/phase gating is
- * still applied via eligibleMetrics(). */
-function donutEligibleMetrics(discipline, formats) {
-  return eligibleMetrics(discipline, formats).filter((m) => m.additive === true);
-}
 
 // R4 Wave 1b (item 3 + item 4): the radar-valid metric predicate — the ONE
 // source both the radar checkbox picker's list AND the honest-refusal/enable
@@ -502,15 +478,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // per-render metric pickers inside els.metricControls — rebuilt on every
   // renderMetricControls(), so each is destroy()'d before the next rebuild (they
   // each hold a document click listener, exactly like the radar/benchmark
-  // dropdowns' metricControlsDropdownTeardown). `donutTeamSelectHandle` is the
-  // donut-only team picker (also pushed into metricControlSelects for teardown),
-  // kept separately so setDonutTeamNeedsInput() can toggle its red outline.
+  // dropdowns' metricControlsDropdownTeardown).
   let chartTypeSelect = null;
   let metricControlSelects = [];
-  let donutTeamSelectHandle = null;
   // R3 Wave 3, item 4 (no defaults / honest graph state):
   //  • chosenMetricKey — the ONE metric the user has picked, shared across the
-  //    single-metric chart types (bar/donut/slope/byyear/dumbbell + scatter's Y
+  //    single-metric chart types (bar/slope/byyear/dumbbell + scatter's Y
   //    axis) so it PERSISTS across chart-type switches. Adopted into a type's
   //    own key only when it's valid for that type; otherwise that type renders
   //    an honest "choose another metric" message rather than silently swapping.
@@ -539,16 +512,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   }
   let barStyle = "bars"; // "bars" | "dots" (lollipop) — bar chart only
   let barMetricKey = null;
-  let donutMetricKey = null;
-  // Wave 2 (item 5): the donut-ONLY team pick. A donut compares players within
-  // ONE team's additive total, so it needs a single team — but instead of the
-  // GLOBAL Team filter (state.teams), a donut-local <select> supplies it. This
-  // is a per-type closure var (the isolation pattern every chart type follows):
-  // it is NEVER written into the shared store/state.js, so choosing a donut team
-  // leaves the Stats table and every other chart type untouched. Holds a team
-  // NAME (matching the strings state.teams carries — see buildScopeClauses's
-  // `teamColumn IN (...)`), or null until the user picks one.
-  let donutTeamId = null;
   let scatterXKey = null;
   let scatterYKey = null;
   // R4 Wave 1b (item 3): radar no longer uses fixed metric GROUPS. The user
@@ -611,7 +574,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   //     seed (the graph scope's active sort at seed time), the fallback title
   //     provenance for chart types with no single rankable metric.
   //   • lastRankMetricKey/Discipline — which metric most recently ranked the
-  //     CHECKED set via a Best/Worst derivation (bar/donut/scatter-Y only —
+  //     CHECKED set via a Best/Worst derivation (bar/scatter-Y only —
   //     see rankMetricForActiveType/deriveChecked); null whenever the
   //     seed-order fallback was used or the roster is dirty.
   let seedSortKey = null;
@@ -670,8 +633,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    *   ---------+----------------------------------------+-----------------
    *      >= 3  | (radar-valid subset, capped to 10)     | radar
    *        2   | —                                      | scatter (X,Y)
-   *        1   | additive total AND scope pinned to 1 team | donut
-   *        1   | otherwise                              | bar
+   *        1   | (single-metric ranking)                | bar
    *        0   | —                                      | (no auto-select)
    *
    * This is derived ENTIRELY from the applied filters — it is NOT a default:
@@ -713,20 +675,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       scatterYKey = valid[1];
       markMetricChosen(valid[1]);
     } else {
-      // Exactly one metric condition.
-      const m = getMetric(valid[0], discipline);
-      if (m && m.additive === true && (state.teams || []).length === 1) {
-        type = "donut";
-        donutMetricKey = valid[0];
-        // Wave 2 (item 5): this archetype fires precisely when the scope is
-        // pinned to ONE team, so adopt that team as the donut's own pick — keeps
-        // the filter-driven donut drawing now that the donut needs an explicit
-        // team (donutTeamId), without ever reading state.teams at draw time.
-        donutTeamId = state.teams[0];
-      } else {
-        type = "bar";
-        barMetricKey = valid[0];
-      }
+      // Exactly one metric condition -> bar (a single-metric ranking).
+      type = "bar";
+      barMetricKey = valid[0];
       markMetricChosen(valid[0]);
     }
 
@@ -751,7 +702,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         chartType = null;
         chosenMetricKey = null;
         metricEverChosen = false;
-        barMetricKey = donutMetricKey = scatterXKey = scatterYKey = null;
+        barMetricKey = scatterXKey = scatterYKey = null;
         slopeMetricKey = byYearMetricKey = dumbbellMetricKey = phaseFamilyId = null;
         radarMetricKeys = [];
         autoSelectedFromFilters = false;
@@ -895,9 +846,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   //     for "worst").
   //   • "manual" — the user's literal hand-picks; nothing here recomputes them.
 
-  /** The metric to rank Best/Worst by for the CURRENT chart type. Bar/donut
-   * rank by their own single displayed metric; scatter ranks by its Y axis (X
-   * is the OTHER axis, not "the" metric). Every other chart type
+  /** The metric to rank Best/Worst by for the CURRENT chart type. Bar ranks by
+   * its own single displayed metric; scatter ranks by its Y axis (X is the
+   * OTHER axis, not "the" metric). Every other chart type
    * (radar/phases/slope/byyear/dumbbell) shows a GROUP of metrics at once or
    * needs its own per-player chart query (two windows/sides) to get a single
    * value — too expensive to fetch just for a ranking preview across the WHOLE
@@ -905,7 +856,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * (returns null here to signal that fallback). */
   function rankMetricForActiveType(state) {
     if (chartType === "bar") return getMetric(barMetricKey, state.discipline);
-    if (chartType === "donut") return getMetric(donutMetricKey, state.discipline);
     if (chartType === "scatter") return getMetric(scatterYKey, state.discipline);
     return null;
   }
@@ -1027,7 +977,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     lastRankMetricDiscipline = metric ? state.discipline : null;
   }
 
-  /** Wired to the bar/donut/scatter-Y metric selects — the three that feed
+  /** Wired to the bar/scatter-Y metric selects — the ones that feed
    * rankMetricForActiveType. R6b (owner correction): Best/Worst rank by the
    * chart's active metric again, so when that metric changes the Best/Worst
    * checked set must re-derive ("switching to Best/Worst re-derives on metric
@@ -1102,13 +1052,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   function setNeedsInput(el, on) {
     if (el) el.classList.toggle("needs-input", !!on);
   }
-  /** Red-outline the donut team picker when no team is chosen (item 6). R2-2a:
-   * the picker is a searchSelect now, so the outline lives on its toggle — the
-   * component's setInvalid() toggles `.needs-input` there (its toggle carries
-   * class `select`, so the existing `.select.needs-input` CSS still applies). */
-  function setDonutTeamNeedsInput(on) {
-    if (donutTeamSelectHandle) donutTeamSelectHandle.setInvalid(on);
-  }
   /** Red-outline whichever of a Slope/Dumbbell window's 4 date inputs are still
    * empty (item 6). `prefix` is "slope" | "dumbbell". Re-run on render and on
    * every window-input change so an input clears its outline as soon as it's
@@ -1118,115 +1061,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const el = els.metricControls.querySelector(`[data-role="${role}"]`);
       setNeedsInput(el, el && !el.value);
     }
-  }
-
-  // ── Item 5 + R2-2a #6b: donut-only team options ─────────────────────────────
-  // Distinct teams the ACTUAL QUALIFYING PLAYERS appear under — NOT every team
-  // with any row in the raw scope. The raw-scope version listed all
-  // international teams even when the filters (an advanced metric condition, a
-  // team/opposition/position narrowing) restricted the player set to, say, only
-  // Indian + Sri Lankan players; the owner wants the picker to offer only those
-  // players' teams (#6b). The qualifying set is table.js's buildQuery(state, [])
-  // — the EXACT leaderboard player set (WHERE + HAVING/advancedToHaving), the
-  // same rows the Stats table shows — reused here as an id subquery so the two
-  // can never disagree. The outer query still runs over the discipline view with
-  // the SAME scope clauses the pool draw (fetchDonutTeamPool) uses, so the team
-  // strings match what the draw expects; only the id restriction is new. No
-  // team-specific literal is injected (buildScopeClauses self-escapes
-  // state.teams; buildQuery self-escapes its own inputs), so this stays inert to
-  // SQL injection. Ordered most-represented first, name as tiebreak.
-  async function fetchDonutTeamOptions() {
-    const state = store.get();
-    const discipline = state.discipline;
-    const view = discipline;
-    const teamCol = discipline === "batting" ? "batting_team" : "bowling_team";
-    const idCol = discipline === "batting" ? "batter_id" : "bowler_id";
-    const whereClauses = buildScopeClauses(state, {
-      includeTeams: true,
-      teamColumn: teamCol,
-      idColumn: idCol,
-      oppositionColumn: discipline === "batting" ? "bowling_team" : "batting_team",
-      includePositions: discipline === "batting",
-    });
-    // buildQuery(state, []) projects `id`/`name` only (no metric columns, no
-    // matchesSql), grouped per player, gated by the advanced HAVING — exactly
-    // the qualifying id set. Embedded as `idCol IN (SELECT id FROM (…))`.
-    const { sql: qualifyingSql } = buildQuery(state, []);
-    const sql = [
-      `SELECT ${teamCol} AS team, COUNT(*) AS n`,
-      `FROM ${view}`,
-      `WHERE ${whereClauses.join(" AND ")}`,
-      `  AND ${idCol} IN (SELECT id FROM (${qualifyingSql}) AS qualifying_set)`,
-      `GROUP BY ${teamCol}`,
-      `ORDER BY n DESC, team ASC`,
-    ].join("\n");
-    const { rows } = await query(sql);
-    return rows.map((r) => r.team).filter((t) => t != null);
-  }
-
-  /** Owner correction (Wave 2 follow-up): the donut draws the TEAM's OWN
-   * players within the current scope — every player with a qualifying row for
-   * `donutTeamId` under `teamState`, sized by the one donut metric — NOT the
-   * shared Players roster (Top Names/Best/Worst/Manual) intersected with the
-   * team. The Players section is simply ignored for donut now.
-   *
-   * Same query SHAPE as fetchDonutTeamOptions just above (and charts.js's
-   * fetchSelectedPlayerMetrics), minus any id restriction — duplicated rather
-   * than imported, since this batch's ownership is src/graph/graph.js only
-   * (same precedent as this file's own wireDropdown() copy of filters.js's
-   * helper); charts.js itself is untouched. Deliberately does NOT route
-   * through table.js's buildQuery/benchmark.js's fetchBenchmarkPool: those
-   * special-case the "Matches" metric (source: player_matches) into a SEPARATE
-   * matchesSql query that a caller must merge in — skipping that merge would
-   * silently zero out "Matches" as a donut metric (players.js's own doc
-   * comment on the exact same trap). Projecting `metric.sqlExpression`
-   * straight off the innings view instead (this function, and every OTHER
-   * chart type via fetchSelectedPlayerMetrics) sidesteps it entirely and keeps
-   * "Matches" behaving identically across every chart type.
-   *
-   * buildDonutChart itself already caps the DRAWING at top-7 + "Other" — this
-   * just hands it the team's whole in-scope pool to rank.
-   * Returns [{id, name, [metric.key]: value}]. */
-  async function fetchDonutTeamPool(teamState, metric) {
-    const discipline = teamState.discipline;
-    const view = discipline;
-    const idCol = discipline === "batting" ? "batter_id" : "bowler_id";
-    const nameCol = discipline === "batting" ? "batter_name" : "bowler_name";
-    const teamCol = discipline === "batting" ? "batting_team" : "bowling_team";
-    const whereClauses = buildScopeClauses(teamState, {
-      includeTeams: true,
-      teamColumn: teamCol,
-      idColumn: idCol,
-      oppositionColumn: discipline === "batting" ? "bowling_team" : "batting_team",
-      includePositions: discipline === "batting",
-    });
-    const sql = [
-      `SELECT ${idCol} AS id, ${nameCol} AS name, ${metric.sqlExpression} AS ${metric.key}`,
-      `FROM ${view}`,
-      `WHERE ${whereClauses.join(" AND ")}`,
-      `GROUP BY ${idCol}, ${nameCol}`,
-    ].join("\n");
-    const { rows } = await query(sql);
-    return rows;
-  }
-
-  /** R2-2a: called by the donut team searchSelect's onLoad once its async option
-   * fetch resolves (the component owns the stale-fetch/torn-down guards now —
-   * its own fetchToken + destroyed flag). Here we only reconcile app state: drop
-   * a pick that's fallen out of the fresh option set (honest — the team isn't in
-   * the qualifying pool anymore), keep the red "needs input" outline in step,
-   * and — if the prune cleared the pick — mark the chart dirty so the stage shows
-   * the "choose a team" guidance instead of a stale chart. The component itself
-   * already falls its toggle back to the placeholder when the value no longer
-   * resolves, so no setValue is needed here. */
-  function reconcileDonutTeam(teamValues) {
-    const pruned = donutTeamId && !teamValues.includes(donutTeamId);
-    if (pruned) {
-      donutTeamId = null;
-      if (donutTeamSelectHandle) donutTeamSelectHandle.setValue(null);
-    }
-    setDonutTeamNeedsInput(!donutTeamId);
-    if (pruned) markDirty({ paramsChanged: true });
   }
 
   function renderMetricControls() {
@@ -1241,7 +1075,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       try { h.destroy(); } catch { /* already gone */ }
     }
     metricControlSelects = [];
-    donutTeamSelectHandle = null;
     const state = store.get();
     const discipline = state.discipline;
     const formats = state.formats;
@@ -1283,52 +1116,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         syncChartTypeButtons();
         onRankMetricChanged();
       });
-    } else if (chartType === "donut") {
-      const metrics = donutEligibleMetrics(discipline, formats);
-      donutMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
-      // Item 5: a donut-only Team picker (a shortcut for the single team the
-      // donut needs, WITHOUT touching the shared state.teams filter). R2-2a: it
-      // is the shared searchable dropdown driven by fetchDonutTeamOptions (async
-      // option source), so it types-to-filter like every other control. The pick
-      // survives an immediate re-render before the async options land (the
-      // component seeds its toggle from `value: donutTeamId` right away).
-      els.metricControls.innerHTML = `
-        <span class="graph-control-label">Metric (total)</span>
-        <div class="graph-metric-select" data-role="donut-metric"></div>
-        <span class="graph-control-label">Team</span>
-        <div class="graph-donut-team" data-role="donut-team"></div>
-      `;
-      mountMetricSelect("donut-metric", metrics, donutMetricKey, (val) => {
-        noteManualChartEdit();
-        donutMetricKey = val || null;
-        if (donutMetricKey) markMetricChosen(donutMetricKey);
-        syncChartTypeButtons();
-        onRankMetricChanged();
-      }, { emptyLabel: "No additive totals available" });
-      const teamHost = els.metricControls.querySelector('[data-role="donut-team"]');
-      if (teamHost) {
-        donutTeamSelectHandle = mountSearchSelect(teamHost, {
-          // #6b: teams of the ACTUAL qualifying player set (fetchDonutTeamOptions
-          // now restricts to buildQuery's ids), not every team in the raw scope.
-          fetchOptions: fetchDonutTeamOptions,
-          value: donutTeamId,
-          placeholder: "Choose a team…",
-          filterPlaceholder: "Search teams…",
-          ariaLabel: "Team",
-          allowEmptyLabel: "Choose a team…",
-          onChange: (val) => {
-            donutTeamId = val || null; // per-type var ONLY — never state.teams
-            setDonutTeamNeedsInput(!donutTeamId); // item 6: clears the outline once picked
-            markDirty({ paramsChanged: true });
-          },
-          // Fired after the async fetch resolves: reconcile the current pick
-          // against the fresh set (prune an out-of-scope team, honest — it's no
-          // longer in the pool) and keep the red "needs input" outline in step.
-          onLoad: (teamValues) => reconcileDonutTeam(teamValues),
-        });
-        metricControlSelects.push(donutTeamSelectHandle);
-      }
-      setDonutTeamNeedsInput(!donutTeamId); // item 6: outline until a team is chosen
     } else if (chartType === "scatter") {
       const metrics = eligibleMetrics(discipline, formats);
       // item 4: no auto-pick. The Y axis carries the shared chosen metric; X is
@@ -2030,13 +1817,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // state.formats). syncChartTypeButtons() computes it ONCE and threads it in
     // here so a single sync pass doesn't rebuild it per type; other callers
     // (the "Graph this player" chooser) omit the override and recompute exactly
-    // as before. Note: the donut/radar/benchmark branches read their own
+    // as before. Note: the radar/benchmark branches read their own
     // wrapper predicates (benchmarkEligibleMetrics lives in benchmark.js,
     // outside this file), so those are intentionally left untouched.
     const eligibleForScope = eligibleMetricsForScope !== undefined ? eligibleMetricsForScope : eligibleMetrics(state.discipline, state.formats);
-    if (typeKey === "donut" && donutEligibleMetrics(state.discipline, state.formats).length === 0) {
-      return { ok: false, reason: "Needs a countable stat" };
-    }
     if (typeKey === "radar" && radarEligibleMetrics(state.discipline, state.formats).length < RADAR_MIN_METRICS) {
       return { ok: false, reason: `Needs at least ${RADAR_MIN_METRICS} radar metrics for this scope` };
     }
@@ -2153,7 +1937,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       syncBarStyleVisibility();
       clearCapNote();
       renderMetricControls();
-      // The cap (and, for bar/donut/scatter, the ranking metric) just changed
+      // The cap (and, for bar/scatter, the ranking metric) just changed
       // with the chart type. In "manual" mode, only trim any genuine overflow
       // (never re-pick). In "best"/"worst" mode, a synchronous silent trim
       // keeps the checked<=cap invariant true for the brief window before the
@@ -2493,7 +2277,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
   /** The metric that actually ranked the CURRENT Best/Worst checked set,
    * resolved for `discipline` — or null if unknown/inapplicable. Prefers the
-   * per-type Best/Worst ranking metric (lastRankMetricKey — bar/donut/scatter-Y
+   * per-type Best/Worst ranking metric (lastRankMetricKey — bar/scatter-Y
    * only) when one was used; otherwise falls back to whatever metric ranked the
    * original SQL seed (seedSortKey — the graph scope's active sort at seed
    * time), which is exactly right for the "seed sort" fallback types
@@ -2568,13 +2352,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     if (chartType === "bar") {
       const metric = getMetric(barMetricKey, discipline);
       return metric ? { type: "bar", discipline, metric, playerCount, roster } : null;
-    }
-    if (chartType === "donut") {
-      const metric = getMetric(donutMetricKey, discipline);
-      // Donut ignores the Players section entirely (owner ruling) — always the
-      // honest plain "N players" title, never "top N"/"most-capped" (which
-      // would misattribute provenance to a selection donut no longer reads).
-      return metric ? { type: "donut", discipline, metric, donutTeam: donutTeamId, playerCount, roster: { dirty: true } } : null;
     }
     if (chartType === "scatter") {
       const metricX = getMetric(scatterXKey, discipline);
@@ -2674,14 +2451,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * of that chart the global scope sentence knows nothing about). */
   function buildFooterScope(config) {
     const base = store.describeScope();
-    if (config && config.type === "donut" && config.donutTeam) {
-      // Item 5 (§8.4 honesty): the donut IS scoped to donutTeam, so the footer
-      // must say so. The GLOBAL Team filter, if somehow also set, is already in
-      // `base` (describeScope reads state.teams) — only add the donut-local team
-      // when it isn't already there, so the sentence never doubles up.
-      const teams = store.get().teams || [];
-      return teams.includes(config.donutTeam) ? base : `${base} · Team: ${config.donutTeam}`;
-    }
     if (config && config.type === "slope") {
       const a = config.windowALabel ?? windowLabel(config.windowA);
       const b = config.windowBLabel ?? windowLabel(config.windowB);
@@ -2776,14 +2545,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
     const players = selection.get();
 
-    // Owner correction (Wave 2 follow-up): the donut chart now IGNORES the
-    // Players section (Top Names/Best/Worst/Manual) entirely — it draws the
-    // TEAM's own full in-scope pool (see the donut branch below), not the
-    // checked roster. So the checked-roster zero/min-cap gates below, which
-    // exist to stop Bar/Scatter/etc. from trying to draw with too few CHECKED
-    // players, must not apply to donut — they'd otherwise block the donut on
-    // an empty/undersized Players selection that donut no longer reads at all.
-    if (players.length === 0 && chartType !== "donut") {
+    if (players.length === 0) {
       hideStatus();
       card.hidePlaceholder();
       if (chartRef.current) {
@@ -2804,9 +2566,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // shows a short note in place of a chart rather than attempting to draw
     // e.g. a 1-bar "ranking". (For radar, min is 1, so this is already
     // subsumed by the players.length === 0 branch above — kept anyway so the
-    // rule reads the same for every chart type.) Donut is exempt — see above.
+    // rule reads the same for every chart type.)
     const capDef = CHART_CAPS[chartType];
-    if (chartType !== "donut" && players.length < capDef.min) {
+    if (players.length < capDef.min) {
       hideStatus();
       if (chartRef.current) {
         chartRef.current.destroy();
@@ -2830,7 +2592,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     try {
       const roster = currentRosterMeta(discipline);
 
-      // Slope is handled entirely separately from the bar/donut/scatter/
+      // Slope is handled entirely separately from the bar/scatter/
       // radar/phases chain below: it needs TWO independent queries (one per
       // date window, via fetchWindowMetric — see charts.js) instead of the
       // single fetchSelectedPlayerMetrics call every other chart type shares,
@@ -3199,74 +2961,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         return;
       }
 
-      // Donut (item 5, Wave 2; corrected per owner ruling): its own branch —
-      // like Slope/Radar above — because it needs a TEAM-SCOPED, roster-
-      // INDEPENDENT value query the shared bar/scatter/phases path below
-      // doesn't do. A donut shows how ONE team's additive total (runs/wickets)
-      // splits between ITS OWN PLAYERS in the current scope — not the shared
-      // Players roster (Top Names/Best/Worst/Manual) intersected with the
-      // team. The Players section is simply ignored here (the checked-roster
-      // zero/min-cap gates above are also bypassed for donut — see there). The
-      // team comes from the donut-local `donutTeamId` picker (never the
-      // shared state.teams); we overlay it onto a scope CLONE (never mutating
-      // the shared store) and fetch the team's WHOLE in-scope pool.
-      if (chartType === "donut") {
-        const metric = getMetric(donutMetricKey, discipline); // item 4: no auto-pick
-        if (!metric) { showChartGuidance(noMetricGuidance("donut")); return; }
-        if (!donutTeamId) {
-          // No team chosen yet — guide to the in-panel team picker (item 5) and
-          // red-outline it (item 6).
-          setDonutTeamNeedsInput(true);
-          showChartGuidance(chartPurposeMessage("donut", null));
-          return;
-        }
-        setDonutTeamNeedsInput(false);
-        // Team-scoped scope CLONE — NEVER mutate the shared store (isolation).
-        const teamState = { ...state, teams: [donutTeamId] };
-        const poolRows = await fetchDonutTeamPool(teamState, metric);
-        if (token !== loadToken) return;
-        hideStatus();
-        if (poolRows.length === 0) {
-          if (chartRef.current) {
-            chartRef.current.destroy();
-            chartRef.current = null;
-          }
-          card.showPlaceholder(`No players found for ${donutTeamId} in this scope. Choose another team, or widen the filters.`);
-          renderExclusions([]);
-          const titleCfg = buildTitleOnlyConfig(0);
-          if (titleCfg) card.regenerate(titleCfg, buildFooterScope(titleCfg));
-          return;
-        }
-        const rowsById = new Map(poolRows.map((r) => [r.id, r]));
-        const poolPlayers = poolRows.map((r) => ({ id: r.id, name: r.name }));
-        const canvas = card.getCanvas();
-        // buildDonutChart itself ranks by value and caps the DRAWING at top-7 +
-        // "Other" — poolPlayers is the team's WHOLE in-scope pool, unrestricted.
-        const result = buildDonutChart(canvas, chartRef, { metric, rowsById, players: poolPlayers });
-        renderExclusions(result?.excluded ?? [], result?.note);
-        const excludedCount = result?.excluded?.length ?? 0;
-        const drawn = Math.max(0, poolPlayers.length - excludedCount);
-        const config = {
-          type: "donut",
-          discipline,
-          metric,
-          donutTeam: donutTeamId,
-          playerCount: drawn,
-          // The Players section (Top Names/Best/Worst/Manual) plays no part in
-          // this set anymore — it's always the team's own full pool, never a
-          // provenance the shared roster can claim — so the title is always
-          // the honest plain "N players" (never "top N"/"most-capped").
-          roster: { dirty: true },
-        };
-        if (pendingRegenerate) {
-          card.regenerate(config, buildFooterScope(config));
-          pendingRegenerate = false;
-        } else {
-          card.updateFooterScope(buildFooterScope(config));
-        }
-        return;
-      }
-
       let metricKeys = [];
       let config;
 
@@ -3344,7 +3038,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
   // ── Update-chart gate (owner item 7) ────────────────────────────────────────
   // In-panel control edits (chart type, per-type metric, radar/benchmark metric
-  // sets, benchmark anchor, slope/dumbbell windows, donut team, bar style, and
+  // sets, benchmark anchor, slope/dumbbell windows, bar style, and
   // every roster change) are now PENDING: they still update the controls UI and
   // the red `needs-input` cues LIVE (see the handlers, which keep calling
   // syncChartTypeButtons/renderMetricControls/renderPlayerList/syncWindowNeedsInput
@@ -3502,8 +3196,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     switch (typeKey) {
       case "bar":
         return single(eligibleMetrics(discipline, formats));
-      case "donut":
-        return single(donutEligibleMetrics(discipline, formats));
       case "slope":
         return single(eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent"));
       case "byyear":
@@ -3616,7 +3308,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       }
     } else if (typeof metricKey === "string" && metricKey) {
       if (newType === "bar") barMetricKey = metricKey;
-      else if (newType === "donut") donutMetricKey = metricKey;
       else if (newType === "slope") slopeMetricKey = metricKey;
       else if (newType === "byyear") byYearMetricKey = metricKey;
       else if (newType === "dumbbell") dumbbellMetricKey = metricKey;

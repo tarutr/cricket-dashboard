@@ -2284,21 +2284,9 @@ a { color: var(--color-accent); }
 
 .graph-metric-select { width: 100%; }
 
-/* B1 Wave 2 (item 5): donut-only team picker — graph.js renders it in the
-   metric-controls area of the donut chart-type branch, wrapped in
-   .graph-donut-team so it doesn't collide with the shared multi-team
-   .team-dropdown used by the scope strip. R2-2a: the picker is now the shared
-   searchable dropdown (.search-select below); its toggle carries the standard
-   `.select` class, so it inherits this panel's denser sizing (the
-   .graph-builder__controls .select override above) and the .search-select root
-   fills the wrapper — this just gives the wrapper the same full-width footprint
-   and vertical rhythm as its sibling metric controls (.graph-metric-select). */
-.graph-donut-team { width: 100%; }
-.graph-donut-team .select { width: 100%; }
-
 /* B1 Wave 2 (item 6): "needs input" red outline. graph.js toggles this class
-   directly on a required control (a date-window <input> or the donut team
-   <select> above) when it's empty and the current chart can't draw without
+   directly on a required control (a date-window <input>) when it's empty and
+   the current chart can't draw without
    it. Compounded with .select/.input (rather than a bare .needs-input rule)
    so it reliably outranks both the plain .select/.input border AND their
    :hover state — a bare class of equal specificity would lose to
@@ -2329,7 +2317,7 @@ a { color: var(--color-accent); }
    radius, shadow, raised bg) that holds a filter input + a scrollable list of
    options. Kept context-neutral so later waves can drop it into the filter
    drawers and popup — the graph consumers just add their existing width classes
-   (.graph-chart-type-select / .graph-metric-select / .graph-donut-team) around
+   (.graph-chart-type-select / .graph-metric-select) around
    it, and the graph's `.needs-input` rule above styles the toggle's outline. */
 .search-select { position: relative; width: 100%; }
 .search-select__toggle {

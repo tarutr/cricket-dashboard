@@ -310,9 +310,18 @@ export function buildBarChart(canvas, chartRef, { metric, rowsById, players, sty
 }
 
 /**
- * DONUT: one metric restricted to additive totals (metric.additive === true —
- * see graph.js's donutEligibleMetrics). Shows share-of-total; legend with
- * values.
+ * DONUT: one metric restricted to additive totals. Shows share-of-total;
+ * legend with values.
+ *
+ * RETAINED FOR LATER (owner decision, polish phase): the Donut chart type was
+ * removed from the Graph Builder (src/graph/graph.js no longer imports or calls
+ * this renderer), but this builder is kept ON FILE intact for a future reuse —
+ * the player-popup donut. It draws purely from this file's own shared helpers
+ * (palette / SERIES_COLORS / labelForValue / destroyIfExists / hasMetricData),
+ * so it has no Graph-Builder-specific dependency and is ready to call as-is.
+ * (Additive-total gating previously lived in graph.js's donutEligibleMetrics,
+ * which was removed with the chart type; any future caller must re-supply an
+ * additive metric — summing non-additive metrics is meaningless, see below.)
  *
  * Batch 8 (task 3, decision 44f): CHART_CAPS.donut.max widened 10 -> 20 (up to
  * 20 CHECKED players can now be compared at once — players.js), but a donut
