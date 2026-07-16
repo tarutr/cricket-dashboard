@@ -71,3 +71,12 @@ team's-own-players: donut India = 40 players, DuckDB-exact (total 12,535). Verif
 Owner: Update-chart gates IN-PANEL controls only; KEEP graph's 'Apply to graph' filter
 button drawing. Button sticky at bottom of .graph-builder__controls (panel scrolls).
 Owner will audit all 3 waves together after W3.
+
+## Wave 3 COMPLETE + committed (1a09567). Fresh-eyes Opus review of ee84930..HEAD:
+NO blocker/should-fix. 3 NITs: (1) donut tile still greys via roster min-cap (stale
+reason for new donut model); (2) donut team-prune can re-light Update btn just after
+Apply/Clear when a picked team falls out of scope (honest, edge-case); (3) comment
+casing "Top names" drift (cosmetic). Gating verified: scheduleRender reachable only via
+renderAndClearDirty (1 site); 6 live-draw paths clear the gate; no stuck/over-gated
+path. DESIGN PHASE BUILD COMPLETE — awaiting owner audit of all 3 waves on localhost.
+Deferred: ~375px mobile one-screen fit (owner); export-while-dirty (left working).
