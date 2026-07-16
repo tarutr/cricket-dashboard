@@ -968,6 +968,45 @@ def ingest_file(con, filepath, registry_misses):
     )
 
 
+# ── Delivery-level registry-miss detection (post-ingest, read-only) ───────────
+# The squad / player-of-match paths capture their misses into registry_misses.
+# The ball-by-ball lookups (batter / bowler / non-striker / dismissed batter /
+# fielder) instead store a NULL player_id silently when a name is not in that
+# file's registry. Such a miss makes the export's runs-reconciliation gate fail
+# (a NULL batter_id drops that delivery from bat_agg) — so it already fails SAFE,
+# just with an opaque "VALIDATION FAILED". This READ-ONLY check surfaces the same
+# situation with a clear alert, before the export step, scoped to the files
+# ingested this run. It touches nothing in the ingest insert path. The table and
+# column names below are a fixed hardcoded list (no user input → no injection).
+_DELIVERY_MISS_FIELDS = [
+    ("deliveries",      "batter",       "batter_id",       "batter"),
+    ("deliveries",      "bowler",       "bowler_id",       "bowler"),
+    ("deliveries",      "non_striker",  "non_striker_id",  "non-striker"),
+    ("deliveries",      "player_out",   "player_out_id",   "dismissed batter"),
+    ("wickets",         "player_out",   "player_out_id",   "dismissed batter"),
+    ("wicket_fielders", "fielder_name", "fielder_id",      "fielder"),
+]
+
+
+def find_delivery_registry_misses(con, stems):
+    """Rows where a ball-by-ball player NAME is present but its id is NULL, over
+    the given match stems (this run's committed files). Read-only. Returns a list
+    of (table, label, match_id, name, n) rows (grouped, capped per field)."""
+    if not stems:
+        return []
+    out = []
+    for table, name_col, id_col, label in _DELIVERY_MISS_FIELDS:
+        rows = con.execute(
+            f"SELECT match_id, {name_col}, COUNT(*) FROM {table} "
+            f"WHERE match_id IN (SELECT UNNEST(?)) "
+            f"AND {name_col} IS NOT NULL AND {id_col} IS NULL "
+            f"GROUP BY match_id, {name_col} ORDER BY 3 DESC LIMIT 50",
+            [stems],
+        ).fetchall()
+        out.extend((table, label, mid, name, n) for mid, name, n in rows)
+    return out
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -1065,6 +1104,29 @@ def main():
             f"be worse than a missing row.\n\n{misses_body}\n",
         )
 
+    # Ball-by-ball registry misses over this run's committed files (read-only;
+    # see find_delivery_registry_misses). Alert-only — the export gate independently
+    # fails the run if a miss really did corrupt an aggregate; this just makes the
+    # cause legible ("player X in match Y") before that happens.
+    committed_stems = [f.stem for f in to_process if f.name not in {e[0] for e in errors}]
+    delivery_misses = find_delivery_registry_misses(con, committed_stems)
+    log.info(f"  Ball-by-ball registry misses : {len(delivery_misses)}")
+    if delivery_misses:
+        for table, label, mid, name, n in delivery_misses:
+            log.warning(f"    {table}: match_id={mid}  name={name!r}  ({label})  x{n}")
+        dmiss_body = "\n".join(
+            f"  - match_id={mid}  name={name!r}  ({label}; {n} row(s) in {table})"
+            for table, label, mid, name, n in delivery_misses
+        )
+        alerts.send_alert(
+            "Cricsheet ball-by-ball player missing from registry",
+            f"{len(delivery_misses)} ball-by-ball player reference(s) (batter / "
+            f"bowler / non-striker / dismissed batter / fielder) in files ingested "
+            f"this run were not found in their own file's registry, so their "
+            f"player_id was stored as NULL. This will trip the export's runs-"
+            f"reconciliation gate (the run fails before publishing) — add the "
+            f"missing registry entry for:\n\n{dmiss_body}\n",
+        )
 
     con.close()
     log.info(f"Log written to: {LOG_PATH}")
