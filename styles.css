@@ -140,13 +140,21 @@ a { color: var(--color-accent); }
    with the taller controls cluster) now centers the wordmark against the
    search box + view toggle on their one shared line. Padding is symmetric
    top/bottom (was heavier on top to counterbalance the subtitle's line-height
-   below the title) since there's no second line to balance against any more. */
+   below the title) since there's no second line to balance against any more.
+
+   B1 Wave 1 (item 2a): padding tightened from space-5 (24px) to space-2
+   (8px) — this was the ~88-90px-tall header the owner flagged as too heavy.
+   The remaining height comes from the shared .segmented__btn/.input
+   min-height (40px), which this rule deliberately leaves alone (that's the
+   sitewide touch-target floor, reused by other controls); the result is a
+   compact ~50-56px one-row strip rather than a near-90px one. Shows on both
+   Stats and Graphs (this element isn't swapped by the view toggle). */
 .app-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-5);
-  padding: var(--space-5) var(--space-6);
+  padding: var(--space-2) var(--space-6);
   border-bottom: 1px solid var(--color-line);
   flex-wrap: wrap;
 }
@@ -159,11 +167,14 @@ a { color: var(--color-accent); }
   max-width: 42rem;
 }
 
+/* B1 Wave 1 (item 2a): 2.25rem was the single biggest contributor to the
+   old ~88-90px header; 1.45rem keeps the wordmark reading as a display-font
+   brand mark while fitting the compact one-row strip. */
 .app-header__title {
   margin: 0;
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 2.25rem;
+  font-size: 1.45rem;
   letter-spacing: -0.02em;
   line-height: 1;
   color: var(--color-fg);
@@ -1071,10 +1082,19 @@ a { color: var(--color-accent); }
    The cap is sized to show ~15 of the now-denser rows plus the header before
    the body starts scrolling; "Show More" still reveals the rest into this
    same region. */
+/* B1 Wave 1 (item 1): was a flat 65vh, which — combined with the header/
+   toolbar/pills/footer chrome around it — pushed the page a few px past one
+   viewport at common laptop sizes (1280x800), forcing an OUTER page scroll
+   on top of the table's own internal one. calc() ties the cap to the
+   actual chrome height instead of a viewport fraction that knows nothing
+   about that chrome, so the whole Stats view (slim header + toolbar + pills
+   host + table + footer) fits one screen and only the table scrolls. max()
+   keeps a usable floor on very short viewports (e.g. landscape mobile)
+   where the subtraction would otherwise crush the table to near-nothing. */
 .table-scroll {
   overflow: auto;
   max-width: 100%;
-  max-height: 65vh;
+  max-height: max(320px, calc(100vh - 350px));
 }
 
 /* Shared table base (task 3): .data-table (leaderboard) and .mini-table
@@ -1949,13 +1969,22 @@ a { color: var(--color-accent); }
 /* ── Mobile (~380px) ───────────────────────────────────────────────────────── */
 
 @media (max-width: 480px) {
+  /* B1 Wave 1 (item 2a): the old column-stacked header (title row, then a
+     search+toggle row below) added a second row's worth of height on top
+     of the already-heavy space-5 padding + 1.75rem title. Verified
+     empirically (getBoundingClientRect at 375px) that a single row fits
+     fine — the header search already collapses to an icon-only ~36px box
+     below 480px (see .header-search rules above), so wordmark + icon +
+     Stats/Graphs toggle comfortably share one row without the column
+     fallback; .app-header's base flex-wrap: wrap stays as a safety net if
+     a future addition doesn't fit. Mirrors the desktop slim-strip padding,
+     just with the tighter horizontal margin already used elsewhere on
+     mobile (space-4 instead of space-6). */
   .app-header {
-    flex-direction: column;
-    align-items: stretch;
-    padding: var(--space-5) var(--space-4);
+    padding: var(--space-2) var(--space-4);
   }
 
-  .app-header__title { font-size: 1.75rem; }
+  .app-header__title { font-size: 1.15rem; }
 
   .app-main { padding: var(--space-4); }
 
@@ -2043,6 +2072,16 @@ a { color: var(--color-accent); }
   align-items: start;
 }
 
+/* B1 Wave 1 (item 2b): this column used to grow with its content and scroll
+   with the whole page — on a long control stack (chart type + metric +
+   players + windows) that pushed the Graph view well past one viewport.
+   max-height + overflow-y: auto turns it into its own scroll region (same
+   calc()-based budget as .table-scroll above, since the chrome around it —
+   header + main padding + footer — is the same), so this panel scrolls
+   internally and the Graph page itself doesn't grow taller than one screen.
+   A later wave adds a pinned "Update chart" button at the bottom of this
+   column — deliberately not pre-structuring a separate scroll/pinned-footer
+   split here, this stays ONE scroll region for now. */
 .graph-builder__controls {
   display: flex;
   flex-direction: column;
@@ -2051,6 +2090,34 @@ a { color: var(--color-accent); }
   border-radius: var(--radius-md);
   background: var(--color-panel);
   padding: var(--space-4) var(--space-4) var(--space-5);
+  max-height: max(280px, calc(100vh - 240px));
+  overflow-y: auto;
+}
+
+/* B1 Wave 1 (item 4b, "make all fonts smaller" — SCOPED to graph controls
+   only, per owner: the Stats table and every other view keep their current
+   type sizes). Two techniques combined:
+   1. Re-declaring the --text-xs/sm/sm2/md tokens on this container shrinks
+      every descendant that already reads one of those custom properties
+      (labels, captions, notes, the chart-type/roster-mode tiles below) —
+      free, and can't miss a selector the way an explicit list could.
+   2. .select/.input/.btn/.link-btn/.segmented__btn hard-code a literal
+      0.9rem/inherited-1rem in their base rules (not a token), so those need
+      an explicit override here to shrink too. More specific rules further
+      down (e.g. .graph-chart-type/.graph-roster-mode .segmented__btn) still
+      win ties by source order and shrink further still for the tile grids. */
+.graph-builder__controls {
+  --text-xs: 0.64rem;
+  --text-sm: 0.68rem;
+  --text-sm2: 0.7rem;
+  --text-md: 0.74rem;
+}
+.graph-builder__controls .select,
+.graph-builder__controls .input,
+.graph-builder__controls .btn,
+.graph-builder__controls .link-btn,
+.graph-builder__controls .segmented__btn {
+  font-size: var(--text-md);
 }
 
 /* R3 Wave 3: graph controls top bar — "Back to your table" link + graph-local
@@ -2143,11 +2210,37 @@ a { color: var(--color-accent); }
 
 /* Slope / Dumbbell Window A/B pickers — now DAY-level native <input
    type="date"> controls (R3 Wave 3, item 10; were month <select>s). Same
-   `.date-range` markup as the scope strip, plus a flex-shrink allowance since
-   the sidebar column (300px) is much narrower than the top filter bar these
-   classes were first written for. */
+   `.date-range` markup as the scope strip (and shared verbatim by the
+   dumbbell controls further down — both use this same class, not a separate
+   .graph-dumbbell-range).
+
+   B1 Wave 1 (item 4b): side-by-side (flex: 1 1 0) clipped the native
+   "dd/mm/yyyy" text + calendar icon at the ~110-130px each input got in a
+   300px sidebar. Stacked vertically instead — each input gets the FULL
+   column width, which is what actually fixes the clipping (this is a
+   layout problem, not a font-size problem). The "–" separator is dropped
+   since a stacked pair reads fine as two full-width rows without it. */
+.graph-slope-range {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+}
+.graph-slope-range .date-range__sep { display: none; }
 .graph-slope-range .select,
-.graph-slope-range .input { flex: 1 1 0; min-width: 0; }
+.graph-slope-range .input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+/* Shrink the native calendar-picker icon a touch to match the denser graph-
+   controls type scale below (WebKit/Blink only — Firefox's date input has
+   no equivalent styleable icon, so this is a harmless no-op there). */
+.graph-slope-range input[type="date"]::-webkit-calendar-picker-indicator {
+  width: 0.85em;
+  height: 0.85em;
+  padding: 0;
+}
 
 .graph-player-search { position: relative; }
 .graph-player-search .input { width: 100%; }
@@ -2207,8 +2300,25 @@ a { color: var(--color-accent); }
    — display:flex + width:100% so they share the controls-column width and
    shrink to fit at ~380px (the base .segmented is inline-flex, which would
    otherwise size to content and could overflow the narrow controls column). */
-.graph-roster-mode { display: flex; width: 100%; }
-.graph-roster-mode .segmented__btn { flex: 1; white-space: nowrap; }
+/* B1 Wave 1 (item 3): "Manual" was clipping at the 300px sidebar width —
+   `.segmented { overflow: hidden }` was clipping the 4th button because
+   flex items default to `min-width: auto` (their own min-content width),
+   which `white-space: nowrap` pins to the full text width, so flex-shrink
+   had no room to actually shrink below that. Same fix as
+   .graph-chart-type .segmented__btn above: min-width: 0 lets the buttons
+   actually shrink, wrap as a fallback, and a smaller font gives all 4
+   labels room on one line at both desktop and ~380px. */
+.graph-roster-mode { display: flex; flex-wrap: wrap; width: 100%; }
+.graph-roster-mode .segmented__btn {
+  flex: 1 1 25%;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  text-align: center;
+  font-size: var(--text-xs);
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.25;
+}
 
 /* Owner point 13: filter-as-you-type box + "type to narrow" note for the
    full-filtered-set pool (up to ~2,800 players). */

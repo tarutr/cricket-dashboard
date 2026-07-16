@@ -392,9 +392,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
                owner couldn't find it) so Top names | Best | Worst | Manual is
                visible and directly switchable. -->
           <div class="graph-roster-mode-row" data-role="roster-mode-row" hidden>
-            <span class="graph-control-label">Show</span>
             <div class="segmented segmented--small graph-roster-mode" data-role="roster-mode" role="group" aria-label="Show">
-              <button type="button" class="segmented__btn" data-value="topnames">Top names</button>
+              <button type="button" class="segmented__btn" data-value="topnames">Top Names</button>
               <button type="button" class="segmented__btn" data-value="best">Best</button>
               <button type="button" class="segmented__btn" data-value="worst">Worst</button>
               <button type="button" class="segmented__btn" data-value="manual">Manual</button>
@@ -1595,7 +1594,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // out of scope here — flagged in the batch report as a follow-up candidate.
 
   function rosterModeLabel(mode) {
-    if (mode === "topnames") return "Top names";
+    if (mode === "topnames") return "Top Names";
     if (mode === "best") return "Best";
     if (mode === "worst") return "Worst";
     return "Manual";
