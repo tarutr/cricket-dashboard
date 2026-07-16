@@ -2120,6 +2120,39 @@ a { color: var(--color-accent); }
   font-size: var(--text-md);
 }
 
+/* B1 Wave 3 (owner item 7): the "Update chart" gate. The controls column
+   scrolls internally (item 2b above), so this button is pinned to the BOTTOM of
+   that scroll region — position: sticky keeps it reachable no matter how far the
+   control stack is scrolled. The negative margins bleed the bar to the panel's
+   inner edges and cancel the column's own bottom padding so it sits flush; the
+   panel-coloured fill + a top border let the control stack scroll cleanly under
+   it. This mirrors how the Stats side gates every redraw behind its "Search". */
+.graph-update-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-5));
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-panel);
+  border-top: 1px solid var(--color-line);
+}
+.graph-update-btn { width: 100%; }
+/* Dirty (un-applied in-panel edits pending): the button lifts out of its
+   at-rest look into the editorial red accent so it reads as "action needed" —
+   the same red the cap-note and links use. When the chart is already up to date
+   the button is `disabled`, so it falls back to the muted .btn:disabled at-rest
+   treatment above: nothing pending to apply. */
+.graph-update-btn.is-dirty {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-bg);
+}
+.graph-update-btn.is-dirty:hover {
+  background: var(--color-accent-strong);
+  border-color: var(--color-accent-strong);
+  opacity: 1;
+}
+
 /* R3 Wave 3: graph controls top bar — "Back to your table" link + graph-local
    "Filters" button. The Filters popup itself reuses the shared .filters-popup
    classes (defined once, below), so only this small bar is graph-specific. */

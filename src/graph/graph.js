@@ -406,6 +406,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           </div>
           <p class="graph-cap-note" data-role="cap-note" hidden></p>
         </div>
+
+        <!-- Owner item 7: in-panel control edits are now PENDING (they update
+             the controls UI live but don't redraw the chart) — only this button
+             draws. Sticky at the bottom of the internally-scrolling controls
+             column so it's always reachable; the graph's own "Apply to graph"
+             filter button is separate and keeps drawing on its own. -->
+        <div class="graph-update-bar">
+          <button type="button" class="btn btn--primary graph-update-btn" data-role="graph-update" disabled>Update chart</button>
+        </div>
       </div>
 
       <div class="graph-builder__stage">
@@ -438,6 +447,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     rosterList: container.querySelector('[data-role="roster-list"]'),
     resetPlayers: container.querySelector('[data-role="reset-players"]'),
     capNote: container.querySelector('[data-role="cap-note"]'),
+    updateBtn: container.querySelector('[data-role="graph-update"]'),
     status: container.querySelector('[data-role="status"]'),
     stageGuidance: container.querySelector('[data-role="stage-guidance"]'),
     cardHost: container.querySelector('[data-role="card-host"]'),
@@ -770,7 +780,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // (e.g. every type reading "greyed" on first paint, before the initial
       // seed's candidates ever arrive, and never recovering).
       syncChartTypeButtons();
-      scheduleRender({ paramsChanged: true });
+      markDirty({ paramsChanged: true });
     },
     onTruncate: (note) => showCapNote(note),
   });
@@ -991,7 +1001,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   function onRankMetricChanged() {
     const mode = selection.getMode();
     if (mode === "best" || mode === "worst") deriveChecked(mode);
-    scheduleRender({ paramsChanged: true });
+    markDirty({ paramsChanged: true });
   }
 
   // ── Metric controls (rebuilt per chart type) ──────────────────────────────
@@ -1150,7 +1160,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     setDonutTeamNeedsInput(!donutTeamId);
     // If the prune cleared the pick, the donut can no longer draw — refresh so
     // the stage shows the "choose a team" guidance instead of a stale chart.
-    if (pruned) scheduleRender({ paramsChanged: true });
+    if (pruned) markDirty({ paramsChanged: true });
   }
 
   function renderMetricControls() {
@@ -1240,7 +1250,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         teamSel.addEventListener("change", (e) => {
           donutTeamId = e.target.value || null; // per-type var ONLY — never state.teams
           setDonutTeamNeedsInput(!donutTeamId); // item 6: clears the outline once picked
-          scheduleRender({ paramsChanged: true });
+          markDirty({ paramsChanged: true });
         });
       }
       setDonutTeamNeedsInput(!donutTeamId); // item 6: outline until a team is chosen
@@ -1268,7 +1278,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         scatterXKey = e.target.value || null;
         if (scatterXKey) metricEverChosen = true;
         syncChartTypeButtons();
-        scheduleRender({ paramsChanged: true });
+        markDirty({ paramsChanged: true });
       });
       els.metricControls.querySelector('[data-role="scatter-y"]').addEventListener("change", (e) => {
         noteManualChartEdit();
@@ -1359,7 +1369,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           if (radarMetricKeys.length) metricEverChosen = true;
           syncRadarMetricsUI();
           syncChartTypeButtons();
-          scheduleRender({ paramsChanged: true });
+          markDirty({ paramsChanged: true });
         });
       });
 
@@ -1389,7 +1399,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           phaseFamilyId = e.target.value || null;
           if (phaseFamilyId) metricEverChosen = true;
           syncChartTypeButtons();
-          scheduleRender({ paramsChanged: true });
+          markDirty({ paramsChanged: true });
         });
       }
     } else if (chartType === "slope") {
@@ -1427,7 +1437,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           slopeMetricKey = e.target.value || null;
           if (slopeMetricKey) markMetricChosen(slopeMetricKey);
           syncChartTypeButtons();
-          scheduleRender({ paramsChanged: true });
+          markDirty({ paramsChanged: true });
         });
       }
       const bindWindowSelect = (role, setter) => {
@@ -1436,7 +1446,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           el.addEventListener("change", (e) => {
             setter(e.target.value);
             syncWindowNeedsInput("slope"); // item 6: clear the outline as inputs fill
-            scheduleRender({ paramsChanged: true });
+            markDirty({ paramsChanged: true });
           });
         }
       };
@@ -1468,7 +1478,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           byYearMetricKey = e.target.value || null;
           if (byYearMetricKey) markMetricChosen(byYearMetricKey);
           syncChartTypeButtons();
-          scheduleRender({ paramsChanged: true });
+          markDirty({ paramsChanged: true });
         });
       }
     } else if (chartType === "dumbbell") {
@@ -1511,7 +1521,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           dumbbellMetricKey = e.target.value || null;
           if (dumbbellMetricKey) markMetricChosen(dumbbellMetricKey);
           syncChartTypeButtons();
-          scheduleRender({ paramsChanged: true });
+          markDirty({ paramsChanged: true });
         });
       }
       const bindWindowSelect = (role, setter) => {
@@ -1520,7 +1530,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           el.addEventListener("change", (e) => {
             setter(e.target.value);
             syncWindowNeedsInput("dumbbell"); // item 6: clear the outline as inputs fill
-            scheduleRender({ paramsChanged: true });
+            markDirty({ paramsChanged: true });
           });
         }
       };
@@ -1615,7 +1625,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           // by renderChart()'s pool cache (keyed on scope+metrics, NOT
           // anchor), not by anything special here; scheduleRender is the
           // same call every other control makes.
-          scheduleRender({ paramsChanged: true });
+          markDirty({ paramsChanged: true });
         });
       }
 
@@ -1663,7 +1673,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           metricEverChosen = true; // item 4: benchmark metric-set edit counts
           syncBenchmarkMetricsUI();
           syncChartTypeButtons();
-          scheduleRender({ paramsChanged: true });
+          markDirty({ paramsChanged: true });
         });
       });
 
@@ -2062,7 +2072,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     if (!btn || btn.dataset.value === barStyle) return;
     barStyle = btn.dataset.value;
     syncBarStyleButtons();
-    scheduleRender();
+    markDirty();
   });
 
   els.chartType.addEventListener("click", (e) => {
@@ -2095,7 +2105,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       deriveChecked(selection.getMode());
     }
     renderPlayerList();
-    scheduleRender({ paramsChanged: true });
+    markDirty({ paramsChanged: true });
+  });
+
+  // Owner item 7: the ONE control that actually draws the pending in-panel
+  // state. Enabled/emphasised only while there are un-applied edits (see
+  // updateUpdateBtn); Filters' own "Apply to graph" button draws separately.
+  els.updateBtn.addEventListener("click", () => {
+    renderAndClearDirty();
   });
 
   // ── Export ────────────────────────────────────────────────────────────────
@@ -2283,6 +2300,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // Metric eligibility may differ under the reset scope — refresh explicitly
     // (onChange only refreshes the metric controls for the benchmark type).
     renderMetricControls();
+    // Item 7: "Clear filters" is a deliberate reset (like the graph's own
+    // "Apply to graph"), NOT a pending in-panel tweak — so draw the resulting
+    // honest empty state NOW and leave the gate clean. Before the Update-chart
+    // gate, the selection.setChecked([]) above redrew via onChange; that hook
+    // now only marks dirty, so this explicit draw restores the reset behaviour.
+    renderAndClearDirty({ paramsChanged: true });
   });
 
   // "← Back to your table" (item 5): return to the Stats view with the existing
@@ -3252,6 +3275,55 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     renderDebounce = setTimeout(renderChart, 60);
   }
 
+  // ── Update-chart gate (owner item 7) ────────────────────────────────────────
+  // In-panel control edits (chart type, per-type metric, radar/benchmark metric
+  // sets, benchmark anchor, slope/dumbbell windows, donut team, bar style, and
+  // every roster change) are now PENDING: they still update the controls UI and
+  // the red `needs-input` cues LIVE (see the handlers, which keep calling
+  // syncChartTypeButtons/renderMetricControls/renderPlayerList/syncWindowNeedsInput
+  // etc.), but they no longer redraw the chart. Instead they call markDirty()
+  // below, which lights the sticky "Update chart" button. Only that button
+  // (renderAndClearDirty) actually renders the pending state.
+  //
+  // markDirty() accumulates `pendingRegenerate` EXACTLY as scheduleRender would,
+  // so the eventual draw regenerates the title/subtitle iff a pending edit was a
+  // real param change — the ONE thing withheld is the setTimeout(renderChart),
+  // which the button supplies. renderChart() always reads live state/selection
+  // at draw time, so a button-driven draw is byte-identical to the old
+  // auto-render for the same inputs (IRON RULE).
+  //
+  // Three NON-panel draw triggers stay LIVE and CLEAR the gate (they route
+  // through renderAndClearDirty instead of markDirty): the initial seed
+  // (onShow/enterFromBridge), a scope apply from the graph's own Filters popup
+  // (onScopeChanged — owner keeps "Apply to graph" separate from Update chart),
+  // and the "Graph this player" chooser confirm (enterWithChoiceImpl — an
+  // explicit "show me this player" action draws immediately).
+  let chartDirty = false;
+  function updateUpdateBtn() {
+    const btn = els.updateBtn;
+    if (!btn) return;
+    btn.disabled = !chartDirty;
+    btn.classList.toggle("is-dirty", chartDirty);
+    btn.textContent = chartDirty ? "Update chart •" : "Update chart";
+  }
+  /** An in-panel edit: control UI already updated live by the caller; here we
+   * only record that the DRAWN chart is now behind, without drawing. */
+  function markDirty({ paramsChanged = false } = {}) {
+    if (paramsChanged) pendingRegenerate = true;
+    chartDirty = true;
+    updateUpdateBtn();
+  }
+  /** Draw now and clear the pending gate — the shared tail of every LIVE draw
+   * trigger (seed / scope apply / chooser confirm / the Update-chart button).
+   * pendingRegenerate has already been accumulated by any markDirty() edits, so
+   * the button passes no paramsChanged; the live triggers pass true to force a
+   * fresh title exactly as they did when they called scheduleRender directly. */
+  function renderAndClearDirty({ paramsChanged = false } = {}) {
+    chartDirty = false;
+    updateUpdateBtn();
+    scheduleRender({ paramsChanged });
+  }
+
   // ── Public API ───────────────────────────────────────────────────────────
 
   /**
@@ -3283,7 +3355,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // applied metric conditions (or revert if they've been cleared). Runs
     // post-seed so the archetype's #players tie-breaks read the real pool.
     maybeAutoSelectFromFilters();
-    scheduleRender({ paramsChanged: true });
+    // Initial seed / entry: draw as before and start with a clean (non-dirty)
+    // gate — the Update-chart gate applies only to SUBSEQUENT in-panel edits.
+    renderAndClearDirty({ paramsChanged: true });
   }
 
   /**
@@ -3327,6 +3401,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     }
     // "already-selected": silent no-op — the player's already in the roster,
     // which is exactly what the task brief asks for ("adds ... if absent").
+    // Item 7: an external "Graph this player" add is an explicit show-me action
+    // (like the chooser confirm), NOT an in-panel tweak — so draw it immediately
+    // and clear the gate rather than leaving the added player pending. (The
+    // add above already marked the chart dirty via selection.onChange.)
+    renderAndClearDirty({ paramsChanged: true });
   }
 
   // ── "Graph this player" chooser (owner decision 46) ─────────────────────────
@@ -3505,7 +3584,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     if (replaced) {
       showCapNote(`${capSubjectLabel()} is capped at ${activeMaxCap()} players — ${player.name} replaced the last one on the chart.`);
     }
-    scheduleRender({ paramsChanged: true });
+    // "Graph this player" chooser confirm is an explicit "show me this player"
+    // action → draw immediately (treated like an apply), not left pending.
+    renderAndClearDirty({ paramsChanged: true });
   }
 
   /** Called whenever the shared filter scope changes (discipline/format/filters). */
@@ -3526,7 +3607,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     seedSelection().then(() => {
       // Item 1: filter-driven auto-select/revert, post-seed (same as onShow).
       maybeAutoSelectFromFilters();
-      scheduleRender({ paramsChanged: true });
+      // A scope apply from the graph's own Filters popup ("Apply to graph")
+      // keeps its OWN apply button (owner item 7): it draws with the current
+      // (pending) in-panel values and counts as an update — so clear the gate.
+      renderAndClearDirty({ paramsChanged: true });
     });
   }
 

@@ -63,3 +63,11 @@ fill. 5: donut team picker (106 in-scope teams, blank-first); values EXACT (Indi
 249/127/51 vs DuckDB); isolation OK (Stats 2,813, Bar full-scope, no team leak). OPEN
 DECISION: donut currently shows shared-roster ∩ team (India w/ default top-15 roster =
 only 3 players). Likely owner wants team's-own-players (proper composition). Flagged.
+
+## Wave 2 COMPLETE + committed (8cc7c7b + dc66e20 donut refinement). Owner chose
+team's-own-players: donut India = 40 players, DuckDB-exact (total 12,535). Verified.
+
+## Wave 3 spawned (item 7, solo Opus/xhigh, owns graph.js + button CSS in styles.css).
+Owner: Update-chart gates IN-PANEL controls only; KEEP graph's 'Apply to graph' filter
+button drawing. Button sticky at bottom of .graph-builder__controls (panel scrolls).
+Owner will audit all 3 waves together after W3.
