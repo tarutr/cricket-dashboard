@@ -48,12 +48,14 @@ function conditionPillLabel(cond, state) {
  * same way it re-syncs the drawer and advanced-filter count elsewhere).
  *
  * `onPinChange` (task 3b, owner decision 46) is a separate hook for a
- * PINNED-PLAYER pill's × — retained so a caller could ever treat un-pinning
- * differently from a filter-pill removal. As of R4 Wave 4a it makes no
- * difference: every pill's ×/+ goes through the same PENDING-edit path (mutate
- * the live store, light the toolbar Search button, never re-query — the table
- * stays frozen until Search). Defaults to `onChange` so a caller that never
- * pins anything needs to pass only one callback.
+ * PINNED-PLAYER pill's ×/+ — DIVERGES from `onChange` again as of the R4 Wave
+ * 4a ADDENDUM (owner ruling): a pin's ×/+ is INSTANT (the row drops in/out of
+ * the table right now, no Search light), while a filter pill's ×/+ stays
+ * PENDING (soft-deletes into the pending set; only takes effect at the next
+ * Search). render() below tags every pin pill `pinned: true`; the click
+ * handler dispatches to `onPinChange` for those and `onChange` for everything
+ * else. Defaults to `onChange` so a caller that never pins anything needs to
+ * pass only one callback.
  *
  * R4 Wave 4a (A2): `getState` now defaults to — and main.js passes — the LIVE
  * (pending) store, so a pending edit (popup filter, toolbar control, pin add,
@@ -290,9 +292,13 @@ export function mountPills(container, store, onChange, onPinChange = onChange, g
           staged.set(p.key, { key: p.key, label: p.label, inert: p.inert, pinned: p.pinned, title: p.title, restore: p.restore });
           p.remove();
         }
-        // Both are PENDING edits: refresh derived views + light/settle the
-        // Search button; the frozen table never moves here.
-        onChange();
+        // R4 Wave 4a ADDENDUM: a PIN pill's ×/+ is INSTANT — main.js's
+        // onPinChange (onPinsChanged) drops the row in/out of the table right
+        // now and keeps the Search button settled. A FILTER pill's ×/+ stays
+        // PENDING — onChange (onFiltersChanged) only lights Search; the frozen
+        // table doesn't move until the next Search commits it.
+        if (p.pinned) onPinChange();
+        else onChange();
       });
     });
   }

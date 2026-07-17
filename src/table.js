@@ -1553,6 +1553,37 @@ export function mountTable(
     load(frozen);
   }
 
+  /** R4 Wave 4a ADDENDUM (owner ruling): picking a player from the
+   * results-toolbar search — or clicking a pin pill's ×/+ (A4's soft-delete/
+   * undo) — drops their row into (or out of) the table INSTANTLY, unlike a
+   * FILTER pill (still PENDING). main.js calls this AFTER it has already (a)
+   * mutated state.pinnedPlayers on the live store and (b) advanced its OWN
+   * applied snapshot's pinnedPlayers to match, so the Search button's dirty
+   * comparison sees no change. This mirrors applyColumnsInstant: it requeries
+   * against the FROZEN applied SCOPE (lastLoadedState) with pinnedPlayers
+   * swapped in — never the live/pending store's OTHER fields (dates/Vs/
+   * filters/etc.), which must stay frozen until Search.
+   *
+   * Matchup ("Vs") mode: buildMatchupQuery has no pin OR-injection (a later
+   * wave) — buildQuery already routes matchup mode there untouched, so this
+   * requery naturally produces no extra row while still keeping state/pills
+   * honest. No special-casing needed; do not add pin logic to the matchup
+   * query here.
+   *
+   * If nothing has EVER been searched (lastLoadedState null — no table body
+   * exists yet), there is no frozen scope to drop a row into: the pin still
+   * updates the store/pill (via main.js) and simply applies on the eventual
+   * first Search, same as before this addendum. */
+  function applyPinnedPlayers() {
+    if (!lastLoadedState) {
+      syncToolbar();
+      return;
+    }
+    const pins = store.get().pinnedPlayers || [];
+    const frozen = { ...lastLoadedState, pinnedPlayers: pins };
+    load(frozen);
+  }
+
   function clearDragIndicators() {
     theadEl.querySelectorAll(".data-table__th--drop-before, .data-table__th--drop-after").forEach((el) => {
       el.classList.remove("data-table__th--drop-before", "data-table__th--drop-after");
@@ -2438,5 +2469,5 @@ export function mountTable(
     syncToolbar();
   }
 
-  return { load, showPrompt: renderPrompt, enterView, hasResults, syncToolbar, setDateBounds };
+  return { load, showPrompt: renderPrompt, enterView, hasResults, syncToolbar, setDateBounds, applyPinnedPlayers };
 }

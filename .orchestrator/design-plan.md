@@ -190,3 +190,21 @@ Waves (each gated; I verify in-browser + independent DuckDB for number-adjacent;
 - 4f (3 parallel, disjoint files) frontend/Sonnet-high playerFilters.js popup selects +
   docs/Sonnet-high (owner_decisions/CHART_SYSTEM/README/SPEC) + hygiene/Sonnet-medium (dead CSS).
 ## 4a spawned.
+## 4a COMPLETE + committed (42c24d9) + orchestrator-verified.
+Diff scope: only table.js/main.js/pills.js/styles.css (+docs); filters.js/metrics.js/state.js/
+graph EMPTY diff; buildQuery/buildMatchupQuery byte-identical (only comment+call-site touched).
+node --check all pass; 0 console errors. On-screen anchors EXACT: 2,813 / Karanbir 2,454 /
+SA Yadav 60·1544·29.13·150.34 (BF=1,027 matches coverage anchor). Behaviour verified in-browser:
+instant sort (no is-dirty), instant columns-picker add (no is-dirty), pending Vs (is-dirty lights
++ table frozen), dirty is COMPARISON-based (revert Vs->Everyone clears it), Clear resets to
+first-load + clears staged. Pills: pending pill appears instantly (table frozen), pin steel-blue
+(#e8eef5 bg / #2f4761 text), soft-delete pill--staged (red outline #9c2b2b, ×->+, restore works).
+RESOLVED FORK (owner 2026-07-17): player-search is fully INSTANT — picking a player DROPS THE ROW
+INTO THE TABLE IMMEDIATELY (no Search press, does NOT light is-dirty); pin remove/restore also
+instant. Filter pills stay PENDING (only pins are instant). Built as addendum + orchestrator-verified
+in-browser: pick SA Yadav -> is-dirty stays false, row appears with EXACT 60·1544·29.13·150.34,
+count/other rows unchanged; agent also showed the out-of-filter additive case (Team=Australia 37
+rows, pin SA Yadav -> rank 1, × -> 36). Pin × -> pill--staged (red outline #9c2b2b, ×->+), is-dirty
+stays false. Query builders BYTE-IDENTICAL (buildQuery/buildMatchupQuery untouched); calc files
+empty diff; node --check pass; 0 console errors.
+## 4a (incl. instant-pin addendum) COMPLETE + orchestrator-verified. Awaiting owner gate -> 4b.

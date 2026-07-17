@@ -328,6 +328,31 @@ function triggerTableSearch(text, matches) {
 }
 
 /**
+ * R4 Wave 4a ADDENDUM (owner ruling): a PIN's add/remove/restore is INSTANT —
+ * unlike a FILTER pill (still PENDING, waits for Search), picking a player
+ * drops their row into the table right now and must NOT light the Search
+ * button. Called AFTER the caller (pinPlayer below, or a pin pill's ×/+ in
+ * pills.js) has already mutated state.pinnedPlayers on the live store.
+ *
+ * Advances appliedState.pinnedPlayers to match the live store — so the
+ * dirty comparison (serializeQueryState, which still includes pinnedPlayers)
+ * reads no change and the Search button stays settled — then asks
+ * table.js's applyPinnedPlayers() to requery its OWN frozen applied scope
+ * with the new pin list. Any OTHER pending edit (dates/Vs/filters/preset)
+ * is untouched by this and keeps lighting Search exactly as before.
+ */
+function onPinsChanged() {
+  const pins = store.get().pinnedPlayers || [];
+  if (appliedState) appliedState = { ...appliedState, pinnedPlayers: pins };
+  if (pillsController) pillsController.render();
+  updateDrawerBadge();
+  if (tableController) {
+    tableController.syncToolbar();
+    tableController.applyPinnedPlayers();
+  }
+}
+
+/**
  * Pin a player from the table-search dropdown (task 3b, owner decision 46):
  * unlike triggerTableSearch's "Filter the table" action (which narrows the
  * result set to name matches), picking a SUGGESTED PLAYER row here instead
@@ -340,24 +365,19 @@ function triggerTableSearch(text, matches) {
  * row alone. Plain mode only (see pills.js/table.js) — matchup mode leaves
  * the pin inert rather than touching buildMatchupQuery.
  *
- * If the player genuinely has no innings even in the CORE scope, no bypass
- * could have produced a row for them either — load()'s missingPinnedIds
- * return value tells us that, and per the owner's ruling the optimistic pin
- * is rolled all the way back (no pill at all, not even a greyed one) with
- * the one toast this app shows for an honest "real player, wrong scope" case
- * (mirrors triggerTableSearch's own toast above).
+ * R4 Wave 4a ADDENDUM: pinning is now INSTANT (onPinsChanged, above) — the
+ * row appears in the table immediately, no Search press. If the player
+ * genuinely has no innings even in the CORE scope, load()'s own
+ * missingPinnedIds return value would tell us that, but per the addendum
+ * (item 5) no rollback/toast fires yet here — that's a later wave; today a
+ * no-data pin simply shows its pill with no row, honestly (no crash, no
+ * spurious Search light).
  */
 function pinPlayer(id, name) {
   const state = store.get();
   if ((state.pinnedPlayers || []).some((p) => p.id === id)) return; // already pinned
   store.set({ pinnedPlayers: [...(state.pinnedPlayers || []), { id, name }] });
-  // R3.2 ("everything waits for Search"): pinning is PENDING now — it lights the
-  // Search button dirty (via onFiltersChanged → syncToolbar); the pin applies
-  // and its "+ name" pill appears on the next Search. The old immediate requery
-  // + "no innings in this scope" rollback ran only because pins used to apply
-  // instantly; at Search time a pin with no innings in the core scope simply
-  // produces no row, which load()'s own missingPinnedIds path still reports.
-  onFiltersChanged();
+  onPinsChanged();
 }
 
 /**
@@ -387,20 +407,28 @@ function triggerHeaderFilterTable(text, matches) {
  * nodes and their listeners are simply left behind for GC).
  */
 function mountTableToolbarExtras({ searchInputEl, searchResultsEl, pillsHostEl }) {
-  // R4 Wave 4a (A2): the pills row now renders from the LIVE (pending) store,
-  // not the frozen applied snapshot — a pending edit (popup filter, toolbar
+  // R4 Wave 4a (A2): the pills row renders from the LIVE (pending) store, not
+  // the frozen applied snapshot — a pending edit (popup filter, toolbar
   // control, pin add, pill ×/+) surfaces as a pill IMMEDIATELY, matching the
-  // other pending toolbar controls. The TABLE body still only moves on Search;
-  // the pills are a live indicator of what the next Search will apply. A pill's
-  // × soft-deletes (A4: red outline + "+"); onFiltersChanged refreshes derived
-  // views + lights the Search button dirty, but never requeries the frozen table.
+  // other pending toolbar controls.
+  //
+  // The two callbacks now genuinely diverge again (ADDENDUM): a FILTER pill's
+  // ×/+ (onChange → onFiltersChanged) is still PENDING — it soft-deletes (A4:
+  // red outline + "+") and only takes effect on the table at the next Search.
+  // A PIN pill's ×/+ (onPinChange → onPinsChanged) is INSTANT — the row drops
+  // in/out of the table right now, no Search light — matching pinPlayer()'s
+  // own instant add. pills.js dispatches to whichever callback based on the
+  // pill's `pinned` flag.
   pillsController = mountPills(
     pillsHostEl,
     store,
     () => {
       onFiltersChanged();
+    },
+    () => {
+      onPinsChanged();
     }
-    // getState + onPinChange default: the live store, so pills reflect pending.
+    // getState default: the live store, so pills reflect pending.
   );
   pillsController.render();
 
