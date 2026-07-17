@@ -66,3 +66,41 @@ Scope: gender male, match_type IN (T20,IT20), international, 2023-07-01 → <202
 
 ## Status
 - [x] implement / [x] node --check / [x] headless verify / [x] browser verify / [x] committed 0af4d58
+
+---
+
+## Follow-up refinements (3 owner-requested changes) — 2026-07-17
+
+### What changed
+- metrics.js: comp_uncat `shortLabel` "Uncategorised BF %"/"Uncategorised %" -> "Uncat %"
+  (both disciplines); full `label` kept for the Columns picker. No sqlExpression/kind touched.
+- playerData.js: popup coarse batting query + bowling-hands query now INCLUDE the
+  '(unmapped)' bucket (dropped the `<> '(unmapped)'` clause). Fine "Vs bowling type" query
+  still drops it. Doc comments updated.
+- playerSections.js: render '(unmapped)' as an "Uncategorised" row — COARSE_LABEL map (batting,
+  ordered last via COARSE_ORDER `?? 2`) and HAND_LABELS['(unmapped)'] + a stable sort that
+  forces '(unmapped)' last (bowling). Coverage lines "Style data"/"Batting-hand data" -> "Matchup data".
+
+### Verified (localhost:8000, modules cache-reloaded + page reloaded, ZERO console errors)
+- Plain fingerprint (Node buildQuery harness) = 3307620867 / 1430 — UNCHANGED.
+- Anchors (independent hand-written DuckDB): SA Yadav vs Spin 38/454/140.99; Bumrah vs RHB
+  pos1,2 27/177/9. Plain baseline on screen: 2,813 players, Karanbir Singh 2,454; SA Yadav 60/1,544/29.13/150.34.
+- Change 1: Vs table header reads "Uncat %" both disciplines; Pace/Spin/RHB/LHB headers unchanged;
+  Columns picker shows full "Uncategorised BF %"; composition sums to 100% (SA Yadav 57.5/31.4/11.1).
+- Change 2 batting (SA Yadav popup, T20 both 2020->2026-07-13): coarse "Vs pace and spin" =
+  Pace 52.8% / Spin 37.0% / Uncategorised 10.2% (sum 100). Uncat row 54/406/669/164.78/51.46/13
+  MATCHES independent DuckDB over bowling_group='(unmapped)' exactly. Fine "Vs bowling type" has
+  NO % column (unchanged).
+- Change 2 bowling (Bumrah popup, same scope): "Vs L/R-handers" = RHB 62.2% / LHB 29.2% /
+  Uncategorised 8.7% (sum 100). Uncat row 44/255/310/18/7.29/17.22/14.17 MATCHES independent
+  DuckDB over batting_hand='(unmapped)' exactly. Uncategorised rendered LAST.
+- Change 3: batting "Matchup data covers 3,562 of 3,968 balls faced (89.8%)."; bowling
+  "Matchup data covers 2,691 of 2,946 balls bowled (91.3%)."
+- node --check: metrics.js, playerData.js, playerSections.js all OK.
+
+### Concern (not changed — out of task scope)
+- playerSections.js battingGridHTML (~line 538) has a SECOND "Style data covers …" coverage line,
+  used only for the drawer-Vs-scoped hero tiles (shown when the popup's own Filters drawer sets a
+  Vs bucket; in that mode the Matchups section is greyed, so the two lines never appear together).
+  Task Change 3 named "the batting line ... and the bowling line" (2 lines, "above those tables"),
+  so I left this third instance as "Style data". Flag for owner if they want it consistent too.
