@@ -229,3 +229,22 @@ green; node --check all; 0 console errors. FLAG for owner: R.Pos is now batting-
 previously ALSO active in plain bowling (odd bowler_id IN batting clause); now inactive there,
 aligning with the R3.1 "Reg. Batting Position BATTING-ONLY" ruling (no anchor affected).
 Deferred: "(no innings)" pin annotation (Wave 4d); the 4 new Vs stats (Wave 4c).
+
+## COVERAGE-BREAKDOWN wave BUILT + orchestrator-verified. Awaiting owner gate. Replaced the
+single matchup "Coverage — N of M (X%)" column with per-group composition columns.
+Table (Vs mode): batting Pace/Spin/Uncategorised BF %, bowling RHB/LHB/Uncategorised % —
+ordinary sortable/draggable/toggleable columns, far-right + default on, sum to 100% per row,
+table-only, computed un-filtered by the Vs bucket (extends the coverage machinery). Popup:
+coarse "Vs pace and spin" + "Vs L/R-handers" tables gain a right-most "% BF"/"% balls" column;
+coverage text line retained; fine "Vs bowling type" table unchanged. Files: metrics.js (6 new
+composition metrics), table.js, state.js, advanced.js, playerData.js, playerSections.js,
+styles.css (filters.js UNTOUCHED). Independent verification: plain query byte-identical
+(3307620867/1430); existing matchup stats byte-identical (SA Yadav vs Spin 38/454/140.99,
+Bumrah vs RHB pos1,2 27/177/9); composition SA Yadav 57.5/31.4/11.1, Bumrah 65.6/26.2/8.2,
+sum to 100% across all 2,401 batting + 2,028 bowling rows (the 1 non-100 row = Sajid Patel,
+0 legal balls -> honest NULL "—"); ON SCREEN: 3 columns render far-right, Coverage gone,
+Spin BF % sort works instantly (no Search re-trigger), popup "% BF" column present in coarse
+table + text line kept + fine table unchanged; node --check all; 0 console errors. Owner-
+approved behaviour override: this reverses decision 36's "Coverage always fixed" (now
+toggleable). Bowling popup "% balls" column agent-verified (Bumrah RHB 62.2/LHB 29.2); I
+independently verified the batting popup.
