@@ -547,7 +547,7 @@ export function battingGridHTML(state, coreNorm, extra) {
         : ["SR", getMetric("strike_rate", "matchup_batting"), summary.strike_rate],
       ["Bdry %", getMetric("boundary_pct", "matchup_batting"), summary.boundary_pct],
     ]);
-    coverageHTML = matchupCoverageLine("Style data", "faced", coreNorm.coverage) || "";
+    coverageHTML = matchupCoverageLine("Matchup data", "faced", coreNorm.coverage) || "";
   } else {
     const srKey = redBall ? "balls_per_dismissal" : "strike_rate";
     const srLabel = redBall ? "BPD" : "SR";
