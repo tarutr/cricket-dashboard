@@ -264,8 +264,18 @@ const DEFAULT_COLUMNS = {
 // to the fixed sets matchup mode has always shown. Kept here (not in table.js)
 // so state.js owns every column default, matchup namespaces included.
 const DEFAULT_MATCHUP_COLUMNS = {
-  matchup_batting: ["innings", "balls", "runs", "strike_rate", "average", "dismissals", "dot_pct", "boundary_pct"],
-  matchup_bowling: ["innings", "balls", "wickets", "runs_conceded", "economy", "average", "strike_rate", "dot_pct"],
+  // Coverage-breakdown wave: the three composition columns (comp_*) default ON
+  // and far-right — a per-group style/hand-mix breakdown replacing the old
+  // fixed "Coverage" column (they are ordinary sortable/draggable/toggleable
+  // columns; the fixed Coverage cell is gone from table.js).
+  matchup_batting: [
+    "innings", "balls", "runs", "strike_rate", "average", "dismissals", "dot_pct", "boundary_pct",
+    "comp_pace", "comp_spin", "comp_uncat",
+  ],
+  matchup_bowling: [
+    "innings", "balls", "wickets", "runs_conceded", "economy", "average", "strike_rate", "dot_pct",
+    "comp_rhb", "comp_lhb", "comp_uncat",
+  ],
 };
 
 /**

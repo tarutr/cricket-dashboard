@@ -159,8 +159,13 @@ const BASIC_METRIC_KEYS = new Set([
   "dismissals", "fours_conceded", "sixes_conceded",
 ]);
 
-/** True if a metric must NOT appear as a filter option (dismissal-% only). */
+/** True if a metric must NOT appear as a filter option: the dismissal-%
+ * columns (their count sibling is the filterable one), AND the matchup
+ * composition columns (kind "composition" — descriptive style/hand-mix
+ * percentages with a placeholder sqlExpression; table.js's conditionToHaving
+ * refuses them too, so this keeps them out of the picker in the first place). */
 export function isMetricRemovedFromFilters(metric) {
+  if (metric.kind === "composition") return true;
   return metric.section === "dismissal" && metric.format === "pct1";
 }
 

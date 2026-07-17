@@ -547,8 +547,18 @@ export async function fetchBowlingOpposition(playerId, state, overlay = null) {
 // decision 21): every stat must ship with "based on N of M balls" alongside
 // it, so callers get `coverage` back and MUST render it next to the buckets —
 // never show a matchup number without its coverage line.
-const MATCHUP_BATTING_KEYS = metricsFor("matchup_batting").map((m) => m.key);
-const MATCHUP_BOWLING_KEYS = metricsFor("matchup_bowling").map((m) => m.key);
+// Exclude the composition columns (kind "composition", Coverage-breakdown
+// wave): their sqlExpression is a placeholder never meant for selectList (they
+// are computed only in table.js's buildMatchupQuery via windowed partials). The
+// popup gets its own per-group % on the coarse tables, derived in
+// playerSections.js from each row's `balls` and the coverage total — not from
+// these keys.
+const MATCHUP_BATTING_KEYS = metricsFor("matchup_batting")
+  .filter((m) => m.kind !== "composition")
+  .map((m) => m.key);
+const MATCHUP_BOWLING_KEYS = metricsFor("matchup_bowling")
+  .filter((m) => m.kind !== "composition")
+  .map((m) => m.key);
 
 /**
  * Batter vs bowling-style matchups. `coverage` = {mapped: N, total: M} balls

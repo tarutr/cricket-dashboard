@@ -1192,6 +1192,58 @@ const MATCHUP_BATTING_METRICS = [
     kind: "rate",
     minSampleComponent: "SUM(odi_death_balls)",
   },
+  // ── Composition columns (Coverage-breakdown wave) ─────────────────────────
+  // Each = (that bowling_group's UNFILTERED balls faced) ÷ (the player's TOTAL
+  // balls faced in scope) × 100 — a DESCRIPTIVE style-mix percentage that is
+  // UN-FILTERED by the selected Vs bucket (it describes the whole faced
+  // composition, exactly like the coverage figure it replaces), so it must NOT
+  // go through the per-bucket FILTER path the other matchup metrics take.
+  // `kind: "composition"` (a dedicated value, like r_pos's "position") marks
+  // these for special handling: `sqlExpression` is a placeholder NEVER
+  // interpolated — table.js's buildMatchupQuery computes them from unfiltered
+  // per-group ball partials windowed per player over the '(unmapped)'-aware
+  // coverage denominator (see that function). `compositionGroup` is the exact
+  // bowling_group value each column measures. Table-only: the graph never sees
+  // the matchup namespaces, and advanced.js excludes kind "composition" from
+  // the stat-condition picker. zeroIsData:true so 0% (a player who faced no
+  // spin) is shown as "0.0%", never hidden; higherIsBetter:null (neutral).
+  // The three per row partition the player's balls faced, so they sum to 100%.
+  {
+    key: "comp_pace",
+    label: "Pace BF %",
+    shortLabel: "Pace BF %",
+    discipline: "matchup_batting",
+    source: "matchup",
+    compositionGroup: "Pace",
+    sqlExpression: "__COMPOSITION__", // never interpolated — see comment above
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "composition",
+  },
+  {
+    key: "comp_spin",
+    label: "Spin BF %",
+    shortLabel: "Spin BF %",
+    discipline: "matchup_batting",
+    source: "matchup",
+    compositionGroup: "Spin",
+    sqlExpression: "__COMPOSITION__",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "composition",
+  },
+  {
+    key: "comp_uncat",
+    label: "Uncategorised BF %",
+    shortLabel: "Uncategorised BF %",
+    discipline: "matchup_batting",
+    source: "matchup",
+    compositionGroup: "(unmapped)",
+    sqlExpression: "__COMPOSITION__",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "composition",
+  },
 ];
 
 const MATCHUP_BOWLING_METRICS = [
@@ -1597,6 +1649,49 @@ const MATCHUP_BOWLING_METRICS = [
     additive: true,
     kind: "total",
     minSampleComponent: "SUM(odi_death_wickets)",
+  },
+  // ── Composition columns (Coverage-breakdown wave) ─────────────────────────
+  // Bowling analogue of matchup_batting's comp_* metrics above (see that block
+  // for the full contract): each = (that batting_hand's UNFILTERED balls
+  // bowled) ÷ (the player's TOTAL balls bowled in scope) × 100 — a descriptive
+  // hand-mix percentage, UN-FILTERED by the selected Vs bucket, computed by
+  // table.js's buildMatchupQuery from unfiltered per-hand ball partials. The
+  // three per row partition balls bowled, so they sum to 100%.
+  {
+    key: "comp_rhb",
+    label: "RHB %",
+    shortLabel: "RHB %",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    compositionGroup: "Right-hand bat",
+    sqlExpression: "__COMPOSITION__", // never interpolated — see comment above
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "composition",
+  },
+  {
+    key: "comp_lhb",
+    label: "LHB %",
+    shortLabel: "LHB %",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    compositionGroup: "Left-hand bat",
+    sqlExpression: "__COMPOSITION__",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "composition",
+  },
+  {
+    key: "comp_uncat",
+    label: "Uncategorised %",
+    shortLabel: "Uncategorised %",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    compositionGroup: "(unmapped)",
+    sqlExpression: "__COMPOSITION__",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "composition",
   },
 ];
 

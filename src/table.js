@@ -273,7 +273,19 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
       keyOrder.push(k);
     }
   }
-  const metrics = keyOrder.map((key) => getMetric(key, ns)).filter(Boolean);
+  const allMetrics = keyOrder.map((key) => getMetric(key, ns)).filter(Boolean);
+  // Composition columns (Coverage-breakdown wave): "Pace BF % / Spin BF % /
+  // Uncategorised BF %" (batting) and "RHB % / LHB % / Uncategorised %"
+  // (bowling). These are DESCRIPTIVE, UN-FILTERED-BY-BUCKET percentages — each
+  // group's UNFILTERED balls ÷ the player's TOTAL balls (the coverage
+  // denominator) — so they must NOT flow through the per-bucket FILTER path the
+  // regular metrics take below. Split out here and computed via the SAME
+  // unfiltered-partial → window-per-player → %-of-total staging the coverage
+  // figures already use (see this function's doc comment). Their sqlExpression
+  // is a placeholder, never interpolated (kind === "composition", mirroring
+  // r_pos's placeholder handling in buildQuery).
+  const metrics = allMetrics.filter((m) => m.kind !== "composition");
+  const compMetrics = allMetrics.filter((m) => m.kind === "composition");
 
   const mv = state.matchupVs;
   const bucketCol = mv.dim === "hand" ? "batting_hand" : mv.dim === "type" ? "bowling_type" : "bowling_group";
@@ -331,6 +343,16 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   aggSelectParts.push(
     `SUM(CASE WHEN ${groupCol} <> '(unmapped)' THEN ${ballsCol} ELSE 0 END) AS __coverage_mapped_partial`
   );
+  // Composition (Coverage-breakdown wave): one UNFILTERED per-group ball
+  // partial per visible composition column, at THIS query's (id, name) grain —
+  // summed across name variants by the window in step 2, then divided by
+  // __coverage_total in step 3. compositionGroup is a fixed vocabulary literal
+  // (a bowling_group / batting_hand value); esc()'d as defense in depth.
+  for (const m of compMetrics) {
+    aggSelectParts.push(
+      `SUM(CASE WHEN ${groupCol} = '${esc(m.compositionGroup)}' THEN ${ballsCol} ELSE 0 END) AS ${m.key}__partial`
+    );
+  }
 
   const scopeOpts = {
     includeTeams: true,
@@ -378,10 +400,17 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     if (m.sortExpression) passThroughCols.push(`${m.key}__sort`);
   }
   for (const { alias } of extraAggColumns) passThroughCols.push(alias);
+  // Window every coverage/composition partial into its cross-name-variant total
+  // for the id (SUM is additive — re-summing the partials reconstructs the
+  // id-only totals). The composition partials join the same PARTITION BY id.
+  const windowExprs = [
+    `SUM(__coverage_total_partial) OVER (PARTITION BY id) AS __coverage_total`,
+    `SUM(__coverage_mapped_partial) OVER (PARTITION BY id) AS __coverage_mapped`,
+    ...compMetrics.map((m) => `SUM(${m.key}__partial) OVER (PARTITION BY id) AS ${m.key}__total`),
+  ];
   const windowedSql = [
     `SELECT ${passThroughCols.join(", ")},`,
-    `       SUM(__coverage_total_partial) OVER (PARTITION BY id) AS __coverage_total,`,
-    `       SUM(__coverage_mapped_partial) OVER (PARTITION BY id) AS __coverage_mapped`,
+    `       ${windowExprs.join(",\n       ")}`,
     `FROM agg`,
   ].join("\n");
 
@@ -395,6 +424,12 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     ...metrics.flatMap((m) => (m.sortExpression ? [m.key, `${m.key}__sort`] : [m.key])),
     "__coverage_total",
     "__coverage_mapped",
+    // Composition %: each group's windowed unfiltered balls as a share of the
+    // player's TOTAL balls (the coverage denominator). NULLIF → NULL (renders
+    // "—") only when the player has zero balls in scope; otherwise 0% is real
+    // data (zeroIsData:true), so a player who never faced spin reads "0.0%",
+    // never hidden. The three per row sum to 100% (they partition the balls).
+    ...compMetrics.map((m) => `${m.key}__total * 100.0 / NULLIF(__coverage_total, 0) AS ${m.key}`),
   ];
   // decision 44c: NO minimum-innings gate. This `>= 1` is NOT a min-innings
   // filter — it is the bucket-existence test that reproduces the correct row
@@ -457,6 +492,12 @@ function conditionToHaving(cond, discipline, exprFn) {
   // degradation an out-of-namespace condition already gets (see
   // conditionApplicability just below, which this stays in step with).
   if (metric.kind === "position") return null;
+  // Composition columns (Coverage-breakdown wave) are descriptive display-only
+  // percentages with a placeholder sqlExpression (see metrics.js) — never a
+  // usable stat condition. advanced.js already excludes them from the picker;
+  // this guard is the same belt-and-braces defence r_pos gets just above, so a
+  // stray composition-keyed condition can never reach SQL.
+  if (metric.kind === "composition") return null;
   const expr = exprFn ? exprFn(cond, metric) : metric.sqlExpression;
   if (!expr) return null;
   // §8.1: rate/ratio metrics (zeroIsData:false) treat 0 as "no data" too, so a
@@ -501,10 +542,11 @@ function conditionApplicability(advanced, ns) {
     for (const c of g.conds) {
       total += 1;
       const m = getMetric(c.metricKey, ns);
-      // kind "position" (R. Pos.) is never a usable condition — see
-      // conditionToHaving's guard just above, which this must stay honest
-      // about (never silently count it as "applied").
-      if (m && m.kind !== "position") applied += 1;
+      // kind "position" (R. Pos.) and kind "composition" (the descriptive
+      // matchup %-mix columns) are never usable conditions — see
+      // conditionToHaving's guards just above, which this must stay honest
+      // about (never silently count them as "applied").
+      if (m && m.kind !== "position" && m.kind !== "composition") applied += 1;
     }
   }
   return { total, applied };
@@ -564,11 +606,10 @@ function regularPositionCteSql(state) {
  * Returns { sql, matchesSql } — matchesSql is null unless "matches"
  * is visible AND still answerable from player_matches (see below). While a
  * matchup "Vs" selection is active, delegates to buildMatchupQuery (C1: one
- * merged scan carrying both the stat columns and the coverage N-of-M
- * denominator — see that function's doc comment); its `sql` result also
- * carries `__coverage_total`/`__coverage_mapped` columns that mountTable's
- * load() turns into each row's `coverage` object, in place of the second
- * query this used to require.
+ * merged scan carrying the stat columns, the coverage totals, and the
+ * per-group composition %s — see that function's doc comment). __coverage_total
+ * is the denominator behind the composition columns (comp_*); the old fixed
+ * "Coverage" display column it once fed was replaced by those columns.
  *
  * "Matches" honesty (D4 Piece 3): player_matches has no opposition or
  * batting-position columns, so whenever an innings-level filter is
@@ -1404,9 +1445,10 @@ export function mountTable(
     const dir = isSorted ? state.sort.dir : null;
     const arrow = isSorted ? (dir === "asc" ? " ▲" : " ▼") : "";
     // `data-table__th--draggable` (task 2): every metric column can be
-    // reordered via drag — see wireColumnDrag. The sticky Player column and
-    // the structural split/coverage columns (rendered elsewhere in
-    // renderLoaded, never through this function) never get this class.
+    // reordered via drag — see wireColumnDrag. The sticky Player column
+    // (rendered elsewhere in renderLoaded, never through this function) never
+    // gets this class; the matchup composition columns DO (they're ordinary
+    // metric columns, so they drag/sort like any other).
     // `columnTitle` (task 5, R. Pos.): an optional metrics.js field for a
     // header hover title beyond the plain label — most metrics omit it.
     const titleAttr = metric.columnTitle ? ` title="${escAttr(metric.columnTitle)}"` : "";
@@ -1419,17 +1461,6 @@ export function mountTable(
   function applySort(rows, s) {
     const metric = resolveSortMetric(s.sort.key, effectiveDiscipline(s));
     return metric ? rows.slice().sort((a, b) => compareRows(a, b, metric, s.sort.dir)) : rows;
-  }
-
-  /** Coverage cell text: "N of M (P%)" — one decimal on P, thousands separators on N/M.
-   * No coverage figure, no stat (SPEC_ADDENDUM D4.3) — every matchup row carries this. */
-  function coverageLabel(coverage) {
-    if (!coverage || !coverage.total) return "—";
-    const pct = (coverage.mapped / coverage.total) * 100;
-    return `${coverage.mapped.toLocaleString()} of ${coverage.total.toLocaleString()} (${pct.toLocaleString(undefined, {
-      minimumFractionDigits: 1,
-      maximumFractionDigits: 1,
-    })}%)`;
   }
 
   /** The "Vs" select's <option> markup for the current discipline. Value encodes
@@ -1468,9 +1499,9 @@ export function mountTable(
   // Dragging a metric column header left/right reorders state.columns[ns] —
   // a VIEW change only: it must never trigger a requery (the column picker's
   // checked set is unchanged), so this re-renders the already-cached
-  // `lastRows` in place instead of calling load(). The sticky Player column
-  // and the structural coverage column are never wired (see renderLoaded's
-  // call site below — only `.data-table__th--draggable` headers).
+  // `lastRows` in place instead of calling load(). The sticky Player column is
+  // never wired (see renderLoaded's call site below — only
+  // `.data-table__th--draggable` headers).
 
   /** Reorder `ns`'s column-key array: pull `fromKey` out and reinsert it
    * immediately before/after `overKey` (or at the end when `overKey` is
@@ -1631,7 +1662,7 @@ export function mountTable(
       }
       for (const tr of tbodyEl.querySelectorAll("tr")) {
         const draggedTd = tr.querySelector(`td[data-key="${key}"]`);
-        if (!draggedTd) continue; // sticky/coverage/split cells never carry data-key
+        if (!draggedTd) continue; // the sticky Player cell never carries data-key
         if (overKey) {
           const targetTd = tr.querySelector(`td[data-key="${overKey}"]`);
           if (!targetTd) continue;
@@ -1926,14 +1957,14 @@ export function mountTable(
     // persists, so keep it honestly in step with the closure flag.
     scrollEl.classList.toggle("is-name-expanded", nameExpanded);
 
-    const matchupOn = matchupVsActive(state);
     const ns = effectiveDiscipline(state);
     const colKeys = state.columns[ns];
     const cols = colKeys.map((key) => getMetric(key, ns)).filter(Boolean);
 
-    const coverageTh = matchupOn
-      ? `<th class="data-table__th data-table__th--coverage" scope="col">Coverage</th>`
-      : "";
+    // Coverage-breakdown wave: the old fixed "Coverage" column is gone —
+    // matchup rows now carry the per-group composition %s (comp_*) as ordinary
+    // columns within `cols` (default far-right, in the restricted picker), so
+    // there is no special-cased header/cell here any more.
 
     // Rank column (task 1): a display-only countdown index, sticky at the very
     // left (before Player). Its header is a plain "#" — rank is not a sortable
@@ -1954,7 +1985,6 @@ export function mountTable(
       <tr>
         ${rankTh}
         ${playerTh}
-        ${coverageTh}
         ${cols.map((m) => headerCellHTML(m, state)).join("")}
       </tr>`;
 
@@ -1968,9 +1998,6 @@ export function mountTable(
         // full sorted `rows`, so numbers run 1, 2, 3 … and continue unbroken
         // across a "Show More" reveal (51, 52, …) — no query, pure display.
         const rankTd = `<td class="data-table__td data-table__td--rank">${(i + 1).toLocaleString()}</td>`;
-        const coverageTd = matchupOn
-          ? `<td class="data-table__td data-table__td--coverage">${coverageLabel(row.coverage)}</td>`
-          : "";
         const cells = cols.map((m) => dataCellHTML(m, row)).join("");
         // Player names link to the player page (R2, decision 29). The full
         // name is now always the rendered text (task 4 replaced JS
@@ -1982,7 +2009,7 @@ export function mountTable(
         const nameCell = onPlayerClick
           ? `<button type="button" class="player-link" data-player-id="${escAttr(row.id ?? "")}" title="${escAttr(fullName)}">${escHtml(fullName)}</button>`
           : `<span title="${escAttr(fullName)}">${escHtml(fullName)}</span>`;
-        return `<tr>${rankTd}<td class="data-table__td data-table__td--sticky">${nameCell}</td>${coverageTd}${cells}</tr>`;
+        return `<tr>${rankTd}<td class="data-table__td data-table__td--sticky">${nameCell}</td>${cells}</tr>`;
       })
       .join("");
 
@@ -2088,10 +2115,9 @@ export function mountTable(
     }
 
     // Column drag-to-reorder (task 2): every metric header (never the
-    // sticky Player column, split, or coverage columns — those don't get
-    // the --draggable class) can be dragged left/right to reorder
-    // state.columns[ns]. Rebound on every renderLoaded call, same as the
-    // sort click handler just above.
+    // sticky Player column — it doesn't get the --draggable class) can be
+    // dragged left/right to reorder state.columns[ns]. Rebound on every
+    // renderLoaded call, same as the sort click handler just above.
     theadEl.querySelectorAll(".data-table__th--draggable").forEach((th) => {
       wireColumnDrag(th, ns);
     });
@@ -2391,15 +2417,12 @@ export function mountTable(
         const byId = new Map(matchesResult.rows.map((r) => [r.id, r.matches]));
         merged = rows.map((r) => ({ ...r, matches: byId.get(r.id) ?? null }));
       }
-      // C1: coverage is now carried inline on every row by buildMatchupQuery
-      // (__coverage_total / __coverage_mapped, one merged scan) instead of a
-      // second standalone query — read straight off the row.
-      if (matchupVsActive(state)) {
-        merged = merged.map((r) => ({
-          ...r,
-          coverage: { mapped: r.__coverage_mapped ?? 0, total: r.__coverage_total ?? 0 },
-        }));
-      }
+      // Coverage-breakdown wave: the fixed "Coverage" column is gone, so its
+      // former per-row `coverage` object is no longer built here. The coverage
+      // TOTALS (__coverage_total / __coverage_mapped) are still computed inside
+      // buildMatchupQuery — __coverage_total is the denominator for the new
+      // composition % columns (comp_*), which arrive already-computed on each
+      // row like any other column.
 
       const sorted = applySort(merged, state);
 

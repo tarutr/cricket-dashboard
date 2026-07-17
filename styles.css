@@ -4406,17 +4406,6 @@ a { color: var(--color-accent); }
   font-style: italic;
 }
 
-.data-table__th--coverage {
-  color: var(--color-muted);
-}
-
-.data-table__td--coverage {
-  font-size: var(--text-sm2);
-  color: var(--color-muted);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
 @media (max-width: 480px) {
   .select--compact {
     max-width: 9rem;

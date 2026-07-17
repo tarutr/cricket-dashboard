@@ -254,8 +254,28 @@ export function matchupCoverageLine(label, noun, coverage) {
 
 const BATTING_MATCHUP_KEYS = ["innings", "balls", "runs", "strike_rate", "average", "dismissals"];
 const BATTING_MATCHUP_HEADERS = ["Bucket", "Inns", "Balls", "Runs", "SR", "Avg", "Out"];
+// Coverage-breakdown wave: the COARSE "Vs pace and spin" table gains a
+// right-most composition-% column (the fine "Vs bowling type" table does NOT —
+// it keeps BATTING_MATCHUP_HEADERS). The %% is each bucket's balls faced as a
+// share of the player's TOTAL balls faced in scope (matchups.coverage.total) —
+// the SAME number as the leaderboard's "Pace BF %" / "Spin BF %" columns.
+const BATTING_COARSE_HEADERS = [...BATTING_MATCHUP_HEADERS, "% BF"];
+// Coarse bucket -> the matchup_batting composition metric it corresponds to
+// (used only for identical pct1 formatting — the numeric value is computed
+// here from balls ÷ total, same as the leaderboard column).
+const COARSE_COMP_KEY = { Pace: "comp_pace", Spin: "comp_spin" };
 // Coarse buckets always read Pace before Spin, regardless of which has more balls.
 const COARSE_ORDER = { Pace: 0, Spin: 1 };
+
+/** One composition-% cell: `balls` as a share of the player's TOTAL balls
+ * (`total`), formatted through the composition metric `compKey` in `ns` so it
+ * reads identically to the leaderboard's matching column. `total > 0` is
+ * guaranteed by the caller's coverage gate; the NULL branch is defensive. */
+function compositionPctCell(ns, compKey, balls, total) {
+  const m = getMetric(compKey, ns);
+  const value = total > 0 ? (Number(balls) / total) * 100 : null;
+  return escHtml(formatValue(m, value));
+}
 
 // Fine-breakdown bowling_type -> coarse group, for the "vs bowling type"
 // table (owner note 11, fix round: group Pace then Spin with subheadings).
@@ -337,11 +357,16 @@ export function battingMatchupsHTML(matchups) {
   const metrics = BATTING_MATCHUP_KEYS.map((k) => getMetric(k, "matchup_batting"));
   const rowFor = (label, r) => [escHtml(label), ...metrics.map((m) => escHtml(formatValue(m, r[m.key])))];
 
+  const total = Number(matchups.coverage?.total) || 0;
   const coarse = [...matchups.coarse].sort((a, b) => (COARSE_ORDER[a.bucket] ?? 2) - (COARSE_ORDER[b.bucket] ?? 2));
-  const coarseRows = coarse.map((r) => rowFor(r.bucket, r));
+  // Coarse rows gain the composition-% cell; the FINE rows (below) do NOT.
+  const coarseRows = coarse.map((r) => [
+    ...rowFor(r.bucket, r),
+    compositionPctCell("matchup_batting", COARSE_COMP_KEY[r.bucket] ?? "comp_uncat", r.balls, total),
+  ]);
   const fineEntries = matchups.fine.map((r) => ({ bucket: r.bucket, cells: rowFor(matchupBucketLabel(r.bucket), r) }));
 
-  return `${coverageHTML}${subTableHTML("Vs pace and spin", BATTING_MATCHUP_HEADERS, coarseRows)}${fineBowlingTypeSectionHTML(
+  return `${coverageHTML}${subTableHTML("Vs pace and spin", BATTING_COARSE_HEADERS, coarseRows)}${fineBowlingTypeSectionHTML(
     "Vs bowling type",
     BATTING_MATCHUP_HEADERS,
     fineEntries
@@ -350,6 +375,11 @@ export function battingMatchupsHTML(matchups) {
 
 const BOWLING_MATCHUP_KEYS = ["innings", "balls", "runs_conceded", "wickets", "economy", "average", "strike_rate"];
 const BOWLING_MATCHUP_HEADERS = ["Bucket", "Inns", "Balls", "Runs", "Wkts", "Econ", "Avg", "SR"];
+// Coverage-breakdown wave: right-most composition-% column — each hand's balls
+// bowled as a share of the player's TOTAL balls bowled in scope (same number
+// as the leaderboard's "RHB %" / "LHB %" columns).
+const BOWLING_HAND_HEADERS = [...BOWLING_MATCHUP_HEADERS, "% balls"];
+const HAND_COMP_KEY = { "Right-hand bat": "comp_rhb", "Left-hand bat": "comp_lhb" };
 const HAND_LABELS = { "Right-hand bat": "Right-handers", "Left-hand bat": "Left-handers" };
 
 export function bowlingMatchupsHTML(matchups) {
@@ -358,11 +388,13 @@ export function bowlingMatchupsHTML(matchups) {
     return `<p class="player-page__note player-page__note--muted">No batting-hand data in this scope.</p>`;
   }
   const metrics = BOWLING_MATCHUP_KEYS.map((k) => getMetric(k, "matchup_bowling"));
+  const total = Number(matchups.coverage?.total) || 0;
   const rows = matchups.hands.map((r) => [
     escHtml(HAND_LABELS[r.bucket] ?? r.bucket),
     ...metrics.map((m) => escHtml(formatValue(m, r[m.key]))),
+    compositionPctCell("matchup_bowling", HAND_COMP_KEY[r.bucket] ?? "comp_uncat", r.balls, total),
   ]);
-  return `${coverageHTML}${miniTableHTML(BOWLING_MATCHUP_HEADERS, rows)}`;
+  return `${coverageHTML}${miniTableHTML(BOWLING_HAND_HEADERS, rows)}`;
 }
 
 // ── Honest refusal rendering (B7 overlay) ────────────────────────────────────
