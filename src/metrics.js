@@ -1235,7 +1235,7 @@ const MATCHUP_BATTING_METRICS = [
   {
     key: "comp_uncat",
     label: "Uncategorised BF %",
-    shortLabel: "Uncategorised BF %",
+    shortLabel: "Uncat %",
     discipline: "matchup_batting",
     source: "matchup",
     compositionGroup: "(unmapped)",
@@ -1245,6 +1245,10 @@ const MATCHUP_BATTING_METRICS = [
     kind: "composition",
   },
 ];
+// Table COLUMN HEADER shows shortLabel (table.js headerCellHTML); the Columns
+// picker + long-form uses show `label` (table.js:2229). The Uncategorised
+// composition columns keep the full descriptive `label` but shorten the header
+// to "Uncat %" so it doesn't crowd the Vs table. (Set once here, not in table.js.)
 
 const MATCHUP_BOWLING_METRICS = [
   {
@@ -1684,7 +1688,7 @@ const MATCHUP_BOWLING_METRICS = [
   {
     key: "comp_uncat",
     label: "Uncategorised %",
-    shortLabel: "Uncategorised %",
+    shortLabel: "Uncat %",
     discipline: "matchup_bowling",
     source: "matchup",
     compositionGroup: "(unmapped)",

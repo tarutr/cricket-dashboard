@@ -264,8 +264,12 @@ const BATTING_COARSE_HEADERS = [...BATTING_MATCHUP_HEADERS, "% BF"];
 // (used only for identical pct1 formatting — the numeric value is computed
 // here from balls ÷ total, same as the leaderboard column).
 const COARSE_COMP_KEY = { Pace: "comp_pace", Spin: "comp_spin" };
-// Coarse buckets always read Pace before Spin, regardless of which has more balls.
+// Coarse buckets always read Pace before Spin, then '(unmapped)' last (its
+// COARSE_ORDER fallback is `?? 2`), regardless of which has more balls.
 const COARSE_ORDER = { Pace: 0, Spin: 1 };
+// The '(unmapped)' coarse bucket renders as an "Uncategorised" row (the third
+// row, per COARSE_ORDER above); Pace/Spin pass through as their own labels.
+const COARSE_LABEL = { "(unmapped)": "Uncategorised" };
 
 /** One composition-% cell: `balls` as a share of the player's TOTAL balls
  * (`total`), formatted through the composition metric `compKey` in `ns` so it
@@ -350,7 +354,7 @@ function fineBowlingTypeSectionHTML(title, headers, entries) {
 }
 
 export function battingMatchupsHTML(matchups) {
-  const coverageHTML = matchupCoverageLine("Style data", "faced", matchups.coverage);
+  const coverageHTML = matchupCoverageLine("Matchup data", "faced", matchups.coverage);
   if (!coverageHTML) {
     return `<p class="player-page__note player-page__note--muted">No bowling-style data in this scope.</p>`;
   }
@@ -360,8 +364,9 @@ export function battingMatchupsHTML(matchups) {
   const total = Number(matchups.coverage?.total) || 0;
   const coarse = [...matchups.coarse].sort((a, b) => (COARSE_ORDER[a.bucket] ?? 2) - (COARSE_ORDER[b.bucket] ?? 2));
   // Coarse rows gain the composition-% cell; the FINE rows (below) do NOT.
+  // '(unmapped)' renders as the "Uncategorised" third row, its % via comp_uncat.
   const coarseRows = coarse.map((r) => [
-    ...rowFor(r.bucket, r),
+    ...rowFor(COARSE_LABEL[r.bucket] ?? r.bucket, r),
     compositionPctCell("matchup_batting", COARSE_COMP_KEY[r.bucket] ?? "comp_uncat", r.balls, total),
   ]);
   const fineEntries = matchups.fine.map((r) => ({ bucket: r.bucket, cells: rowFor(matchupBucketLabel(r.bucket), r) }));
@@ -380,16 +385,23 @@ const BOWLING_MATCHUP_HEADERS = ["Bucket", "Inns", "Balls", "Runs", "Wkts", "Eco
 // as the leaderboard's "RHB %" / "LHB %" columns).
 const BOWLING_HAND_HEADERS = [...BOWLING_MATCHUP_HEADERS, "% balls"];
 const HAND_COMP_KEY = { "Right-hand bat": "comp_rhb", "Left-hand bat": "comp_lhb" };
-const HAND_LABELS = { "Right-hand bat": "Right-handers", "Left-hand bat": "Left-handers" };
+// '(unmapped)' renders as an "Uncategorised" row (forced last below); the two
+// named hands read as "Right-handers" / "Left-handers".
+const HAND_LABELS = { "Right-hand bat": "Right-handers", "Left-hand bat": "Left-handers", "(unmapped)": "Uncategorised" };
 
 export function bowlingMatchupsHTML(matchups) {
-  const coverageHTML = matchupCoverageLine("Batting-hand data", "bowled", matchups.coverage);
+  const coverageHTML = matchupCoverageLine("Matchup data", "bowled", matchups.coverage);
   if (!coverageHTML) {
     return `<p class="player-page__note player-page__note--muted">No batting-hand data in this scope.</p>`;
   }
   const metrics = BOWLING_MATCHUP_KEYS.map((k) => getMetric(k, "matchup_bowling"));
   const total = Number(matchups.coverage?.total) || 0;
-  const rows = matchups.hands.map((r) => [
+  // Uncategorised ('(unmapped)') always renders last; RHB/LHB keep their SQL
+  // balls-DESC order (Array#sort is stable, so this only moves '(unmapped)').
+  const hands = [...matchups.hands].sort(
+    (a, b) => (a.bucket === "(unmapped)" ? 1 : 0) - (b.bucket === "(unmapped)" ? 1 : 0)
+  );
+  const rows = hands.map((r) => [
     escHtml(HAND_LABELS[r.bucket] ?? r.bucket),
     ...metrics.map((m) => escHtml(formatValue(m, r[m.key]))),
     compositionPctCell("matchup_bowling", HAND_COMP_KEY[r.bucket] ?? "comp_uncat", r.balls, total),

@@ -563,10 +563,12 @@ const MATCHUP_BOWLING_KEYS = metricsFor("matchup_bowling")
 /**
  * Batter vs bowling-style matchups. `coverage` = {mapped: N, total: M} balls
  * faced (M = all buckets, N = buckets with a mapped style — bowling_group <>
- * '(unmapped)'). `coarse` groups by bowling_group ('Pace'/'Spin' only, the
- * '(unmapped)' rows dropped); `fine` groups by the specific bowling_type
- * (also dropping '(unmapped)'; bare-slow bowlers surface as the group name
- * 'Pace'/'Spin' there per decision 24 — label via matchupBucketLabel()).
+ * '(unmapped)'). `coarse` groups by bowling_group and INCLUDES the '(unmapped)'
+ * bucket as its own row (Pace / Spin / Uncategorised — the popup renders
+ * Uncategorised last so the three rows' balls partition the coverage total);
+ * `fine` groups by the specific bowling_type and still DROPS '(unmapped)'
+ * (bare-slow bowlers surface as the group name 'Pace'/'Spin' there per
+ * decision 24 — label via matchupBucketLabel()).
  */
 export async function fetchBattingMatchups(playerId, state, overlay = null) {
   // matchup_batting carries batting_position + bowling_team + match_date, so
@@ -587,9 +589,14 @@ export async function fetchBattingMatchups(playerId, state, overlay = null) {
     `       SUM(balls_faced) FILTER (bowling_group <> '(unmapped)') AS mapped`,
     `FROM matchup_batting WHERE ${where}`,
   ].join("\n");
+  // Coverage-breakdown follow-up: the coarse table now INCLUDES the
+  // '(unmapped)' bowling_group as its own row (rendered last, labelled
+  // "Uncategorised" in playerSections.js) so Pace + Spin + Uncategorised balls
+  // partition the coverage total and their "% BF" sum to 100%. The FINE query
+  // below still drops '(unmapped)'.
   const coarseSql = [
     `SELECT bowling_group AS bucket, ${metricSelects}`,
-    `FROM matchup_batting WHERE ${where} AND bowling_group <> '(unmapped)'`,
+    `FROM matchup_batting WHERE ${where}`,
     `GROUP BY bowling_group ORDER BY balls DESC`,
   ].join("\n");
   const fineSql = [
@@ -614,7 +621,9 @@ export async function fetchBattingMatchups(playerId, state, overlay = null) {
 /**
  * Bowler vs batting-hand matchups. `coverage` = {mapped: N, total: M} balls
  * bowled (M = all buckets, N = buckets with a mapped hand — batting_hand <>
- * '(unmapped)'). `hands` groups by batting_hand, '(unmapped)' dropped.
+ * '(unmapped)'). `hands` groups by batting_hand and INCLUDES the '(unmapped)'
+ * bucket as its own row (RHB / LHB / Uncategorised — the popup renders
+ * Uncategorised last so the three rows' balls partition the coverage total).
  */
 export async function fetchBowlingMatchups(playerId, state, overlay = null) {
   // matchup_bowling carries batting_position (the STRIKER's position faced) +
@@ -635,9 +644,13 @@ export async function fetchBowlingMatchups(playerId, state, overlay = null) {
     `       SUM(balls) FILTER (batting_hand <> '(unmapped)') AS mapped`,
     `FROM matchup_bowling WHERE ${where}`,
   ].join("\n");
+  // Coverage-breakdown follow-up: include the '(unmapped)' batting_hand as its
+  // own row (rendered last, labelled "Uncategorised" in playerSections.js) so
+  // RHB + LHB + Uncategorised balls partition the coverage total and their
+  // "% balls" sum to 100%.
   const handsSql = [
     `SELECT batting_hand AS bucket, ${metricSelects}`,
-    `FROM matchup_bowling WHERE ${where} AND batting_hand <> '(unmapped)'`,
+    `FROM matchup_bowling WHERE ${where}`,
     `GROUP BY batting_hand ORDER BY balls DESC`,
   ].join("\n");
 
