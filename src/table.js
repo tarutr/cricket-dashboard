@@ -102,7 +102,14 @@ function serializeQueryState(state) {
     matchupVs: state.matchupVs,
     pinnedPlayers: state.pinnedPlayers,
     search: state.search,
-    sort: state.sort,
+    // R4 Wave 4a (A1): `sort` is deliberately EXCLUDED. Clicking a column header
+    // now re-sorts the loaded rows INSTANTLY (applySortKey below) and must NOT
+    // light the Search button — since nothing PENDING ever changes the sort key
+    // on its own (a discipline change lights Search via `discipline` here
+    // regardless), leaving sort out of the dirty comparison is the whole fix.
+    // `columns` STAYS in: the PENDING preset dropdown sets it and must keep
+    // lighting Search — the INSTANT Columns picker / drag-reorder instead advance
+    // the applied snapshot (onColumnsApplied) so THEY read as not-dirty.
     columns: state.columns[ns],
     advanced: state.advanced,
   });
@@ -962,7 +969,7 @@ function compareRows(a, b, metric, dir) {
 export function mountTable(
   container,
   store,
-  { onPlayerClick, onOpenFilters, onClear, onSearch, onDateChange, getAppliedState, onSkeletonReady } = {}
+  { onPlayerClick, onOpenFilters, onClear, onSearch, onDateChange, getAppliedState, onColumnsApplied, onSkeletonReady } = {}
 ) {
   let lastRows = [];
   let loadToken = 0;
@@ -1473,13 +1480,15 @@ export function mountTable(
    * null — dropped past the last draggable column). Pure array surgery over the
    * column order; never changes which columns show or the query result.
    *
-   * R3.2: reorder is a purely-cosmetic view change of the SAME data, applied
-   * immediately (the drag would look broken otherwise). It updates BOTH the
-   * pending store (so a later Search persists the order, and the Search button
-   * lights dirty) AND the FROZEN snapshot's columns ONLY (a shallow clone of
-   * lastLoadedState with just its `columns` replaced) — never
-   * `lastLoadedState = store.get()`, which would fold every OTHER pending edit
-   * into the frozen table and misdraw it. */
+   * R4 Wave 4a (A1): reorder is a purely-cosmetic view change of the SAME data,
+   * applied immediately (the drag would look broken otherwise) and — like the
+   * Columns picker — it must NOT light Search. It updates the FROZEN snapshot's
+   * columns ONLY (a shallow clone of lastLoadedState with just its `columns`
+   * replaced) — never `lastLoadedState = store.get()`, which would fold every
+   * OTHER pending edit into the frozen table and misdraw it — plus the pending
+   * store (so a later Search persists the order), plus the APPLIED snapshot via
+   * onColumnsApplied so the dirty comparison sees the new order as already
+   * applied (no Search light). */
   function reorderColumns(ns, fromKey, overKey, side) {
     const base = lastLoadedState || store.get();
     const cols = (base.columns[ns] || []).slice();
@@ -1495,7 +1504,9 @@ export function mountTable(
       else if (side === "after") toIdx += 1;
     }
     cols.splice(toIdx, 0, fromKey);
-    // Pending order (lights the Search button dirty via the store hook).
+    // Advance the APPLIED snapshot FIRST (before store.set fires the toolbar
+    // sync) so the Search button never flashes dirty for a reorder.
+    if (onColumnsApplied) onColumnsApplied(ns, cols);
     const live = store.get();
     store.set({ columns: { ...live.columns, [ns]: cols } });
     // Frozen snapshot: reorder ONLY its columns for this ns, leaving every
@@ -1503,6 +1514,43 @@ export function mountTable(
     // and enterView() keeps showing the reordered columns after a tab switch.
     lastLoadedState = { ...lastLoadedState, columns: { ...lastLoadedState.columns, [ns]: cols } };
     lastQueryStateKey = serializeQueryState(store.get());
+  }
+
+  /** R4 Wave 4a (A1): apply a Columns-picker change INSTANTLY. Checking/
+   * unchecking a column changes the DISPLAYED (frozen) table now, not at Search,
+   * and must NOT light the Search button — the applied snapshot's columns
+   * advance in lockstep (onColumnsApplied) so the dirty comparison reads them as
+   * unchanged. This is the deliberate split from the PENDING preset dropdown,
+   * which also sets state.columns but does NOT call onColumnsApplied.
+   *
+   * Adding a column needs data the frozen result set doesn't carry (buildQuery
+   * only SELECTs the visible columns), so this requeries — but against the
+   * FROZEN applied SCOPE (lastLoadedState), never the live/pending store, so an
+   * un-searched pending scope edit can't leak in (rows stay frozen).
+   *
+   * `pickerNs` is the namespace the popover was built for (the live effective
+   * discipline). It matches the frozen table's namespace in the common case (no
+   * pending discipline/Vs change); when it doesn't, an instant apply to a table
+   * showing a different namespace would be incoherent, so we fall back to a
+   * PENDING edit (store + syncToolbar → Search lights, applied on the next
+   * load). */
+  function applyColumnsInstant(pickerNs, cols) {
+    const base = lastLoadedState;
+    const live = store.get();
+    const baseNs = base ? effectiveDiscipline(base) : null;
+    if (!base || pickerNs !== baseNs) {
+      store.set({ columns: { ...live.columns, [pickerNs]: cols } });
+      syncToolbar();
+      return;
+    }
+    if (onColumnsApplied) onColumnsApplied(baseNs, cols);
+    store.set({ columns: { ...live.columns, [baseNs]: cols } });
+    // Prune to the frozen scope's eligible columns — a phase column only valid
+    // under a still-pending format change can't apply to the frozen result set.
+    const allowed = new Set(eligibleMetrics(baseNs, base.formats).map((m) => m.key));
+    const frozenCols = cols.filter((k) => allowed.has(k));
+    const frozen = { ...base, columns: { ...base.columns, [baseNs]: frozenCols } };
+    load(frozen);
   }
 
   function clearDragIndicators() {
@@ -1920,23 +1968,36 @@ export function mountTable(
 
     syncToolbar();
 
-    /** Commit a new sort key/direction to the PENDING store only (R3.2:
-     * everything waits for Search). The DISPLAYED table stays frozen — its rows
-     * keep the APPLIED sort and the header arrow does NOT move — until Search
-     * re-runs load(), which applies this pending sort. The change lights the
-     * Search button dirty via the store hook. Shared by the metric-header
-     * clicks and the Player-header sort. */
+    /** R4 Wave 4a (A1): clicking a column header re-sorts the already-loaded
+     * rows INSTANTLY — the header arrow moves and the body re-orders NOW, not at
+     * Search. Sorting is "how the loaded rows are displayed," not "which rows,"
+     * so it's a pure client-side re-sort (no requery — every sortable column's
+     * values are already in lastRows) and it must NOT light the Search button
+     * (`sort` is excluded from serializeQueryState). The new key/dir is still
+     * persisted to the store so a later Search / the graph seed keep it. The
+     * frozen SCOPE is untouched: lastLoadedState only has its `sort` replaced,
+     * never `= store.get()` (which would fold in un-searched pending edits).
+     * Shared by the metric-header clicks and the Player-header sort. */
     function applySortKey(key) {
-      const s = store.get();
-      if (s.sort.key === key) {
-        store.set({ sort: { key, dir: s.sort.dir === "asc" ? "desc" : "asc" } });
+      const cur = store.get().sort;
+      const frozen = lastLoadedState || store.get();
+      let sort;
+      if (cur.key === key) {
+        sort = { key, dir: cur.dir === "asc" ? "desc" : "asc" };
       } else {
-        const metric = resolveSortMetric(key, effectiveDiscipline(s));
-        const defaultDir = metric && metric.higherIsBetter === false ? "asc" : "desc";
-        store.set({ sort: { key, dir: defaultDir } });
+        const metric = resolveSortMetric(key, effectiveDiscipline(frozen));
+        sort = { key, dir: metric && metric.higherIsBetter === false ? "asc" : "desc" };
       }
-      // No client-side re-sort / re-render here anymore — pending until Search.
-      syncToolbar();
+      store.set({ sort }); // pending store (excluded from dirty → no Search light)
+      if (lastLoadedState) {
+        lastLoadedState = { ...lastLoadedState, sort };
+        lastQueryStateKey = serializeQueryState(lastLoadedState);
+        lastRows = applySort(lastRows, lastLoadedState);
+        visibleRowCount = PAGE_SIZE; // a new sort order is "a new view" — page 1
+        renderLoaded(lastRows, lastLoadedState, lastBowlingTypes);
+      } else {
+        syncToolbar();
+      }
     }
 
     // Sorting: click header to set the PENDING sort (applied on Search). The
@@ -2162,11 +2223,11 @@ export function mountTable(
           const idx = cols.indexOf(cb.dataset.key);
           if (idx >= 0) cols.splice(idx, 1);
         }
-        store.set({ columns: { ...s.columns, [curNs]: cols } });
-        // R3.2: PENDING column change — the checkbox already reflects the pick
-        // and the frozen table doesn't move until Search. syncToolbar() lights
-        // the Search button dirty; the popover (on document.body) stays open.
-        syncToolbar();
+        // R4 Wave 4a (A1): INSTANT column change — apply to the frozen table
+        // now (re-rendering / requerying the same rows) without lighting Search.
+        // The checkbox already reflects the pick; the popover (on document.body)
+        // survives the requery via refreshOpenColumnsPopover().
+        applyColumnsInstant(curNs, cols);
       });
     });
 
@@ -2192,8 +2253,7 @@ export function mountTable(
             if (idx >= 0) cols.splice(idx, 1);
           });
         }
-        store.set({ columns: { ...s.columns, [curNs]: cols } });
-        syncToolbar();
+        applyColumnsInstant(curNs, cols); // A1: INSTANT, no Search light
       });
     });
 
@@ -2220,8 +2280,7 @@ export function mountTable(
           });
           cols.push(showPct ? pctKey : countKey);
         }
-        store.set({ columns: { ...s.columns, [curNs]: cols } });
-        syncToolbar();
+        applyColumnsInstant(curNs, cols); // A1: INSTANT, no Search light
       });
     }
 
@@ -2256,23 +2315,34 @@ export function mountTable(
     openColumnsPopoverState = { el: popover, anchor, onDocClick, onKeydown, onScroll, onResize };
   }
 
-  async function load() {
-    // Sort-key fallback across mode/namespace transitions (batting/bowling <->
-    // matchup_batting/matchup_bowling): the column sets differ (e.g.
-    // "balls_faced" vs "balls"; "dismissals" is matchup-only), so a sort key
-    // that no longer resolves in the *effective* namespace must not silently
-    // sort nothing. Falls back to runs/wickets desc, same defaults main.js
-    // uses on a plain discipline switch.
-    const preState = store.get();
-    if (!resolveSortMetric(preState.sort.key, effectiveDiscipline(preState))) {
-      store.set({ sort: { key: preState.discipline === "batting" ? "runs" : "wickets", dir: "desc" } });
-    }
+  async function load(scopeState = null) {
+    let state;
+    if (scopeState) {
+      // R4 Wave 4a (A1): the INSTANT Columns picker requeries against the FROZEN
+      // applied scope (this argument) rather than the live/pending store, so an
+      // un-searched pending filter/date/Vs edit can never leak in and change
+      // which rows show (rows stay frozen until Search). The live-store
+      // sort-fallback + column prune below belong to the Search path only — they
+      // read/mutate the pending store, which this path must not touch.
+      state = scopeState;
+    } else {
+      // Sort-key fallback across mode/namespace transitions (batting/bowling <->
+      // matchup_batting/matchup_bowling): the column sets differ (e.g.
+      // "balls_faced" vs "balls"; "dismissals" is matchup-only), so a sort key
+      // that no longer resolves in the *effective* namespace must not silently
+      // sort nothing. Falls back to runs/wickets desc, same defaults main.js
+      // uses on a plain discipline switch.
+      const preState = store.get();
+      if (!resolveSortMetric(preState.sort.key, effectiveDiscipline(preState))) {
+        store.set({ sort: { key: preState.discipline === "batting" ? "runs" : "wickets", dir: "desc" } });
+      }
 
-    // Restricted picker (D4 R3 follow-up): the matchup namespaces get the same
-    // phase-eligibility prune as the plain picker, so this runs unconditionally
-    // regardless of mode.
-    pruneInvalidColumns();
-    const state = store.get();
+      // Restricted picker (D4 R3 follow-up): the matchup namespaces get the same
+      // phase-eligibility prune as the plain picker, so this runs unconditionally
+      // regardless of mode.
+      pruneInvalidColumns();
+      state = store.get();
+    }
     const ns = effectiveDiscipline(state);
     const cols = state.columns[ns];
     const { sql, matchesSql } = buildQuery(state, cols);

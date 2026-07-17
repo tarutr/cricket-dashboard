@@ -149,3 +149,44 @@ corrected).
   page-header->table gap AND table->footer gap; grow the table card much longer.
   Keep baseline 2,813 + every filter count exact; matchup buildMatchupQuery untouched.
 ## R3.1 spawned (drawer); orchestrator did the 5-file namePlayers revert.
+
+## ===== DESIGN ROUND 4 (owner 2026-07-17) — APPROVED 6-wave plan =====
+Fresh session; handoff = review/DESIGN_ROUND4_HANDOFF_SPEC.md. Orchestrator = Opus 4.8.
+TWO HARD RULES: numbers sacred (only WHEN/HOW things display change, never WHAT a query
+returns); take owner instructions literally, never invent exceptions.
+Owner clarifications resolved before approval (2026-07-17):
+- The Vs ("matchup") dropdown must be an INTERNAL SEARCH over the fully-filtered player
+  set: every filter that chooses WHO is in the table must carry into Vs mode. Code audit
+  found only TWO filters currently drop: R. Pos. (state.regularPositions, gated
+  !matchupVsActive) and PINS (buildMatchupQuery has no pin OR-injection). Everything else
+  already carries (team/opp/event/venue/profile/core scope/search).
+- R. Pos. carries with its PLAIN meaning (usual/modal batting position; owner chose "usual
+  top-order players, full record vs bucket"). The ball-level batter-faced-position filter
+  (state.positions; "+ Add condition -> Batting position"; Vs-ONLY; powers the anchor
+  Bumrah vs RHB pos 1-2 = 27/177/9) is untouched.
+- Numeric stat conditions RE-SCORE against the bucket ("SR>=140" -> "SR vs pace>=140"):
+  owner confirmed correct/desired — NO change.
+- +4 new Vs stats (app-side ONLY, no pipeline/DB change): Matches, Runs per Innings
+  (one-liners), High Score, Best Bowling (two-step: subtotal per innings vs bucket, then
+  max/min). Verified live: SA Yadav HS vs Spin = 47 (method reproduced anchor 38/454).
+- X-ball SR (first10 / 11-20 / 21+) ruled CONCEPTUALLY MEANINGLESS vs a style — permanently OUT.
+- Pin pills recolour red -> steel-blue; A9 = all four option lists scoped to full conditions.
+Anchors re-proven EVERY wave: 2,813 / Karanbir 2,454 top / SA Yadav 60·1544·29.13·150.34 /
+Bumrah vs RHB pos1-2 27·177·9 / SA Yadav vs Spin 38·454·SR140.99 (coverage 913 of 1,027).
+Waves (each gated; I verify in-browser + independent DuckDB for number-adjacent; commit; STOP):
+- 4a frontend/Opus-high — instant-vs-waits (un-do R3.2 over-gating: sort/columns-picker/
+  drag-reorder/player-search INSTANT & stop lighting Search; preset/filters/dates/Vs
+  PENDING) + pills reflect PENDING + pin recolour steel-blue + pill soft-delete-with-undo.
+  Owns table.js/main.js/pills.js/styles.css; query builders forbidden.
+- 4b data-engineer/Opus-XHIGH — Vs adheres to filters: carry R.Pos(modal)+pins into
+  buildMatchupQuery; R.Pos pill/badge live in Vs; pins not greyed. Owns table.js(matchup)/
+  filters.js/state.js/pills.js/drawer.js/drawerInnings.js. NUMBER-ADJACENT.
+- 4c data-engineer/Opus-high — +4 Vs stats (metrics.js + table.js matchup query). NUMBER-ADJACENT.
+- 4d frontend/Sonnet-high — Keep-Selected-Columns toggle + no-data pin "(no innings)"+toast
+  (both modes) + graph rename "Reset to full filtered set" (inline). Owns table.js/main.js/
+  pills.js/drawer.js.
+- 4e data-engineer/Opus-high — A9 option lists scoped to full conditions. Owns playerData.js/
+  drawerInnings.js. NUMBER-ADJACENT.
+- 4f (3 parallel, disjoint files) frontend/Sonnet-high playerFilters.js popup selects +
+  docs/Sonnet-high (owner_decisions/CHART_SYSTEM/README/SPEC) + hygiene/Sonnet-medium (dead CSS).
+## 4a spawned.

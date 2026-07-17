@@ -47,6 +47,14 @@
   --color-bad: #9c2b2b;
   --color-bad-bg: #f7e7e3;
 
+  /* Steel-blue accent (R4 Wave 4a, A3): pinned-player ("+ Name") pills. Muted,
+     harmonises with the ink-navy text (#1b2430); deliberately NOT red so the
+     red soft-delete outline (A4) reads as a distinct "staged for removal" state
+     on top of it. */
+  --color-steel: #3f5b7d;
+  --color-steel-strong: #2f4761;
+  --color-steel-tint: #e8eef5;
+
   --color-active-bg: #1b2430;
   --color-active-fg: #faf8f4;
 
@@ -1761,18 +1769,31 @@ a { color: var(--color-accent); }
   border-style: dashed;
 }
 
-/* Pinned-player pill tint (R3 Wave 6): pills.js renders "+ Name" pins AFTER
-   every filter pill and flags them `pinned: true` for this class — a pin
-   ADDS a player to the result set rather than narrowing it, so it gets a
-   low-saturation accent-red tint rather than the neutral filter-pill
-   background, keeping the two kinds of pill visually distinct wherever a row
-   mixes both. Coexists
-   with .pill--inert (matchup "Vs" mode) without conflict — that rule only
-   touches opacity/border-style, not color. */
+/* Pinned-player pill tint: pills.js renders "+ Name" pins AFTER every filter
+   pill and flags them `pinned: true` for this class — a pin ADDS a player to
+   the result set rather than narrowing it, so it gets a low-saturation tint
+   rather than the neutral filter-pill background, keeping the two kinds of pill
+   visually distinct wherever a row mixes both. Coexists with .pill--inert
+   (matchup "Vs" mode) without conflict — that rule only touches opacity/
+   border-style, not color.
+   R4 Wave 4a (A3): recoloured from the editorial RED tint to a muted STEEL-BLUE
+   — red is now reserved for the soft-delete "staged for removal" outline (A4,
+   .pill--staged below), which must stand out clearly against a pin. */
 .pill--pinned {
-  background: var(--color-accent-tint);
-  color: var(--color-accent-strong);
-  border-color: var(--color-accent-tint);
+  background: var(--color-steel-tint);
+  color: var(--color-steel-strong);
+  border-color: var(--color-steel-tint);
+}
+
+/* Soft-deleted / "staged for removal" pill (R4 Wave 4a, A4): clicking a pill's
+   × removes its effect from the pending set but keeps the pill visible in this
+   state — a red outline with the × flipped to a + — until the next Search
+   commits the removal or the + restores it. Placed AFTER .pill--pinned so its
+   red border wins over a staged pin's steel border (equal specificity). The
+   inset box-shadow gives a crisp 1px outline with no layout shift. */
+.pill--staged {
+  border-color: var(--color-bad);
+  box-shadow: inset 0 0 0 1px var(--color-bad);
 }
 
 .pill__x {
@@ -1804,6 +1825,11 @@ a { color: var(--color-accent); }
 }
 
 .pill__x:hover { color: var(--color-bad); background: var(--color-bad-bg); }
+
+/* The staged pill's button is a RESTORE ("+"), not a delete — hover it in the
+   steel accent (A4) rather than the delete-red, so the affordance reads as
+   "bring this back" instead of "remove". */
+.pill__x--restore:hover { color: var(--color-steel-strong); background: var(--color-steel-tint); }
 
 /* ── "All filters" drawer (owner decision 29) ──────────────────────────────── */
 

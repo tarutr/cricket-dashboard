@@ -161,7 +161,8 @@ export function clearAll({ returnToTable = true } = {}) {
   // default end date), so the toolbar's Search button returns to at-rest
   // (pending === applied) and the first-load gating re-applies.
   appliedState = snapshotAppliedState();
-  if (pillsController) pillsController.render();
+  // A4: a Clear discards any staged (soft-deleted) pill display too.
+  if (pillsController) { pillsController.clearStaged(); pillsController.render(); }
   updateDrawerBadge();
   // Forget the cached result set and reset the table to its first-load empty
   // state (toolbar visible, empty body). Only switch back to the table view
@@ -386,22 +387,20 @@ function triggerHeaderFilterTable(text, matches) {
  * nodes and their listeners are simply left behind for GC).
  */
 function mountTableToolbarExtras({ searchInputEl, searchResultsEl, pillsHostEl }) {
-  // R3.2 ("everything waits for Search"): removing a pill is a PENDING edit like
-  // every other control now — it mutates the live store and lights the Search
-  // button dirty (via onFiltersChanged → syncToolbar), but does NOT requery. The
-  // pills row itself renders from the APPLIED snapshot (getState below), so the
-  // removed filter stays visible on the frozen table until the next Search
-  // commits it. (Flagged to the owner: a pill × is no longer an instant remove.)
+  // R4 Wave 4a (A2): the pills row now renders from the LIVE (pending) store,
+  // not the frozen applied snapshot — a pending edit (popup filter, toolbar
+  // control, pin add, pill ×/+) surfaces as a pill IMMEDIATELY, matching the
+  // other pending toolbar controls. The TABLE body still only moves on Search;
+  // the pills are a live indicator of what the next Search will apply. A pill's
+  // × soft-deletes (A4: red outline + "+"); onFiltersChanged refreshes derived
+  // views + lights the Search button dirty, but never requeries the frozen table.
   pillsController = mountPills(
     pillsHostEl,
     store,
     () => {
       onFiltersChanged();
-    },
-    undefined,
-    // pills DISPLAY the applied snapshot, not the live store, so a pending edit
-    // (popup filter, toolbar control, pill ×) never surfaces before Search.
-    () => appliedState || store.get()
+    }
+    // getState + onPinChange default: the live store, so pills reflect pending.
   );
   pillsController.render();
 
@@ -559,7 +558,10 @@ function boot() {
         // follows scope live — but committing the snapshot keeps the pills/badge
         // correct for a later switch back to Stats.
         appliedState = snapshotAppliedState();
-        if (pillsController) pillsController.render();
+        // A4: this Search commits any soft-deleted (staged) pill removals — the
+        // pending store already dropped their effects at × time, so clear the
+        // staged display set before re-rendering so committed pills vanish.
+        if (pillsController) { pillsController.clearStaged(); pillsController.render(); }
         updateDrawerBadge();
         if (tableController) tableController.syncToolbar(); // clear the dirty cue now
         if (store.get().view === "table") tableController.load();
@@ -668,6 +670,17 @@ function boot() {
         // R3.2: the toolbar's Search dirty cue = pending (live store) ≠ applied
         // snapshot. table.js computes it via this accessor.
         getAppliedState: () => appliedState,
+        // R4 Wave 4a (A1): the Columns picker + column drag-reorder are INSTANT
+        // (they change the frozen table in place) and must NOT light Search —
+        // unlike the PENDING preset dropdown, which also sets columns. table.js
+        // calls this to advance the applied snapshot's column list in lockstep
+        // with the live store so the dirty comparison sees columns as unchanged.
+        // The preset dropdown deliberately does NOT call this, so it stays dirty.
+        onColumnsApplied: (ns, cols) => {
+          if (appliedState) {
+            appliedState = { ...appliedState, columns: { ...appliedState.columns, [ns]: cols } };
+          }
+        },
         // The empty-state prompt's "Open filters" button + the toolbar Filters
         // button open the Filters popup (the query runs from Search).
         onOpenFilters: () => openFiltersPopup(),
