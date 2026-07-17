@@ -2563,31 +2563,34 @@ a { color: var(--color-accent); }
   justify-content: flex-start;
   align-items: center;
 }
-/* The checkbox glyph — an empty square that fills with a check when the row's
-   value is in the selection (.is-selected on the row). Mirrors the muted-line /
-   accent-fill treatment of the app's other checkable rows. */
+/* The checkbox glyph — a slim outline that stays quiet when unselected and
+   shows an accent-coloured tick (no solid fill) when the row's value is in
+   the selection (.is-selected on the row). Deliberately light-touch: a small
+   thin-bordered mark, not a heavy filled swatch — the accent is spent on the
+   tick and border only, echoing the editorial "accent used sparingly" rule. */
 .search-select__check {
   flex: 0 0 auto;
-  width: 1rem;
-  height: 1rem;
-  border: 1.5px solid var(--color-line-strong);
-  border-radius: var(--radius-sm);
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 1.5px solid var(--color-line);
+  border-radius: 3px;
   position: relative;
-  background: var(--color-bg-raised);
+  background: transparent;
+  transition: border-color 0.12s ease;
 }
 .search-select__option--multi.is-selected .search-select__check {
-  background: var(--color-accent);
   border-color: var(--color-accent);
+  background: transparent;
 }
 .search-select__option--multi.is-selected .search-select__check::after {
   content: "";
   position: absolute;
-  left: 0.28rem;
-  top: 0.1rem;
-  width: 0.28rem;
-  height: 0.55rem;
-  border: solid var(--color-accent-contrast, #fff);
-  border-width: 0 2px 2px 0;
+  left: 0.22rem;
+  top: 0.05rem;
+  width: 0.2rem;
+  height: 0.42rem;
+  border: solid var(--color-accent);
+  border-width: 0 1.5px 1.5px 0;
   transform: rotate(45deg);
 }
 /* A capped/floored row can't toggle — mute it and drop the pointer affordance
