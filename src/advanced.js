@@ -166,6 +166,12 @@ const BASIC_METRIC_KEYS = new Set([
  * refuses them too, so this keeps them out of the picker in the first place). */
 export function isMetricRemovedFromFilters(metric) {
   if (metric.kind === "composition") return true;
+  // Matchup peak metrics (decision 47c: matchup_batting high_score /
+  // matchup_bowling best) have a placeholder sqlExpression — computed only in
+  // table.js's buildMatchupQuery joined peak CTE, never as a static aggregate,
+  // so they can't be a numeric stat condition (conditionToHaving refuses them
+  // too). Plain-namespace peaks (source "innings") are unaffected.
+  if (metric.source === "matchup" && metric.kind === "peak") return true;
   return metric.section === "dismissal" && metric.format === "pct1";
 }
 

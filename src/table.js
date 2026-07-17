@@ -284,8 +284,18 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // figures already use (see this function's doc comment). Their sqlExpression
   // is a placeholder, never interpolated (kind === "composition", mirroring
   // r_pos's placeholder handling in buildQuery).
-  const metrics = allMetrics.filter((m) => m.kind !== "composition");
+  const metrics = allMetrics.filter((m) => m.kind !== "composition" && m.kind !== "peak");
   const compMetrics = allMetrics.filter((m) => m.kind === "composition");
+  // Peak metrics (decision 47c): High Score (matchup_batting) / Best Bowling
+  // (matchup_bowling) are per-INNINGS peaks. Step 1's GROUP BY (id, name) has
+  // already collapsed innings, so — like composition columns — they must NOT
+  // flow through the per-bucket FILTER path the regular metrics take below.
+  // They're computed from a per-(id, match, innings) pre-aggregation
+  // (bucket-FILTER'd via WHERE) reduced to one value per player, LEFT JOINed on
+  // id (see the peak CTE further down). Their sqlExpression is a placeholder,
+  // never interpolated. At most one per discipline today, but handled
+  // generically off each metric's peakInner/peakOuter/peakOuterSort recipe.
+  const peakMetrics = allMetrics.filter((m) => m.kind === "peak");
 
   const mv = state.matchupVs;
   const bucketCol = mv.dim === "hand" ? "batting_hand" : mv.dim === "type" ? "bowling_type" : "bowling_group";
@@ -452,15 +462,56 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // `finalWhereParts.join(" AND ")`.
   const finalWhereSql = gateWithPinExemption(finalWhereParts.join(" AND "), "id", pins);
 
+  // Peak CTE (decision 47c): emitted ONLY when a peak column (High Score / Best
+  // Bowling) is actually selected — with none, `peakCteSql` stays null and the
+  // final query below is BYTE-IDENTICAL to the pre-47c matchup query. The
+  // pre-aggregation groups by (id, match, innings) with the bucket in WHERE
+  // (the proven live method: WITH per_innings ... GROUP BY match, innings),
+  // reusing the SAME scope/search/pin WHERE (`whereSql`) as `agg` so pins keep
+  // their exemption and the bucket is applied consistently. It is a second scan
+  // of `view` (a different GROUP BY grain than `agg`, so it can't share the one
+  // scan), which is exactly why peaks need their own CTE. Any peak metrics for a
+  // single discipline share ONE inner pre-aggregation (their inner columns just
+  // concatenate). A missing player (no bucket innings — only pins, via the
+  // step-3 exemption) LEFT-JOINs to NULL and renders "—".
+  let peakCteSql = null;
+  const peakSelectParts = [];
+  if (peakMetrics.length) {
+    const peakWhere = `(${whereSql}) AND (${bucketClause})`;
+    const innerParts = [];
+    const outerParts = [];
+    for (const m of peakMetrics) {
+      innerParts.push(m.peakInner);
+      outerParts.push(`${m.peakOuter} AS ${m.key}`);
+      peakSelectParts.push(`peak.${m.key} AS ${m.key}`);
+      if (m.peakOuterSort) {
+        outerParts.push(`${m.peakOuterSort} AS ${m.key}__sort`);
+        peakSelectParts.push(`peak.${m.key}__sort AS ${m.key}__sort`);
+      }
+    }
+    peakCteSql = [
+      `peak AS (`,
+      `SELECT ${idCol} AS peak_id, ${outerParts.join(", ")}`,
+      `FROM (`,
+      `SELECT ${idCol}, ${innerParts.join(", ")}`,
+      `FROM ${view}`,
+      `WHERE ${peakWhere}`,
+      `GROUP BY ${idCol}, match_id, innings_number`,
+      `) t`,
+      `GROUP BY ${idCol}`,
+      `)`,
+    ].join("\n");
+  }
+
   const sql = [
     `WITH agg AS (`,
     aggSql,
     `),`,
     `windowed AS (`,
     windowedSql,
-    `)`,
-    `SELECT ${finalSelectParts.join(", ")}`,
-    `FROM windowed`,
+    peakCteSql ? `),\n${peakCteSql}` : `)`,
+    `SELECT ${[...finalSelectParts, ...peakSelectParts].join(", ")}`,
+    peakCteSql ? `FROM windowed LEFT JOIN peak ON windowed.id = peak.peak_id` : `FROM windowed`,
     `WHERE ${finalWhereSql}`,
   ].join("\n");
 
@@ -498,6 +549,18 @@ function conditionToHaving(cond, discipline, exprFn) {
   // this guard is the same belt-and-braces defence r_pos gets just above, so a
   // stray composition-keyed condition can never reach SQL.
   if (metric.kind === "composition") return null;
+  // Matchup peak metrics (decision 47c: matchup_batting high_score /
+  // matchup_bowling best) have a placeholder sqlExpression — their real value
+  // exists only via buildMatchupQuery's joined peak CTE, never a static
+  // per-condition aggregate — so they can never be a stat condition (belt-and-
+  // braces with advanced.js's isMetricRemovedFromFilters, which keeps them out
+  // of the picker). This ALSO stops a PLAIN-mode "High Score ≥ N" / "Best …"
+  // condition (plain namespace, real expression) from surviving into matchup
+  // mode and resolving to the placeholder metric there: getMetric returned null
+  // for these keys before the matchup metrics existed, so this preserves that
+  // inert "doesn't apply here" behavior. Plain peaks (source "innings") are
+  // untouched.
+  if (metric.source === "matchup" && metric.kind === "peak") return null;
   const expr = exprFn ? exprFn(cond, metric) : metric.sqlExpression;
   if (!expr) return null;
   // §8.1: rate/ratio metrics (zeroIsData:false) treat 0 as "no data" too, so a
@@ -542,11 +605,18 @@ function conditionApplicability(advanced, ns) {
     for (const c of g.conds) {
       total += 1;
       const m = getMetric(c.metricKey, ns);
-      // kind "position" (R. Pos.) and kind "composition" (the descriptive
-      // matchup %-mix columns) are never usable conditions — see
+      // kind "position" (R. Pos.), kind "composition" (the descriptive matchup
+      // %-mix columns), and matchup peaks (decision 47c: placeholder-SQL High
+      // Score / Best Bowling) are never usable conditions — see
       // conditionToHaving's guards just above, which this must stay honest
       // about (never silently count them as "applied").
-      if (m && m.kind !== "position" && m.kind !== "composition") applied += 1;
+      if (
+        m &&
+        m.kind !== "position" &&
+        m.kind !== "composition" &&
+        !(m.source === "matchup" && m.kind === "peak")
+      )
+        applied += 1;
     }
   }
   return { total, applied };

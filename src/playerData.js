@@ -553,11 +553,17 @@ export async function fetchBowlingOpposition(playerId, state, overlay = null) {
 // popup gets its own per-group % on the coarse tables, derived in
 // playerSections.js from each row's `balls` and the coverage total — not from
 // these keys.
+// Also exclude the decision-47(c) `vsTableOnly` metrics (Matches, Runs per
+// Innings, High Score, Best Bowling): they belong ONLY to the leaderboard Vs
+// table (task scope — NOT this pop-up surface), and the two peaks among them
+// carry a placeholder sqlExpression (they'd emit invalid SQL through
+// selectList). Keeping them out leaves the pop-up's coarse/fine queries
+// byte-identical to before this wave.
 const MATCHUP_BATTING_KEYS = metricsFor("matchup_batting")
-  .filter((m) => m.kind !== "composition")
+  .filter((m) => m.kind !== "composition" && !m.vsTableOnly)
   .map((m) => m.key);
 const MATCHUP_BOWLING_KEYS = metricsFor("matchup_bowling")
-  .filter((m) => m.kind !== "composition")
+  .filter((m) => m.kind !== "composition" && !m.vsTableOnly)
   .map((m) => m.key);
 
 /**

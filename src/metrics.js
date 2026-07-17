@@ -84,6 +84,25 @@
 //   columnTitle    — optional hover title for the column header (`<th
 //                    title="...">`), beyond the plain shortLabel text. Only
 //                    `r_pos` uses this today.
+//   vsTableOnly    — decision 47(c): true iff a matchup metric belongs ONLY to
+//                    the leaderboard "Vs" TABLE (its restricted column picker),
+//                    never the player pop-up's matchup tables (a separate
+//                    surface — playerData.js's MATCHUP_*_KEYS filter it out) nor
+//                    the graph (which never sees the matchup namespaces anyway).
+//                    Carried by the four decision-47(c) additions only.
+//   peakInner /    — decision 47(c) two-step PEAK recipe for the matchup
+//   peakOuter /      namespaces' High Score / Best Bowling. A matchup peak is a
+//   peakOuterSort    per-INNINGS extreme, but buildMatchupQuery's step-1 GROUP BY
+//                    (id, name) has already collapsed innings, so it can't be a
+//                    step-1 aggregate. Instead table.js pre-aggregates each
+//                    innings — `peakInner` is the inner SELECT's per-(id, match,
+//                    innings) aggregate(s), bucket-FILTER'd via WHERE — then
+//                    `peakOuter` reduces those per-innings values to the player's
+//                    peak (MAX / arg_max), and `peakOuterSort` (optional) is the
+//                    numeric rank for str-format peaks (Best Bowling). Only
+//                    present on `kind:"peak"` matchup metrics; their
+//                    `sqlExpression` (and Best Bowling's `sortExpression`) is a
+//                    placeholder NEVER interpolated, like composition/r_pos.
 
 // ── Batting ───────────────────────────────────────────────────────────────────
 const BATTING_METRICS = [
@@ -862,6 +881,27 @@ const BOWLING_METRICS = [
 // are plain aggregate expressions over the already-filtered/grouped rows).
 const MATCHUP_BATTING_METRICS = [
   {
+    key: "matches",
+    label: "Matches",
+    shortLabel: "Mat",
+    discipline: "matchup_batting",
+    source: "matchup",
+    // Decision 47(c): matches in which the batter faced this bucket. The plain
+    // "matches" metric reads player_matches (source:"player_matches") because a
+    // player can appear in a match without batting; here every matchup_batting
+    // row already IS a faced-bucket record, so COUNT(DISTINCT match_id)
+    // FILTER'd on the bucket (buildMatchupQuery) is the honest in-bucket match
+    // count — the same "matches within the slice" rule decision 28 set for
+    // splits. vsTableOnly: leaderboard Vs table only (task scope).
+    sqlExpression: "COUNT(DISTINCT match_id)",
+    higherIsBetter: null, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+    vsTableOnly: true,
+    minSampleComponent: "COUNT(DISTINCT match_id)",
+  },
+  {
     key: "innings",
     label: "Innings",
     shortLabel: "Inns",
@@ -910,6 +950,48 @@ const MATCHUP_BATTING_METRICS = [
     additive: true,
     kind: "total",
     minSampleComponent: "SUM(runs)",
+  },
+  {
+    key: "high_score",
+    label: "High Score",
+    shortLabel: "HS",
+    discipline: "matchup_batting",
+    source: "matchup",
+    // Decision 47(c): PEAK single-innings run tally vs this bucket. Because
+    // buildMatchupQuery's step-1 GROUP BY (id, name) has already collapsed
+    // innings, this is NOT a step-1 aggregate — it's computed in a joined
+    // pre-aggregation (runs SUM'd per (id, match, innings) FILTER'd on the
+    // bucket, then MAX per player). kind:"peak" routes it there via the
+    // peakInner/peakOuter recipe; sqlExpression is a placeholder NEVER sent to
+    // DuckDB (mirroring composition's __COMPOSITION__). Proven live: SA Yadav
+    // High Score vs Spin = 47.
+    sqlExpression: "__PEAK__",
+    peakInner: "SUM(runs) AS __pk_hs",
+    peakOuter: "MAX(__pk_hs)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "peak",
+    vsTableOnly: true,
+    minSampleComponent: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
+  },
+  {
+    key: "runs_per_innings",
+    label: "Runs per Innings",
+    shortLabel: "RPI",
+    discipline: "matchup_batting",
+    source: "matchup",
+    // Decision 47(c): runs vs the bucket ÷ innings vs the bucket. Denominator
+    // mirrors this namespace's own "innings" metric — COUNT(DISTINCT
+    // match:innings), NOT COUNT(*) — so it stays correct under the coarse
+    // (Pace/Spin) grouping where one innings spans several bowling_type rows.
+    // Both aggregates get the per-bucket FILTER in buildMatchupQuery.
+    sqlExpression:
+      "SUM(runs) * 1.0 / NULLIF(COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR)), 0)",
+    higherIsBetter: true, format: "dec1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "rate",
+    vsTableOnly: true,
+    minSampleComponent: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
   },
   {
     key: "strike_rate",
@@ -1252,6 +1334,25 @@ const MATCHUP_BATTING_METRICS = [
 
 const MATCHUP_BOWLING_METRICS = [
   {
+    key: "matches",
+    label: "Matches",
+    shortLabel: "Mat",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    // Decision 47(c): matches in which the bowler bowled to this batting-hand
+    // bucket. Same rationale as matchup_batting's "matches" above — a plain
+    // matchup aggregate (COUNT(DISTINCT match_id) FILTER'd on the bucket), not
+    // the player_matches source the plain namespace uses. vsTableOnly:
+    // leaderboard Vs table only (task scope).
+    sqlExpression: "COUNT(DISTINCT match_id)",
+    higherIsBetter: null, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+    vsTableOnly: true,
+    minSampleComponent: "COUNT(DISTINCT match_id)",
+  },
+  {
     key: "innings",
     label: "Innings",
     shortLabel: "Inns",
@@ -1344,6 +1445,35 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
     minSampleComponent: "SUM(wickets)",
+  },
+  {
+    key: "best",
+    label: "Best Bowling (Innings)",
+    shortLabel: "BBI",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    // Decision 47(c): PEAK single-innings figures vs this batting hand, "W-R"
+    // (most wickets, then fewest runs) — the SAME display + rank rule as the
+    // plain bowling `best` metric. A per-innings PEAK, so (like high_score) it
+    // is NOT a step-1 aggregate: buildMatchupQuery pre-aggregates wickets +
+    // runs_conceded per (id, match, innings) FILTER'd on the bucket, then
+    // arg_max / MAX per player (kind:"peak"; peakInner/peakOuter/peakOuterSort
+    // recipe). Both sqlExpression AND sortExpression are placeholders NEVER sent
+    // to DuckDB — the peak CTE emits `best` (display "W-R") and `best__sort`
+    // (numeric rank). sortExpression must be TRUTHY so table.js's sortValue()
+    // reads the __sort shadow column for this str-format metric (exactly as
+    // plain `best` does).
+    sqlExpression: "__PEAK__",
+    sortExpression: "__PEAK_SORT__",
+    peakInner: "SUM(wickets) AS __pk_w, SUM(runs_conceded) AS __pk_r",
+    peakOuter:
+      "arg_max(CAST(__pk_w AS INTEGER) || '-' || CAST(__pk_r AS INTEGER), __pk_w * 1000 - __pk_r)",
+    peakOuterSort: "MAX(__pk_w * 1000 - __pk_r)",
+    higherIsBetter: true, format: "str",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "peak",
+    vsTableOnly: true,
+    minSampleComponent: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
   },
   {
     key: "dot_pct",
