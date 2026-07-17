@@ -19,10 +19,6 @@
 //   mountEvent            — "Event" (state.event, Batch 1B); gender-scoped.
 //   mountVenue            — "Venue" (state.venue, Batch 1B); gender-scoped.
 //
-//   mountNamePlayers      — "Name" (state.namePlayers): a searchable player
-//                           picker (whole-DB searchPlayers) replacing the old
-//                           free-text name-substring box (R2-2b-ii).
-//
 // Team/Opposition/Event/Venue share mountScopedMultiSelect(): a thin wrapper
 // over searchSelect.js's mountSearchMultiSelect (portal:true, so its panel
 // escapes the Filters popup's overflow clip) fed the SAME relevance-ranked,
@@ -41,7 +37,7 @@
 
 import { wirePortalDropdown } from "./filters.js";
 import { matchupVsActive } from "./state.js";
-import { searchTeams, searchEvents, searchVenues, searchPlayers } from "./playerData.js";
+import { searchTeams, searchEvents, searchVenues } from "./playerData.js";
 import { mountSearchMultiSelect } from "./searchSelect.js";
 import { escHtml, escAttr } from "./html.js";
 
@@ -421,117 +417,4 @@ export function mountOpposition(container, store, onChange, { embedded = false }
     disabledWhen: (s) => s.teamType !== "international",
     disabledNote: "International cricket only for now",
   });
-}
-
-/**
- * "Name" condition player picker (Design Round 2, wave R2-2b-ii): a searchable
- * MULTI-select over WHOLE-DB players — the same ranked, name-history search the
- * header uses (playerData.js's searchPlayers) — replacing the old free-text
- * name-substring box. Picking one or more players writes state.namePlayers
- * ([{id,name}]); the query builder turns that into `player_id IN (…ids)` (see
- * drawer.js's Name note + the flagged buildScopeClauses hook), NOT the old
- * `name ILIKE '%text%'`. state.search is LEFT ALONE, so the results-toolbar
- * table search box keeps its own substring/pin behaviour — the two no longer
- * collide.
- *
- * searchPlayers is a SERVER-side term search (top-25 ranked), which the
- * component's client-side typeahead can't own. So we drive its filter input
- * ourselves (debounced) and, on every result, feed the component the UNION of
- * (this term's results) ∪ (already-picked players). Keeping the picked players
- * in the option set on every setOptions is what lets a selection made under one
- * term survive searching a different one (the component derives its value list
- * from its options). Returns `{ sync }`.
- */
-export function mountNamePlayers(container, store, onChange) {
-  container.innerHTML = `
-    <div class="filter-group filter-group--ms" data-role="name-group">
-      <div data-role="name-host"></div>
-    </div>`;
-  const hostEl = container.querySelector('[data-role="name-host"]');
-
-  // id -> label for every player the user has picked (persists across terms).
-  const picked = new Map();
-  for (const p of store.get().namePlayers || []) picked.set(p.id, p.name);
-  // id -> label for the CURRENT term's results (fresh each search).
-  let resultsMap = new Map();
-  const nameOf = (id) => picked.get(id) || resultsMap.get(id) || id;
-  const optionFor = (id) => ({ value: id, label: nameOf(id) });
-  // Union of current results ∪ picked, results first (searchPlayers' ranked
-  // order), so the list stays ranked and picked players remain selectable.
-  function unionOptions() {
-    const map = new Map();
-    for (const id of resultsMap.keys()) map.set(id, optionFor(id));
-    for (const id of picked.keys()) if (!map.has(id)) map.set(id, optionFor(id));
-    return [...map.values()];
-  }
-
-  let handle;
-  const summarize = (count) => {
-    const vals = handle ? handle.getValues() : [];
-    if (vals.length === 1) return nameOf(vals[0]);
-    return `${count} players`;
-  };
-
-  handle = mountSearchMultiSelect(hostEl, {
-    options: [...picked.keys()].map(optionFor),
-    values: [...picked.keys()],
-    portal: true,
-    placeholder: "Any player",
-    filterPlaceholder: "Search players…",
-    summarize,
-    ariaLabel: "Player name",
-    onChange: (values) => {
-      // Rebuild `picked` to EXACTLY the current selection (new ticks keep their
-      // known label, unticked ones drop), then write [{id,name}] to state.
-      const next = new Map();
-      for (const id of values) next.set(id, nameOf(id));
-      picked.clear();
-      for (const [id, name] of next) picked.set(id, name);
-      store.set({ namePlayers: values.map((id) => ({ id, name: nameOf(id) })) });
-      onChange();
-    },
-  });
-
-  const filterEl = hostEl.querySelector(".search-select__filter");
-  let debounceId = null;
-  let searchToken = 0;
-  async function runSearch(term) {
-    const token = ++searchToken;
-    let rows = [];
-    try {
-      rows = await searchPlayers(term);
-    } catch (e) {
-      rows = [];
-    }
-    if (token !== searchToken) return; // superseded by a newer keystroke
-    resultsMap = new Map(rows.map((r) => [r.id, r.name]));
-    handle.setOptions(unionOptions());
-  }
-  filterEl.addEventListener("input", () => {
-    const term = filterEl.value.trim();
-    clearTimeout(debounceId);
-    if (term.length < 2) {
-      // Below searchPlayers' 2-char floor: cancel any in-flight search and show
-      // just the already-picked players.
-      searchToken++;
-      resultsMap = new Map();
-      handle.setOptions(unionOptions());
-      return;
-    }
-    debounceId = setTimeout(() => runSearch(term), 250);
-  });
-
-  function sync() {
-    // Reconcile from state (a Name pill removal, a Clear-all, or the OTHER
-    // popup's own instance changing the shared selection).
-    const state = store.get();
-    const ids = (state.namePlayers || []).map((p) => p.id);
-    picked.clear();
-    for (const p of state.namePlayers || []) picked.set(p.id, p.name);
-    handle.setOptions(unionOptions());
-    handle.setValues(ids);
-  }
-
-  sync();
-  return { sync };
 }

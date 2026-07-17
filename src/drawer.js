@@ -53,7 +53,6 @@ import {
   mountTeam,
   mountEvent,
   mountVenue,
-  mountNamePlayers,
 } from "./drawerInnings.js";
 import { escHtml, escAttr } from "./html.js";
 
@@ -85,7 +84,6 @@ function orderBy(present, order) {
 // `group` field, which is now documentation only). This array's order drives the
 // applied-ROW render order in the singleton-rows container.
 const SINGLETON_TYPES = [
-  { key: "name", label: "Name", group: "Player", menOnly: false },
   { key: "team", label: "Team", group: "Player", menOnly: false },
   { key: "opposition", label: "Opposition", group: "Player", menOnly: false },
   { key: "hand", label: "Batting hand", group: "Player", menOnly: true },
@@ -100,7 +98,7 @@ const SINGLETON_TYPES = [
 // Wave 2 per owner — his Player list omitted it only because he was thinking of
 // batting filters). "rpos" is injected into the Basic-metrics optgroup right
 // after "Innings".
-const PLAYER_ADD_ORDER = ["name", "team", "opposition", "hand", "bowling", "role"];
+const PLAYER_ADD_ORDER = ["team", "opposition", "hand", "bowling", "role"];
 const MATCH_ADD_ORDER = ["event", "venue"];
 
 /**
@@ -282,16 +280,6 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   const eventController = mountEvent(editorHosts.event, store, onChange);
   const venueController = mountVenue(editorHosts.venue, store, onChange);
 
-  // Name condition (R2-2b-ii): a searchable PLAYER PICKER (whole-DB
-  // searchPlayers), replacing the old free-text name-substring box. Picking one
-  // or more players writes state.namePlayers ([{id,name}]); the query builder
-  // turns that into `player_id IN (…ids)` (NOT the old `name ILIKE`). This uses
-  // its OWN state key so it never collides with state.search — which stays the
-  // results-toolbar table search box's substring/pin filter (untouched). Empty =
-  // inactive (no pill, no query effect, never blocks Search). Its own controller
-  // owns the editor DOM; syncSingletonRows just calls its sync().
-  const nameController = mountNamePlayers(editorHosts.name, store, onChange);
-
   // ── Presence + session-added tracking ──────────────────────────────────────
   // sessionAdded: singleton rows the user added THIS popup session that don't
   // yet carry a value. Reset on every popup open (onShow) so never-filled rows
@@ -304,7 +292,6 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       case "hand": return Boolean(s.profile.battingHand);
       case "bowling": return Boolean(s.profile.bowlingType);
       case "rpos": return (s.regularPositions || []).length > 0 || (s.positions || []).length > 0;
-      case "name": return (s.namePlayers || []).length > 0;
       case "team": return (s.teams || []).length > 0;
       case "opposition": return (s.opposition || []).length > 0;
       case "event": return (s.event || []).length > 0;
@@ -324,7 +311,6 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       case "hand": setProfile({ battingHand: null }); break;
       case "bowling": setProfile({ bowlingType: null }); break;
       case "rpos": store.set({ regularPositions: [], positions: [] }); break;
-      case "name": store.set({ namePlayers: [] }); break;
       case "team": store.set({ teams: [] }); break;
       case "opposition": store.set({ opposition: [] }); break;
       case "event": store.set({ event: [] }); break;
@@ -398,17 +384,26 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     const metricOpts = (list) => list.map((m) => metricOpt(m)).join("");
     // Basic metrics group: standard metric options, with the "Regular position"
     // singleton (c:rpos) injected right after the "Innings" option (item 7).
+    // BATTING ONLY (R3.1 task 2): R. Pos. (state.regularPositions) is a batting
+    // concept — a player's own regular BATTING position — so it must not be
+    // addable while the plain discipline is bowling. Matchup mode is untouched:
+    // matchupVsActive keeps c:rpos available there under its "Batting position"
+    // label for BOTH matchup_batting (batter's own position) and matchup_bowling
+    // (the STRIKER's position faced, decision 46, anchor-verified) — an
+    // orthogonal, already-shipped feature this gate must not disturb.
     const basicOpts = () => {
+      const rposEligible = s.discipline === "batting" || matchupVsActive(s);
+      const rposOpt = rposEligible ? singletonOpt("rpos") : "";
       const parts = [];
       let injected = false;
       for (const m of basic) {
         parts.push(metricOpt(m));
         if (m.key === "innings") {
-          parts.push(singletonOpt("rpos"));
+          parts.push(rposOpt);
           injected = true;
         }
       }
-      if (!injected) parts.push(singletonOpt("rpos")); // no Innings option (edge) — append
+      if (!injected) parts.push(rposOpt); // no Innings option (edge) — append
       return parts.join("");
     };
     const dismissalOpts = dismissal.map((m) => metricOpt(m, stripOutPrefix(m.label))).join("");
@@ -436,7 +431,6 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     oppositionController.sync();
     eventController.sync();
     venueController.sync();
-    nameController.sync();
     renderProfileEditors();
   }
 
@@ -710,11 +704,6 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     if (oppositionFilterActive(s)) n++;
     if (eventFilterActive(s)) n++;
     if (venueFilterActive(s)) n++;
-    // Name condition (R2-2b-ii): the picked-players filter (state.namePlayers) is
-    // a drawer-owned filter, distinct from the results-toolbar table search box
-    // (state.search, which activeCount deliberately never counted). Count one for
-    // an active picked-players selection.
-    if ((s.namePlayers || []).length > 0) n++;
     n += activeConditionCount(s.advanced);
     return n;
   }

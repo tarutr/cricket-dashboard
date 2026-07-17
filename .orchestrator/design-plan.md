@@ -119,3 +119,33 @@ Serialize i->ii->iii (styles.css shared; ii depends on i's multi variant). Docs 
 deferred to END of design phase (owner agreed): owner_decisions.md log + CHART_SYSTEM.md
 + README/SPEC donut/layout staleness (Sonnet/high doc pass).
 ## R2-2b-i spawned.
+
+## ===== DESIGN ROUND 3 (owner 2026-07-16) — Stats toolbar redesign =====
+DECISION: The Advanced-Filters "Name" condition is REMOVED (redundant with the
+results-toolbar player search). RULE (owner, emphatic): EVERYTHING WAITS FOR SEARCH —
+no exceptions. Every toolbar/table control (dates, Vs, preset dropdown, Columns, player
+search, AND column-header SORT) is pending; the table is a frozen snapshot. The ONLY
+things that update the table: the Search button (applies pending + queries) and Clear
+(resets to empty first-load state). No carve-outs (I wrongly proposed a sort exception;
+corrected).
+- R3.1 (drawer cleanup, frontend/Sonnet): remove Name condition from drawer.js/
+  drawerInnings.js (mountNamePlayers etc.); make "Reg. Batting Position" (c:rpos)
+  BATTING-ONLY (absent for bowling). Orchestrator already reverted the namePlayers
+  query wiring in filters.js/state.js/table.js/graph.js/pills.js.
+- R3.2 (Stats toolbar redesign, frontend/Opus-XHIGH; owns table.js/main.js/styles.css/
+  index.html + a drawer.js touch): SINGLE-ROW toolbar [Filters · Search(small) ·
+  From–To · Core-preset ▾ · [Vs│value]] left / [count · SEARCH · Columns · Clear] right.
+  Toolbar ALWAYS visible on first load (no "Open filters" prompt); table body empty
+  until Search. EVERYTHING pending until the toolbar SEARCH button (replaces the toolbar
+  Graph button) — uses the app's appliedState snapshot; red date-outline (graph's
+  needs-input) if a player is picked but no date. Dates in toolbar SYNCED with the popup
+  (both bind state.dateFrom/To). Vs ADDED to the popup as an "+ Add condition" type
+  right AFTER Innings, synced with the toolbar bonded control (both edit state.matchupVs).
+  Preset pills -> plain dropdown (label just "Core", 4-ish options, greyed on first
+  load). count/Columns/Vs/preset/Search all greyed on first load; only Filters + player
+  search + dates active. Clear -> first-load state. TOP-STRIP Graph toggle GAINS the
+  seed (enterFromBridge preferredMetric + matchup->Dumbbell) so removing the toolbar
+  Graph button loses nothing (top strip LAYOUT still untouched). #6 SPACING: tighten
+  page-header->table gap AND table->footer gap; grow the table card much longer.
+  Keep baseline 2,813 + every filter count exact; matchup buildMatchupQuery untouched.
+## R3.1 spawned (drawer); orchestrator did the 5-file namePlayers revert.
