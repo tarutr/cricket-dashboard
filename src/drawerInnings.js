@@ -19,22 +19,30 @@
 //   mountEvent            — "Event" (state.event, Batch 1B); gender-scoped.
 //   mountVenue            — "Venue" (state.venue, Batch 1B); gender-scoped.
 //
-// Team/Event/Venue share mountSearchMultiselect(): a relevance-ranked,
-// gender- + team-type-scoped multiselect backed by playerData.js's searchTeams/
-// searchEvents/searchVenues loaders. Those loaders are called ONCE per
-// gender+teamType with term="" (the full scoped list, ordered games-desc —
-// events also recency-desc); the search box then filters that cached list
-// client-side, so within any typed substring the games-desc order is preserved
-// (typing "India" surfaces the full national team — most games — first).
-// Re-fetches when the gender OR the team type changes (ROUND 3 task 8 — on
-// International the Event list must drop domestic-only competitions like IPL).
-// On reopen with an empty term, currently-selected options float to the top
-// (task 5). Each row is labelled "<name>  N games" (task 4).
+//   mountNamePlayers      — "Name" (state.namePlayers): a searchable player
+//                           picker (whole-DB searchPlayers) replacing the old
+//                           free-text name-substring box (R2-2b-ii).
+//
+// Team/Opposition/Event/Venue share mountScopedMultiSelect(): a thin wrapper
+// over searchSelect.js's mountSearchMultiSelect (portal:true, so its panel
+// escapes the Filters popup's overflow clip) fed the SAME relevance-ranked,
+// gender- + team-type-scoped option lists as before (playerData.js's
+// searchTeams/searchEvents/searchVenues). The loaders are UNCHANGED — called
+// once per gender|teamType with term="" (the full scoped list, ordered
+// games-desc; events also recency-desc) — and each picker writes the SAME state
+// field it always did, so the built query and every leaderboard/graph number is
+// unchanged; only the control's look/behaviour (typeahead + keyboard + ARIA)
+// changes (Design Round 2, wave R2-2b-ii). Options load lazily (on the row
+// becoming visible / first open) and reload when gender OR team type changes
+// (ROUND 3 task 8 — on International the Event list must drop domestic-only
+// competitions like IPL). Team/Event/Venue rows show a "<name>  N games" meta;
+// Opposition keeps its plain list (no meta) and greys out off International
+// (decision 20).
 
-import { query } from "./db.js";
-import { buildScopeClauses, wirePortalDropdown } from "./filters.js";
+import { wirePortalDropdown } from "./filters.js";
 import { matchupVsActive } from "./state.js";
-import { searchTeams, searchEvents, searchVenues } from "./playerData.js";
+import { searchTeams, searchEvents, searchVenues, searchPlayers } from "./playerData.js";
+import { mountSearchMultiSelect } from "./searchSelect.js";
 import { escHtml, escAttr } from "./html.js";
 
 const POSITIONS = Array.from({ length: 12 }, (_, i) => i + 1);
@@ -202,367 +210,328 @@ export function mountRegularPositions(container, store, onChange, { embedded = f
   return { sync };
 }
 
-/**
- * Distinct opposition team names under the current scope. The opposition filter
- * never narrows its own option list (buildScopeClauses called without
- * oppositionColumn here).
- *
- * R7 owner correction (item 5): the opposition picker is the EXACT SAME
- * mechanism as the "Played for" Team picker — searchTeams() counts each team's
- * TOTAL matches from the matches table (scoped by gender + team type only, NOT
- * date/format), games-desc. So the big cricketing nations (India, Pakistan,
- * England…) lead, identical to the Team dropdown, rather than an in-scope count
- * (which put associate nations on top in short windows). Shows every team (the
- * search box narrows); changes ORDER/membership of the OPTION list only — no
- * leaderboard/table query is touched (baseline unaffected).
- */
-async function fetchOppositionOptions(state) {
-  const rows = await searchTeams("", state.gender, state.teamType);
-  return rows.map((r) => r.value);
+// Game-count meta label (ROUND 3, task 4): "1,013 games" — localized thousands
+// separator, the word "games" spelled out. Shown on Team/Event/Venue rows.
+// (Opposition passes showGames:false — it keeps its own plain list, no meta.)
+function gamesMeta(o) {
+  return o && o.games != null ? `${Number(o.games).toLocaleString()} games` : "";
 }
 
 /**
- * Mount the "Against opposition" team-multiselect (state.opposition). Embedded
- * inside a condition row (the row's type label names it), so its own label is
- * suppressed. INTERNATIONAL-only (decision 20): greys + closes otherwise, and
- * oppositionFilterActive() keeps the pill/subtitle honest. Returns `{ sync }`.
+ * Shared gender- + team-type-scoped searchable MULTI-select for Team /
+ * Opposition / Event / Venue (Design Round 2, wave R2-2b-ii). Wraps
+ * searchSelect.js's mountSearchMultiSelect (portal:true so its panel escapes the
+ * Filters popup's overflow clip) and feeds it the SAME async, relevance-ranked
+ * option lists as before via `config.loader` (playerData.js's searchTeams/
+ * searchEvents/searchVenues — UNCHANGED). The picker writes the SAME state field
+ * it always did, so the built query — and every leaderboard/graph number — is
+ * unchanged; only the control changes.
+ *
+ * `config`:
+ *   { get(state)->string[], set(store,arr), loader(gender,teamType)->Promise<rows>,
+ *     emptyLabel, singular, plural, ariaLabel, searchPlaceholder,
+ *     showGames?:bool, disabledWhen?(state)->bool, disabledNote?:string }
+ *
+ * Options load lazily — on the row becoming visible OR first toggle interaction
+ * — and reload when the gender|teamType scope changes (filters.js clears the
+ * selection on such a change, so a stale pick never survives). Returns `{ sync }`.
  */
-export function mountOpposition(container, store, onChange, { embedded = false } = {}) {
+function mountScopedMultiSelect(container, store, onChange, config) {
   container.innerHTML = `
-    <div class="filter-group filter-group--opposition ${embedded ? "filter-group--opp-embedded" : ""}" data-role="opposition-group">
-      ${embedded ? "" : `<span class="filter-label">Against (opposition)</span>`}
-      <div class="team-dropdown" data-role="opp-dropdown">
-        <button type="button" class="team-dropdown__toggle" data-role="opp-toggle" aria-haspopup="true" aria-expanded="false">
-          Any opposition
-        </button>
-        <div class="team-dropdown__panel" data-role="opp-panel" hidden>
-          <input type="text" class="team-dropdown__search" data-role="opp-search" placeholder="Search teams…" />
-          <div class="team-dropdown__list" data-role="opp-list"></div>
-          <div class="team-dropdown__actions">
-            <button type="button" class="link-btn" data-role="opp-clear">Clear</button>
-          </div>
-        </div>
-      </div>
-      <span class="profile-note" data-role="opposition-note" hidden>International cricket only for now</span>
-    </div>
-  `;
+    <div class="filter-group filter-group--ms" data-role="ms-group">
+      <div data-role="ms-host"></div>
+      ${config.disabledNote ? `<span class="profile-note" data-role="ms-note" hidden>${escHtml(config.disabledNote)}</span>` : ""}
+    </div>`;
+  const groupEl = container.querySelector('[data-role="ms-group"]');
+  const hostEl = container.querySelector('[data-role="ms-host"]');
+  const noteEl = container.querySelector('[data-role="ms-note"]');
 
-  const els = {
-    group: container.querySelector('[data-role="opposition-group"]'),
-    toggle: container.querySelector('[data-role="opp-toggle"]'),
-    panel: container.querySelector('[data-role="opp-panel"]'),
-    search: container.querySelector('[data-role="opp-search"]'),
-    list: container.querySelector('[data-role="opp-list"]'),
-    clear: container.querySelector('[data-role="opp-clear"]'),
-    note: container.querySelector('[data-role="opposition-note"]'),
+  // Toggle label: 0 → placeholder; 1 → the single value's own name (getValues()
+  // is up to date when summarize runs during a toggle/setValues); >1 → "N teams".
+  let handle;
+  const summarize = (count) => {
+    const vals = handle ? handle.getValues() : [];
+    if (vals.length === 1) return vals[0];
+    return `${count} ${count === 1 ? config.singular : config.plural}`;
   };
 
-  let oppOptionsCache = [];
-  let lastScopeKey = null;
-  let oppOptionsLoadToken = 0;
-  let oppOptionsErrored = false;
-
-  function scopeKeyFor(state) {
-    return JSON.stringify([state.discipline, state.gender, state.formats, state.dateFrom, state.dateTo, state.teamType, state.teams]);
-  }
-
-  function updateToggleLabel() {
-    const opp = store.get().opposition;
-    els.toggle.textContent = opp.length === 0 ? "Any opposition" : opp.length === 1 ? opp[0] : `${opp.length} opponents`;
-  }
-
-  function renderList(filterText) {
-    if (oppOptionsErrored) {
-      els.list.innerHTML = `<p class="team-dropdown__empty">Couldn't load teams — reopen the filters to retry.</p>`;
-      return;
-    }
-    const q = (filterText || "").trim().toLowerCase();
-    const selected = new Set(store.get().opposition);
-    const filtered = oppOptionsCache.filter((t) => t.toLowerCase().includes(q));
-    els.list.innerHTML =
-      filtered
-        .map(
-          (t) => `<label class="team-dropdown__item">
-          <input type="checkbox" data-team="${escAttr(t)}" ${selected.has(t) ? "checked" : ""} />
-          <span>${escHtml(t)}</span>
-        </label>`
-        )
-        .join("") || `<p class="team-dropdown__empty">No teams match.</p>`;
-
-    els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const current = new Set(store.get().opposition);
-        if (cb.checked) current.add(cb.dataset.team);
-        else current.delete(cb.dataset.team);
-        store.set({ opposition: [...current] });
-        updateToggleLabel();
-        onChange();
-      });
-    });
-  }
-
-  async function refreshOptions() {
-    const state = store.get();
-    if (state.teamType !== "international") return;
-    const key = scopeKeyFor(state);
-    if (key === lastScopeKey) return;
-    const token = ++oppOptionsLoadToken;
-    try {
-      const fetched = await fetchOppositionOptions(state);
-      if (token !== oppOptionsLoadToken) return;
-      oppOptionsCache = fetched;
-      oppOptionsErrored = false;
-      lastScopeKey = key;
-    } catch (e) {
-      if (token !== oppOptionsLoadToken) return;
-      oppOptionsErrored = true;
-      renderList(els.search.value);
-      updateToggleLabel();
-      return;
-    }
-    const validSet = new Set(oppOptionsCache);
-    const stillValid = state.opposition.filter((t) => validSet.has(t));
-    const dropped = stillValid.length !== state.opposition.length;
-    if (dropped) store.set({ opposition: stillValid });
-    renderList(els.search.value);
-    updateToggleLabel();
-    if (dropped) onChange();
-  }
-
-  const dropdown = wirePortalDropdown(els.toggle, els.panel, {
-    onOpen: () => {
-      els.search.value = "";
-      renderList("");
-      els.search.focus();
+  handle = mountSearchMultiSelect(hostEl, {
+    options: [],
+    values: config.get(store.get()),
+    portal: true,
+    placeholder: config.emptyLabel,
+    filterPlaceholder: config.searchPlaceholder,
+    summarize,
+    ariaLabel: config.ariaLabel,
+    renderRow: (o) => {
+      const meta = config.showGames ? gamesMeta(o) : "";
+      return (
+        `<span class="search-select__check" aria-hidden="true"></span>` +
+        `<span class="search-select__opt-label">${escHtml(o.label)}</span>` +
+        (meta ? `<span class="search-select__meta">${escHtml(meta)}</span>` : "")
+      );
+    },
+    onChange: (values) => {
+      config.set(store, values); // SAME state field as before → query unchanged
+      onChange();
     },
   });
 
-  function sync() {
-    const state = store.get();
-    const disabled = state.teamType !== "international";
-    els.group.classList.toggle("is-disabled", disabled);
-    els.note.hidden = !disabled;
-    els.toggle.disabled = disabled;
-    if (disabled) dropdown.close();
-    updateToggleLabel();
-    refreshOptions();
-  }
+  const toggleEl = hostEl.querySelector(".search-select__toggle");
 
-  els.search.addEventListener("input", () => renderList(els.search.value));
-  els.clear.addEventListener("click", () => {
-    store.set({ opposition: [] });
-    renderList(els.search.value);
-    updateToggleLabel();
-    onChange();
-  });
-
-  sync();
-  return { sync };
-}
-
-/**
- * Shared gender-scoped, relevance-ranked multiselect for Team / Event / Venue
- * (task 1B-2). `config`:
- *   { get(state)->string[], set(store,arr), loader(gender)->Promise<opts>,
- *     emptyLabel, countLabel(n)->string, searchPlaceholder, itemMeta(opt)->string }
- * Options are loaded once per gender (loader gets the full gender-scoped list);
- * the search box filters that cache client-side. Returns `{ sync }`.
- */
-function mountSearchMultiselect(container, store, onChange, config) {
-  container.innerHTML = `
-    <div class="filter-group filter-group--opp-embedded" data-role="ms-group">
-      <div class="team-dropdown" data-role="ms-dropdown">
-        <button type="button" class="team-dropdown__toggle" data-role="ms-toggle" aria-haspopup="true" aria-expanded="false">
-          ${escHtml(config.emptyLabel)}
-        </button>
-        <div class="team-dropdown__panel" data-role="ms-panel" hidden>
-          <input type="text" class="team-dropdown__search" data-role="ms-search" placeholder="${escAttr(config.searchPlaceholder)}" />
-          <div class="team-dropdown__list" data-role="ms-list"></div>
-          <div class="team-dropdown__actions">
-            <button type="button" class="link-btn" data-role="ms-clear">Clear</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const els = {
-    toggle: container.querySelector('[data-role="ms-toggle"]'),
-    panel: container.querySelector('[data-role="ms-panel"]'),
-    search: container.querySelector('[data-role="ms-search"]'),
-    list: container.querySelector('[data-role="ms-list"]'),
-    clear: container.querySelector('[data-role="ms-clear"]'),
-  };
-
-  let optionsCache = []; // [{value,label,games,...}] for loadedKey
-  let loadedKey = null; // "gender|teamType" the cache was loaded for
+  // ── Async option loading (gender|teamType scoped, lazy) ────────────────────
+  let optionsCache = [];
+  let loadedKey = null;
   let loadToken = 0;
   let loading = false;
-  let errored = false;
-
-  // Cache key (ROUND 3, task 8): options are gender- AND team-type-scoped, so
-  // the cache must invalidate when EITHER changes (e.g. switching to
-  // International must re-fetch so IPL drops out of the Event list).
-  function cacheKey() {
+  const cacheKey = () => {
     const s = store.get();
     return `${s.gender}|${s.teamType}`;
-  }
-
-  function selected() {
-    return new Set(config.get(store.get()));
-  }
-
-  function updateToggleLabel() {
-    const arr = config.get(store.get());
-    els.toggle.textContent = arr.length === 0 ? config.emptyLabel : arr.length === 1 ? arr[0] : config.countLabel(arr.length);
-  }
-
-  function renderList(filterText) {
-    if (loading) {
-      els.list.innerHTML = `<p class="team-dropdown__empty">Loading…</p>`;
-      return;
-    }
-    if (errored) {
-      els.list.innerHTML = `<p class="team-dropdown__empty">Couldn't load options — reopen the filters to retry.</p>`;
-      return;
-    }
-    const q = (filterText || "").trim().toLowerCase();
-    const sel = selected();
-    let filtered = optionsCache.filter((o) => o.label.toLowerCase().includes(q));
-    // Selected-first on reopen (ROUND 3, task 5): when the panel opens with an
-    // empty search term, float the currently-selected options to the TOP (in
-    // their existing relevance order), the rest below in the usual order. Only
-    // for the empty-term case — while the user is actively typing a filter, the
-    // list stays in pure relevance order so matches don't jump around.
-    if (q === "") {
-      const chosen = filtered.filter((o) => sel.has(o.value));
-      const rest = filtered.filter((o) => !sel.has(o.value));
-      filtered = [...chosen, ...rest];
-    }
-    els.list.innerHTML =
-      filtered
-        .map((o) => {
-          const meta = config.itemMeta ? config.itemMeta(o) : "";
-          return `<label class="team-dropdown__item">
-            <input type="checkbox" data-value="${escAttr(o.value)}" ${sel.has(o.value) ? "checked" : ""} />
-            <span>${escHtml(o.label)}${meta ? ` <span class="team-dropdown__meta">${escHtml(meta)}</span>` : ""}</span>
-          </label>`;
-        })
-        .join("") || `<p class="team-dropdown__empty">No matches.</p>`;
-
-    els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const cur = new Set(config.get(store.get()));
-        if (cb.checked) cur.add(cb.dataset.value);
-        else cur.delete(cb.dataset.value);
-        config.set(store, [...cur]);
-        updateToggleLabel();
-        onChange();
-      });
-    });
-  }
-
+  };
   async function ensureLoaded() {
     const key = cacheKey();
-    if (loadedKey === key && !errored) {
-      renderList(els.search.value); // already cached for this gender+teamType — show it
-      return;
-    }
+    if (loadedKey === key || loading) return;
     loading = true;
-    errored = false;
-    renderList(els.search.value); // "Loading…"
     const token = ++loadToken;
     const s = store.get();
+    let rows;
     try {
-      const rows = await config.loader(s.gender, s.teamType);
-      if (token !== loadToken) return;
-      optionsCache = rows || [];
-      loadedKey = key;
-      loading = false;
+      rows = await config.loader(s.gender, s.teamType);
     } catch (e) {
-      if (token !== loadToken) return;
       loading = false;
-      errored = true;
-      renderList(els.search.value);
-      return;
+      return; // leave options empty; a later open retries
     }
-    renderList(els.search.value);
+    if (token !== loadToken) return;
+    loading = false;
+    optionsCache = rows || [];
+    loadedKey = key;
+    handle.setOptions(optionsCache);
+    // Reflect the current selection against the fresh options (keeps the toggle
+    // summary + checks honest; setOptions on its own would drop unknown values).
+    handle.setValues(config.get(store.get()));
   }
 
-  const dropdown = wirePortalDropdown(els.toggle, els.panel, {
-    onOpen: () => {
-      els.search.value = "";
-      els.search.focus();
-      ensureLoaded();
-    },
-  });
-
-  els.search.addEventListener("input", () => renderList(els.search.value));
-  els.clear.addEventListener("click", () => {
-    config.set(store, []);
-    renderList(els.search.value);
-    updateToggleLabel();
-    onChange();
+  // Lazy-load fallback: first interaction with the toggle (before it opens).
+  toggleEl.addEventListener("mousedown", ensureLoaded);
+  toggleEl.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " " || e.key === "Spacebar") ensureLoaded();
   });
 
   function sync() {
-    // Gender OR team type changed since the cache loaded → drop it so the next
-    // open reloads for the new scope (selections are cleared by the gender /
-    // team-type handlers in filters.js — ROUND 3 task 9).
+    const s = store.get();
+    // Disabled state (Opposition = international only, decision 20): grey the
+    // toggle (:disabled styling) + show the note; a disabled toggle can't open.
+    // The query-side gate (oppositionFilterActive) keeps an inert selection from
+    // ever filtering, so greying is purely a UI affordance.
+    const disabled = config.disabledWhen ? config.disabledWhen(s) : false;
+    if (noteEl) noteEl.hidden = !disabled;
+    groupEl.classList.toggle("is-disabled", disabled);
+    toggleEl.disabled = disabled;
+    if (disabled) handle.close();
+
     if (loadedKey !== null && loadedKey !== cacheKey()) {
+      // Gender/team-type changed since the last load — drop the cache and reload
+      // for the new scope (the selection was already cleared upstream).
       loadedKey = null;
-      optionsCache = [];
-      dropdown.close();
+      ensureLoaded();
+    } else if (loadedKey === null && hostEl.offsetParent !== null) {
+      // Row is visible (popup open, condition present) and nothing loaded yet —
+      // pre-load so the first open shows a populated list, not a flash of empty.
+      ensureLoaded();
+    } else {
+      // Keep the toggle summary honest even without a reload (e.g. a pill
+      // removal / Clear-all cleared the selection, or the other popup's instance
+      // changed it). setValues filters against loaded options; when nothing is
+      // loaded yet the selection is empty at boot, so this is a safe no-op.
+      handle.setValues(config.get(s));
     }
-    updateToggleLabel();
   }
 
   sync();
   return { sync };
-}
-
-// Game-count meta label (ROUND 3, task 4): "1,013 games" — localized thousands
-// separator, the word "games" spelled out. Shared by Team/Event/Venue rows.
-// (The Opposition picker keeps its own plain list — no meta — see mountOpposition.)
-function gamesMeta(o) {
-  return o.games != null ? `${Number(o.games).toLocaleString()} games` : "";
 }
 
 /** "Played for" — single gender + team-type-scoped team picker (state.teams). */
 export function mountTeam(container, store, onChange) {
-  return mountSearchMultiselect(container, store, onChange, {
+  return mountScopedMultiSelect(container, store, onChange, {
     get: (s) => s.teams || [],
     set: (st, arr) => st.set({ teams: arr }),
     loader: (gender, teamType) => searchTeams("", gender, teamType),
     emptyLabel: "All teams",
-    countLabel: (n) => `${n} teams`,
+    singular: "team",
+    plural: "teams",
+    ariaLabel: "Played for team",
     searchPlaceholder: "Search teams…",
-    itemMeta: gamesMeta,
+    showGames: true,
   });
 }
 
 /** "Event" — gender + team-type-scoped competition/series picker (state.event). */
 export function mountEvent(container, store, onChange) {
-  return mountSearchMultiselect(container, store, onChange, {
+  return mountScopedMultiSelect(container, store, onChange, {
     get: (s) => s.event || [],
     set: (st, arr) => st.set({ event: arr }),
     loader: (gender, teamType) => searchEvents("", gender, teamType),
     emptyLabel: "Any event",
-    countLabel: (n) => `${n} events`,
+    singular: "event",
+    plural: "events",
+    ariaLabel: "Event",
     searchPlaceholder: "Search events…",
-    itemMeta: gamesMeta,
+    showGames: true,
   });
 }
 
 /** "Venue" — gender + team-type-scoped ground picker (state.venue). */
 export function mountVenue(container, store, onChange) {
-  return mountSearchMultiselect(container, store, onChange, {
+  return mountScopedMultiSelect(container, store, onChange, {
     get: (s) => s.venue || [],
     set: (st, arr) => st.set({ venue: arr }),
     loader: (gender, teamType) => searchVenues("", gender, teamType),
     emptyLabel: "Any venue",
-    countLabel: (n) => `${n} venues`,
+    singular: "venue",
+    plural: "venues",
+    ariaLabel: "Venue",
     searchPlaceholder: "Search venues…",
-    itemMeta: gamesMeta,
+    showGames: true,
   });
+}
+
+/**
+ * "Against opposition" — team picker over state.opposition. The option list is
+ * the EXACT SAME mechanism as the "Played for" Team picker (searchTeams, scoped
+ * by gender + team type only, games-desc — R7 owner correction, item 5), so the
+ * big cricketing nations lead. INTERNATIONAL-only (decision 20): the toggle
+ * greys + shows the note off International, and oppositionFilterActive() keeps
+ * the query/pill/subtitle honest regardless. No games meta (its historic plain
+ * list). The `embedded` arg is accepted for call-site parity (the row's type
+ * label already names it) but unused — the wrapper never renders its own label.
+ */
+export function mountOpposition(container, store, onChange, { embedded = false } = {}) {
+  void embedded;
+  return mountScopedMultiSelect(container, store, onChange, {
+    get: (s) => s.opposition || [],
+    set: (st, arr) => st.set({ opposition: arr }),
+    loader: (gender, teamType) => searchTeams("", gender, teamType),
+    emptyLabel: "Any opposition",
+    singular: "opponent",
+    plural: "opponents",
+    ariaLabel: "Against opposition",
+    searchPlaceholder: "Search teams…",
+    showGames: false,
+    disabledWhen: (s) => s.teamType !== "international",
+    disabledNote: "International cricket only for now",
+  });
+}
+
+/**
+ * "Name" condition player picker (Design Round 2, wave R2-2b-ii): a searchable
+ * MULTI-select over WHOLE-DB players — the same ranked, name-history search the
+ * header uses (playerData.js's searchPlayers) — replacing the old free-text
+ * name-substring box. Picking one or more players writes state.namePlayers
+ * ([{id,name}]); the query builder turns that into `player_id IN (…ids)` (see
+ * drawer.js's Name note + the flagged buildScopeClauses hook), NOT the old
+ * `name ILIKE '%text%'`. state.search is LEFT ALONE, so the results-toolbar
+ * table search box keeps its own substring/pin behaviour — the two no longer
+ * collide.
+ *
+ * searchPlayers is a SERVER-side term search (top-25 ranked), which the
+ * component's client-side typeahead can't own. So we drive its filter input
+ * ourselves (debounced) and, on every result, feed the component the UNION of
+ * (this term's results) ∪ (already-picked players). Keeping the picked players
+ * in the option set on every setOptions is what lets a selection made under one
+ * term survive searching a different one (the component derives its value list
+ * from its options). Returns `{ sync }`.
+ */
+export function mountNamePlayers(container, store, onChange) {
+  container.innerHTML = `
+    <div class="filter-group filter-group--ms" data-role="name-group">
+      <div data-role="name-host"></div>
+    </div>`;
+  const hostEl = container.querySelector('[data-role="name-host"]');
+
+  // id -> label for every player the user has picked (persists across terms).
+  const picked = new Map();
+  for (const p of store.get().namePlayers || []) picked.set(p.id, p.name);
+  // id -> label for the CURRENT term's results (fresh each search).
+  let resultsMap = new Map();
+  const nameOf = (id) => picked.get(id) || resultsMap.get(id) || id;
+  const optionFor = (id) => ({ value: id, label: nameOf(id) });
+  // Union of current results ∪ picked, results first (searchPlayers' ranked
+  // order), so the list stays ranked and picked players remain selectable.
+  function unionOptions() {
+    const map = new Map();
+    for (const id of resultsMap.keys()) map.set(id, optionFor(id));
+    for (const id of picked.keys()) if (!map.has(id)) map.set(id, optionFor(id));
+    return [...map.values()];
+  }
+
+  let handle;
+  const summarize = (count) => {
+    const vals = handle ? handle.getValues() : [];
+    if (vals.length === 1) return nameOf(vals[0]);
+    return `${count} players`;
+  };
+
+  handle = mountSearchMultiSelect(hostEl, {
+    options: [...picked.keys()].map(optionFor),
+    values: [...picked.keys()],
+    portal: true,
+    placeholder: "Any player",
+    filterPlaceholder: "Search players…",
+    summarize,
+    ariaLabel: "Player name",
+    onChange: (values) => {
+      // Rebuild `picked` to EXACTLY the current selection (new ticks keep their
+      // known label, unticked ones drop), then write [{id,name}] to state.
+      const next = new Map();
+      for (const id of values) next.set(id, nameOf(id));
+      picked.clear();
+      for (const [id, name] of next) picked.set(id, name);
+      store.set({ namePlayers: values.map((id) => ({ id, name: nameOf(id) })) });
+      onChange();
+    },
+  });
+
+  const filterEl = hostEl.querySelector(".search-select__filter");
+  let debounceId = null;
+  let searchToken = 0;
+  async function runSearch(term) {
+    const token = ++searchToken;
+    let rows = [];
+    try {
+      rows = await searchPlayers(term);
+    } catch (e) {
+      rows = [];
+    }
+    if (token !== searchToken) return; // superseded by a newer keystroke
+    resultsMap = new Map(rows.map((r) => [r.id, r.name]));
+    handle.setOptions(unionOptions());
+  }
+  filterEl.addEventListener("input", () => {
+    const term = filterEl.value.trim();
+    clearTimeout(debounceId);
+    if (term.length < 2) {
+      // Below searchPlayers' 2-char floor: cancel any in-flight search and show
+      // just the already-picked players.
+      searchToken++;
+      resultsMap = new Map();
+      handle.setOptions(unionOptions());
+      return;
+    }
+    debounceId = setTimeout(() => runSearch(term), 250);
+  });
+
+  function sync() {
+    // Reconcile from state (a Name pill removal, a Clear-all, or the OTHER
+    // popup's own instance changing the shared selection).
+    const state = store.get();
+    const ids = (state.namePlayers || []).map((p) => p.id);
+    picked.clear();
+    for (const p of state.namePlayers || []) picked.set(p.id, p.name);
+    handle.setOptions(unionOptions());
+    handle.setValues(ids);
+  }
+
+  sync();
+  return { sync };
 }

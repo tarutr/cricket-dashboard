@@ -308,6 +308,7 @@ export function createInitialState(maxMonth) {
                    // ("Vs") mode leaves buildMatchupQuery completely untouched (decision 39's
                    // byte-identical-SQL rule) and shows the pin pill greyed/inert instead.
     search: "",
+    namePlayers: [], // R2-2b-ii: Advanced-Filters "Name" picker — [{id,name}]; applied as idCol IN (...) by buildScopeClauses.
     sort: { key: "runs", dir: "desc" },
     columns: {
       batting: [...DEFAULT_COLUMNS.batting],
@@ -588,6 +589,11 @@ export function createStore(initial) {
     if (regularPositionsFilterActive(s)) {
       const sorted = [...s.regularPositions].sort((a, b) => a - b);
       parts.push(`regular position ${sorted.join(", ")}`);
+    }
+    // Name picker (R2-2b-ii) — mirrors the per-player "Name: …" pills.
+    if (Array.isArray(s.namePlayers) && s.namePlayers.length > 0) {
+      const names = s.namePlayers.map((p) => p.name);
+      parts.push(names.length <= 3 ? `Name: ${names.join(", ")}` : `Name: ${names.length} players`);
     }
 
     // Matchup mode (R3, decision 33) — table only, right after the

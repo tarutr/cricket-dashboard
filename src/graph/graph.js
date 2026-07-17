@@ -2098,7 +2098,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       state.discipline, state.gender, state.formats, state.dateFrom, state.dateTo,
       state.teams, state.teamType, state.minInnings, state.advanced, state.sort,
       state.search, state.positions, state.regularPositions, state.opposition,
-      state.profile, state.matchupVs,
+      state.profile, state.matchupVs, state.namePlayers,
     ]);
   }
 

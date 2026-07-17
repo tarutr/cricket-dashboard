@@ -53,6 +53,7 @@ import {
   mountTeam,
   mountEvent,
   mountVenue,
+  mountNamePlayers,
 } from "./drawerInnings.js";
 import { escHtml, escAttr } from "./html.js";
 
@@ -281,17 +282,15 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   const eventController = mountEvent(editorHosts.event, store, onChange);
   const venueController = mountVenue(editorHosts.venue, store, onChange);
 
-  // Name condition (ROUND 3, task 6): a plain text input writing state.search —
-  // the existing ILIKE-on-name key the table already consumes (table.js's
-  // searchClause). Empty = inactive (no pill, no query effect, never blocks
-  // Search). The value is kept in sync by syncSingletonRows (guarded so it never
-  // clobbers the caret while the user is typing here).
-  editorHosts.name.innerHTML = `<input type="text" class="input cond-name-input" data-role="prof-name" placeholder="Player name…" aria-label="Player name" />`;
-  const nameEl = editorHosts.name.querySelector('[data-role="prof-name"]');
-  nameEl.addEventListener("input", () => {
-    store.set({ search: nameEl.value });
-    onChange();
-  });
+  // Name condition (R2-2b-ii): a searchable PLAYER PICKER (whole-DB
+  // searchPlayers), replacing the old free-text name-substring box. Picking one
+  // or more players writes state.namePlayers ([{id,name}]); the query builder
+  // turns that into `player_id IN (…ids)` (NOT the old `name ILIKE`). This uses
+  // its OWN state key so it never collides with state.search — which stays the
+  // results-toolbar table search box's substring/pin filter (untouched). Empty =
+  // inactive (no pill, no query effect, never blocks Search). Its own controller
+  // owns the editor DOM; syncSingletonRows just calls its sync().
+  const nameController = mountNamePlayers(editorHosts.name, store, onChange);
 
   // ── Presence + session-added tracking ──────────────────────────────────────
   // sessionAdded: singleton rows the user added THIS popup session that don't
@@ -305,7 +304,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       case "hand": return Boolean(s.profile.battingHand);
       case "bowling": return Boolean(s.profile.bowlingType);
       case "rpos": return (s.regularPositions || []).length > 0 || (s.positions || []).length > 0;
-      case "name": return Boolean((s.search || "").trim());
+      case "name": return (s.namePlayers || []).length > 0;
       case "team": return (s.teams || []).length > 0;
       case "opposition": return (s.opposition || []).length > 0;
       case "event": return (s.event || []).length > 0;
@@ -325,7 +324,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       case "hand": setProfile({ battingHand: null }); break;
       case "bowling": setProfile({ bowlingType: null }); break;
       case "rpos": store.set({ regularPositions: [], positions: [] }); break;
-      case "name": store.set({ search: "" }); break;
+      case "name": store.set({ namePlayers: [] }); break;
       case "team": store.set({ teams: [] }); break;
       case "opposition": store.set({ opposition: [] }); break;
       case "event": store.set({ event: [] }); break;
@@ -437,8 +436,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     oppositionController.sync();
     eventController.sync();
     venueController.sync();
-    // Keep the Name input in sync without clobbering the caret while typing here.
-    if (document.activeElement !== nameEl) nameEl.value = s.search || "";
+    nameController.sync();
     renderProfileEditors();
   }
 
@@ -712,6 +710,11 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     if (oppositionFilterActive(s)) n++;
     if (eventFilterActive(s)) n++;
     if (venueFilterActive(s)) n++;
+    // Name condition (R2-2b-ii): the picked-players filter (state.namePlayers) is
+    // a drawer-owned filter, distinct from the results-toolbar table search box
+    // (state.search, which activeCount deliberately never counted). Count one for
+    // an active picked-players selection.
+    if ((s.namePlayers || []).length > 0) n++;
     n += activeConditionCount(s.advanced);
     return n;
   }

@@ -241,6 +241,17 @@ export function buildScopeClauses(
     }
   }
 
+  // Name filter (R2-2b-ii): the Advanced-Filters "Name" condition is now a
+  // player PICKER writing state.namePlayers = [{id,name}] (replaces the old
+  // state.search substring filter, which now belongs only to the results-toolbar
+  // table search). Additive per-player restriction, gated on idColumn like the
+  // profile / R. Pos. semi-joins above — player pages pass no idColumn and are
+  // correctly unaffected. Unset -> clause absent -> query byte-identical.
+  if (idColumn && Array.isArray(state.namePlayers) && state.namePlayers.length > 0) {
+    const ids = state.namePlayers.map((p) => p.id).filter(Boolean);
+    if (ids.length) clauses.push(`${idColumn} IN (${ids.map((id) => `'${esc(id)}'`).join(", ")})`);
+  }
+
   return clauses;
 }
 

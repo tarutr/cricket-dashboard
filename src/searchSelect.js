@@ -386,6 +386,7 @@ export function mountSearchMultiSelect(hostEl, {
   ariaLabel = null,
   disabled = false,
   renderRow = null,
+  portal = false,
 } = {}) {
   const uid = `smsel-${++uidCounter}`;
   let allOptions = normalizeOptions(options);
@@ -413,6 +414,57 @@ export function mountSearchMultiSelect(hostEl, {
   const filterEl = hostEl.querySelector(".search-select__filter");
   const noteEl = hostEl.querySelector(".search-select__note");
   const listEl = hostEl.querySelector(".search-select__list");
+
+  // ── Optional portal (R2-2b-ii) ─────────────────────────────────────────────
+  // When mounted inside a scrolling / overflow-hidden container (the Filters
+  // popup body is overflow-y:auto), an absolutely-positioned panel is CLIPPED by
+  // that ancestor. `portal:true` lifts the OPEN panel to <body> (position:fixed,
+  // placed under the toggle, repositioned on scroll/resize) so it escapes the
+  // clip — the same technique filters.js's wirePortalDropdown uses for the old
+  // in-popup dropdowns. Graph callers omit `portal` → this whole block is inert
+  // and the control stays byte-identical to before.
+  const panelHome = { parent: panelEl.parentNode, next: panelEl.nextSibling };
+  let portaled = false;
+  function positionPanel() {
+    const r = toggleEl.getBoundingClientRect();
+    const margin = 8;
+    panelEl.style.position = "fixed";
+    panelEl.style.zIndex = "1000"; // above the .filters-popup panel (z-index:100)
+    panelEl.style.minWidth = `${Math.round(r.width)}px`;
+    panelEl.style.top = `${Math.round(r.bottom + 6)}px`;
+    const width = panelEl.offsetWidth || Math.round(r.width);
+    let left = Math.min(r.left, window.innerWidth - width - margin);
+    left = Math.max(margin, left);
+    panelEl.style.left = `${Math.round(left)}px`;
+    panelEl.style.right = "auto";
+    const maxH = Math.max(140, Math.round(window.innerHeight - (r.bottom + 6) - margin));
+    panelEl.style.maxHeight = `${maxH}px`;
+    panelEl.style.overflowY = "auto";
+  }
+  const onPortalScroll = () => { if (portaled) positionPanel(); };
+  const onPortalResize = () => { if (portaled) positionPanel(); };
+  function portalOpen() {
+    if (!portal || portaled) return;
+    portaled = true;
+    document.body.appendChild(panelEl);
+    positionPanel();
+    window.addEventListener("scroll", onPortalScroll, true);
+    window.addEventListener("resize", onPortalResize);
+  }
+  function portalClose() {
+    if (!portaled) return;
+    portaled = false;
+    window.removeEventListener("scroll", onPortalScroll, true);
+    window.removeEventListener("resize", onPortalResize);
+    for (const p of ["position", "zIndex", "minWidth", "top", "left", "right", "maxHeight", "overflowY"]) {
+      panelEl.style[p] = "";
+    }
+    if (panelHome.next && panelHome.next.parentNode === panelHome.parent) {
+      panelHome.parent.insertBefore(panelEl, panelHome.next);
+    } else {
+      panelHome.parent.appendChild(panelEl);
+    }
+  }
 
   /** Selected values in OPTIONS order (stable, tick-order-independent). */
   function selectedValues() {
@@ -481,6 +533,9 @@ export function mountSearchMultiSelect(hostEl, {
     } else {
       filterEl.removeAttribute("aria-activedescendant");
     }
+    // The list height changes as options/filter change — keep a portaled panel
+    // pinned under its toggle (no-op unless portaled).
+    if (portaled) positionPanel();
   }
 
   function open() {
@@ -494,6 +549,7 @@ export function mountSearchMultiSelect(hostEl, {
     activeIndex = filtered.length ? 0 : -1;
     syncNote();
     renderList();
+    portalOpen(); // reparent to <body> BEFORE focus so focus is preserved
     filterEl.focus();
   }
 
@@ -505,6 +561,7 @@ export function mountSearchMultiSelect(hostEl, {
     filterEl.setAttribute("aria-expanded", "false");
     filterEl.removeAttribute("aria-activedescendant");
     activeIndex = -1;
+    portalClose(); // restore the panel to its in-host slot
     if (focusToggle) toggleEl.focus();
   }
 
@@ -571,6 +628,11 @@ export function mountSearchMultiSelect(hostEl, {
       }
     } else if (e.key === "Escape") {
       e.preventDefault();
+      // When portaled inside the Filters popup, keep this Escape from bubbling
+      // to the popup's own document-level Escape handler (which would close the
+      // whole popup) — first Escape closes just this dropdown, matching the old
+      // wirePortalDropdown behaviour. Non-portal (graph) callers are unaffected.
+      if (portal) e.stopPropagation();
       close({ focusToggle: true });
     } else if (e.key === "Tab") {
       close();
@@ -590,7 +652,10 @@ export function mountSearchMultiSelect(hostEl, {
   }
   function onDocClick(e) {
     if (!isOpen) return;
-    if (hostEl.contains(e.target)) return;
+    // A portaled panel lives on <body>, OUTSIDE hostEl — so also treat clicks
+    // within the panel itself as "inside" (harmless when not portaled, since the
+    // panel is a hostEl descendant then and hostEl.contains already covers it).
+    if (hostEl.contains(e.target) || panelEl.contains(e.target)) return;
     close();
   }
 
@@ -637,6 +702,7 @@ export function mountSearchMultiSelect(hostEl, {
     close,
     destroy() {
       close();
+      portalClose(); // idempotent — never leave an orphaned panel on <body>
       toggleEl.removeEventListener("click", onToggleClick);
       toggleEl.removeEventListener("keydown", onToggleKeydown);
       filterEl.removeEventListener("input", onFilterInput);

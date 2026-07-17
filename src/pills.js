@@ -136,15 +136,26 @@ export function mountPills(container, store, onChange, onPinChange = onChange, g
       }
     }
 
-    // Free-text player-name filter (state.search) — written by the new "Name"
-    // condition in the Filters popup (ROUND 3 task 6) and by omnisearch's
-    // "Filter the table to names matching …" action. Both are the same ILIKE
-    // filter, so one pill covers both. Labelled "Name: X" (task 6) — a shade
-    // shorter/clearer than describeScope()'s `matching "X"` subtitle token; the
-    // two describe the same filter, so the honest-scope invariant still holds.
+    // Free-text player-name filter (state.search) — now written ONLY by
+    // omnisearch's "Filter the table to names matching …" action in the
+    // results-toolbar search box (an ILIKE substring). The Advanced-Filters
+    // "Name" CONDITION no longer writes state.search — it's the player picker
+    // below (state.namePlayers). Labelled `Name ~ "X"` to distinguish the
+    // substring match from the exact-player pills.
     if (s.search && s.search.trim()) {
       const term = s.search.trim();
-      pills.push({ label: `Name: ${term}`, remove: () => store.set({ search: "" }) });
+      pills.push({ label: `Name ~ "${term}"`, remove: () => store.set({ search: "" }) });
+    }
+
+    // Name picker (R2-2b-ii): the Advanced-Filters "Name" condition is now a
+    // player picker (state.namePlayers = [{id,name}]). One removable pill per
+    // picked player — a NARROWING filter (idCol IN ...), so it reads with the
+    // other filter pills (not the pin styling, which ADDS players).
+    for (const p of s.namePlayers || []) {
+      pills.push({
+        label: `Name: ${p.name}`,
+        remove: () => store.set({ namePlayers: (store.get().namePlayers || []).filter((x) => x.id !== p.id) }),
+      });
     }
 
     // Stat conditions (decision 42): one pill per ACTIVE condition (metric +

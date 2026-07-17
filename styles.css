@@ -2453,6 +2453,17 @@ a { color: var(--color-accent); }
 .search-select__option--multi.is-disabled .search-select__check {
   border-color: var(--color-line);
 }
+/* Trailing games-count meta on Team / Event / Venue rows (R2-2b-ii). The multi
+   row is flex-start (box → label), so push the meta to the trailing edge; muted
+   + non-wrapping so it reads as an annotation, not part of the name. */
+.search-select__option--multi .search-select__meta {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: var(--space-2);
+  font-size: var(--text-sm2, 0.75rem);
+  color: var(--color-muted);
+  white-space: nowrap;
+}
 
 /* Slope / Dumbbell Window A/B pickers — DAY-level native <input type="date">
    controls (R3 Wave 3, item 10). Same `.date-range` markup as the scope strip

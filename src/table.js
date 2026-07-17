@@ -100,6 +100,7 @@ function serializeQueryState(state) {
     matchupVs: state.matchupVs,
     pinnedPlayers: state.pinnedPlayers,
     search: state.search,
+    namePlayers: state.namePlayers,
     sort: state.sort,
     columns: state.columns[ns],
     advanced: state.advanced,
