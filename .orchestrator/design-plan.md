@@ -199,9 +199,11 @@ instant sort (no is-dirty), instant columns-picker add (no is-dirty), pending Vs
 + table frozen), dirty is COMPARISON-based (revert Vs->Everyone clears it), Clear resets to
 first-load + clears staged. Pills: pending pill appears instantly (table frozen), pin steel-blue
 (#e8eef5 bg / #2f4761 text), soft-delete pill--staged (red outline #9c2b2b, ×->+, restore works).
-RESOLVED FORK (owner 2026-07-17): player-search is fully INSTANT — picking a player DROPS THE ROW
-INTO THE TABLE IMMEDIATELY (no Search press, does NOT light is-dirty); pin remove/restore also
-instant. Filter pills stay PENDING (only pins are instant). Built as addendum + orchestrator-verified
+RESOLVED FORK (owner 2026-07-17): PICKING a player from the results search DROPS THE ROW INTO
+THE TABLE IMMEDIATELY (no Search press, does NOT light is-dirty). Scope is ADD ONLY — a pin
+pill's ×/+ stays PENDING (soft-delete stages with red-outline undo, commits on next Search),
+exactly as approved 4a; filter pills stay PENDING. (Orchestrator over-reached first by making
+×/+ instant too; owner corrected; reverted in commit b556f92 — pick-instant, ×/+ pending.) Built as addendum + orchestrator-verified
 in-browser: pick SA Yadav -> is-dirty stays false, row appears with EXACT 60·1544·29.13·150.34,
 count/other rows unchanged; agent also showed the out-of-filter additive case (Team=Australia 37
 rows, pin SA Yadav -> rank 1, × -> 36). Pin × -> pill--staged (red outline #9c2b2b, ×->+), is-dirty
