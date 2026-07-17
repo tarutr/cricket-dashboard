@@ -248,3 +248,21 @@ table + text line kept + fine table unchanged; node --check all; 0 console error
 approved behaviour override: this reverses decision 36's "Coverage always fixed" (now
 toggleable). Bowling popup "% balls" column agent-verified (Bumrah RHB 62.2/LHB 29.2); I
 independently verified the batting popup.
+
+## 4-item polish batch (checkbox restyle, format-keeps-team, popup renames) COMPLETE +
+verified + owner-approved ("looks good"). Also: all "Style data"/"Batting-hand data" popup
+coverage lines renamed to "Matchup data" (owner-approved; last one committed 59e82e5).
+
+## 4c (four new Vs stats: Matches, Runs/Innings, High Score, Best Bowling) BUILT +
+orchestrator-verified. Awaiting owner gate. New matchup metrics, OPT-IN columns in the Vs
+picker (DEFAULT_MATCHUP_COLUMNS + filters.js untouched -> default Vs view + plain anchors
+byte-identical). HS/Best Bowling via a two-step peak CTE (per match:innings, then max/arg_max).
+Independent DuckDB (exact): SA Yadav HS vs Spin=47, RPI 11.95, Matches 38; Bumrah Best Bowling
+vs RHB="2-9", Matches 32; SA Yadav vs Spin 38/454/140.99 + Bumrah vs RHB pos1,2 27/177/9 hold;
+plain fingerprint 3307620867; composition %s still 100. 0 console errors. Table-only
+(vsTableOnly flag) — NOT in popup/graph. OPEN for owner: (a) Best Bowling renders "2-9" (dash,
+mirroring plain "Best Bowling") — owner said "W/R"; confirm dash vs slash. (b) Matches +
+Runs/Innings ALSO auto-exposed as Vs stat-conditions (consistent with the re-score model);
+HS/Best Bowling are columns-only; keep or restrict. (c) popup/graph parity deferred.
+Remaining R4 queue: 4d (keep-columns + no-data pin + graph rename), 4e (A9 option-list scope),
+4f (popup selects + docs + hygiene).
