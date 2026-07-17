@@ -811,6 +811,19 @@ a { color: var(--color-accent); }
 .cond-row__value [data-role="rpos-plain"],
 .cond-row__value [data-role="rpos-matchup"] { display: contents; }
 
+/* Wave 4b (decision 47a): in BATTING matchup both position controls show at once
+   (R. Pos. roster + striker position), so the R. Pos. row's value host stacks them
+   as a gap-separated column and the striker sub-control gets its own inline caption
+   (same weight as the row's type label). In every other mode exactly one control
+   shows and the caption is hidden, so this reads as a single compact dropdown. */
+[data-cond="rpos"] .cond-row__value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.cond-row__subtype { font-weight: 600; }
+
 /* Editors size to content (bounded), not to the row width — the compact,
    whitespace-generous look item 8 asks for. */
 .cond-row__value .filter-group { min-width: 0; }

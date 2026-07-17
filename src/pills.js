@@ -223,19 +223,15 @@ export function mountPills(container, store, onChange, onPinChange = onChange, g
     // differently and sits differently). `pinned: true` gets the distinct
     // accent-tint styling (.pill--pinned in styles.css) so it's visually
     // distinguishable from the neutral filter pills too, not just positioned
-    // after them. Inert (greyed, with an explaining title) while matchup "Vs"
-    // mode is active — pins only apply in plain mode (buildMatchupQuery is
-    // left completely untouched, per decision 39's byte-identical-SQL rule)
-    // — but the × still works either way, since un-pinning is always a valid,
-    // honest action.
-    const matchupInert = matchupVsActive(s);
+    // after them. Wave 4b (decision 47a): pins now apply in matchup ("Vs")
+    // mode as well as plain mode (buildMatchupQuery exempts them through the
+    // same shared helper as buildQuery), so the pill is LIVE in both — no
+    // longer greyed/inert in Vs.
     for (const p of s.pinnedPlayers || []) {
       pills.push({
         key: `pin:${p.id}`,
         label: `+ ${p.name}`,
-        inert: matchupInert,
         pinned: true,
-        title: matchupInert ? "Pinned players don't apply in matchup (Vs) mode" : null,
         remove: () =>
           store.set({ pinnedPlayers: (store.get().pinnedPlayers || []).filter((x) => x.id !== p.id) }),
         restore: () => {

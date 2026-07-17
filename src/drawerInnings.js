@@ -139,8 +139,9 @@ const REGULAR_POSITIONS = Array.from({ length: 11 }, (_, i) => i + 1);
  * Mount the "R. Pos." (regular position) multi-select (decision 46). Binds to
  * `state.regularPositions` — a player matches when their MOST COMMON batting
  * position within scope is in the selection (the semi-join lives in filters.js).
- * PLAIN-MODE only (hides in matchup mode). Both disciplines + both genders.
- * `embedded` suppresses the outer filter-label. Returns `{ sync }`.
+ * BATTING contexts only (plain batting AND batting matchup, Wave 4b/decision 47a);
+ * hides in every bowling context. Both genders. `embedded` suppresses the outer
+ * filter-label. Returns `{ sync }`.
  */
 export function mountRegularPositions(container, store, onChange, { embedded = false } = {}) {
   const DESC = "Regular position — where this player most often bats";
@@ -190,8 +191,14 @@ export function mountRegularPositions(container, store, onChange, { embedded = f
 
   function sync() {
     const state = store.get();
-    els.group.hidden = matchupVsActive(state); // plain-mode only
-    if (matchupVsActive(state)) {
+    // R. Pos. is a BATTING concept (Wave 4b, decision 47a): the control shows in
+    // every batting context — plain batting AND batting matchup, where it sits
+    // alongside the striker-position control — and hides in every bowling context
+    // (plain or matchup), where the striker-position control is the only position
+    // filter. (Previously plain-mode-only, both disciplines.)
+    const show = state.discipline === "batting";
+    els.group.hidden = !show;
+    if (!show) {
       dropdown.close();
       return;
     }

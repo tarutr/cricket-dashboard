@@ -341,7 +341,18 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   // control in two separate sub-hosts (each controller sets its own host's
   // innerHTML, so they must not share one); each self-hides in the other mode,
   // so exactly one shows and the single row covers both.
-  editorHosts.rpos.innerHTML = `<div data-role="rpos-plain"></div><div data-role="rpos-matchup"></div>`;
+  // Wave 4b (decision 47a): in BATTING matchup both controls show at once (R. Pos.
+  // roster + striker position), so the striker sub-host gets its own inline caption
+  // — the row's shared type label serves R. Pos. (see syncSingletonRows). The
+  // caption is a sibling of the sub-hosts (NOT inside them), so neither controller's
+  // innerHTML wipes it. It stays hidden except in batting matchup, where alone the
+  // two controls coexist; in every other mode exactly one control shows and the
+  // row's own type label suffices.
+  editorHosts.rpos.innerHTML =
+    `<div data-role="rpos-plain"></div>` +
+    `<span class="cond-row__subtype" data-role="rpos-striker-cap" hidden>Batting position</span>` +
+    `<div data-role="rpos-matchup"></div>`;
+  const strikerCapEl = editorHosts.rpos.querySelector('[data-role="rpos-striker-cap"]');
   const regularPositionController = mountRegularPositions(
     editorHosts.rpos.querySelector('[data-role="rpos-plain"]'), store, onChange, { embedded: true }
   );
@@ -365,7 +376,15 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       case "hand": return Boolean(s.profile.battingHand);
       case "bowling": return Boolean(s.profile.bowlingType);
       case "vs": return matchupVsActive(s); // present iff a Vs bucket applies to the current discipline
-      case "rpos": return (s.regularPositions || []).length > 0 || (s.positions || []).length > 0;
+      // Wave 4b: presence tracks only the control(s) actually applicable now — the
+      // R. Pos. roster in batting contexts, the striker position in matchup — so a
+      // value left over from another discipline/mode never renders an empty row
+      // (R. Pos. is inert on bowling views; striker is inert outside matchup).
+      case "rpos":
+        return (
+          (s.discipline === "batting" && (s.regularPositions || []).length > 0) ||
+          (matchupVsActive(s) && (s.positions || []).length > 0)
+        );
       case "team": return (s.teams || []).length > 0;
       case "opposition": return (s.opposition || []).length > 0;
       case "event": return (s.event || []).length > 0;
@@ -505,8 +524,15 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     for (const t of SINGLETON_TYPES) {
       rowEls[t.key].hidden = !isPresent(t, s);
     }
-    // R. Pos. row label reflects which control is live (plain vs matchup).
-    typeLabelEls.rpos.textContent = matchupVsActive(s) ? "Batting position" : "R. Pos.";
+    // R. Pos. row label + striker caption (Wave 4b). In every BATTING context the
+    // R. Pos. control is present, so the row's type label serves it ("R. Pos.").
+    // In batting matchup the striker-position control also shows, below R. Pos.,
+    // labelled by its own inline caption. In a BOWLING matchup only the striker
+    // control shows, so the row label serves it directly ("Batting position") and
+    // the caption stays hidden.
+    const battingMatchup = matchupVsActive(s) && s.discipline === "batting";
+    typeLabelEls.rpos.textContent = s.discipline === "batting" ? "R. Pos." : "Batting position";
+    strikerCapEl.hidden = !battingMatchup;
 
     renderVsEditor();
     regularPositionController.sync();
