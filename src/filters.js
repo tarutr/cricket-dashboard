@@ -244,6 +244,52 @@ export function buildScopeClauses(
   return clauses;
 }
 
+// ── Pinned-player exemption (owner decision 46 task 3b; Wave 4b, decision 47a) ──
+// Pins are the players ADDED to the result set regardless of the leaderboard-only
+// filters (team/opposition/position/profile/R.Pos/search/stat conditions); only
+// their CORE scope (gender/format/date window/team type) still applies. Wave 4b
+// (decision 47a) moves pins onto the SAME shared path buildScopeClauses is on, so
+// both the plain query (table.js buildQuery) and the Vs query (buildMatchupQuery)
+// exempt pins through ONE mechanism and can never diverge again. With no pins,
+// every helper below returns exactly what the un-pinned query produced, so the
+// number-critical normal query stays byte-identical.
+
+/** The pinned-player id set as a SQL literal list (`'id1', 'id2'`), or null when
+ * there are no pins. `pins` is [{id, name}]; entries without an id are dropped
+ * (callers may already have filtered — this is idempotent). */
+export function pinnedIdSetSql(pins) {
+  const ids = (pins || []).filter((p) => p && p.id).map((p) => `'${esc(p.id)}'`);
+  return ids.length ? ids.join(", ") : null;
+}
+
+/** Wrap a full WHERE-clause list so pinned players bypass every leaderboard-only
+ * clause while still obeying the inescapable CORE scope. `coreClauses` MUST be the
+ * exact prefix `fullClauses` begins with (buildCoreScopeClauses output, same
+ * options/order) — the remainder is the leaderboard-only part pins skip. Emits
+ * `core AND (extra OR idColumn IN (pins))`; `extra` collapses to TRUE when there
+ * is nothing leaderboard-only to bypass. With no pins this returns exactly
+ * `fullClauses.join(" AND ")` — byte-identical to the un-pinned query. */
+export function whereWithPinExemption(fullClauses, coreClauses, idColumn, pins) {
+  const idSet = pinnedIdSetSql(pins);
+  if (!idSet) return fullClauses.join(" AND ");
+  const extra = fullClauses.slice(coreClauses.length);
+  const corePart = coreClauses.join(" AND ");
+  const extraPart = extra.length ? `(${extra.join(" AND ")})` : "TRUE";
+  return `${corePart} AND (${extraPart} OR ${idColumn} IN (${idSet}))`;
+}
+
+/** Wrap a post-aggregation gate (buildQuery's HAVING, or buildMatchupQuery's
+ * step-3 existence/stat-condition gate) so pinned players are exempt from it:
+ * `(gateSql) OR idColumn IN (pins)`. Returns `gateSql` unchanged when there are
+ * no pins (or no gate). NOTE the caller supplies the id column valid at that
+ * stage — buildQuery's HAVING uses the raw GROUP BY column, buildMatchupQuery's
+ * step-3 runs over a subquery where it is projected as `id`. */
+export function gateWithPinExemption(gateSql, idColumn, pins) {
+  const idSet = pinnedIdSetSql(pins);
+  if (!idSet || !gateSql) return gateSql;
+  return `(${gateSql}) OR ${idColumn} IN (${idSet})`;
+}
+
 // Team type checkbox dropdown (decision 44b): the state value is still the
 // single 'international' | 'club' | 'both' string (untouched) — these two
 // checkboxes are just a different INPUT SHAPE over the same value. 'club' is

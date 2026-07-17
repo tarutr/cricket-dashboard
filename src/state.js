@@ -141,15 +141,21 @@ export function positionsFilterActive(state) {
 }
 
 /** True if the R. Pos. filter (`state.regularPositions`, owner decision 46) is
- * currently narrowing the set. Applies in PLAIN mode only (both disciplines) —
- * inert in matchup mode, where the striker-position filter uses `positions`
- * instead. The query gate is an additive per-player semi-join derived in
- * buildScopeClauses (a player matches when their most-common batting position
- * within scope is in the selection); this predicate keeps the pill, subtitle,
- * badge count, and drawer control all agreeing on when it is live. */
+ * currently narrowing the set. R. Pos. is a BATTING concept — a player's own
+ * most-common batting position within scope — so it is active in every batting
+ * context (plain batting AND batting matchup, Wave 4b / decision 47a: "usual
+ * top-order players, full record vs the bucket") and inactive in every bowling
+ * context (plain bowling and bowling matchup, where the striker-position filter
+ * uses `positions` instead). The query gate is an additive per-player semi-join
+ * derived in buildScopeClauses (a player matches when their most-common batting
+ * position within scope is in the selection); it applies identically in plain
+ * and matchup mode because both go through buildScopeClauses with an idColumn.
+ * This predicate keeps the pill, subtitle, badge count, and drawer control all
+ * agreeing on when it is live. Gating on discipline (not matchupVsActive) is
+ * what opens the Vs gate without touching the striker-position filter. */
 export function regularPositionsFilterActive(state) {
   return (
-    !matchupVsActive(state) &&
+    state.discipline === "batting" &&
     Array.isArray(state.regularPositions) &&
     state.regularPositions.length > 0
   );
@@ -303,10 +309,11 @@ export function createInitialState(maxMonth) {
     pinnedPlayers: [], // [{id, name}] — owner decision 46 task 3b: players ADDED to the table's
                    // result set regardless of the other leaderboard-only filters (team/opposition/
                    // position/profile/R. Pos./search/stat conditions). Their CORE scope
-                   // (gender/format/date window/team type) still applies — see table.js's
-                   // buildQuery for the additive WHERE/HAVING union. Plain mode only: matchup
-                   // ("Vs") mode leaves buildMatchupQuery completely untouched (decision 39's
-                   // byte-identical-SQL rule) and shows the pin pill greyed/inert instead.
+                   // (gender/format/date window/team type) still applies. Wave 4b (decision 47a):
+                   // pins now apply in BOTH plain (buildQuery) and matchup ("Vs", buildMatchupQuery)
+                   // mode, through ONE shared exemption helper (filters.js whereWithPinExemption /
+                   // gateWithPinExemption) so the two builders can never diverge; the pill is live
+                   // (not greyed) in Vs mode too.
     search: "",
     sort: { key: "runs", dir: "desc" },
     columns: {

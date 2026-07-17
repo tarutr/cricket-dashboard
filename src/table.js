@@ -10,7 +10,7 @@
 
 import { getMetric, hasMetricData, matchupBucketLabel, DISMISSAL_KINDS } from "./metrics.js";
 import { query } from "./db.js";
-import { buildScopeClauses, buildCoreScopeClauses } from "./filters.js";
+import { buildScopeClauses, buildCoreScopeClauses, whereWithPinExemption, gateWithPinExemption } from "./filters.js";
 import { activeGroups } from "./advanced.js";
 import { escHtml, escAttr } from "./html.js";
 import {
@@ -353,10 +353,20 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   const whereClauses = buildScopeClauses(state, scopeOpts);
   if (searchClause) whereClauses.push(searchClause);
 
+  // Pinned players (Wave 4b, decision 47a): additive — a pinned player is scanned
+  // as long as they have ANY core-scope row in this view, bypassing every
+  // leaderboard-only clause above (team/opposition/position/profile/R.Pos/search),
+  // exactly as buildQuery does. The bucket predicate is NOT in this WHERE (it is a
+  // per-aggregate FILTER), so pins keep it automatically. With no pins this is
+  // byte-identical to the former `whereClauses.join(" AND ")`.
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  const coreClauses = buildCoreScopeClauses(state);
+  const whereSql = whereWithPinExemption(whereClauses, coreClauses, idCol, pins);
+
   const aggSql = [
     `SELECT ${aggSelectParts.join(", ")}`,
     `FROM ${view}`,
-    `WHERE ${whereClauses.join(" AND ")}`,
+    `WHERE ${whereSql}`,
     `GROUP BY ${idCol}, ${nameCol}`,
   ].join("\n");
 
@@ -398,6 +408,14 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   const finalWhereParts = [`${inningsGateAlias} >= 1`];
   const advWhere = advancedToHaving(state.advanced, ns, (cond) => condAliasMap.get(cond));
   if (advWhere) finalWhereParts.push(advWhere);
+  // Pinned players (Wave 4b, decision 47a): exempt from the step-3 gate too, so a
+  // pinned player still shows even with 0 innings vs the bucket (the existence
+  // gate fails) or failing a stat condition — their row simply reads 0/blank vs
+  // the bucket (the "(no innings)" annotation is a later wave). This runs over
+  // `windowed`, where the id column is projected as `id` (NOT idCol), so the
+  // exemption references `id`. With no pins this is byte-identical to the former
+  // `finalWhereParts.join(" AND ")`.
+  const finalWhereSql = gateWithPinExemption(finalWhereParts.join(" AND "), "id", pins);
 
   const sql = [
     `WITH agg AS (`,
@@ -408,7 +426,7 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     `)`,
     `SELECT ${finalSelectParts.join(", ")}`,
     `FROM windowed`,
-    `WHERE ${finalWhereParts.join(" AND ")}`,
+    `WHERE ${finalWhereSql}`,
   ].join("\n");
 
   return { sql, matchesSql: null, coverageSql: null };
@@ -616,29 +634,18 @@ export function buildQuery(state, visibleColumns) {
     whereClauses.push(`${nameCol} ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
   }
 
-  // Pinned players (task 3b, owner decision 46): additive OR, plain mode
-  // only (matchupVsActive already routed to buildMatchupQuery above, which
-  // this pinning logic never touches — see that function's own doc comment
-  // on why matchup mode leaves pins inert). buildCoreScopeClauses is
-  // guaranteed to be the exact prefix `whereClauses` above already starts
-  // with (same state, same includeGender default), so slicing it off isolates
-  // precisely the "leaderboard-only" remainder — team/opposition/position/
-  // profile/R. Pos./search — without recomputing or duplicating any of that
-  // filter logic. A pinned player's CORE scope (gender/format/date window/
-  // team type) still applies unconditionally; only the leaderboard-only part
-  // is bypassed, for exactly their id.
+  // Pinned players (task 3b, owner decision 46; Wave 4b routed onto the shared
+  // helper): additive OR. buildCoreScopeClauses is guaranteed to be the exact
+  // prefix `whereClauses` above already starts with (same state, same
+  // includeGender default), so the helper slices off precisely the
+  // "leaderboard-only" remainder — team/opposition/position/profile/R. Pos./
+  // search — without recomputing or duplicating any of that filter logic. A
+  // pinned player's CORE scope (gender/format/date window/team type) still
+  // applies unconditionally; only the leaderboard-only part is bypassed, for
+  // exactly their id. buildMatchupQuery now calls the SAME helper (Wave 4b,
+  // decision 47a), so plain and Vs pin-handling can never diverge.
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
-  const pinnedIdList = pins.map((p) => `'${esc(p.id)}'`).join(", ");
-  let whereSql;
-  if (pins.length > 0) {
-    const core = buildCoreScopeClauses(state);
-    const extra = whereClauses.slice(core.length);
-    const corePart = core.join(" AND ");
-    const extraPart = extra.length ? `(${extra.join(" AND ")})` : "TRUE";
-    whereSql = `${corePart} AND (${extraPart} OR ${idCol} IN (${pinnedIdList}))`;
-  } else {
-    whereSql = whereClauses.join(" AND ");
-  }
+  const whereSql = whereWithPinExemption(whereClauses, buildCoreScopeClauses(state), idCol, pins);
 
   // decision 44c: the BASE query applies NO minimum-innings gate — a player
   // appears if they have any qualifying innings row (equivalent to min 1). The
@@ -657,11 +664,7 @@ export function buildQuery(state, visibleColumns) {
   // rows") — idCol is the raw GROUP BY column (not the `id` alias), always
   // valid to reference directly in HAVING.
   const havingSql =
-    havingParts.length === 0
-      ? null
-      : pins.length > 0
-        ? `(${havingParts.join(" AND ")}) OR ${idCol} IN (${pinnedIdList})`
-        : havingParts.join(" AND ");
+    havingParts.length === 0 ? null : gateWithPinExemption(havingParts.join(" AND "), idCol, pins);
 
   const wantsMatches = visibleColumns.includes("matches");
   const inningsLevel = positionsFilterActive(state) || oppositionFilterActive(state);
@@ -692,18 +695,12 @@ export function buildQuery(state, visibleColumns) {
   let matchesSql = null;
   if (wantsMatches && !inningsLevel) {
     const pmFull = buildScopeClauses(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
-    const pmExtra = pmFull.slice(buildCoreScopeClauses(state).length);
+    const pmCoreClauses = buildCoreScopeClauses(state);
+    const pmExtra = pmFull.slice(pmCoreClauses.length);
     if (state.search && state.search.trim()) {
       pmExtra.push(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
     }
-    let pmWhereSql;
-    if (pins.length > 0) {
-      const pmCore = buildCoreScopeClauses(state).join(" AND ");
-      const pmExtraPart = pmExtra.length ? `(${pmExtra.join(" AND ")})` : "TRUE";
-      pmWhereSql = `${pmCore} AND (${pmExtraPart} OR player_id IN (${pinnedIdList}))`;
-    } else {
-      pmWhereSql = [...buildCoreScopeClauses(state), ...pmExtra].join(" AND ");
-    }
+    const pmWhereSql = whereWithPinExemption([...pmCoreClauses, ...pmExtra], pmCoreClauses, "player_id", pins);
     matchesSql = [
       `SELECT player_id AS id, COUNT(DISTINCT match_id) AS matches`,
       `FROM player_matches`,
