@@ -2401,6 +2401,59 @@ a { color: var(--color-accent); }
   margin: 0;
 }
 
+/* ── MULTI-select variant (R2-2b-i) ────────────────────────────────────────
+   mountSearchMultiSelect reuses every .search-select__ rule above (toggle,
+   caret, panel, filter, 15rem-capped list). These add only the multi-specific
+   parts: a per-row checkbox glyph and an optional panel note. Rows toggle
+   (stay open) rather than pick, so they read left-to-right (box → label), not
+   the single-pick's space-between name/hint layout. */
+.search-select__note {
+  font-size: var(--text-sm2, 0.75rem);
+  color: var(--color-muted);
+  margin: 0 0 var(--space-2);
+  padding: 0 var(--space-1);
+}
+.search-select__option--multi {
+  justify-content: flex-start;
+  align-items: center;
+}
+/* The checkbox glyph — an empty square that fills with a check when the row's
+   value is in the selection (.is-selected on the row). Mirrors the muted-line /
+   accent-fill treatment of the app's other checkable rows. */
+.search-select__check {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  border: 1.5px solid var(--color-line-strong);
+  border-radius: var(--radius-sm);
+  position: relative;
+  background: var(--color-bg-raised);
+}
+.search-select__option--multi.is-selected .search-select__check {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.search-select__option--multi.is-selected .search-select__check::after {
+  content: "";
+  position: absolute;
+  left: 0.28rem;
+  top: 0.1rem;
+  width: 0.28rem;
+  height: 0.55rem;
+  border: solid var(--color-accent-contrast, #fff);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+/* A capped/floored row can't toggle — mute it and drop the pointer affordance
+   (the caller's isOptionDisabled hook adds .is-disabled). */
+.search-select__option--multi.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.search-select__option--multi.is-disabled .search-select__check {
+  border-color: var(--color-line);
+}
+
 /* Slope / Dumbbell Window A/B pickers — DAY-level native <input type="date">
    controls (R3 Wave 3, item 10). Same `.date-range` markup as the scope strip
    (shared verbatim by the dumbbell controls — both use this class).

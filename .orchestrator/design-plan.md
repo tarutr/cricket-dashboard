@@ -104,3 +104,18 @@ slope date row .graph-slope-range (stack->row); donut team fetch graph.js:1066-1
 buildQuery for HAVING-correct set); add-player players.js:165-198 (unscope) +
 fetchSelectedPlayerMetrics charts.js:37-81 (relaxed-scope fetch for added ids).
 ## R2-1 spawned.
+
+## R2-2b (search unification, everything else). Owner: go ahead. Name box decision:
+convert Advanced-Filters "Name" from a substring filter (state.search ILIKE) to a
+PICK-FROM-A-LIST searchable player picker (multi-select to match sibling condition
+pickers; flag single-vs-multi to owner). NUMBER-ADJACENT (query changes name-ILIKE ->
+player IN picked). Watch the state.search sharing with the table search box.
+Sub-waves: R2-2b-i (frontend/Opus-high) = extend searchSelect.js with a MULTI-SELECT
+variant + apply to graph radar metrics, benchmark metrics, benchmark player-anchor
+(single). R2-2b-ii (frontend/Opus-high) = filter drawers Team/Opp/Event/Venue + Name
+conversion (drawer.js/drawerInnings.js/advanced.js) — verify filter result counts.
+R2-2b-iii (frontend/Sonnet-high) = player-popup selects Against/Vs/Date (playerFilters.js).
+Serialize i->ii->iii (styles.css shared; ii depends on i's multi variant). Docs pass
+deferred to END of design phase (owner agreed): owner_decisions.md log + CHART_SYSTEM.md
++ README/SPEC donut/layout staleness (Sonnet/high doc pass).
+## R2-2b-i spawned.

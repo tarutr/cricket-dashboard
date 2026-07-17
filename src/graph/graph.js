@@ -16,7 +16,7 @@ import { escHtml, escAttr } from "../html.js";
 import { getManifest, query } from "../db.js";
 import { mountFilters, buildScopeClauses } from "../filters.js";
 import { mountFilterDrawer } from "../drawer.js";
-import { mountSearchSelect } from "../searchSelect.js";
+import { mountSearchSelect, mountSearchMultiSelect } from "../searchSelect.js";
 import {
   CHART_CAPS,
   createSelection,
@@ -475,10 +475,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // R2-2a (searchable dropdowns): live handles for the shared searchSelect
   // component (src/searchSelect.js). `chartTypeSelect` is mounted ONCE (static
   // control, persists for the panel's life). `metricControlSelects` are the
-  // per-render metric pickers inside els.metricControls — rebuilt on every
-  // renderMetricControls(), so each is destroy()'d before the next rebuild (they
-  // each hold a document click listener, exactly like the radar/benchmark
-  // dropdowns' metricControlsDropdownTeardown).
+  // per-render metric pickers inside els.metricControls (single-pick AND, since
+  // R2-2b-i, the radar/benchmark MULTI-select pickers + the benchmark anchor) —
+  // rebuilt on every renderMetricControls(), so each is destroy()'d before the
+  // next rebuild (they each hold a document click listener).
   let chartTypeSelect = null;
   let metricControlSelects = [];
   // R3 Wave 3, item 4 (no defaults / honest graph state):
@@ -1036,14 +1036,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     return chosenMetricKey && metrics.some((m) => m.key === chosenMetricKey) ? chosenMetricKey : null;
   }
 
-  // Holds the teardown for whichever dropdown the LAST renderMetricControls()
-  // wired inside els.metricControls (radar or benchmark — mutually exclusive,
-  // at most one at a time). renderMetricControls() replaces metricControls'
-  // innerHTML on every rebuild, so before wiring fresh nodes we dispose the
-  // previous call's document listeners here (A2 leak fix). The roster dropdown
-  // is separate (static markup, wired once at 1689) and untouched by this.
-  let metricControlsDropdownTeardown = null;
-
   // ── Item 6: "needs input" red outline ──────────────────────────────────────
   // A chart that can't draw because a REQUIRED control is empty red-outlines
   // exactly that control (the stylist styles `.needs-input`). ONE class string
@@ -1064,13 +1056,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   }
 
   function renderMetricControls() {
-    if (metricControlsDropdownTeardown) {
-      metricControlsDropdownTeardown();
-      metricControlsDropdownTeardown = null;
-    }
-    // R2-2a: dispose the previous render's searchSelect pickers (each holds a
-    // document click listener — same leak class as metricControlsDropdownTeardown
-    // above) before their host nodes are replaced by the innerHTML rebuilds below.
+    // R2-2a/R2-2b-i: dispose the previous render's searchSelect pickers (each
+    // holds a document click listener) before their host nodes are replaced by
+    // the innerHTML rebuilds below. This is now the ONLY per-render teardown in
+    // metricControls: radar/benchmark's old wireDropdown panels became
+    // searchSelect components, so metricControlSelects covers them too.
     for (const h of metricControlSelects) {
       try { h.destroy(); } catch { /* already gone */ }
     }
@@ -1145,95 +1135,47 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         onRankMetricChanged();
       }, { ariaLabel: "Y axis metric" });
     } else if (chartType === "radar") {
-      // R4 Wave 1b (item 3): a checkbox dropdown of INDIVIDUAL radar-valid
-      // metrics (no more fixed groups), max RADAR_MAX_METRICS. Mirrors the
-      // Benchmark metric multi-select's markup/wiring (the shared .dropdown
-      // pattern) — the difference is a max-only cap (no min FLOOR that
-      // auto-refills; item 3's "no auto-pick" means an empty radar stays empty
-      // until the user checks metrics), and a small in-panel note at the cap.
+      // R4 Wave 1b (item 3): INDIVIDUAL radar-valid metrics (no fixed groups),
+      // max RADAR_MAX_METRICS. R2-2b-i: the searchable MULTI-select component
+      // (mountSearchMultiSelect) — type to filter axes, tick several in one open
+      // panel. Max-only cap (no min FLOOR that auto-refills; item 3's "no
+      // auto-pick" means an empty radar stays empty until the user picks), with
+      // the at-cap note carried by the component's noteFor hook.
       const eligible = radarEligibleMetrics(discipline, formats);
       // Prune any keys no longer eligible (phase gating / discipline switch),
       // preserving selection order; NEVER auto-fill toward a floor.
-      radarMetricKeys = radarMetricKeys.filter((k) => eligible.some((m) => m.key === k));
+      radarMetricKeys = eligible.map((m) => m.key).filter((k) => radarMetricKeys.includes(k));
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metrics (axes)</span>
-        <div class="dropdown graph-radar-metrics" data-role="radar-metrics-dropdown">
-          <button type="button" class="select dropdown__toggle" data-role="radar-metrics-toggle" aria-haspopup="true" aria-expanded="false" ${eligible.length ? "" : "disabled"}></button>
-          <div class="dropdown__panel graph-radar-metrics__panel" data-role="radar-metrics-panel" hidden>
-            <p class="graph-radar-metrics__note" data-role="radar-metrics-note" hidden></p>
-            ${
-              eligible.length
-                ? eligible
-                    .map(
-                      (m) => `<label class="dropdown__item">
-                        <input type="checkbox" data-metric-key="${escAttr(m.key)}" ${radarMetricKeys.includes(m.key) ? "checked" : ""} />
-                        <span>${escHtml(m.label)}</span>
-                      </label>`
-                    )
-                    .join("")
-                : `<p class="graph-radar-metrics__group-label">No radar metrics available for this scope</p>`
-            }
-          </div>
-        </div>
+        <div class="graph-metric-select" data-role="radar-metrics"></div>
       `;
-      const radarToggle = els.metricControls.querySelector('[data-role="radar-metrics-toggle"]');
-      const radarPanel = els.metricControls.querySelector('[data-role="radar-metrics-panel"]');
-      const radarNote = els.metricControls.querySelector('[data-role="radar-metrics-note"]');
-      const radarCheckboxes = () => els.metricControls.querySelectorAll('[data-role="radar-metrics-panel"] input[type="checkbox"]');
-
-      // Cap guard: once RADAR_MAX_METRICS are checked, every UNchecked box is
-      // disabled with an explanatory tooltip (the established cap-block idiom,
-      // e.g. filters.js's format/team-type dropdowns and the Benchmark picker)
-      // and an in-panel note appears. There is no minimum floor here.
-      function syncRadarMetricsUI() {
-        radarToggle.textContent = eligible.length
-          ? radarMetricKeys.length
-            ? `${radarMetricKeys.length} of ${eligible.length} metrics`
-            : "Choose metrics…"
-          : "No metrics available";
-        const atCap = radarMetricKeys.length >= RADAR_MAX_METRICS;
-        if (radarNote) {
-          radarNote.hidden = !atCap;
-          radarNote.textContent = atCap ? `Up to ${RADAR_MAX_METRICS} metrics — untick one to swap.` : "";
-        }
-        radarCheckboxes().forEach((cb) => {
-          const checked = radarMetricKeys.includes(cb.dataset.metricKey);
-          cb.checked = checked;
-          const blocked = !checked && atCap;
-          cb.disabled = blocked;
-          cb.closest(".dropdown__item").classList.toggle("is-disabled", blocked);
-          cb.title = blocked ? `Pick at most ${RADAR_MAX_METRICS} metrics` : "";
+      const radarHost = els.metricControls.querySelector('[data-role="radar-metrics"]');
+      if (radarHost) {
+        const handle = mountSearchMultiSelect(radarHost, {
+          options: eligible.map((m) => ({ value: m.key, label: m.label })),
+          values: radarMetricKeys,
+          placeholder: eligible.length ? "Choose metrics…" : "No metrics available",
+          filterPlaceholder: "Search metrics…",
+          ariaLabel: "Radar metrics (axes)",
+          disabled: eligible.length === 0,
+          summarize: (n, total) => `${n} of ${total} metrics`,
+          // Cap guard: once RADAR_MAX_METRICS are checked, every UNchecked row is
+          // disabled (the established cap-block idiom) and the note appears. No
+          // minimum floor here.
+          isOptionDisabled: (val, selected) => !selected.has(val) && selected.size >= RADAR_MAX_METRICS,
+          noteFor: (selected) =>
+            selected.size >= RADAR_MAX_METRICS ? `Up to ${RADAR_MAX_METRICS} metrics — untick one to swap.` : null,
+          onChange: (vals) => {
+            noteManualChartEdit();
+            // Preserve catalogue order so axes are stable regardless of tick order.
+            radarMetricKeys = eligible.map((m) => m.key).filter((mk) => vals.includes(mk));
+            if (radarMetricKeys.length) metricEverChosen = true;
+            syncChartTypeButtons();
+            markDirty({ paramsChanged: true });
+          },
         });
+        metricControlSelects.push(handle);
       }
-      syncRadarMetricsUI();
-
-      radarCheckboxes().forEach((cb) => {
-        cb.addEventListener("change", () => {
-          const k = cb.dataset.metricKey;
-          const set = new Set(radarMetricKeys);
-          if (cb.checked) {
-            if (set.size >= RADAR_MAX_METRICS) {
-              cb.checked = false; // defensive: disabled should already prevent this
-              return;
-            }
-            set.add(k);
-          } else {
-            set.delete(k);
-          }
-          noteManualChartEdit();
-          // Preserve catalogue order so axes are stable regardless of tick order.
-          radarMetricKeys = eligible.map((m) => m.key).filter((mk) => set.has(mk));
-          if (radarMetricKeys.length) metricEverChosen = true;
-          syncRadarMetricsUI();
-          syncChartTypeButtons();
-          markDirty({ paramsChanged: true });
-        });
-      });
-
-      // wireDropdown() attaches fresh document listeners on the new nodes; the
-      // previous rebuild's listeners were already removed at the top of
-      // renderMetricControls() via metricControlsDropdownTeardown (A2 leak fix).
-      if (radarToggle && radarPanel && eligible.length) metricControlsDropdownTeardown = wireDropdown(radarToggle, radarPanel);
     } else if (chartType === "phases") {
       const families = eligiblePhaseFamilies(discipline, formats);
       // item 4: no auto-pick — require an explicit family choice.
@@ -1373,16 +1315,16 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       bindWindowSelect("dumbbell-b-to", (v) => (dumbbellWindowB = { ...dumbbellWindowB, to: v }));
       syncWindowNeedsInput("dumbbell"); // item 6: outline the empty date inputs on render
     } else if (chartType === "benchmark") {
-      // B8b (decision 44e). Anchor picker: a plain <select> over the CHECKED
-      // roster ONLY (task brief) — unlike every other chart type, the pool
-      // this chart draws from is the WHOLE filtered set regardless of roster
-      // size (CHART_CAPS.benchmark = {min:1, max:15} — see players.js's doc
-      // comment on why the roster only sources the anchor choice here).
-      // Metric picker: a multi-select checkbox dropdown (the shared
-      // .dropdown pattern filters.js's Format/Team-type dropdowns already
-      // established), grouped by kind (Volume/Tempo/Consistency —
-      // benchmark.js's BENCHMARK_KIND_LABELS is the one source both this
-      // picker and the chart's own section headers read from).
+      // B8b (decision 44e). Anchor picker: the searchable SINGLE-pick component
+      // over the CHECKED roster ONLY (task brief) — unlike every other chart
+      // type, the pool this chart draws from is the WHOLE filtered set
+      // regardless of roster size (CHART_CAPS.benchmark = {min:1, max:15} — see
+      // players.js's doc comment on why the roster only sources the anchor
+      // choice here). Metric picker: the searchable MULTI-select component
+      // (R2-2b-i) — min-4/max-12, enforced via its isOptionDisabled hook. (The
+      // draw still groups metrics by kind — benchmark.js's BENCHMARK_KIND_LABELS
+      // remains the one source for the CHART's own section headers; the picker
+      // is a flat searchable list now.)
       const eligible = benchmarkEligibleMetrics(discipline, formats);
 
       // Prune any no-longer-eligible keys (phase gating / discipline switch),
@@ -1410,114 +1352,70 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         benchmarkAnchorId = roster[0]?.id ?? null;
       }
 
-      const groups = groupMetricsByKind(eligible);
-
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Anchor</span>
-        <select class="select graph-metric-select" data-role="benchmark-anchor" ${roster.length === 0 ? "disabled" : ""}>
-          ${
-            roster.length
-              ? roster
-                  .map((p) => `<option value="${escAttr(p.id)}" ${p.id === benchmarkAnchorId ? "selected" : ""}>${escHtml(p.name)}</option>`)
-                  .join("")
-              : `<option value="">Check a player below first</option>`
-          }
-        </select>
+        <div class="graph-metric-select" data-role="benchmark-anchor"></div>
         <span class="graph-control-label">Metrics</span>
-        <div class="dropdown graph-benchmark-metrics" data-role="benchmark-metrics-dropdown">
-          <button type="button" class="select dropdown__toggle" data-role="benchmark-metrics-toggle" aria-haspopup="true" aria-expanded="false"></button>
-          <div class="dropdown__panel graph-benchmark-metrics__panel" data-role="benchmark-metrics-panel" hidden>
-            ${groups
-              .map(
-                (g) => `
-              <div class="graph-benchmark-metrics__group-label">${escHtml(g.label)}</div>
-              ${g.metrics
-                .map(
-                  (m) => `<label class="dropdown__item">
-                    <input type="checkbox" data-metric-key="${escAttr(m.key)}" ${keys.includes(m.key) ? "checked" : ""} />
-                    <span>${escHtml(m.label)}</span>
-                  </label>`
-                )
-                .join("")}`
-              )
-              .join("")}
-          </div>
-        </div>
+        <div class="graph-metric-select" data-role="benchmark-metrics"></div>
       `;
 
-      const anchorSel = els.metricControls.querySelector('[data-role="benchmark-anchor"]');
-      if (anchorSel) {
-        anchorSel.addEventListener("change", (e) => {
-          benchmarkAnchorId = e.target.value || null;
-          // An explicit benchmark configuration counts as "a metric chosen"
-          // for the honest invalid-metric guidance (benchmark has no single
-          // metric — anchor + the metric set together specify it).
-          metricEverChosen = true;
-          syncChartTypeButtons();
-          // "Changing anchor re-renders, no refetch" (task brief) — enforced
-          // by renderChart()'s pool cache (keyed on scope+metrics, NOT
-          // anchor), not by anything special here; scheduleRender is the
-          // same call every other control makes.
-          markDirty({ paramsChanged: true });
+      const anchorHost = els.metricControls.querySelector('[data-role="benchmark-anchor"]');
+      if (anchorHost) {
+        // No allowEmptyLabel — the anchor is mandatory (native-<select> parity:
+        // one roster member is always selected when the roster is non-empty).
+        const anchorHandle = mountSearchSelect(anchorHost, {
+          options: roster.map((p) => ({ value: p.id, label: p.name })),
+          value: benchmarkAnchorId,
+          placeholder: roster.length ? "Choose an anchor player…" : "Check a player below first",
+          filterPlaceholder: "Search players…",
+          ariaLabel: "Anchor player",
+          disabled: roster.length === 0,
+          onChange: (val) => {
+            benchmarkAnchorId = val || null;
+            // An explicit benchmark configuration counts as "a metric chosen"
+            // for the honest invalid-metric guidance (benchmark has no single
+            // metric — anchor + the metric set together specify it).
+            metricEverChosen = true;
+            syncChartTypeButtons();
+            // "Changing anchor re-renders, no refetch" (task brief) — enforced
+            // by renderChart()'s pool cache (keyed on scope+metrics, NOT
+            // anchor), not by anything special here; markDirty is the same call
+            // every other control makes.
+            markDirty({ paramsChanged: true });
+          },
         });
+        metricControlSelects.push(anchorHandle);
       }
 
-      const metricsToggle = els.metricControls.querySelector('[data-role="benchmark-metrics-toggle"]');
-      const metricsPanel = els.metricControls.querySelector('[data-role="benchmark-metrics-panel"]');
-      const metricCheckboxes = () => els.metricControls.querySelectorAll('[data-role="benchmark-metrics-panel"] input[type="checkbox"]');
-
-      // Min-4/max-12 guard, same "disable the box(es) that would violate the
-      // floor/cap" idiom as filters.js's format/team-type dropdowns (there,
-      // a min-1 floor disables the sole remaining checked box; here the
-      // floor is 4, so ALL checked boxes are disabled once exactly 4 remain,
-      // and all UNchecked boxes are disabled once 12 are already checked).
-      function syncBenchmarkMetricsUI() {
-        metricsToggle.textContent = `${benchmarkMetricKeys.length} of ${eligible.length} metrics`;
-        metricCheckboxes().forEach((cb) => {
-          const checked = benchmarkMetricKeys.includes(cb.dataset.metricKey);
-          cb.checked = checked;
-          const atFloor = checked && benchmarkMetricKeys.length <= 4;
-          const atCap = !checked && benchmarkMetricKeys.length >= 12;
-          cb.disabled = atFloor || atCap;
-          cb.closest(".dropdown__item").classList.toggle("is-disabled", atFloor || atCap);
-          cb.title = atFloor ? "Pick at least 4 metrics" : atCap ? "Pick at most 12 metrics" : "";
+      const metricsHost = els.metricControls.querySelector('[data-role="benchmark-metrics"]');
+      if (metricsHost) {
+        // Min-4/max-12 guard via the component's isOptionDisabled hook — same
+        // "disable the box(es) that would violate the floor/cap" idiom as
+        // filters.js's format/team-type dropdowns: at the floor of 4 every
+        // CHECKED row disables (can't drop below 4); at the cap of 12 every
+        // UNchecked row disables.
+        const metricsHandle = mountSearchMultiSelect(metricsHost, {
+          options: eligible.map((m) => ({ value: m.key, label: m.label })),
+          values: benchmarkMetricKeys,
+          placeholder: "Choose metrics…",
+          filterPlaceholder: "Search metrics…",
+          ariaLabel: "Benchmark metrics",
+          summarize: (n, total) => `${n} of ${total} metrics`,
+          isOptionDisabled: (val, selectedSet) => {
+            const checked = selectedSet.has(val);
+            const atFloor = checked && selectedSet.size <= 4;
+            const atCap = !checked && selectedSet.size >= 12;
+            return atFloor || atCap;
+          },
+          onChange: (vals) => {
+            benchmarkMetricKeys = vals; // already in catalogue order (options order)
+            metricEverChosen = true; // item 4: benchmark metric-set edit counts
+            syncChartTypeButtons();
+            markDirty({ paramsChanged: true });
+          },
         });
+        metricControlSelects.push(metricsHandle);
       }
-      syncBenchmarkMetricsUI();
-
-      metricCheckboxes().forEach((cb) => {
-        cb.addEventListener("change", () => {
-          const k = cb.dataset.metricKey;
-          const set = new Set(benchmarkMetricKeys);
-          if (cb.checked) {
-            if (set.size >= 12) {
-              cb.checked = false; // defensive: disabled should already prevent this
-              return;
-            }
-            set.add(k);
-          } else {
-            if (set.size <= 4) {
-              cb.checked = true; // defensive: disabled should already prevent this
-              return;
-            }
-            set.delete(k);
-          }
-          benchmarkMetricKeys = [...set];
-          metricEverChosen = true; // item 4: benchmark metric-set edit counts
-          syncBenchmarkMetricsUI();
-          syncChartTypeButtons();
-          markDirty({ paramsChanged: true });
-        });
-      });
-
-      // Unlike the roster dropdown (static markup, wired once), this panel is
-      // rebuilt fresh on every renderMetricControls() call while Benchmark is
-      // active (chart-type switch, scope change, or a roster change via the
-      // onChange hook above). The previous rebuild's document listeners were
-      // removed at the top of renderMetricControls() via
-      // metricControlsDropdownTeardown (A2 leak fix); here we wire the fresh
-      // nodes and record their teardown for the next rebuild.
-      if (metricsToggle && metricsPanel) metricControlsDropdownTeardown = wireDropdown(metricsToggle, metricsPanel);
     }
   }
 
