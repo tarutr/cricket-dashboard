@@ -171,11 +171,11 @@ function headerRowHTML({ showControls = false } = {}) {
     : "";
   const filtersBtnHTML = showControls
     ? `<button type="button" class="btn btn--ghost player-page__filters-btn" data-role="open-player-filters">
-        Filters <span class="filter-open-btn__count" data-role="filters-count" hidden></span>
+        Player Filters <span class="filter-open-btn__count" data-role="filters-count" hidden></span>
       </button>`
     : "";
   const graphBtnHTML = showControls
-    ? `<button type="button" class="btn btn--ghost player-page__graph-btn" data-role="graph-player">Graph this player</button>`
+    ? `<button type="button" class="btn btn--ghost player-page__graph-btn" data-role="graph-player">Player Graphs</button>`
     : "";
   return `<div class="player-page__header-row">
       <div class="player-page__header-row-group player-page__header-row-group--left">

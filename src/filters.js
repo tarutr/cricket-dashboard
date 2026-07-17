@@ -592,7 +592,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
       } else {
         set.delete(key);
       }
-      store.set({ formats: [...set], teams: [] });
+      store.set({ formats: [...set] });
       syncFormatDropdown();
       if (onFormatsChanged) onFormatsChanged();
       onChange();
