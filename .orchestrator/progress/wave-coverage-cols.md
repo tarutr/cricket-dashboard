@@ -46,5 +46,23 @@ Scope: gender male, match_type IN (T20,IT20), international, 2023-07-01 → <202
   app-generated SQL exactly — decision-39 rule satisfied.
 - node --check: all 6 touched files OK.
 
+## Browser-verified (localhost:8000, modules cache-reloaded + page reloaded, ZERO console errors)
+- In-browser independent DuckDB (hand-written shapes): SA Yadav comp balls 591/322/114 →
+  57.5/31.4/11.1; vs Spin 38/454/140.99; Bumrah vs RHB pos1,2 27/177/9. All match.
+- In-browser buildQuery plain fingerprint = 3307620867 / 1430 (unchanged).
+- Vs mode UI: 3 composition columns render FAR-RIGHT, default ON; old Coverage column GONE.
+  - Sortable: clicking "Spin BF %" re-sorts instantly (header ▼), Search stays disabled.
+  - 0.0% RENDERS (not "—") — zeroIsData works; rows sum to 100 (0.0+100.0+0.0).
+  - Draggable: all 3 carry data-table__th--draggable + data-key.
+  - Toggleable: appear in Columns picker (Basic, checked); toggling comp_uncat OFF removes
+    only that column instantly, Search stays disabled; re-toggle restores.
+- Popup batting (SA Yadav, scope T20 both 2020→2026): coverage text retained; coarse
+  "Vs pace and spin" gains "% BF" (Pace 52.8% = 2095/3968, Spin 37.0% = 1467/3968 — matches
+  independent DuckDB for that scope); fine "Vs bowling type" UNCHANGED (no % column).
+- Popup bowling (Bumrah): coverage text retained; hands table gains "% balls"
+  (RHB 62.2% = 1831/2946, LHB 29.2% = 860/2946).
+- Graph exclusion: structural — graph nulls matchupVs, uses eligibleMetrics(plain discipline),
+  which never includes matchup_* metrics. Composition metrics are table-only by construction.
+
 ## Status
-- [x] implement / [x] node --check / [x] headless number verify / [ ] browser verify UI + commit
+- [x] implement / [x] node --check / [x] headless verify / [x] browser verify / [x] committed 0af4d58
