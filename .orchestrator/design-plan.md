@@ -215,3 +215,17 @@ rows, pin SA Yadav -> rank 1, × -> 36). Pin × -> pill--staged (red outline #9c
 stays false. Query builders BYTE-IDENTICAL (buildQuery/buildMatchupQuery untouched); calc files
 empty diff; node --check pass; 0 console errors.
 ## 4a (incl. instant-pin addendum) COMPLETE + orchestrator-verified. Awaiting owner gate -> 4b.
+
+## 4b (Vs dropdown honors full filter set: fix R.Pos+pins carry, harden via shared pin
+helper + parity guard) BUILT + orchestrator-verified. Awaiting owner gate. See plan
+~/.claude/plans/this-is-way-too-glowing-origami.md; decision 47(a). Independent verification:
+byte-identical normal query (djb2 3307620867/1430) AND clean matchup query (1547662675/1790);
+anchors re-derived via hand-written DuckDB under the real T20+IT20 scope — baseline 2,813
+(2,810 ids + 3 dual-name), SA Yadav vs Spin 38/454/140.99, Bumrah vs RHB pos1,2 27/177/9;
+buildQuery SQL confirms R.Pos+pins now present in batting-Vs, R.Pos batting-only, pins in
+both disciplines; CSK scenario on real data 35->12 (10 top-order R.Pos + Kohli/Bumrah pins),
+Kohli pin = full vs-pace 45/1340/170.05 (bypasses Team=CSK), non-pins are CSK; parity guard
+green; node --check all; 0 console errors. FLAG for owner: R.Pos is now batting-only — it was
+previously ALSO active in plain bowling (odd bowler_id IN batting clause); now inactive there,
+aligning with the R3.1 "Reg. Batting Position BATTING-ONLY" ruling (no anchor affected).
+Deferred: "(no innings)" pin annotation (Wave 4d); the 4 new Vs stats (Wave 4c).
