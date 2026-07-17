@@ -30,8 +30,20 @@ restricted picker. App-side query only; no pipeline/DB/parquet change.
   (len 2500, djb2 3064880972), no peak CTE, no placeholder.
 - New-column SQL well-formed; no __PEAK__/__PEAK_SORT__/__COMPOSITION__ leak.
 
-## TODO (browser, localhost:8000, vs R2)
-- SA Yadav HS vs Spin = 47; his Matches / RPI vs Spin vs a direct query.
-- A bowler's Best Bowling vs a hand vs a direct most-wickets-then-fewest-runs query.
-- Anchors hold: SA Yadav vs Spin 38/454/140.99; Bumrah vs RHB pos 1,2 27/177/9.
-- Composition %s still sum to 100. Toggle/sort/format in the Vs picker.
+## Verified (browser, localhost:8000, vs R2) — DONE, zero console errors
+- SA Yadav vs Spin: independent raw HS=47 (WITH per_innings…MAX), Matches=38,
+  Innings=38, Runs=454. App buildMatchupQuery row IDENTICAL: HS 47, Mat 38,
+  Runs 454, RPI 11.9, SR 140.99 → anchor 38/454/140.99 HOLDS.
+- Bumrah Best Bowling vs RHB: independent raw arg_max = "2-9" (rank 1991); app
+  best "2-9", best__sort 1991 — IDENTICAL. Matches 32.
+- Anchor Bumrah vs RHB striker pos 1,2 = 27 inns / 177 balls / 9 wkts HOLDS
+  (with the new columns selected; best "2-9", Mat 27).
+- Composition %s (Pace/Spin/Uncat) still sum to 100.00 (spot-checked 5 rows).
+- UI: all 4 metrics appear unchecked in the Vs picker (opt-in), toggle ON,
+  render far-right with right formats (Mat/HS int, RPI dec1, BBI "W-R").
+  HS sorts descending (86/79/77…); BBI sorts by rank (7-6,7-7,6-2,6-3,6-8…).
+- Condition picker: Matches + Runs/Innings ARE offered (real exprs, re-score
+  per decision 47b); High Score + Best Bowling are NOT (matchup-peak guard),
+  in BOTH batting-Vs and bowling-Vs modes.
+
+STATUS: COMPLETE.
