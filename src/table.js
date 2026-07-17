@@ -1553,13 +1553,14 @@ export function mountTable(
     load(frozen);
   }
 
-  /** R4 Wave 4a ADDENDUM (owner ruling): picking a player from the
-   * results-toolbar search — or clicking a pin pill's ×/+ (A4's soft-delete/
-   * undo) — drops their row into (or out of) the table INSTANTLY, unlike a
-   * FILTER pill (still PENDING). main.js calls this AFTER it has already (a)
-   * mutated state.pinnedPlayers on the live store and (b) advanced its OWN
-   * applied snapshot's pinnedPlayers to match, so the Search button's dirty
-   * comparison sees no change. This mirrors applyColumnsInstant: it requeries
+  /** R4 Wave 4a ADDENDUM (owner ruling 2026-07-17): *picking* a player from the
+   * results-toolbar search drops their row into the table INSTANTLY, unlike a
+   * FILTER pill AND unlike a pin pill's ×/+ (both still PENDING — a pill's
+   * soft-delete/undo only commits on Search). main.js calls this AFTER it has
+   * already (a) added the player to state.pinnedPlayers on the live store and
+   * (b) advanced its OWN applied snapshot's pinnedPlayers to match, so the
+   * Search button's dirty comparison sees no change. This mirrors
+   * applyColumnsInstant: it requeries
    * against the FROZEN applied SCOPE (lastLoadedState) with pinnedPlayers
    * swapped in — never the live/pending store's OTHER fields (dates/Vs/
    * filters/etc.), which must stay frozen until Search.

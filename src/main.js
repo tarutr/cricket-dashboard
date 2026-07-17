@@ -328,11 +328,14 @@ function triggerTableSearch(text, matches) {
 }
 
 /**
- * R4 Wave 4a ADDENDUM (owner ruling): a PIN's add/remove/restore is INSTANT —
- * unlike a FILTER pill (still PENDING, waits for Search), picking a player
- * drops their row into the table right now and must NOT light the Search
- * button. Called AFTER the caller (pinPlayer below, or a pin pill's ×/+ in
- * pills.js) has already mutated state.pinnedPlayers on the live store.
+ * R4 Wave 4a ADDENDUM (owner ruling 2026-07-17): *picking* a player from the
+ * results search is INSTANT — unlike a FILTER pill (PENDING, waits for Search)
+ * AND unlike a pill's ×/+ (also PENDING), picking drops the player's row into
+ * the table right now and must NOT light the Search button. Called by
+ * pinPlayer() below (the ONLY caller) AFTER it has added the player to
+ * state.pinnedPlayers on the live store. Removing/restoring a pin via its
+ * pill ×/+ is deliberately NOT routed here — that stays on the pending path
+ * (onFiltersChanged), committing on the next Search, same as approved 4a.
  *
  * Advances appliedState.pinnedPlayers to match the live store — so the
  * dirty comparison (serializeQueryState, which still includes pinnedPlayers)
@@ -412,23 +415,19 @@ function mountTableToolbarExtras({ searchInputEl, searchResultsEl, pillsHostEl }
   // control, pin add, pill ×/+) surfaces as a pill IMMEDIATELY, matching the
   // other pending toolbar controls.
   //
-  // The two callbacks now genuinely diverge again (ADDENDUM): a FILTER pill's
-  // ×/+ (onChange → onFiltersChanged) is still PENDING — it soft-deletes (A4:
+  // Every pill's ×/+ — FILTER and PIN alike — is PENDING: it soft-deletes (A4:
   // red outline + "+") and only takes effect on the table at the next Search.
-  // A PIN pill's ×/+ (onPinChange → onPinsChanged) is INSTANT — the row drops
-  // in/out of the table right now, no Search light — matching pinPlayer()'s
-  // own instant add. pills.js dispatches to whichever callback based on the
-  // pill's `pinned` flag.
+  // The ADDENDUM's INSTANT behaviour (owner ruling 2026-07-17) is scoped to
+  // *adding* a pin from the results search — pinPlayer() → onPinsChanged() —
+  // NOT to a pill's ×/+, so mountPills gets the single pending onChange.
   pillsController = mountPills(
     pillsHostEl,
     store,
     () => {
       onFiltersChanged();
-    },
-    () => {
-      onPinsChanged();
     }
-    // getState default: the live store, so pills reflect pending.
+    // onPinChange + getState default to onChange / the live store, so a pill's
+    // ×/+ is pending and the pills reflect pending edits.
   );
   pillsController.render();
 
