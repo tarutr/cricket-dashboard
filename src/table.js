@@ -97,6 +97,8 @@ function serializeQueryState(state) {
     positions: state.positions,
     regularPositions: state.regularPositions,
     opposition: state.opposition,
+    event: state.event,
+    venue: state.venue,
     matchupVs: state.matchupVs,
     pinnedPlayers: state.pinnedPlayers,
     search: state.search,
@@ -957,7 +959,11 @@ function compareRows(a, b, metric, dir) {
 
 // ── Table controller ─────────────────────────────────────────────────────────
 
-export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, onOpenFilters, onClear, onSkeletonReady } = {}) {
+export function mountTable(
+  container,
+  store,
+  { onPlayerClick, onOpenFilters, onClear, onSearch, onDateChange, getAppliedState, onSkeletonReady } = {}
+) {
   let lastRows = [];
   let loadToken = 0;
   // Snapshot (serializeQueryState) of the state that produced lastRows, or
@@ -1023,6 +1029,31 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
   let tbodyEl = null;
   let showMoreWrapEl = null;
   let showMoreBtnEl = null;
+  // R3.2 single-row toolbar: stable control nodes (built once in
+  // ensureSkeleton, wired once, kept in step by syncToolbar() rather than an
+  // innerHTML rebuild — the "everything waits for Search" model needs the
+  // controls to edit PENDING store state without moving the frozen table, and
+  // rebuilding them each render would drop focus/selection and the search box's
+  // typed text). Null while not in table mode.
+  let dateFromEl = null;
+  let dateToEl = null;
+  let presetSelectEl = null;
+  let vsWrapEl = null;
+  let vsSelectEl = null;
+  let countEl = null;
+  let searchBtnEl = null;
+  let columnsBtnEl = null;
+  let clearBtnEl = null;
+  let noteEl = null;
+  let bodyHintEl = null;
+  // Manifest date bounds (min/max "YYYY-MM-DD"), stashed via setDateBounds so a
+  // skeleton rebuild (Clear/error→Search) can re-apply them to the fresh date
+  // inputs. The toolbar dates bind the SAME state.dateFrom/dateTo as the popup's.
+  let dateBounds = { min: null, max: null };
+  // Which discipline the preset <select>'s option list was last built for — the
+  // batting/bowling preset vocabularies differ, so syncToolbar rebuilds the
+  // options only when the (pending) discipline actually changes.
+  let presetOptionsDiscipline = null;
   // Pagination (task 3, B1 Wave 5 polish): how many of the CURRENT lastRows
   // are actually painted into tbody. Reset to PAGE_SIZE on every fresh load()
   // and on every client-side re-sort (both are "a new view of the data, start
@@ -1031,11 +1062,6 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
   // already-expanded table doesn't collapse it again.
   const PAGE_SIZE = 50;
   let visibleRowCount = PAGE_SIZE;
-
-  function visibleColumns() {
-    const state = store.get();
-    return state.columns[state.discipline];
-  }
 
   /** Drop any visible phase column that's no longer valid for the current scope
    * (silent). Operates on the CURRENT effective namespace — the matchup_batting/
@@ -1070,23 +1096,20 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     }
   }
 
-  /** Build the persistent table-mode skeleton (toolbar + loading overlay +
-   * table shell) once and cache node references. A no-op if it already
-   * exists — repeated calls across a query cycle must never rebuild it,
-   * that's the whole point of this fix.
+  /** Build the persistent table-mode skeleton (single-row toolbar + loading
+   * overlay + table shell) once and cache node references. A no-op if it
+   * already exists.
    *
-   * F2: the toolbar now has a PERSISTENT left cluster (Filters button +
-   * compact table-search box) that `renderToolbar()` never touches —
-   * `toolbarEl` itself is repointed to `.table-toolbar__dynamic`, the child
-   * renderToolbar()'s innerHTML replacement actually owns (row count,
-   * presets, Vs, Graph/Columns/Clear — one row at desktop widths, R3 Wave 4).
-   * The search box needs a
-   * stable node across reloads (typed text + the omnisearch dropdown's own
-   * state would be destroyed by a wholesale rebuild), and a fresh pills host
-   * lives right below the toolbar, between it and the table-scroll (F2 task
-   * 5) — both are handed to main.js via onSkeletonReady the moment they
-   * exist, since main.js's mountOmnisearch/mountPills calls need real DOM
-   * nodes and this closure is the only thing that can hand them over. */
+   * R3.2 (owner "everything waits for Search"): the WHOLE toolbar is now a set
+   * of STABLE nodes built here once and kept in step by syncToolbar() — never
+   * innerHTML-rebuilt — because every control edits PENDING store state and the
+   * Search button lights dirty, all without moving the frozen table. Rebuilding
+   * on each render would drop focus/selection and the search box's typed text.
+   *
+   * Single row: LEFT [Filters · search · From–To · preset ▾ · [Vs|val ▾]] /
+   * RIGHT [count · SEARCH · Columns · Clear]. The old "Graph" button is gone —
+   * the page-header Stats↔Graphs toggle now carries the seed (main.js). The
+   * search box + pills host are handed to main.js via onSkeletonReady. */
   function ensureSkeleton() {
     if (toolbarEl) return;
     container.innerHTML = `
@@ -1097,26 +1120,58 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
             <input type="text" class="input" placeholder="Search players…" aria-label="Search players" autocomplete="off" role="combobox" aria-expanded="false" aria-autocomplete="list" data-role="table-search-input" />
             <div class="omnisearch__results" role="listbox" aria-label="Player search results" hidden data-role="table-search-results"></div>
           </div>
+          <div class="table-toolbar__dates" data-role="toolbar-dates">
+            <input type="date" class="input table-toolbar__date" data-role="toolbar-date-from" aria-label="From date" />
+            <span class="table-toolbar__date-sep">–</span>
+            <input type="date" class="input table-toolbar__date" data-role="toolbar-date-to" aria-label="To date" />
+          </div>
+          <select class="select table-toolbar__preset" data-role="preset-select" aria-label="Column preset"></select>
+          <div class="table-toolbar__vs" data-role="toolbar-vs">
+            <span class="table-toolbar__vs-label" aria-hidden="true">Vs</span>
+            <select class="select table-toolbar__vs-select" data-role="matchup-vs" aria-label="Matchup opponent"></select>
+          </div>
         </div>
-        <div class="table-toolbar__dynamic"></div>
+        <div class="table-toolbar__right">
+          <div class="table-toolbar__row-count" data-role="row-count"></div>
+          <button type="button" class="btn btn--primary table-toolbar__search-btn" data-role="toolbar-search" disabled>Search</button>
+          <button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>
+          <button type="button" class="btn btn--ghost table-toolbar__clear-btn" data-role="toolbar-clear-btn">Clear</button>
+        </div>
       </div>
+      <div class="table-toolbar__note" data-role="toolbar-note" hidden></div>
       <div class="table-pills-host" data-role="table-pills-host"></div>
       <div class="table-body-wrap" data-role="table-body-wrap">
         <div class="table-loading-overlay" aria-live="polite" hidden>Running query…</div>
         <div class="table-scroll"><table class="data-table"><thead></thead><tbody></tbody></table>
+          <p class="table-body-hint" data-role="table-body-hint" hidden>Set your filters, then press Search.</p>
           <div class="table-show-more" data-role="table-show-more" hidden>
             <button type="button" class="btn btn--ghost" data-role="show-more-btn"></button>
           </div>
         </div>
       </div>
     `;
-    toolbarEl = container.querySelector(".table-toolbar__dynamic");
+    // .table-toolbar__dynamic no longer exists; toolbarEl points at the whole
+    // toolbar (used only as a "skeleton exists" sentinel + a syncToolbar guard).
+    toolbarEl = container.querySelector(".table-toolbar");
     overlayEl = container.querySelector(".table-loading-overlay");
     scrollEl = container.querySelector(".table-scroll");
     theadEl = container.querySelector(".data-table thead");
     tbodyEl = container.querySelector(".data-table tbody");
     showMoreWrapEl = container.querySelector('[data-role="table-show-more"]');
     showMoreBtnEl = container.querySelector('[data-role="show-more-btn"]');
+    bodyHintEl = container.querySelector('[data-role="table-body-hint"]');
+    dateFromEl = container.querySelector('[data-role="toolbar-date-from"]');
+    dateToEl = container.querySelector('[data-role="toolbar-date-to"]');
+    presetSelectEl = container.querySelector('[data-role="preset-select"]');
+    vsWrapEl = container.querySelector('[data-role="toolbar-vs"]');
+    vsSelectEl = container.querySelector('[data-role="matchup-vs"]');
+    countEl = container.querySelector('[data-role="row-count"]');
+    searchBtnEl = container.querySelector('[data-role="toolbar-search"]');
+    columnsBtnEl = container.querySelector('[data-role="columns-btn"]');
+    clearBtnEl = container.querySelector('[data-role="toolbar-clear-btn"]');
+    noteEl = container.querySelector('[data-role="toolbar-note"]');
+    presetOptionsDiscipline = null; // force a fresh option build in syncToolbar
+
     if (showMoreBtnEl) {
       showMoreBtnEl.addEventListener("click", () => {
         // Reveal-all-at-once (task 3: "one click"), not another page. Pure
@@ -1126,12 +1181,84 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
       });
     }
 
-    // Filters button (F2): opens the same Filters popup as the empty-state
-    // prompt's own button below — bound once here since, unlike the
-    // presentation controls renderToolbar() rebuilds every render, this
-    // button's behaviour never changes across reloads.
-    const filtersBtn = container.querySelector('[data-role="toolbar-filters-btn"]');
-    if (filtersBtn) filtersBtn.addEventListener("click", () => { if (onOpenFilters) onOpenFilters(); });
+    // Filters button: opens the Filters popup. Bound once (its behaviour never
+    // changes across reloads).
+    if (toolbarEl) {
+      const filtersBtn = container.querySelector('[data-role="toolbar-filters-btn"]');
+      if (filtersBtn) filtersBtn.addEventListener("click", () => { if (onOpenFilters) onOpenFilters(); });
+    }
+
+    // Toolbar date inputs (R3.2): bind the SAME state.dateFrom/dateTo as the
+    // popup's — a PENDING edit (never a query). Apply the stashed manifest
+    // bounds, then let syncToolbar keep their values in step with the store.
+    if (dateFromEl && dateToEl) {
+      applyDateBounds();
+      const onDate = (el, key) => () => {
+        store.set({ [key]: el.value || null });
+        // onDateChange lets main.js re-sync the popup's own date inputs +
+        // preset label + date-required note; syncToolbar (via the store hook)
+        // refreshes this cluster + the Search button.
+        if (onDateChange) onDateChange();
+        syncToolbar();
+      };
+      dateFromEl.addEventListener("change", onDate(dateFromEl, "dateFrom"));
+      dateToEl.addEventListener("change", onDate(dateToEl, "dateTo"));
+    }
+
+    // Preset <select> (R3.2, item 5): the old preset chip row is now a plain
+    // native select. Changing it sets the discipline's column list (PENDING) —
+    // no query until Search. The option list is (re)built per-discipline by
+    // syncToolbar; this handler reads the store live so binding once is safe.
+    if (presetSelectEl) {
+      presetSelectEl.addEventListener("change", () => {
+        const s = store.get();
+        const def = COLUMN_PRESET_DEFS[s.discipline].find((d) => d.key === presetSelectEl.value);
+        const cols = def ? def.columns(s.formats) : null;
+        if (!cols) {
+          syncToolbar(); // revert the select to the real current preset/custom
+          return;
+        }
+        store.set({ columns: { ...s.columns, [s.discipline]: cols } });
+        syncToolbar();
+      });
+    }
+
+    // Bonded "Vs" control (R3.2, item 6): a fixed "Vs" prefix + a value select.
+    // Changing it sets state.matchupVs (PENDING) — synced with the popup's Vs
+    // condition via the shared store. buildMatchupQuery is untouched.
+    if (vsSelectEl) {
+      vsSelectEl.addEventListener("change", () => {
+        const raw = vsSelectEl.value;
+        if (!raw) {
+          store.set({ matchupVs: null });
+        } else {
+          const idx = raw.indexOf(":");
+          store.set({ matchupVs: { dim: raw.slice(0, idx), value: raw.slice(idx + 1) } });
+        }
+        syncToolbar();
+      });
+    }
+
+    if (columnsBtnEl) {
+      columnsBtnEl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openColumnsPopover(columnsBtnEl);
+      });
+    }
+
+    // SEARCH button (R3.2): replaces the old toolbar "Graph" button and is the
+    // ONE query trigger from the toolbar — main.js's runSearch commits pending
+    // → applied and loads. syncToolbar gates its enabled/dirty state.
+    if (searchBtnEl) {
+      searchBtnEl.addEventListener("click", () => {
+        if (searchBtnEl.disabled) return;
+        if (onSearch) onSearch();
+      });
+    }
+
+    if (clearBtnEl) {
+      clearBtnEl.addEventListener("click", () => { if (onClear) onClear(); });
+    }
 
     if (onSkeletonReady) {
       const searchHostEl = container.querySelector('[data-role="table-search-host"]');
@@ -1140,6 +1267,20 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         searchResultsEl: searchHostEl.querySelector('[data-role="table-search-results"]'),
         pillsHostEl: container.querySelector('[data-role="table-pills-host"]'),
       });
+    }
+
+    syncToolbar();
+  }
+
+  /** Apply the stashed manifest date bounds to the toolbar date inputs (called
+   * on build and whenever setDateBounds updates them). */
+  function applyDateBounds() {
+    if (!dateFromEl || !dateToEl) return;
+    for (const el of [dateFromEl, dateToEl]) {
+      if (dateBounds.min) el.min = dateBounds.min;
+      else el.removeAttribute("min");
+      if (dateBounds.max) el.max = dateBounds.max;
+      else el.removeAttribute("max");
     }
   }
 
@@ -1155,52 +1296,60 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     tbodyEl = null;
     showMoreWrapEl = null;
     showMoreBtnEl = null;
+    bodyHintEl = null;
+    dateFromEl = null;
+    dateToEl = null;
+    presetSelectEl = null;
+    vsWrapEl = null;
+    vsSelectEl = null;
+    countEl = null;
+    searchBtnEl = null;
+    columnsBtnEl = null;
+    clearBtnEl = null;
+    noteEl = null;
+    presetOptionsDiscipline = null;
   }
 
   /**
-   * Blank/prompt state (owner: no automated search — the table stays empty
-   * until the Filters popup's "Search" is clicked). Shown on first boot
-   * (nothing has ever loaded) and by main.js's clearAll() (owner: Clear wipes
-   * the table back to this prompt) — a plain filter change no longer reverts
-   * here (F1a): the table persists until the next Search replaces it or
-   * Clear empties it.
+   * First-load / empty state (R3.2, item 1): the toolbar is ALWAYS visible —
+   * we build the full skeleton and show an EMPTY table body below it, rather
+   * than the old "Set your filters → Open filters" prompt card. Shown on first
+   * boot (nothing has ever loaded) and by main.js's clearAll() (Clear returns
+   * to exactly this state). A plain filter change never reverts here (the
+   * no-automated-search rule): the table persists until the next Search
+   * replaces it or Clear empties it.
+   *
+   * The skeleton is torn down and rebuilt fresh here so the search box + pills
+   * re-mount empty (Clear must clear the typed search term too) — but it is
+   * rebuilt IMMEDIATELY, so the toolbar never disappears; syncToolbar() then
+   * applies the first-load gating (only Filters + search + dates active).
    */
   function renderPrompt() {
     // Invalidate any in-flight load: without this, a query started just before
     // the filters changed resolves AFTER the prompt renders and paints a stale
-    // (often 0-row) table over it — reproduced by removing two pills in quick
-    // succession; also the likely cause of the once-seen "leaderboard reset to
-    // empty after drawer close" from the 2026-07 design review.
+    // (often 0-row) table over it.
     loadToken++;
-    closeColumnsPopover(); // no columns-btn here either — same reasoning.
+    closeColumnsPopover();
     teardownSkeleton();
-    // F2: enterView() now unconditionally trusts lastLoadedState/lastRows
-    // whenever they're non-null (no more live-state comparison — see
-    // enterView()'s own doc comment below), so this is the ONE place that
-    // must actively forget a previous result set, the moment we go back to a
-    // genuine "nothing shown" state (first boot, or Clear). Without this, a
-    // Clear followed by a bare tab switch away and back would resurrect the
-    // pre-Clear table instead of this prompt — and hasResults() (read by
-    // graph.js's bridge to decide its own empty-state) would keep reporting
-    // "yes" straight through a Clear, letting Graphs silently seed itself
-    // from the just-reset default scope instead of honestly saying "run a
-    // search on Stats first."
+    // enterView() unconditionally trusts lastLoadedState/lastRows whenever
+    // they're non-null, so this is the ONE place that must actively forget a
+    // previous result set the moment we go back to a genuine "nothing shown"
+    // state (first boot, or Clear) — otherwise hasResults() would keep
+    // reporting "yes" straight through a Clear.
     lastRows = [];
     lastQueryStateKey = null;
     lastLoadedState = null;
     visibleRowCount = PAGE_SIZE;
-    nameExpanded = false; // (task 7) a Clear rebuilds the skeleton — drop expansion
-    container.innerHTML = `
-      <div class="table-prompt">
-        <p class="table-prompt__text">Set your filters, then search.</p>
-        <button type="button" class="btn btn--primary" data-role="open-filters">Open filters</button>
-      </div>
-    `;
-    // F1a: the empty-state button opens the Filters popup (main.js passes
-    // onOpenFilters) rather than running the query directly — the query now
-    // runs only from the popup's "Search" button.
-    const btn = container.querySelector('[data-role="open-filters"]');
-    if (btn) btn.addEventListener("click", () => { if (onOpenFilters) onOpenFilters(); });
+    nameExpanded = false; // a Clear rebuilds the skeleton — drop expansion
+    ensureSkeleton(); // builds the toolbar + empty body, wires + syncs it
+    // Empty body: no rows, and the subtle "Set your filters, then press Search"
+    // hint (syncToolbar shows it whenever there are no rows). Clear the thead so
+    // the empty table carries no stale headers.
+    if (theadEl) theadEl.innerHTML = "";
+    if (tbodyEl) tbodyEl.innerHTML = "";
+    if (showMoreWrapEl) showMoreWrapEl.hidden = true;
+    if (overlayEl) overlayEl.hidden = true;
+    syncToolbar();
   }
 
   /** Called when the table view is (re-)entered — clicking the Stats tab, or
@@ -1321,11 +1470,19 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
 
   /** Reorder `ns`'s column-key array: pull `fromKey` out and reinsert it
    * immediately before/after `overKey` (or at the end when `overKey` is
-   * null — dropped past the last draggable column). Pure array surgery over
-   * state.columns[ns]; never touches the query itself. */
+   * null — dropped past the last draggable column). Pure array surgery over the
+   * column order; never changes which columns show or the query result.
+   *
+   * R3.2: reorder is a purely-cosmetic view change of the SAME data, applied
+   * immediately (the drag would look broken otherwise). It updates BOTH the
+   * pending store (so a later Search persists the order, and the Search button
+   * lights dirty) AND the FROZEN snapshot's columns ONLY (a shallow clone of
+   * lastLoadedState with just its `columns` replaced) — never
+   * `lastLoadedState = store.get()`, which would fold every OTHER pending edit
+   * into the frozen table and misdraw it. */
   function reorderColumns(ns, fromKey, overKey, side) {
-    const state = store.get();
-    const cols = state.columns[ns].slice();
+    const base = lastLoadedState || store.get();
+    const cols = (base.columns[ns] || []).slice();
     const fromIdx = cols.indexOf(fromKey);
     if (fromIdx === -1) return;
     cols.splice(fromIdx, 1);
@@ -1338,13 +1495,14 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
       else if (side === "after") toIdx += 1;
     }
     cols.splice(toIdx, 0, fromKey);
-    store.set({ columns: { ...state.columns, [ns]: cols } });
-    // Keep enterView()'s snapshot in step with this view-only change, so a
-    // later tab-away/back shows the REORDERED columns, not whatever order was
-    // current as of the last actual load() (F2: lastLoadedState, not just
-    // lastQueryStateKey, since enterView() renders against the former now).
+    // Pending order (lights the Search button dirty via the store hook).
+    const live = store.get();
+    store.set({ columns: { ...live.columns, [ns]: cols } });
+    // Frozen snapshot: reorder ONLY its columns for this ns, leaving every
+    // other applied field untouched, so the displayed body reorders in place
+    // and enterView() keeps showing the reordered columns after a tab switch.
+    lastLoadedState = { ...lastLoadedState, columns: { ...lastLoadedState.columns, [ns]: cols } };
     lastQueryStateKey = serializeQueryState(store.get());
-    lastLoadedState = store.get();
   }
 
   function clearDragIndicators() {
@@ -1478,7 +1636,10 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
       th.classList.remove("data-table__th--dragging");
       if (dragging && dragState && dragState.key === key) {
         reorderColumns(ns, key, dragState.overKey, dragState.side);
-        renderLoaded(lastRows, store.get(), lastBowlingTypes);
+        // Re-render the FROZEN body from lastLoadedState (whose columns
+        // reorderColumns just updated) — never store.get(), which carries other
+        // pending edits that must not reach the displayed table until Search.
+        renderLoaded(lastRows, lastLoadedState ?? store.get(), lastBowlingTypes);
       }
       dragState = null;
       startX = null;
@@ -1511,181 +1672,129 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     });
   }
 
+  const setNeedsInput = (el, on) => { if (el) el.classList.toggle("needs-input", !!on); };
+
+  /** (Re)build the preset <select>'s option list for a discipline (batting and
+   * bowling have different preset vocabularies). A hidden, disabled "Custom"
+   * option is included so syncToolbar can display "Custom" whenever the current
+   * columns match no preset (or in matchup mode) — a native select must show
+   * one of its own options. */
+  function buildPresetOptions(discipline) {
+    const opts = [`<option value="__custom" hidden disabled>Custom</option>`];
+    for (const def of COLUMN_PRESET_DEFS[discipline]) {
+      opts.push(`<option value="${def.key}">${escHtml(def.label)}</option>`);
+    }
+    presetSelectEl.innerHTML = opts.join("");
+    presetOptionsDiscipline = discipline;
+  }
+
   /**
-   * Render the persistent toolbar's contents in place (row count, preset
-   * chips, "Vs" / Columns actions) and rebind its listeners. Called both
-   * mid-query (`rows: null` → "Loading…" row count, everything else still
-   * fully interactive-looking) and after a load resolves (`rows`: the result
-   * set) — same markup shape either way, so no control ever vanishes or
-   * changes position between the two states (Batch 1 mechanical fix:
-   * previously the whole toolbar was replaced by a bare "Loading…" div on
-   * every re-query).
+   * Keep the single-row toolbar's stable controls in step with state (R3.2).
+   * Called from the store-change hook (main.js) on EVERY pending edit and from
+   * renderLoaded after a Search resolves — never rebuilds the toolbar DOM, only
+   * updates values / enabled / dirty / count in place.
    *
-   * Column presets don't apply in matchup mode (no preset vocabulary there —
-   * only the restricted column picker applies), but they stay in their
-   * normal toolbar slot, just greyed out (disabled + title) instead of being
-   * removed — removing them (the old behavior) is what let the "Vs" control
-   * and the Columns button drift to different positions between modes,
-   * since removing an earlier sibling reflows everything after it.
-   *
-   * R3 Wave 4 (owner): consolidated to fit on ONE row at desktop widths
-   * (1280px) — row count, presets, Vs, then the flush-right Graph/Columns/
-   * Clear cluster; wraps gracefully on narrow viewports. The "Group rows"
-   * select (No grouping / Batting position / Opposition / Dismissal) that
-   * used to sit next to "Vs" is removed entirely — see the comment further
-   * down where its markup used to be built.
+   * The controls (dates, preset, Vs, columns btn, search box) reflect the LIVE
+   * (pending) store; the count + honesty note describe the APPLIED (frozen)
+   * table; the Search button lights dirty when pending ≠ applied AND the
+   * pending state is searchable (both dates set). First-load gating: until a
+   * Search has produced results, the preset / Vs / Columns / count are greyed —
+   * only Filters, the search box, and the dates are active.
    */
-  function renderToolbar(state, rows, bowlingTypes) {
-    const matchupOn = matchupVsActive(state);
-    const ns = effectiveDiscipline(state);
+  function syncToolbar() {
+    if (!toolbarEl) return;
+    const live = store.get();
+    const applied = getAppliedState ? getAppliedState() || live : live;
+    const results = hasResults();
+    const matchupOn = matchupVsActive(live);
+    const discipline = live.discipline;
 
-    // Position filters DO apply in both modes now (D4-R4) — only the honest
-    // stat-condition applicability note remains conditional.
-    const { total: condTotal, applied: condApplied } = conditionApplicability(state.advanced, ns);
-    const conditionNoteText =
-      condTotal > 0 && condApplied < condTotal ? `${condApplied} of ${condTotal} stat conditions apply here` : "";
-
-    // Column presets (R1): one-click sets; the active chip is the preset whose
-    // columns exactly match the current selection (none = no-preset/custom
-    // territory). Always rendered — greyed out in matchup mode rather than
-    // swapped for a note, so the toolbar's shape never changes between modes.
-    const currentPreset = matchupOn ? null : activePresetKey(state.discipline, state.formats, visibleColumns());
-    const presetChipsHTML = COLUMN_PRESET_DEFS[state.discipline]
-      .map((def) => {
-        const phaseAvailable = def.columns(state.formats) !== null;
-        const disabled = matchupOn || !phaseAvailable;
-        const title = matchupOn
-          ? ` title="Presets don't apply in matchup mode — column picker only"`
-          : phaseAvailable
-            ? ""
-            : ` title="Pick a single phase family (T20, or ODI/ODM) to use phase columns"`;
-        const active = !matchupOn && def.key === currentPreset;
-        return `<button type="button" class="chip chip--preset ${active ? "is-active" : ""}"
-          data-preset="${def.key}" ${disabled ? "disabled" : ""}${title}>${def.label}</button>`;
-      })
-      .join("");
-    const noteText = matchupOn
-      ? conditionNoteText
-        ? `Matchup mode, ${conditionNoteText}`
-        : "Matchup mode"
-      : conditionNoteText;
-    const noteHTML = noteText ? `<div class="table-toolbar__matchup-note">${noteText}</div>` : "";
-    const presetsBlockHTML = `<div class="table-toolbar__presets" role="group" aria-label="Column presets">${presetChipsHTML}</div>${noteHTML}`;
-
-    // "Group rows" UI control removed (R3 Wave 4, owner decision): the
-    // toolbar's row-grouping <select> (No grouping / Batting position /
-    // Opposition / Dismissal) and its wiring are gone. The underlying
-    // splitBy/SPLIT_DIMENSIONS/splitAllowed plumbing was removed in R4 Wave 3
-    // (it was dead — nothing set state.splitBy off its initial null).
-    const columnsBtnHTML = `<button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>`;
-
-    // "Graph" bridge button (Batch 3 part 2, decision 43; matchup mode enabled
-    // Batch 4 wave 2; relabeled "Turn into graph" -> "Graph" and grouped with
-    // Columns as the toolbar's right-most cluster, decision 44d; decision 46f:
-    // no longer force-renders anything — just navigates to Graphs, seeding its
-    // player pool from this exact table's current filters/sort/top-15, or —
-    // in matchup mode only — landing directly on the Dumbbell chart with the
-    // table's own Vs bucket as one side) — see graph.js's enterFromBridge().
-    // An unqueried/empty table has nothing to seed from, so that's the only
-    // state that still disables the button, with an honest title rather than
-    // removing it (same reasoning as the presets greying above — the
-    // toolbar's shape never changes between modes).
-    const noResultsForGraph = !rows || rows.length === 0;
-    const graphBtnDisabled = noResultsForGraph;
-    const graphBtnTitle = noResultsForGraph
-      ? "Show results first"
-      : matchupOn
-        ? "Seed the Graph Builder's Dumbbell chart from this Vs comparison"
-        : "Seed the Graph Builder from this table";
-    const turnIntoGraphBtnHTML = `<button type="button" class="btn btn--ghost" data-role="turn-into-graph" ${graphBtnDisabled ? "disabled" : ""} title="${escAttr(graphBtnTitle)}">Graph</button>`;
-
-    // "Vs" matchup select (D4 R3, decision 33): rendered for the Men's view
-    // only. F2 (owner ruling): the Women view shows NO matchup control at
-    // all — not even greyed — since matchup coverage there is ~0% (decision
-    // 21) and a disabled control with an explanatory title was judged more
-    // confusing than simply absent. UI-only: matchupVsActive() (state.js)
-    // already hard-gates on state.gender === "male", so a stale
-    // state.matchupVs value left over from a prior Men's session stays
-    // completely inert for women's queries regardless of whether this
-    // control is shown — buildMatchupQuery/buildScopeClauses are untouched.
-    const vsSelectHTML =
-      state.gender === "female"
-        ? ""
-        : `<label class="table-toolbar__group-label">Vs
-      <select class="select select--compact" data-role="matchup-vs" aria-label="Matchup opponent">${matchupVsOptionsHTML(state, bowlingTypes)}</select>
-    </label>`;
-
-    // Clear button (F2, red/danger-tinted): empties the table AND every
-    // filter/pin (main.js's clearAll()) — rightmost, right of Graph/Columns.
-    const clearBtnHTML = `<button type="button" class="btn btn--ghost table-toolbar__clear-btn" data-role="toolbar-clear-btn">Clear</button>`;
-
-    // Right-most cluster (decision 44d, +Clear in F2): Graph + Columns +
-    // Clear grouped together and pushed flush to the card's right edge via
-    // .table-toolbar__graph-columns (margin-left: auto in styles.css), in
-    // that order. Vs keeps its own left-packed cluster (R3 Wave 4: Group rows
-    // removed from it) so the two groups can wrap independently on narrow
-    // (~380px) viewports without losing the "flush right" placement of
-    // Graph/Columns/Clear.
-    toolbarEl.innerHTML = `
-      <div class="table-toolbar__row-count">${rowCountLabel(rows)}</div>
-      ${presetsBlockHTML}
-      <div class="table-toolbar__actions">
-        <div class="table-toolbar__controls">
-          ${vsSelectHTML}
-        </div>
-        <div class="table-toolbar__graph-columns">
-          ${turnIntoGraphBtnHTML}
-          ${columnsBtnHTML}
-          ${clearBtnHTML}
-        </div>
-      </div>
-    `;
-
-    toolbarEl.querySelectorAll(".chip--preset").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        if (btn.disabled) return;
-        const def = COLUMN_PRESET_DEFS[state.discipline].find((d) => d.key === btn.dataset.preset);
-        const cols = def ? def.columns(store.get().formats) : null;
-        if (!cols) return;
-        const s = store.get();
-        store.set({ columns: { ...s.columns, [s.discipline]: cols } });
-        load();
-      });
-    });
-
-    const vsSelect = toolbarEl.querySelector('[data-role="matchup-vs"]');
-    if (vsSelect) {
-      vsSelect.addEventListener("change", () => {
-        const raw = vsSelect.value;
-        if (!raw) {
-          store.set({ matchupVs: null });
-        } else {
-          const idx = raw.indexOf(":");
-          store.set({ matchupVs: { dim: raw.slice(0, idx), value: raw.slice(idx + 1) } });
-        }
-        load();
-      });
+    // Count — from the DISPLAYED (applied) rows; greyed until a search has run.
+    if (countEl) {
+      countEl.textContent = results ? rowCountLabel(lastRows) : "";
+      countEl.classList.toggle("is-disabled", !results);
     }
 
-    const columnsBtn = toolbarEl.querySelector('[data-role="columns-btn"]');
-    if (columnsBtn) {
-      columnsBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openColumnsPopover(columnsBtn);
-      });
+    // Dates (pending) — mirror the store; needs-input red outline when a player
+    // is picked (pin/search) but a date is still missing.
+    const playerPicked = (live.pinnedPlayers || []).length > 0 || Boolean(live.search && live.search.trim());
+    if (dateFromEl) {
+      dateFromEl.value = live.dateFrom || "";
+      setNeedsInput(dateFromEl, playerPicked && !live.dateFrom);
+    }
+    if (dateToEl) {
+      dateToEl.value = live.dateTo || "";
+      setNeedsInput(dateToEl, playerPicked && !live.dateTo);
     }
 
-    const turnIntoGraphBtn = toolbarEl.querySelector('[data-role="turn-into-graph"]');
-    if (turnIntoGraphBtn) {
-      turnIntoGraphBtn.addEventListener("click", () => {
-        if (turnIntoGraphBtn.disabled) return;
-        if (onTurnIntoGraph) onTurnIntoGraph();
-      });
+    // Preset dropdown (pending) — options per-discipline; Phases disabled when
+    // the format selection doesn't permit it; whole control greyed in matchup
+    // mode (presets don't apply there) or before the first search.
+    if (presetSelectEl) {
+      if (presetOptionsDiscipline !== discipline) buildPresetOptions(discipline);
+      for (const opt of presetSelectEl.options) {
+        if (opt.value === "__custom") continue;
+        const def = COLUMN_PRESET_DEFS[discipline].find((d) => d.key === opt.value);
+        opt.disabled = def ? def.columns(live.formats) === null : true;
+      }
+      const key = matchupOn ? null : activePresetKey(discipline, live.formats, live.columns[discipline]);
+      presetSelectEl.value = key || "__custom";
+      presetSelectEl.disabled = !results || matchupOn;
+      presetSelectEl.title = matchupOn ? "Presets don't apply in matchup (Vs) mode — use Columns" : "";
     }
 
-    const clearBtn = toolbarEl.querySelector('[data-role="toolbar-clear-btn"]');
-    if (clearBtn) {
-      clearBtn.addEventListener("click", () => { if (onClear) onClear(); });
+    // Bonded Vs (pending) — Men's view only (matchupVsActive hard-gates on male
+    // regardless; the control is simply absent for women, per decision 21).
+    if (vsWrapEl && vsSelectEl) {
+      if (live.gender === "female") {
+        vsWrapEl.hidden = true;
+      } else {
+        vsWrapEl.hidden = false;
+        vsSelectEl.innerHTML = matchupVsOptionsHTML(live, lastBowlingTypes);
+        vsSelectEl.disabled = !results;
+      }
+    }
+
+    if (columnsBtnEl) columnsBtnEl.disabled = !results;
+
+    // Search button — dirty iff pending ≠ applied; enabled iff dirty AND
+    // searchable (both dates present). Mirrors the graph's Update-chart button:
+    // accent-filled + enabled when there's something to apply, muted+disabled
+    // when the displayed table is already up to date.
+    if (searchBtnEl) {
+      const dirty = serializeQueryState(live) !== serializeQueryState(applied);
+      const searchable = Boolean(live.dateFrom && live.dateTo);
+      const active = dirty && searchable;
+      searchBtnEl.disabled = !active;
+      searchBtnEl.classList.toggle("is-dirty", active);
+    }
+
+    // Honesty note — describes the DISPLAYED (applied) table: matchup mode +
+    // any partial stat-condition applicability (§8.4). Hidden before a search.
+    if (noteEl) {
+      let noteText = "";
+      if (results) {
+        const appliedNs = effectiveDiscipline(applied);
+        const { total, applied: appliedCount } = conditionApplicability(applied.advanced, appliedNs);
+        const condNote = total > 0 && appliedCount < total ? `${appliedCount} of ${total} stat conditions apply here` : "";
+        const matchupApplied = matchupVsActive(applied);
+        noteText = matchupApplied ? (condNote ? `Matchup mode, ${condNote}` : "Matchup mode") : condNote;
+      }
+      noteEl.textContent = noteText;
+      noteEl.hidden = !noteText;
+    }
+
+    // Body hint (empty-state guidance inside the table area).
+    if (bodyHintEl) {
+      if (!results) {
+        bodyHintEl.textContent = "Set your filters, then press Search.";
+        bodyHintEl.hidden = false;
+      } else if (lastRows.length === 0) {
+        bodyHintEl.textContent = "No players match these filters.";
+        bodyHintEl.hidden = false;
+      } else {
+        bodyHintEl.hidden = true;
+      }
     }
   }
 
@@ -1704,7 +1813,12 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
   function renderLoadingState(state, bowlingTypes = lastBowlingTypes) {
     ensureSkeleton();
     overlayEl.hidden = false;
-    renderToolbar(state, null, bowlingTypes);
+    // The toolbar controls stay exactly as they are (pending values); only the
+    // row-count slot reads "Loading…" for the duration of the query. A full
+    // syncToolbar() would still be correct, but a targeted count update avoids
+    // any flicker on the other controls mid-query.
+    if (countEl) countEl.textContent = "Loading…";
+    if (bodyHintEl) bodyHintEl.hidden = true;
   }
 
   /** Set `--sticky-col-w` (styles.css) from the widest name in `names`, once
@@ -1804,11 +1918,14 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
       }
     }
 
-    renderToolbar(state, rows, bowlingTypes);
+    syncToolbar();
 
-    /** Commit a new sort key/direction, then re-sort + re-render the cached
-     * rows client-side (no requery — the result set is unchanged, only its
-     * order). Shared by the metric-header clicks and the Player-header sort. */
+    /** Commit a new sort key/direction to the PENDING store only (R3.2:
+     * everything waits for Search). The DISPLAYED table stays frozen — its rows
+     * keep the APPLIED sort and the header arrow does NOT move — until Search
+     * re-runs load(), which applies this pending sort. The change lights the
+     * Search button dirty via the store hook. Shared by the metric-header
+     * clicks and the Player-header sort. */
     function applySortKey(key) {
       const s = store.get();
       if (s.sort.key === key) {
@@ -1818,23 +1935,15 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
         const defaultDir = metric && metric.higherIsBetter === false ? "asc" : "desc";
         store.set({ sort: { key, dir: defaultDir } });
       }
-      const next = store.get();
-      lastRows = applySort(lastRows, next);
-      // View-only change, same reasoning as reorderColumns (F2): keep
-      // enterView()'s snapshot in step so a later tab-away/back shows this
-      // sort, not whichever one was current as of the last actual load().
-      lastQueryStateKey = serializeQueryState(next);
-      lastLoadedState = next;
-      // Task 3: a new sort order is "a new view of the data" — back to page 1.
-      visibleRowCount = PAGE_SIZE;
-      renderLoaded(lastRows, next, bowlingTypes);
+      // No client-side re-sort / re-render here anymore — pending until Search.
+      syncToolbar();
     }
 
-    // Sorting: click header to sort/flip. The sort-state class (is-sorted /
-    // arrow) is recomputed from `state` on every renderLoaded call, so it
-    // survives this persistent-skeleton refactor the same way it always did.
-    // The sticky Player header is EXCLUDED here (task 6/7) — it needs its own
-    // single-click-sort vs double-click-expand handling, wired just below.
+    // Sorting: click header to set the PENDING sort (applied on Search). The
+    // sort-state class (is-sorted / arrow) reflects the FROZEN `state` and is
+    // recomputed on every renderLoaded, so it stays on the applied sort until
+    // the next Search. The sticky Player header is EXCLUDED here (task 6/7) —
+    // it needs its own single-click-sort vs double-click-expand handling.
     theadEl.querySelectorAll(".data-table__th[data-key]:not(.data-table__th--sticky)").forEach((th) => {
       th.addEventListener("click", () => applySortKey(th.dataset.key));
     });
@@ -2054,11 +2163,10 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
           if (idx >= 0) cols.splice(idx, 1);
         }
         store.set({ columns: { ...s.columns, [curNs]: cols } });
-        // Reloads the table; refreshOpenColumnsPopover() (called at the end
-        // of load(), once the new container DOM exists) keeps THIS popover
-        // alive, repositioned, and re-synced instead of it vanishing with
-        // the old container.innerHTML.
-        load();
+        // R3.2: PENDING column change — the checkbox already reflects the pick
+        // and the frozen table doesn't move until Search. syncToolbar() lights
+        // the Search button dirty; the popover (on document.body) stays open.
+        syncToolbar();
       });
     });
 
@@ -2085,7 +2193,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
           });
         }
         store.set({ columns: { ...s.columns, [curNs]: cols } });
-        load();
+        syncToolbar();
       });
     });
 
@@ -2113,7 +2221,7 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
           cols.push(showPct ? pctKey : countKey);
         }
         store.set({ columns: { ...s.columns, [curNs]: cols } });
-        load();
+        syncToolbar();
       });
     }
 
@@ -2250,5 +2358,15 @@ export function mountTable(container, store, { onPlayerClick, onTurnIntoGraph, o
     return lastQueryStateKey !== null;
   }
 
-  return { load, showPrompt: renderPrompt, enterView, hasResults };
+  /** Stash the manifest date bounds ("YYYY-MM-DD") for the toolbar date inputs
+   * and apply them to the current inputs (a skeleton rebuild re-applies via
+   * ensureSkeleton). Mirrors filters.js's own setDateBounds for the popup
+   * inputs — both sets bind the same state.dateFrom/dateTo. */
+  function setDateBounds(minD, maxD) {
+    dateBounds = { min: minD || null, max: maxD || null };
+    applyDateBounds();
+    syncToolbar();
+  }
+
+  return { load, showPrompt: renderPrompt, enterView, hasResults, syncToolbar, setDateBounds };
 }

@@ -34,7 +34,7 @@ import {
   effectiveNamespace,
   eligibleMetrics,
 } from "./state.js";
-import { getMetric } from "./metrics.js";
+import { getMetric, matchupBucketLabel } from "./metrics.js";
 import {
   OPERATORS,
   activeConditionCount,
@@ -89,6 +89,11 @@ const SINGLETON_TYPES = [
   { key: "hand", label: "Batting hand", group: "Player", menOnly: true },
   { key: "bowling", label: "Bowling style", group: "Player", menOnly: true },
   { key: "role", label: "Role", group: "Player", menOnly: true },
+  // "Vs" (R3.2): the matchup opponent selector, mirroring the toolbar's bonded
+  // Vs control — both edit state.matchupVs, synced via the shared store. Injected
+  // into the Basic-metrics dropdown group right after "Innings" (see basicOpts).
+  // Men-only (matchupVsActive hard-gates on male; coverage is ~0% for women).
+  { key: "vs", label: "Vs", group: "Basic", menOnly: true },
   { key: "rpos", label: "R. Pos.", group: "Basic", menOnly: false },
   { key: "event", label: "Event", group: "Match", menOnly: false },
   { key: "venue", label: "Venue", group: "Match", menOnly: false },
@@ -178,6 +183,74 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   const handEl = editorHosts.hand.querySelector('[data-role="prof-hand"]');
   editorHosts.bowling.innerHTML = `<select class="select" data-role="prof-bowling" aria-label="Bowling style"></select>`;
   const bowlingEl = editorHosts.bowling.querySelector('[data-role="prof-bowling"]');
+
+  // ── "Vs" matchup editor (R3.2) ──────────────────────────────────────────────
+  // Mirrors the results-toolbar's bonded Vs control — both edit state.matchupVs,
+  // kept in sync purely through the shared store (a change here calls onChange →
+  // main.js re-syncs the toolbar; a toolbar change re-syncs this via sync()).
+  // buildMatchupQuery is untouched. Options depend on discipline (batting →
+  // pace/spin group + fine bowling types; bowling → batting hand) and match the
+  // toolbar's set — the fine bowling types come from the SAME matchup_batting
+  // distinct-values query, so any value set on either side displays on the other.
+  editorHosts.vs.innerHTML = `<select class="select" data-role="cond-vs" aria-label="Matchup opponent"></select>`;
+  const vsEl = editorHosts.vs.querySelector('[data-role="cond-vs"]');
+  let vsBowlingTypes = null; // fetched once; null until loaded (Vs disabled/coarse-only until then)
+  async function loadVsBowlingTypes() {
+    if (vsBowlingTypes) return vsBowlingTypes;
+    try {
+      const { rows } = await query(
+        `SELECT DISTINCT bowling_type AS v FROM matchup_batting WHERE bowling_type <> '(unmapped)'`
+      );
+      const vals = rows.map((r) => r.v);
+      // Same ordering intent as the toolbar's orderBowlingTypes: named fine
+      // styles first, then any unlisted style alphabetically, then the bare
+      // Pace/Spin buckets last (they read as "…(unspecified)" via matchupBucketLabel).
+      const set = new Set(vals);
+      const known = BOWLING_TYPE_ORDER.filter((v) => set.has(v));
+      const knownSet = new Set(known);
+      const buckets = ["Pace", "Spin"].filter((v) => set.has(v));
+      const bucketSet = new Set(buckets);
+      const rest = vals.filter((v) => !knownSet.has(v) && !bucketSet.has(v)).sort();
+      vsBowlingTypes = [...known, ...rest, ...buckets];
+    } catch (e) {
+      vsBowlingTypes = null; // leave null so a later render retries
+      return [];
+    }
+    return vsBowlingTypes;
+  }
+  vsEl.addEventListener("change", () => {
+    const raw = vsEl.value;
+    if (!raw) {
+      store.set({ matchupVs: null });
+    } else {
+      const i = raw.indexOf(":");
+      store.set({ matchupVs: { dim: raw.slice(0, i), value: raw.slice(i + 1) } });
+    }
+    onChange();
+  });
+  function renderVsEditor() {
+    const s = store.get();
+    // Fetch the fine bowling types on demand for the batting view; re-render
+    // once they arrive so a fine "type:…" value shows selected rather than
+    // falling back to "Everyone".
+    if (s.discipline === "batting" && !vsBowlingTypes) {
+      loadVsBowlingTypes().then(() => renderVsEditor());
+    }
+    const current = matchupVsActive(s) ? `${s.matchupVs.dim}:${s.matchupVs.value}` : "";
+    const opt = (value, label) =>
+      `<option value="${escAttr(value)}" ${value === current ? "selected" : ""}>${escHtml(label)}</option>`;
+    if (s.discipline === "batting") {
+      const typeOpts = (vsBowlingTypes || []).map((t) => opt(`type:${t}`, matchupBucketLabel(t))).join("");
+      vsEl.innerHTML = `${opt("", "Everyone")}
+        <optgroup label="Pace / spin">${opt("group:Pace", "Pace")}${opt("group:Spin", "Spin")}</optgroup>
+        <optgroup label="Bowling type">${typeOpts}</optgroup>`;
+    } else {
+      vsEl.innerHTML = `${opt("", "Everyone")}${opt("hand:Right-hand bat", "Right-handers")}${opt(
+        "hand:Left-hand bat",
+        "Left-handers"
+      )}`;
+    }
+  }
 
   function renderProfileEditors() {
     const p = store.get().profile;
@@ -291,6 +364,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       case "role": return Boolean(s.profile.roleGroup);
       case "hand": return Boolean(s.profile.battingHand);
       case "bowling": return Boolean(s.profile.bowlingType);
+      case "vs": return matchupVsActive(s); // present iff a Vs bucket applies to the current discipline
       case "rpos": return (s.regularPositions || []).length > 0 || (s.positions || []).length > 0;
       case "team": return (s.teams || []).length > 0;
       case "opposition": return (s.opposition || []).length > 0;
@@ -310,6 +384,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       case "role": setProfile({ roleGroup: null, roleSub: null }); break;
       case "hand": setProfile({ battingHand: null }); break;
       case "bowling": setProfile({ bowlingType: null }); break;
+      case "vs": store.set({ matchupVs: null }); break;
       case "rpos": store.set({ regularPositions: [], positions: [] }); break;
       case "team": store.set({ teams: [] }); break;
       case "opposition": store.set({ opposition: [] }); break;
@@ -394,16 +469,24 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     const basicOpts = () => {
       const rposEligible = s.discipline === "batting" || matchupVsActive(s);
       const rposOpt = rposEligible ? singletonOpt("rpos") : "";
+      // "Vs" (R3.2): injected right AFTER Innings, before R. Pos. Available in
+      // both disciplines (batting → pace/spin/type; bowling → hand); singletonOpt
+      // returns "" for women (menOnly) and disables it once the row is present.
+      const vsOpt = singletonOpt("vs");
       const parts = [];
       let injected = false;
       for (const m of basic) {
         parts.push(metricOpt(m));
         if (m.key === "innings") {
+          parts.push(vsOpt);
           parts.push(rposOpt);
           injected = true;
         }
       }
-      if (!injected) parts.push(rposOpt); // no Innings option (edge) — append
+      if (!injected) { // no Innings option (edge) — append
+        parts.push(vsOpt);
+        parts.push(rposOpt);
+      }
       return parts.join("");
     };
     const dismissalOpts = dismissal.map((m) => metricOpt(m, stripOutPrefix(m.label))).join("");
@@ -425,6 +508,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     // R. Pos. row label reflects which control is live (plain vs matchup).
     typeLabelEls.rpos.textContent = matchupVsActive(s) ? "Batting position" : "R. Pos.";
 
+    renderVsEditor();
     regularPositionController.sync();
     matchupPositionController.sync();
     teamController.sync();

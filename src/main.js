@@ -14,7 +14,6 @@ import { mountOmnisearch } from "./omnisearch.js";
 import { mountPlayerPopup } from "./playerPopup.js";
 import { getMetric } from "./metrics.js";
 import { mountGraph } from "./graph/graph.js";
-import { showToast } from "./toast.js";
 
 const DEFAULT_SORT_KEY = { batting: "runs", bowling: "wickets" };
 
@@ -158,10 +157,15 @@ export function clearAll({ returnToTable = true } = {}) {
     filterController.setDateBounds(minDate, maxDate); // re-applies input bounds; inputs re-sync to the (now empty) date
   }
   if (drawerController) drawerController.sync();
+  // R3.2: Clear resets the APPLIED baseline too (after setDateBounds fills the
+  // default end date), so the toolbar's Search button returns to at-rest
+  // (pending === applied) and the first-load gating re-applies.
+  appliedState = snapshotAppliedState();
   if (pillsController) pillsController.render();
   updateDrawerBadge();
-  // Forget the cached result set and reset the table to its initial prompt.
-  // Only switch back to the table view when this was the Stats-side Clear.
+  // Forget the cached result set and reset the table to its first-load empty
+  // state (toolbar visible, empty body). Only switch back to the table view
+  // when this was the Stats-side Clear.
   if (returnToTable) showTableView();
   tableController.showPrompt();
 }
@@ -254,17 +258,14 @@ function applyView() {
 }
 
 /**
- * `requery` (task 3b, owner decision 46): pinning/unpinning a player is
- * explicitly NOT a plain filter change — the owner's ruling is "removing one
- * un-pins and re-queries" (and, symmetrically, adding one shows immediately,
- * same as the omnisearch "Filter the table" action already does). Every other
- * caller of this function is a plain filter change and keeps the default: the
- * table PERSISTS as-is (F1a — no more revert-to-blank-prompt), re-querying only
- * on the popup's "Search". Returns the table branch's promise
- * (tableController.load() or a resolved null) so a pin-add can chain off its
- * resolved {rowCount, missingPinnedIds} to detect a pin with no innings in scope.
+ * R3.2 ("everything waits for Search"): any filter/control change — popup
+ * filters, pill ×, pins, player search — is a PENDING edit. This refreshes the
+ * derived views (pills/badge from the frozen applied snapshot, the popup while
+ * open) and lights the toolbar Search button dirty via syncToolbar(), but NEVER
+ * re-queries the Stats table (only runSearch() does). Graph view still follows
+ * scope live via onScopeChanged. Returns a resolved promise for legacy callers.
  */
-function onFiltersChanged({ requery = false } = {}) {
+function onFiltersChanged() {
   // Drop columns/conditions orphaned by the new scope BEFORE anything renders,
   // so the drawer, badge, pills, and query all agree (§8.4 honesty).
   pruneIneligibleState(store);
@@ -275,16 +276,16 @@ function onFiltersChanged({ requery = false } = {}) {
   if (drawerController && filtersPopup && filtersPopup.isOpen()) drawerController.sync();
   if (pillsController) pillsController.render();
   updateDrawerBadge();
-  // NEW INTERACTION MODEL (F1a): touching a control NEVER blanks the table — in
-  // table view the table persists as-is. The query re-runs ONLY via the popup's
-  // "Search" (runSearch), the pin add/remove `requery` path below, and toolbar
-  // presentation controls (which bypass this function). Graph view still
+  // R3.2 ("everything waits for Search"): touching ANY control NEVER moves the
+  // Stats table — it's a frozen snapshot until the next Search commits pending
+  // → applied. So there is no requery path here anymore; the table re-runs ONLY
+  // via runSearch() (the popup's or the toolbar's Search button). syncToolbar()
+  // keeps the toolbar controls + the Search dirty cue in step. Graph view still
   // follows scope changes live.
+  if (tableController) tableController.syncToolbar();
   if (store.get().view === "graph") {
     graphController.onScopeChanged();
-    return Promise.resolve(null);
   }
-  if (requery) return tableController.load();
   return Promise.resolve(null);
 }
 
@@ -313,23 +314,16 @@ function onFiltersChanged({ requery = false } = {}) {
  * stays silent, same as before.
  */
 function triggerTableSearch(text, matches) {
+  // R3.2 ("everything waits for Search"): the "Filter the table to names
+  // matching…" action is PENDING now — it sets state.search (a "Name: X" pill
+  // appears on the next Search) and lights the Search button dirty via
+  // onFiltersChanged → syncToolbar. The old immediate requery + "excluded by
+  // your filters" toast depended on running the query here; that feedback now
+  // comes from the Search result itself. `matches` is accepted for signature
+  // compatibility with the header-search path but no longer consulted.
+  void matches;
   store.set({ search: text });
   onFiltersChanged();
-  if (store.get().view === "table") {
-    tableController.load().then((result) => {
-      const rowCount = result ? result.rowCount : null;
-      if (rowCount === 0 && matches && matches.length > 0) {
-        // Judgment call: a single unambiguous match names the player; more
-        // than one (a common surname etc.) falls back to the search text
-        // rather than guessing which of several real players the user meant.
-        const message =
-          matches.length === 1
-            ? `No table rows match — ${matches[0].name}'s stats may be excluded by your current filters.`
-            : `No table rows match — players matching "${text}" may be excluded by your current filters.`;
-        showToast(message);
-      }
-    });
-  }
 }
 
 /**
@@ -356,14 +350,13 @@ function pinPlayer(id, name) {
   const state = store.get();
   if ((state.pinnedPlayers || []).some((p) => p.id === id)) return; // already pinned
   store.set({ pinnedPlayers: [...(state.pinnedPlayers || []), { id, name }] });
-  onFiltersChanged({ requery: true }).then((result) => {
-    const missing = result && result.missingPinnedIds ? result.missingPinnedIds : [];
-    if (missing.includes(id)) {
-      store.set({ pinnedPlayers: (store.get().pinnedPlayers || []).filter((p) => p.id !== id) });
-      if (pillsController) pillsController.render();
-      showToast(`${name} has no innings in this scope.`);
-    }
-  });
+  // R3.2 ("everything waits for Search"): pinning is PENDING now — it lights the
+  // Search button dirty (via onFiltersChanged → syncToolbar); the pin applies
+  // and its "+ name" pill appears on the next Search. The old immediate requery
+  // + "no innings in this scope" rollback ran only because pins used to apply
+  // instantly; at Search time a pin with no innings in the core scope simply
+  // produces no row, which load()'s own missingPinnedIds path still reports.
+  onFiltersChanged();
 }
 
 /**
@@ -393,29 +386,21 @@ function triggerHeaderFilterTable(text, matches) {
  * nodes and their listeners are simply left behind for GC).
  */
 function mountTableToolbarExtras({ searchInputEl, searchResultsEl, pillsHostEl }) {
-  // R3 Wave 2 (item 7b): removing ANY pill re-queries immediately. A pill is a
-  // direct edit of the ALREADY-searched result set — not a Filters-popup control
-  // that waits for "Search" — so the table must reflect the remaining conditions
-  // at once (removing an over-constraining pill is how the user recovers results
-  // from a 0-row set). This previously split into two callbacks: the general
-  // (non-pin) path called onFiltersChanged() with NO requery, which under the
-  // F1a "persist the table as-is" rule left the table showing the pre-removal
-  // rows — or stuck at 0 — while the pill row and scope sentence already said
-  // otherwise; only pin removal (onPinChange) re-queried. Both paths now
-  // requery, so a single callback covers both (mountPills defaults onPinChange
-  // to onChange). The query builders are untouched — for a given state the SQL
-  // is byte-identical; only WHEN load() runs changed.
+  // R3.2 ("everything waits for Search"): removing a pill is a PENDING edit like
+  // every other control now — it mutates the live store and lights the Search
+  // button dirty (via onFiltersChanged → syncToolbar), but does NOT requery. The
+  // pills row itself renders from the APPLIED snapshot (getState below), so the
+  // removed filter stays visible on the frozen table until the next Search
+  // commits it. (Flagged to the owner: a pill × is no longer an instant remove.)
   pillsController = mountPills(
     pillsHostEl,
     store,
     () => {
-      onFiltersChanged({ requery: true });
+      onFiltersChanged();
     },
     undefined,
-    // item 4: pills DISPLAY the applied snapshot, not the live store, so a
-    // pending popup edit never shows as a pill before Search. Removal handlers
-    // still mutate the live store (see pills.js) — applied === live whenever the
-    // pills are visible (popup closed), so the two never disagree at click time.
+    // pills DISPLAY the applied snapshot, not the live store, so a pending edit
+    // (popup filter, toolbar control, pill ×) never surfaces before Search.
     () => appliedState || store.get()
   );
   pillsController.render();
@@ -446,7 +431,10 @@ function boot() {
       const initial = store.get();
       lastAppliedDefaults.batting = [...initial.columns.batting];
       lastAppliedDefaults.bowling = [...initial.columns.bowling];
-      appliedState = snapshotAppliedState(); // item 4: nothing applied yet — pills/badge start empty
+      // R3.2: appliedState is snapshotted AFTER setDateBounds (below) so the
+      // default end date it fills is part of the applied baseline — otherwise
+      // the toolbar's Search button would read "dirty" from boot on a date the
+      // user never touched. (setDateBounds needs filterController, mounted next.)
 
       initStatusEl.innerHTML = "";
       appContentEl.hidden = false;
@@ -483,6 +471,10 @@ function boot() {
         }
       );
       filterController.setDateBounds(minDate, maxDate);
+      // Now that setDateBounds has filled the default end date, snapshot the
+      // applied baseline — pills/badge start empty and the toolbar Search button
+      // starts at-rest (pending === applied).
+      appliedState = snapshotAppliedState();
 
       // Filters content: the ONE grouped condition builder (owner 1B-2) mounts
       // into the Advanced Filters section host. onChange refreshes pills/subtitle
@@ -540,28 +532,36 @@ function boot() {
         drawerController.onHide();
       }
       function runSearch() {
-        // The ONE query trigger from the popup. Date is REQUIRED (owner 1B-2):
-        // block first and surface the inline message in Search Conditions if it
-        // isn't set; then validate the advanced numeric conditions. Only when
-        // both pass do we close and (in table view) load. Graphs already follow
-        // scope changes live via onFiltersChanged → onScopeChanged.
+        // The ONE query trigger (R3.2: shared by BOTH the popup's "Search"
+        // button AND the toolbar's SEARCH button). Date is REQUIRED (owner
+        // 1B-2): block first and surface the message; then validate the advanced
+        // numeric conditions. When called from the toolbar the popup may be
+        // closed, so on a validation failure we OPEN it (if needed) and re-run
+        // the failed validator so its inline error shows after onShow's reset.
         if (!filterController.validateDate()) {
+          if (!filtersPopup.isOpen()) filtersPopup.open();
+          filterController.validateDate();
           fpopSetSection("fpop-body-conditions", true); // expand + show the date-required note
           return;
         }
         if (!drawerController.validate()) {
+          if (!filtersPopup.isOpen()) filtersPopup.open();
+          drawerController.validate();
           fpopSetSection("fpop-body-advanced", true); // surface the inline error
           return;
         }
         closePopup();
-        // item 4: Search is the moment the popup's pending edits BECOME applied.
-        // Commit the snapshot and refresh the pills + badge from it (closePopup
-        // itself never queries), then load the table. In graph view there's no
-        // table load — the graph already follows scope live — but committing the
-        // snapshot keeps the pills/badge correct for a later switch back to Stats.
+        // R3.2: Search is the moment ALL pending edits (popup filters AND the
+        // toolbar controls — dates, Vs, preset, columns, sort, player search /
+        // pins) BECOME applied. Commit the snapshot and refresh the pills +
+        // badge + toolbar from it (closePopup itself never queries), then load
+        // the table. In graph view there's no table load — the graph already
+        // follows scope live — but committing the snapshot keeps the pills/badge
+        // correct for a later switch back to Stats.
         appliedState = snapshotAppliedState();
         if (pillsController) pillsController.render();
         updateDrawerBadge();
+        if (tableController) tableController.syncToolbar(); // clear the dirty cue now
         if (store.get().view === "table") tableController.load();
       }
 
@@ -581,30 +581,26 @@ function boot() {
       // every other use of it in this file already guards with
       // `if (pillsController)` for exactly that reason.
 
-      // Presentation controls in the table toolbar (presets, Vs) set state and
-      // reload directly without onFiltersChanged — keep pills and the badge in
-      // step with EVERY state change (e.g. entering matchup mode makes the
-      // position filter inert, so its pill and badge count must drop
-      // immediately).
+      // R3.2 ("everything waits for Search"): appliedState now advances ONLY in
+      // runSearch() (commit) and clearAll() (reset) — never here. EVERY store
+      // mutation is a PENDING edit (toolbar controls, popup, pills ×, pins,
+      // player search): it must NOT move the frozen table/pills/badge before
+      // Search. This hook just keeps every derived view honest against the
+      // (still-frozen) applied snapshot and lights the toolbar's Search button
+      // dirty via syncToolbar(). The graph has its own scope path (onScopeChanged).
       store.subscribe(() => {
-        // R7 Wave B (item 4): advance the applied snapshot ONLY for changes that
-        // apply immediately — i.e. while the Filters popup is CLOSED (toolbar Vs/
-        // presets, pin add/remove, pill removal, omnisearch "filter the table").
-        // While the popup is OPEN every store mutation is a PENDING edit that
-        // must not touch the table area until Search, so the snapshot (and thus
-        // the pills + badge, which render from it) stays frozen. The graph has
-        // its own local scope store, so its popup edits never reach this hook.
-        if (!(filtersPopup && filtersPopup.isOpen())) appliedState = snapshotAppliedState();
+        // Pills + badge render from appliedState (frozen) — a pending edit never
+        // surfaces there before Search.
         if (pillsController) pillsController.render();
         updateDrawerBadge();
-        // The popup's filter content too: toolbar presentation controls (Vs,
-        // presets) bypass onFiltersChanged, but the position-chip enablement
-        // and condition-builder vocabulary depend on the Vs selection. sync()
-        // is scope-key-cached (option refetches no-op unless scope moved), but
-        // is gated to the popup being VISIBLE (Batch 3 fix 2): syncing hidden
-        // content is wasted work, and syncing while open used to rebuild the
-        // advanced panel's innerHTML on each keystroke, destroying the input
-        // being typed into. onShow() syncs directly on open.
+        // Toolbar (dates, preset, Vs, columns-enabled, count, Search dirty):
+        // re-sync from the live (pending) store on every change. No-op unless the
+        // table skeleton exists.
+        if (tableController) tableController.syncToolbar();
+        // The popup's filter content: its condition-builder vocabulary + Vs
+        // position-chip enablement depend on the Vs selection, so re-sync while
+        // the popup is VISIBLE (Batch 3 fix 2: syncing hidden content is wasted
+        // work, and syncing while open rebuilds innerHTML — kept gated).
         if (drawerController && filtersPopup && filtersPopup.isOpen()) drawerController.sync();
       });
 
@@ -656,32 +652,38 @@ function boot() {
 
       tableController = mountTable(tableAreaEl, store, {
         onPlayerClick: (id, name) => playerPopupController.open(id, name),
-        // "Graph" toolbar button (decision 46f): navigates to Graphs exactly
-        // like clicking the tab — graph.js's enterFromBridge() picks no chart
-        // type and renders nothing by itself, EXCEPT when the table is in
-        // matchup "Vs" mode, where it lands directly on Dumbbell (the one
-        // chart type that understands matchup vocabulary) seeded from THIS
-        // table's current sort column as the preferred metric.
-        onTurnIntoGraph: () => {
-          const sortKey = store.get().sort.key;
-          store.set({ view: "graph" });
-          showGraphView();
-          graphController.enterFromBridge({ preferredMetricKey: sortKey });
+        // R3.2: the toolbar SEARCH button (which REPLACED the old "Graph"
+        // button) is the toolbar's query trigger — the exact same runSearch()
+        // the popup's Search uses (commit pending → applied, then load). The
+        // Stats↔Graphs top-strip toggle now carries the "turn into graph" seed
+        // instead (see the view-toggle handler below).
+        onSearch: () => runSearch(),
+        // R3.2: a toolbar date edit re-syncs the popup's own date inputs +
+        // preset label + date-required note (both sets bind state.dateFrom/To);
+        // syncToolbar (via the store hook) refreshes the toolbar side.
+        onDateChange: () => {
+          filterController.render();
+          filterController.validateDate();
         },
-        // F1a: the empty-state prompt's "Open filters" button opens the Filters
-        // popup (the query then runs from the popup's "Search").
+        // R3.2: the toolbar's Search dirty cue = pending (live store) ≠ applied
+        // snapshot. table.js computes it via this accessor.
+        getAppliedState: () => appliedState,
+        // The empty-state prompt's "Open filters" button + the toolbar Filters
+        // button open the Filters popup (the query runs from Search).
         onOpenFilters: () => openFiltersPopup(),
-        // F2: the toolbar's red "Clear" button — the same full reset as
-        // everywhere else clearAll() is wired.
+        // The toolbar's red "Clear" button — the same full reset as everywhere
+        // else clearAll() is wired.
         onClear: () => clearAll(),
-        // F2: table.js's persistent toolbar (Filters button/search box/pills
-        // host) only exists once its skeleton is built — the first Search of
-        // a session, and again after Clear or a query error tears the
-        // previous one down and a later Search rebuilds it. This fires every
-        // time that happens so the pills row and the relocated table-search
-        // box get (re-)wired onto the fresh nodes.
+        // table.js's persistent toolbar (search box/pills host) exists once its
+        // skeleton is built — on FIRST LOAD now (R3.2: the toolbar is always
+        // visible), and again after Clear/a query error rebuilds it. This fires
+        // each time so the pills row + table-search box get (re-)wired.
         onSkeletonReady: (nodes) => mountTableToolbarExtras(nodes),
       });
+      // R3.2: the toolbar's From–To date inputs get the same manifest bounds the
+      // popup's do (both bind state.dateFrom/dateTo). Applied here + re-applied
+      // by ensureSkeleton on each rebuild.
+      tableController.setDateBounds(minDate, maxDate);
       playerPopupController = mountPlayerPopup(playerPopupHostEl, store, {
         // "Graph this player" (task 4, decision 43): close the popup first
         // (playerPopup.js's wrapper does this before calling us), then show
@@ -709,12 +711,25 @@ function boot() {
         const view = btn.dataset.value;
         if (view === store.get().view) return;
         store.set({ view });
-        applyView();
+        // R3.2 (item 7): the toolbar's "Graph" button was removed, so the
+        // top-strip Stats→Graphs toggle now carries what that button did —
+        // enterFromBridge({ preferredMetricKey: current sort key }). The
+        // top-strip LAYOUT is unchanged; only the toggle's behaviour gains the
+        // seed. enterFromBridge handles the empty/never-searched case itself.
+        // Graphs→Stats keeps the plain applyView() (restores the frozen table).
+        if (view === "graph") {
+          showGraphView();
+          graphController.enterFromBridge({ preferredMetricKey: store.get().sort.key });
+        } else {
+          applyView();
+        }
       });
 
       updateDrawerBadge();
       updateViewToggle();
-      // Owner: blank on first load — show the prompt, don't auto-run the query.
+      // R3.2 (item 1): the toolbar is visible from first load — showPrompt now
+      // builds the skeleton + toolbar with an empty table body (no "Open
+      // filters" card); the query still runs only from a Search.
       tableController.showPrompt();
     })
     .catch((err) => {

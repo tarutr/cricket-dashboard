@@ -269,16 +269,15 @@ a { color: var(--color-accent); }
 
 .app-main {
   flex: 1;
-  /* R2-1 (item 5 + one-screen constraint): tighter top gap between the slim
-     header and the first card (Stats table / Graph toolbar) — space-4 instead
-     of space-5 — and a trimmed bottom (space-6 instead of space-7) so the
-     Graphs tab's taller control stacks (Slope/Dumbbell windows) get more of the
-     viewport before it scrolls. Both still breathe under the header/above the
-     footer. */
-  padding: var(--space-4) var(--space-6) var(--space-6);
+  /* R3.2 (item 8): tighten the header→card and card→footer gaps further — the
+     top/bottom padding drops to space-3 (was space-4 top / space-6 bottom) so
+     the table card sits close under the slim header and just above the footer,
+     reclaiming the wasted vertical space the owner flagged. Horizontal padding
+     is unchanged. (Built on R2-1's earlier trim.) */
+  padding: var(--space-3) var(--space-6);
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--space-4);
   max-width: 88rem;
   width: 100%;
   margin: 0 auto;
@@ -1027,11 +1026,13 @@ a { color: var(--color-accent); }
 
 .table-toolbar__search {
   position: relative;
-  flex: 1 1 auto;
-  min-width: 8rem;
-  /* R3 Wave 4 one-row budget: 16rem → 10rem so Filters+search+count+presets+
-     Vs+Graph/Columns/Clear fit one row at 1280px (measured 1224 vs 1166). */
-  max-width: 10rem;
+  flex: 0 1 auto;
+  min-width: 7rem;
+  /* R3.2 one-row budget: the single-row toolbar now also carries From–To dates,
+     the preset dropdown and the bonded Vs on the left, so the search box shrinks
+     to ~8rem to help everything fit at ~1280px (it still grows the dropdown
+     panel to full width). */
+  max-width: 8rem;
 }
 
 .table-toolbar__search .input {
@@ -1039,22 +1040,123 @@ a { color: var(--color-accent); }
   font-size: 0.9rem;
 }
 
-/* The presentation controls (row count, presets, Vs,
-   Graph/Columns/Clear) rebuilt by renderToolbar() on every render — same flex
-   row/wrap/gap treatment .table-toolbar used to apply directly to these as
-   its own immediate children, now one level down since .table-toolbar__left
-   is the other top-level cluster. flex: 1 1 auto claims the row's remaining
-   width after .table-toolbar__left's own intrinsic size, so
-   .table-toolbar__graph-columns' margin-left: auto further in (Leaderboard
-   matchup mode block below) still has real room to push Graph/Columns/Clear
-   flush right. */
-.table-toolbar__dynamic {
+/* ── R3.2 single-row toolbar ────────────────────────────────────────────────
+   LEFT cluster [Filters · search · From–To · preset ▾ · [Vs|val ▾]] and RIGHT
+   cluster [count · SEARCH · Columns · Clear], both built once by ensureSkeleton
+   and kept in step by syncToolbar (never innerHTML-rebuilt). Both wrap
+   gracefully on narrow viewports; the right cluster stays grouped. */
+.table-toolbar__right {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
-  flex: 1 1 auto;
+  margin-left: auto; /* push the count/Search/Columns/Clear cluster flush right */
+}
+
+/* From–To dates (bind the SAME state.dateFrom/dateTo as the popup's). */
+.table-toolbar__dates {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.table-toolbar__date {
+  /* Native date inputs have a wide intrinsic min; cap them so the row fits. */
+  width: 8.75rem;
   min-width: 0;
+  font-size: 0.85rem;
+}
+.table-toolbar__date-sep {
+  color: var(--color-muted);
+}
+
+/* Preset dropdown (item 5): a plain native select; label is just the preset
+   name. Capped so a long option ("Progression") doesn't stretch the row. */
+.table-toolbar__preset {
+  max-width: 9rem;
+}
+
+/* Bonded "Vs" control (item 6): a fixed "Vs" prefix + a divider + the value
+   select, styled to read as ONE labelled control rather than stray text next to
+   a separate dropdown. */
+.table-toolbar__vs {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--color-bg-raised);
+}
+.table-toolbar__vs-label {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm2);
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-panel);
+  border-right: 1px solid var(--color-line-strong); /* the divider */
+  white-space: nowrap;
+}
+/* The value select sits flush inside the bonded control — no border/radius of
+   its own, capped width (bowling-type names can be long; the open panel still
+   renders at full label width). */
+.table-toolbar__vs-select {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  max-width: 8.5rem;
+  min-height: 38px;
+}
+.table-toolbar__vs-select:hover { border: none; }
+.table-toolbar__vs:has(.table-toolbar__vs-select:disabled) {
+  opacity: 0.55;
+  background: var(--color-panel);
+}
+
+/* SEARCH button dirty state (item: pending cue) — mirrors the graph's
+   Update-chart button. Enabled ⟺ there's something to apply (pending ≠ applied
+   AND both dates set): it lifts into the editorial red accent. Otherwise the
+   button is `disabled` and falls back to the muted .btn:disabled at-rest look
+   ("nothing to search"). */
+.table-toolbar__search-btn.is-dirty {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-bg);
+}
+.table-toolbar__search-btn.is-dirty:hover {
+  background: var(--color-accent-strong);
+  border-color: var(--color-accent-strong);
+  opacity: 1;
+}
+
+/* Player count — greyed before the first search has produced results. */
+.table-toolbar__row-count.is-disabled { opacity: 0.5; }
+
+/* Honesty note (matchup mode / partial stat-condition applicability), between
+   the toolbar and the pills. Collapses out of flow when empty. */
+.table-toolbar__note {
+  font-size: var(--text-sm2);
+  color: var(--color-muted);
+  font-style: italic;
+  padding: var(--space-2) var(--space-5) 0;
+}
+.table-toolbar__note[hidden] { display: none; }
+
+/* Empty-state hint inside the table area (first load / no matches). */
+.table-body-hint {
+  padding: var(--space-6) var(--space-5);
+  color: var(--color-muted);
+  text-align: center;
+  font-size: var(--text-md);
+}
+.table-body-hint[hidden] { display: none; }
+
+/* needs-input red outline on the toolbar date inputs (a player is picked but a
+   date is still missing) — mirrors the graph's .needs-input cue. */
+.table-toolbar__date.needs-input {
+  border-color: var(--color-bad);
+  outline: 2px solid var(--color-bad);
+  outline-offset: -1px;
 }
 
 /* ── Pills host, between the toolbar and the table (F2 task 5) ──────────────
@@ -1101,7 +1203,12 @@ a { color: var(--color-accent); }
 .table-scroll {
   overflow: auto;
   max-width: 100%;
-  max-height: max(320px, calc(100vh - 350px));
+  /* R3.2 (item 8): grow the table card noticeably longer by shrinking the fixed
+     chrome allowance in the calc (350px → 260px) now that the header→card and
+     card→footer gaps are tighter and the toolbar is a single row. The table
+     still fits one screen and scrolls internally; max() keeps a usable floor on
+     very short viewports. Horizontal column scroll (overflow:auto) is intact. */
+  max-height: max(340px, calc(100vh - 260px));
 }
 
 /* Shared table base (task 3): .data-table (leaderboard) and .mini-table
