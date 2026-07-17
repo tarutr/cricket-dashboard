@@ -548,3 +548,42 @@ change requires a new owner decision recorded here. Dates are decision dates.
     (g) **L3 v1 extras** (glossary tooltips, per-chart info, CSV export,
     click-to-highlight, Randomise): ALL wanted — deferred to the round after
     this fix round.
+
+47. **DESIGN ROUND 4 RULINGS (2026-07-17):** (a) **Vs/matchup mode must adhere to ALL
+    applied filters** — the Vs dropdown is an internal search among the players the
+    filters chose; nothing silently drops. The two current violations (R. Pos. and
+    added players/pins are dropped on entering Vs mode) are to be fixed. R. Pos.
+    carries with its PLAIN meaning ("usual top order players, full v pace" — owner's
+    words): restrict the roster by usual position, show the full vs-bucket record.
+    The Vs-only striker-position filter (state.positions) is untouched. (b) **Numeric
+    stat conditions re-score against the bucket** ("SR vs pace ≥ 140") — owner
+    confirmed today's behaviour is correct ("obviously"); no change. (c) **Four new
+    Vs stats approved**: Matches, Runs per Innings, High Score, Best Bowling — all
+    app-side query work only (no pipeline/DB change; HS method proven live: SA Yadav
+    HS vs Spin = 47, method reproduced the 38-inns/454-runs anchor). (d) **X-ball SR
+    (first 10 / 11–20 / 21+) is conceptually meaningless against a bowling style** —
+    permanently out, not parked. (e) **A9 approved**: Team/Opposition/Event/Venue
+    option lists scope to the FULL search conditions (gender+format+date+team-type).
+    (f) **Pin pills recolour steel-blue** (red freed for the delete state).
+    (g) **Instant/pending, final**: sort, columns picker, drag-reorder are instant;
+    PICKING a player from the results search drops their row in instantly (no Search
+    press); a pill's ×/+ (filter AND pin) stays PENDING — soft-delete stages with a
+    red-outline undo and commits on Search. Recorded for honesty: the orchestrator
+    initially over-extended the instant ruling to pin ×/+ "for symmetry"; the owner
+    corrected it; reverted same day (commit b556f92).
+
+48. **GOVERNANCE PACKAGE (2026-07-17):** after the over-reach in 47(g) the owner
+    ordered an instruction-surface audit and approved: (a) a one-page **CLAUDE.md**
+    as the supreme, always-loaded contract (numbers-sacred + anchors; decisions-are-
+    law/defects-are-fair-game; verification ritual; pointers not copies).
+    (b) **.orchestrator/ORCHESTRATION.md** — the /opus-orchestrator skill's rules
+    distilled into the repo (routing table, escalation ladder, brief/report formats,
+    resume protocol, model-resume gotcha) so the discipline holds in any session.
+    (c) `.orchestrator/plan.md` replaced with a signpost stub (the skill's entry
+    path lands on live state, not the finished D0–D4 plan — archived at
+    review/archive/orchestrator-plan-d0-d4.md). (d) Completed-round review docs
+    moved to review/archive/. (e) THIS FILE is the only decision log; design-plan.md
+    is a status tracker and must not re-narrate decisions. (f) Subagent latitude
+    ruling: agents may fix real defects they trip over (report under "Also fixed")
+    but must never reverse/extend an owner-ruled behaviour; orchestrator briefs must
+    trace every behavioural item to an owner sentence.

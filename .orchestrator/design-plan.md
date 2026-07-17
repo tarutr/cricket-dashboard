@@ -1,5 +1,10 @@
 # Design phase plan — dashboard UX changes (7 owner items)
 
+> **Rules live elsewhere:** contract = `CLAUDE.md` (repo root, auto-loaded); orchestration
+> (models/effort/briefs/gates/resume) = `.orchestrator/ORCHESTRATION.md`; decisions =
+> `review/owner_decisions.md` (the ONLY decision log — this file tracks wave status and
+> references decisions, it does not re-narrate them).
+
 Branch: `polish-b1-mechanical` (main untouched). NOT the cleanup — these are
 intentional behaviour/UI changes. Cricket numbers stay correct (anchors: batting
 2,813 / SA Yadav 60/1,544/29.13/150.34 must hold; donut/slope/dumbbell must draw the
