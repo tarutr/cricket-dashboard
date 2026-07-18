@@ -154,6 +154,54 @@ export function mountSearchSelect(hostEl, {
     return `<span class="search-select__opt-label">${escHtml(o.label)}</span>${suffix}`;
   }
 
+  // ── Optional portal (ported from mountSearchMultiSelect's `portal` option
+  // below — see this function's own JSDoc `portal` note) ───────────────────
+  // Lifts the OPEN panel to <body> so it escapes a clipping `overflow`
+  // ancestor (e.g. src/playerFilters.js's popup drawer, `overflow-y: auto`).
+  // Non-portal callers (graph.js) leave this whole block inert.
+  const panelHome = { parent: panelEl.parentNode, next: panelEl.nextSibling };
+  let portaled = false;
+  function positionPanel() {
+    const r = toggleEl.getBoundingClientRect();
+    const margin = 8;
+    panelEl.style.position = "fixed";
+    panelEl.style.zIndex = "1000"; // above the .filters-popup panel (z-index:100)
+    panelEl.style.minWidth = `${Math.round(r.width)}px`;
+    panelEl.style.top = `${Math.round(r.bottom + 6)}px`;
+    const width = panelEl.offsetWidth || Math.round(r.width);
+    let left = Math.min(r.left, window.innerWidth - width - margin);
+    left = Math.max(margin, left);
+    panelEl.style.left = `${Math.round(left)}px`;
+    panelEl.style.right = "auto";
+    const maxH = Math.max(140, Math.round(window.innerHeight - (r.bottom + 6) - margin));
+    panelEl.style.maxHeight = `${maxH}px`;
+    panelEl.style.overflowY = "auto";
+  }
+  const onPortalScroll = () => { if (portaled) positionPanel(); };
+  const onPortalResize = () => { if (portaled) positionPanel(); };
+  function portalOpen() {
+    if (!portal || portaled) return;
+    portaled = true;
+    document.body.appendChild(panelEl);
+    positionPanel();
+    window.addEventListener("scroll", onPortalScroll, true);
+    window.addEventListener("resize", onPortalResize);
+  }
+  function portalClose() {
+    if (!portaled) return;
+    portaled = false;
+    window.removeEventListener("scroll", onPortalScroll, true);
+    window.removeEventListener("resize", onPortalResize);
+    for (const p of ["position", "zIndex", "minWidth", "top", "left", "right", "maxHeight", "overflowY"]) {
+      panelEl.style[p] = "";
+    }
+    if (panelHome.next && panelHome.next.parentNode === panelHome.parent) {
+      panelHome.parent.insertBefore(panelEl, panelHome.next);
+    } else {
+      panelHome.parent.appendChild(panelEl);
+    }
+  }
+
   function renderList() {
     if (filtered.length === 0) {
       listEl.innerHTML = `<p class="search-select__empty">No matches</p>`;
@@ -177,6 +225,9 @@ export function mountSearchSelect(hostEl, {
     } else {
       filterEl.removeAttribute("aria-activedescendant");
     }
+    // The list height changes as options/filter change — keep a portaled panel
+    // pinned under its toggle (no-op unless portaled).
+    if (portaled) positionPanel();
   }
 
   function open() {
@@ -192,6 +243,7 @@ export function mountSearchSelect(hostEl, {
     const selIdx = filtered.findIndex((o) => o.value === currentValue);
     activeIndex = selIdx >= 0 ? selIdx : filtered.length ? 0 : -1;
     renderList();
+    portalOpen(); // reparent to <body> BEFORE focus so focus is preserved
     // Focus the filter so typing filters immediately (same as omnisearch).
     filterEl.focus();
   }
@@ -204,6 +256,7 @@ export function mountSearchSelect(hostEl, {
     filterEl.setAttribute("aria-expanded", "false");
     filterEl.removeAttribute("aria-activedescendant");
     activeIndex = -1;
+    portalClose(); // restore the panel to its in-host slot
     if (focusToggle) toggleEl.focus();
   }
 
@@ -257,6 +310,11 @@ export function mountSearchSelect(hostEl, {
       if (activeIndex >= 0) choose(activeIndex);
     } else if (e.key === "Escape") {
       e.preventDefault();
+      // When portaled inside a scrolling popup (e.g. src/playerFilters.js's
+      // Filters drawer), keep this Escape from bubbling to the popup's own
+      // document-level Escape handler (which would close the whole popup) —
+      // mirrors mountSearchMultiSelect's identical guard.
+      if (portal) e.stopPropagation();
       close({ focusToggle: true });
     } else if (e.key === "Tab") {
       close();
@@ -269,7 +327,10 @@ export function mountSearchSelect(hostEl, {
   }
   function onDocClick(e) {
     if (!isOpen) return;
-    if (hostEl.contains(e.target)) return;
+    // A portaled panel lives on <body>, OUTSIDE hostEl — so also treat clicks
+    // within the panel itself as "inside" (harmless when not portaled, since
+    // the panel is a hostEl descendant then and hostEl.contains already covers it).
+    if (hostEl.contains(e.target) || panelEl.contains(e.target)) return;
     close();
   }
 
@@ -333,6 +394,7 @@ export function mountSearchSelect(hostEl, {
     destroy() {
       destroyed = true;
       close();
+      portalClose(); // idempotent — never leave an orphaned panel on <body>
       toggleEl.removeEventListener("click", onToggleClick);
       toggleEl.removeEventListener("keydown", onToggleKeydown);
       filterEl.removeEventListener("input", onFilterInput);
