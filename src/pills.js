@@ -65,8 +65,21 @@ function conditionPillLabel(cond, state) {
  * pill ×) surfaces as a pill IMMEDIATELY, matching the other pending toolbar
  * controls. The table body still only moves on Search; the pills are a live
  * indicator of what the NEXT Search will apply.
+ *
+ * `getNoInningsIds` (4d/A6): returns the Set of pinned player ids main.js
+ * learned, from the LAST completed load(), have zero rows in the searched
+ * scope (table.js's `missingPinnedIds`) — main.js is the only source of
+ * truth for that (a query result), so this module just renders whatever it
+ * reports. Defaults to an always-empty Set for any caller that never pins.
  */
-export function mountPills(container, store, onChange, onPinChange = onChange, getState = () => store.get()) {
+export function mountPills(
+  container,
+  store,
+  onChange,
+  onPinChange = onChange,
+  getState = () => store.get(),
+  getNoInningsIds = () => new Set()
+) {
   // R4 Wave 4a (A4): soft-delete-with-undo. A pill's × removes its effect from
   // the PENDING store (so the Search button lights, per A2) AND stages the pill
   // for display — it stays visible with a red outline and the × flipped to a +.
@@ -230,11 +243,22 @@ export function mountPills(container, store, onChange, onPinChange = onChange, g
     // mode as well as plain mode (buildMatchupQuery exempts them through the
     // same shared helper as buildQuery), so the pill is LIVE in both — no
     // longer greyed/inert in Vs.
+    // No-data pin feedback (4d/A6): a pinned player absent from the last
+    // loaded result set (zero innings in the searched scope, core scope
+    // included) gets an honest "(no innings)" suffix on their own pill — the
+    // player is real, they're just not there, same spirit as the omnisearch
+    // "Filter the table" toast above but per-pin and pill-attached rather
+    // than toast-only. main.js also fires the toast once per Search/pin-add;
+    // this pill annotation is the persistent half of that feedback.
+    const noInningsIds = getNoInningsIds();
     for (const p of s.pinnedPlayers || []) {
+      const noInnings = noInningsIds.has(String(p.id));
       pills.push({
         key: `pin:${p.id}`,
-        label: `+ ${p.name}`,
+        label: noInnings ? `+ ${p.name} (no innings)` : `+ ${p.name}`,
         pinned: true,
+        noInnings,
+        title: noInnings ? `${p.name} has no innings in this scope` : undefined,
         remove: () =>
           store.set({ pinnedPlayers: (store.get().pinnedPlayers || []).filter((x) => x.id !== p.id) }),
         restore: () => {
@@ -270,7 +294,7 @@ export function mountPills(container, store, onChange, onPinChange = onChange, g
 
     container.innerHTML = `<div class="pills-row">${display
       .map((p, i) => {
-        const cls = `pill${p.inert ? " pill--inert" : ""}${p.pinned ? " pill--pinned" : ""}${p.staged ? " pill--staged" : ""}`;
+        const cls = `pill${p.inert ? " pill--inert" : ""}${p.pinned ? " pill--pinned" : ""}${p.staged ? " pill--staged" : ""}${p.noInnings ? " pill--no-innings" : ""}`;
         const btnCls = `pill__x${p.staged ? " pill__x--restore" : ""}`;
         const glyph = p.staged ? "&plus;" : "&times;";
         const aria = p.staged ? "Restore filter" : "Remove filter";
@@ -288,7 +312,7 @@ export function mountPills(container, store, onChange, onPinChange = onChange, g
         } else {
           // × : soft-delete — stage the captured descriptor (so it stays
           // visible), then remove its effect from the pending set.
-          staged.set(p.key, { key: p.key, label: p.label, inert: p.inert, pinned: p.pinned, title: p.title, restore: p.restore });
+          staged.set(p.key, { key: p.key, label: p.label, inert: p.inert, pinned: p.pinned, noInnings: p.noInnings, title: p.title, restore: p.restore });
           p.remove();
         }
         // Every pill's ×/+ (FILTER and PIN alike) is a PENDING edit: refresh

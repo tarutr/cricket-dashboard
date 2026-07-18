@@ -1798,6 +1798,16 @@ a { color: var(--color-accent); }
   border-color: var(--color-steel-tint);
 }
 
+/* No-data pin (4d/A6): a pinned player with zero rows in the last loaded
+   result set — pills.js appends "(no innings)" to the label and flags this
+   class. Dashed border borrows .pill--inert's "this isn't quite live" visual
+   language while keeping the steel pin tint, so it reads as "still pinned,
+   but honestly empty" rather than a different kind of pill entirely. */
+.pill--no-innings {
+  border-style: dashed;
+  font-style: italic;
+}
+
 /* Soft-deleted / "staged for removal" pill (R4 Wave 4a, A4): clicking a pill's
    × removes its effect from the pending set but keeps the pill visible in this
    state — a red outline with the × flipped to a + — until the next Search

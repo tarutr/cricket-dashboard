@@ -1711,24 +1711,26 @@ export function mountTable(
    * swapped in — never the live/pending store's OTHER fields (dates/Vs/
    * filters/etc.), which must stay frozen until Search.
    *
-   * Matchup ("Vs") mode: buildMatchupQuery has no pin OR-injection (a later
-   * wave) — buildQuery already routes matchup mode there untouched, so this
-   * requery naturally produces no extra row while still keeping state/pills
-   * honest. No special-casing needed; do not add pin logic to the matchup
-   * query here.
+   * Matchup ("Vs") mode: buildMatchupQuery now routes pins through the same
+   * whereWithPinExemption/gateWithPinExemption helper buildQuery uses (Wave
+   * 4b, decision 47a) — this requery picks up a matchup row for the pin
+   * exactly like the plain-mode path, no special-casing needed here.
    *
    * If nothing has EVER been searched (lastLoadedState null — no table body
    * exists yet), there is no frozen scope to drop a row into: the pin still
    * updates the store/pill (via main.js) and simply applies on the eventual
-   * first Search, same as before this addendum. */
+   * first Search, same as before this addendum. Returns load()'s promise (or
+   * a resolved null in the no-op case) so callers (main.js's onPinsChanged,
+   * 4d/A6) can read the resolved `missingPinnedIds` for the "(no innings)"
+   * pill annotation + toast. */
   function applyPinnedPlayers() {
     if (!lastLoadedState) {
       syncToolbar();
-      return;
+      return Promise.resolve(null);
     }
     const pins = store.get().pinnedPlayers || [];
     const frozen = { ...lastLoadedState, pinnedPlayers: pins };
-    load(frozen);
+    return load(frozen);
   }
 
   function clearDragIndicators() {
@@ -2555,17 +2557,20 @@ export function mountTable(
       // this reload never destroys it (Batch 3 fix 3) — re-find its anchor in
       // the freshly-rendered toolbar, reposition, and re-sync checked state.
       refreshOpenColumnsPopover();
-      // Pinned players with zero rows in this result set (task 3b): only
-      // meaningful in plain mode — matchup mode never applies the pin bypass
-      // (buildMatchupQuery is untouched), so every id would spuriously read
-      // "missing" there. main.js's pinPlayer() uses this to roll back an
-      // optimistic pin that turned out to have no innings in the core scope
-      // at all (no bypass could have produced a row for it either).
-      const missingPinnedIds = matchupVsActive(state)
-        ? []
-        : (state.pinnedPlayers || [])
-            .filter((p) => p && p.id && !sorted.some((r) => String(r.id) === String(p.id)))
-            .map((p) => p.id);
+      // Pinned players with zero rows in this result set (task 3b, extended
+      // 4d/A6): computed in BOTH plain and matchup mode — Wave 4b/decision 47a
+      // routed buildMatchupQuery onto the same whereWithPinExemption/
+      // gateWithPinExemption helper buildQuery uses, so a pinned id is exempt
+      // from leaderboard-only filters in Vs mode too and can legitimately
+      // still be "missing" only when it has no innings at all in the CORE
+      // scope (gender/format/date/team-type) — an honest signal either way.
+      // (This used to force `[]` for matchup mode, from before that Wave 4b
+      // extension landed — stale now that the bypass applies there too.)
+      // main.js's pinPlayer()/onPinsChanged() use this to annotate a no-data
+      // pin's pill "(no innings)" and toast once per Search/pin-add.
+      const missingPinnedIds = (state.pinnedPlayers || [])
+        .filter((p) => p && p.id && !sorted.some((r) => String(r.id) === String(p.id)))
+        .map((p) => p.id);
       // Resolved row count (B2R wave 3): the omnisearch "Filter the table"
       // toast (main.js's triggerTableSearch) needs to know whether the query
       // it just triggered came back empty, without table.js exposing any

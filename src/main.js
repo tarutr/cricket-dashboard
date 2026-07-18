@@ -14,6 +14,7 @@ import { mountOmnisearch } from "./omnisearch.js";
 import { mountPlayerPopup } from "./playerPopup.js";
 import { getMetric } from "./metrics.js";
 import { mountGraph } from "./graph/graph.js";
+import { showToast } from "./toast.js";
 
 const DEFAULT_SORT_KEY = { batting: "runs", bowling: "wickets" };
 
@@ -88,6 +89,13 @@ let filtersPopup = null; // { open, close, isOpen } — the Filters popup contro
 let maxDate = null; // manifest max match date "YYYY-MM-DD" — reference for date presets + input max (1B-2)
 let minDate = null; // manifest min match date "YYYY-MM-DD" — input min bound
 
+// No-data pin feedback (4d/A6): ids (as strings) of currently-pinned players
+// with zero rows in the LAST completed load() — table.js's `missingPinnedIds`,
+// recomputed fresh on every load (plain and matchup mode alike). Read by
+// pills.js (via getNoInningsIds passed to mountPills) to annotate that pin's
+// pill "(no innings)". Display-only bookkeeping — never read by any query.
+let noInningsPinIds = new Set();
+
 // R7 Wave B (item 4): the APPLIED filter state — a snapshot of the store as of
 // the last query the table actually reflects (Search, or an immediate-apply
 // action while the popup is closed: toolbar Vs/presets, pin add/remove, pill
@@ -148,6 +156,10 @@ export function clearAll({ returnToTable = true } = {}) {
   store.set(fresh); // full replace — createInitialState returns every key
   lastAppliedDefaults.batting = [...fresh.columns.batting];
   lastAppliedDefaults.bowling = [...fresh.columns.bowling];
+  // 4d/A6: a Clear wipes pinnedPlayers too — drop any stale no-innings flags
+  // so a player re-pinned post-Clear never shows "(no innings)" left over
+  // from the previous (now-discarded) scope before a fresh load() corrects it.
+  noInningsPinIds = new Set();
   // Re-render every control from the fresh defaults (the store.subscribe hook
   // refreshes pills/badge; the controls need an explicit re-render).
   // filterController.render() re-syncs the Gender/Discipline selects.
@@ -334,6 +346,39 @@ function triggerTableSearch(text, matches) {
 }
 
 /**
+ * No-data pin feedback (4d/A6): given the `{ rowCount, missingPinnedIds }`
+ * result of a completed tableController.load() (or applyPinnedPlayers()) —
+ * both plain and matchup mode alike, see table.js's load() — recompute which
+ * pinned players currently have zero rows and (a) refresh noInningsPinIds so
+ * pills.js's next render annotates each one "(no innings)", and (b) toast
+ * ONCE, naming only the ids that just BECAME missing (not ones already known
+ * missing from an earlier Search) so an unrelated later Search/pin-add never
+ * re-toasts about the same stale pin. `result` is null on a query error (the
+ * error-state path in load()) or the no-op early-return in
+ * applyPinnedPlayers() (nothing ever searched yet) — either way there is no
+ * new information, so this is a no-op.
+ */
+function reportPinCoverage(result) {
+  if (!result) return;
+  const missingIds = (result.missingPinnedIds || []).map(String);
+  const missingSet = new Set(missingIds);
+  const newlyMissing = missingIds.filter((id) => !noInningsPinIds.has(id));
+  noInningsPinIds = missingSet;
+  if (pillsController) pillsController.render();
+  if (newlyMissing.length === 0) return;
+  const pins = store.get().pinnedPlayers || [];
+  const names = newlyMissing
+    .map((id) => pins.find((p) => String(p.id) === id)?.name)
+    .filter(Boolean);
+  if (names.length === 0) return;
+  if (names.length === 1) {
+    showToast(`${names[0]} has no innings in this scope`);
+  } else {
+    showToast(`${names.length} pinned players have no innings in this scope`);
+  }
+}
+
+/**
  * R4 Wave 4a ADDENDUM (owner ruling 2026-07-17): *picking* a player from the
  * results search is INSTANT — unlike a FILTER pill (PENDING, waits for Search)
  * AND unlike a pill's ×/+ (also PENDING), picking drops the player's row into
@@ -357,7 +402,10 @@ function onPinsChanged() {
   updateDrawerBadge();
   if (tableController) {
     tableController.syncToolbar();
-    tableController.applyPinnedPlayers();
+    // 4d/A6: applyPinnedPlayers() now returns its load() promise so a no-data
+    // pin (the "later wave" this file used to flag right here) gets its pill
+    // annotated + a toast fired, the instant the optimistic pin resolves.
+    Promise.resolve(tableController.applyPinnedPlayers()).then((result) => reportPinCoverage(result));
   }
 }
 
@@ -371,16 +419,15 @@ function onPinsChanged() {
  * buildQuery. Their core scope (gender/format/date window/team type) still
  * applies — only the OTHER, leaderboard-only filters (team/opposition/
  * position/profile/R. Pos./search/stat conditions) are bypassed for their
- * row alone. Plain mode only (see pills.js/table.js) — matchup mode leaves
- * the pin inert rather than touching buildMatchupQuery.
+ * row alone. Wave 4b (decision 47a) extended the same bypass to matchup
+ * ("Vs") mode via buildMatchupQuery, so the pin is live in both.
  *
  * R4 Wave 4a ADDENDUM: pinning is now INSTANT (onPinsChanged, above) — the
  * row appears in the table immediately, no Search press. If the player
  * genuinely has no innings even in the CORE scope, load()'s own
- * missingPinnedIds return value would tell us that, but per the addendum
- * (item 5) no rollback/toast fires yet here — that's a later wave; today a
- * no-data pin simply shows its pill with no row, honestly (no crash, no
- * spurious Search light).
+ * missingPinnedIds return value tells us that — onPinsChanged's
+ * reportPinCoverage() call (4d/A6) annotates their pill "(no innings)" and
+ * toasts once; a no-data pin no longer just sits there silently.
  */
 function pinPlayer(id, name) {
   const state = store.get();
@@ -431,9 +478,15 @@ function mountTableToolbarExtras({ searchInputEl, searchResultsEl, pillsHostEl }
     store,
     () => {
       onFiltersChanged();
-    }
+    },
     // onPinChange + getState default to onChange / the live store, so a pill's
     // ×/+ is pending and the pills reflect pending edits.
+    undefined,
+    undefined,
+    // 4d/A6: hands pills.js the live no-innings-pin id set so a pinned
+    // player's own pill can read "(no innings)" once reportPinCoverage()
+    // learns that from a completed load().
+    () => noInningsPinIds
   );
   pillsController.render();
 
@@ -603,7 +656,10 @@ function boot() {
         if (pillsController) { pillsController.clearStaged(); pillsController.render(); }
         updateDrawerBadge();
         if (tableController) tableController.syncToolbar(); // clear the dirty cue now
-        if (store.get().view === "table") tableController.load();
+        // 4d/A6: a committed Search is the primary no-data-pin detection point
+        // — recompute + annotate/toast for whichever pinned players (if any)
+        // came back with zero rows in this scope, plain or matchup mode alike.
+        if (store.get().view === "table") tableController.load().then((result) => reportPinCoverage(result));
       }
 
       filtersPopup = { open: openPopup, close: closePopup, isOpen: () => !filtersPopupEl.hidden };
