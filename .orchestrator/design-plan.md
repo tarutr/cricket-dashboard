@@ -413,3 +413,24 @@ etc.); charting the 4 vsTableOnly stats would need relaxing the flag (metrics.js
 follow-up. SURFACED to owner as an honest correction + decision. B1's other flags (comp_* excluded =
 correct; applyGraphFilters sort-key on plain = benign order-only; dirty-dot test artifact) = non-issues.
 ## B2 spawning (Line matchup-by-year).
+## B2 COMPLETE + orchestrator-verified (commits 279ec86..03cd878). Only timeseries.js + graph.js
+touched; sacred files 0 diff; node-check OK; plain Line byte-identical (timeseriesSupported refactor
+parity-preserving). buildMatchupTimeseriesQuery auto-dispatches like buildQuery (matchup view + bucket
+predicate + per-(id,year) + matchup-namespace sqlExpression). INDEPENDENT: SA Yadav runs vs Spin by year
+141/92/63/158 = 454 (anchor) — exact. Line un-greyed + selectable under Vs; 4 vsTableOnly stats still
+excluded (B3 handles).
+## ===== B3 (owner ruled 2026-07-18: make the 4 vsTableOnly stats GRAPHABLE — "deferred to THIS session") =====
+frontend-heavy/Opus. The 4 stats: matchup matches (total,int,hib null), high_score (peak,int,hib true),
+runs_per_innings (rate,dec1,hib true), best (peak,STR,hib true). Approach: (1) graph.js graphMetrics
+(~282) drop the `!m.vsTableOnly` exclusion → the 4 enter the pool; existing per-chart filters then decide
+applicability (radar/benchmark need hib≠null → matches excluded there; slope/dumbbell need rate/percent →
+only RPI; line needs timeseriesSupported). (2) timeseries.js timeseriesSupported: drop the vsTableOnly
+exclusion B2 added → RPI(rate)+matches(total) Line-able by year; peaks stay excluded by kind (consistent
+w/ plain). (3) charts.js: Best Bowling is format:"str" (row[key]="2-9" → Number()=NaN). Add a shared
+peak-value accessor: numeric value = Number(row[key]) if finite ELSE Number(row[key+"__sort"]) (the rank
+wickets*1000−runs); LABEL always row[key] (the "W-R"/number). Apply across bar/scatter/radar/benchmark so
+str-peaks chart by rank with the figure as label. NOTE: this also fixes/【changes】 PLAIN best charting (was
+NaN/broken) — a consistency fix, flag it. MUST NOT touch buildQuery/buildMatchupQuery/buildScopeClauses/
+metrics.js aggregation; values come from the existing builders. Verify (independent): High Score vs Spin
+SA Yadav=47; Matches=38; RPI=11.95; Best Bowling vs RHB Bumrah label "2-9" (rank 1991); plain best now
+charts by rank; non-Vs numbers byte-identical. ## B3 spawning.
