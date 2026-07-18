@@ -16,12 +16,20 @@
 // PLAYER_SECTION_SUPPORT still lets an already-set value narrow bowling.
 // matchups (the STRIKER's position) when the user switches tabs; see
 // playerPage.js's report note on this interaction.
+//
+// Wave C / item 4f (2026-07-18): Date From/To, Against (opposition) and Vs
+// are mounted as src/searchSelect.js single-pick searchable dropdowns
+// (`portal: true` — this drawer's own panel is `overflow-y: auto`, same
+// clipping risk drawerInnings.js's multi-select portal was built for) rather
+// than native <select>s. SAME options, SAME state fields, SAME behaviour —
+// control style only. Batting position stays the custom checkbox dropdown
+// (out of scope; not one of the four named controls).
 
 import { query, getManifest } from "./db.js";
 import { buildScopeClauses } from "./filters.js";
 import { escSql as esc } from "./state.js";
-import { escHtml, escAttr } from "./html.js";
-import { monthOptionsHTML } from "./playerSections.js";
+import { MONTH_NAMES } from "./playerSections.js";
+import { mountSearchSelect } from "./searchSelect.js";
 
 // Same fixed 1-12 vocabulary as the main drawer's Batting position control
 // (src/drawerInnings.js's POSITIONS) — batting position is a closed, known
@@ -74,6 +82,40 @@ function dateBounds() {
   return { minMonth, maxMonth };
 }
 
+/** Same option-list shape/order as playerSections.js's monthOptionsHTML (the
+ * scope-strip's own copy, not exported/shared — see that file's comment) —
+ * duplicated here rather than sharing an HTML-string helper because
+ * searchSelect.js's option arrays need {value,label} pairs, not <option>
+ * markup. Kept in sync by hand, same "duplicated on purpose" precedent as
+ * POSITIONS above. The "—" no-selection row is handled by the searchSelect
+ * mount's own `allowEmptyLabel`, not included in this list. */
+function monthOptionsList(minMonth, maxMonth) {
+  if (!minMonth || !maxMonth) return [];
+  const [minY, minM] = minMonth.split("-").map(Number);
+  const [maxY, maxM] = maxMonth.split("-").map(Number);
+  const opts = [];
+  for (let y = maxY; y >= minY; y--) {
+    const mFrom = y === maxY ? maxM : 12;
+    const mTo = y === minY ? minM : 1;
+    for (let m = mFrom; m >= mTo; m--) {
+      const val = `${y}-${String(m).padStart(2, "0")}`;
+      opts.push({ value: val, label: `${MONTH_NAMES[m - 1]} ${y}` });
+    }
+  }
+  return opts;
+}
+
+/** Preserve a previously-picked Opposition value that's no longer in a
+ * freshly fetched list (a stale pick from before a discipline switch, say) —
+ * same "never silently drop it" behaviour the old native-<select> optionsHTML()
+ * gave (this replaces that helper). Vs never had this fallback (its own
+ * fetch/render below doesn't call this), so that stays unchanged too. */
+function withStaleSelected(values, selected) {
+  const opts = values.map((v) => ({ value: v, label: v }));
+  if (selected && !values.includes(selected)) opts.push({ value: selected, label: selected });
+  return opts;
+}
+
 /**
  * Mount the drawer (hidden) into `hostEl`. `onApply(overlay)` fires with the
  * built overlay object (or `null` when every control is back to its default —
@@ -94,9 +136,9 @@ export function mountPlayerFilters(hostEl, { onApply }) {
           <section class="player-filters-drawer__section">
             <h4 class="player-filters-drawer__section-title">Date window</h4>
             <div class="date-range">
-              <select class="select" data-role="pf-dateFrom" aria-label="From"></select>
+              <div data-role="pf-dateFrom"></div>
               <span class="date-range__sep">–</span>
-              <select class="select" data-role="pf-dateTo" aria-label="To"></select>
+              <div data-role="pf-dateTo"></div>
             </div>
           </section>
 
@@ -116,13 +158,13 @@ export function mountPlayerFilters(hostEl, { onApply }) {
 
           <section class="player-filters-drawer__section">
             <h4 class="player-filters-drawer__section-title">Against (opposition)</h4>
-            <select class="select" data-role="pf-opposition" aria-label="Opposition"></select>
+            <div data-role="pf-opposition"></div>
             <p class="player-page__footnote" data-role="pf-opp-note" hidden>International cricket only for now.</p>
           </section>
 
           <section class="player-filters-drawer__section" data-role="pf-section-vs">
             <h4 class="player-filters-drawer__section-title">Vs</h4>
-            <select class="select" data-role="pf-vs" aria-label="Vs bowling style"></select>
+            <div data-role="pf-vs"></div>
           </section>
         </div>
         <div class="filter-drawer__footer">
@@ -203,35 +245,61 @@ export function mountPlayerFilters(hostEl, { onApply }) {
     if (e.key === "Escape" && !els.posPanel.hidden) closePosPanel();
   });
 
-  function optionsHTML(values, selected, anyLabel) {
-    const opts = [`<option value="">${anyLabel}</option>`];
-    for (const v of values) {
-      opts.push(`<option value="${escAttr(v)}" ${v === selected ? "selected" : ""}>${escHtml(v)}</option>`);
-    }
-    // Never silently drop a value that isn't in the freshly fetched list (a
-    // stale pick from before a discipline switch, say) — keep it selectable
-    // rather than resetting it out from under the user.
-    if (selected && !values.includes(selected)) {
-      opts.push(`<option value="${escAttr(selected)}" selected>${escHtml(selected)}</option>`);
-    }
-    return opts.join("");
-  }
-
-  els.dateFrom.addEventListener("change", () => {
-    pending = { ...pending, dateFrom: els.dateFrom.value || null };
+  // Item 4f (Wave C): the four searchSelect mounts — SAME options, SAME
+  // pending.* fields as the native <select>s they replace. `portal: true` on
+  // all four: this drawer's own panel (.player-filters-drawer__panel) is
+  // `overflow-y: auto`, the identical clipping risk drawerInnings.js's
+  // mountSearchMultiSelect portal was built to escape (see searchSelect.js's
+  // own comment on that option).
+  const dateFromSelect = mountSearchSelect(els.dateFrom, {
+    ariaLabel: "From",
+    filterPlaceholder: "Search months…",
+    placeholder: "—",
+    allowEmptyLabel: "—",
+    portal: true,
+    onChange: (v) => {
+      pending = { ...pending, dateFrom: v || null };
+    },
   });
-  els.dateTo.addEventListener("change", () => {
-    pending = { ...pending, dateTo: els.dateTo.value || null };
+  const dateToSelect = mountSearchSelect(els.dateTo, {
+    ariaLabel: "To",
+    filterPlaceholder: "Search months…",
+    placeholder: "—",
+    allowEmptyLabel: "—",
+    portal: true,
+    onChange: (v) => {
+      pending = { ...pending, dateTo: v || null };
+    },
   });
-  els.opposition.addEventListener("change", () => {
-    pending = { ...pending, opposition: els.opposition.value || null };
+  const oppositionSelect = mountSearchSelect(els.opposition, {
+    ariaLabel: "Opposition",
+    filterPlaceholder: "Search teams…",
+    placeholder: "Any opposition",
+    allowEmptyLabel: "Any opposition",
+    portal: true,
+    onChange: (v) => {
+      pending = { ...pending, opposition: v || null };
+    },
   });
-  els.vs.addEventListener("change", () => {
-    pending = { ...pending, vs: els.vs.value || null };
+  const vsSelect = mountSearchSelect(els.vs, {
+    ariaLabel: "Vs bowling style",
+    filterPlaceholder: "Search bowling types…",
+    placeholder: "Everyone",
+    allowEmptyLabel: "Everyone",
+    portal: true,
+    onChange: (v) => {
+      pending = { ...pending, vs: v || null };
+    },
   });
 
   els.clearBtn.addEventListener("click", () => {
     pending = { dateFrom: null, dateTo: null, positions: [], opposition: null, vs: null };
+    // Also fixed: the native <select>s never reset their own visible
+    // selection on Clear (only dates/positions did, via renderAll() below) —
+    // Opposition/Vs kept showing the old pick until the whole drawer was
+    // reopened. Reset these two explicitly so Clear is visually honest too.
+    oppositionSelect.setValue(null);
+    vsSelect.setValue(null);
     renderAll();
   });
 

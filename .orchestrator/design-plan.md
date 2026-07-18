@@ -309,7 +309,33 @@ Independent DuckDB targets all matched EXACTLY on screen: item3 HS>=47 vs Spin=8
 >=48=73 (out); item2 Vs >=2W<=9R vs RHB=800 (Bumrah in)/<=8R=781 (out); item2 plain >=5W<=20R=72.
 No aggregation string changed; filters.js untouched; plain fingerprint 3307620867/1430 held;
 2,813 baseline reproduced after A2. Two-box UI + single-box HS + pills all correct.
-## WAVE A COMPLETE + orchestrator-verified. STOPPED for owner gate before Wave B (per instruction).
-Open flags for owner: (a) toolbar "Vs" label left unchanged (rename to match?); (b) plain-authored
-HS/Best-Bowling condition re-scores vs bucket in Vs mode (consistent w/ decision 47b); (c) old
-4d/4e/4f queue reconciliation (handoff #2 reorganized into Wave A+B — still wanted?).
+## WAVE A COMPLETE + orchestrator-verified. Owner gate PASSED (2026-07-18):
+(a) toolbar "Vs" STAYS "Vs" (owner: do not rename); (b) re-score-in-Vs behaviour confirmed correct;
+(c) owner ruled ALL of 4d/4e/4f must be done + player-popup dropdown change APPROVED.
+
+## ===== WAVE C (owner-approved 2026-07-18: 4d + 4e + 4f) — build plan approved =====
+Order: Wave C (now) → Wave B (matchup Graph) → docs (4f-C) LAST (after Wave B, avoid rework).
+Source descriptions: review/DESIGN_ROUND4_HANDOFF_SPEC.md (A5/A6/A8/A9/B/C/D). Provenance:
+A9=decision 47e (already approved); popup-dropdown conversion=owner 2026-07-18. A7 (R.Pos Vs-drop)
+already resolved in completed Wave 4b — NOT in scope here.
+### C1 — three PARALLEL workers, disjoint files:
+- **C1a = 4d** (frontend-engineer/Sonnet-high) — (A5) "Keep Selected Columns" checkbox in Filters
+  footer left-of-Search, default OFF (OFF→new Search resets cols to scope default via
+  defaultColumnsFor; ON→persist cols+order); (A6) no-data pin "(no innings)" pill note + toast
+  (reuse src/toast.js showToast — main.js already flags this as "a later wave"); (A8) graph.js:400
+  rename "Reset to filtered set"→"Reset to full filtered set". DISPLAY-ONLY. Owns main.js, state.js,
+  drawer.js, pills.js, table.js, graph.js, styles.css (imports toast.js). Anchors byte-identical.
+- **C1b = 4e/A9** (data-engineer/Opus) — Team/Opposition/Event/Venue option lists scope to FULL
+  conditions (gender+format+date+team-type), was gender+team-type only. playerData.js searchTeams/
+  searchEvents/searchVenues gain optional format+date scoping; drawerInnings.js callers pass
+  state.formats+dateFrom/dateTo. NUMBER-ADJACENT → orchestrator independent DuckDB. Only caller of
+  those loaders is drawerInnings.js (backward-compat safe). Owns playerData.js, drawerInnings.js.
+- **C1c = 4f popup dropdowns** (frontend-engineer/Sonnet-high) — convert playerFilters.js native
+  selects pf-dateFrom/pf-dateTo/pf-opposition/pf-vs to the shared searchSelect component (single-pick,
+  searchable). CONTROL-STYLE ONLY — no new filters, no popup re-scope, no player-graph sorting (still
+  deferred). Owns playerFilters.js (searchSelect.js only if a variant is missing → flag).
+### C2 (serial, after C1a commits): 4f-D hygiene = dead-CSS removal from styles.css (Sonnet/medium,
+grep-proven unused). ### Docs (4f-C) deferred to after Wave B.
+Agents do NOT drive the browser (avoid 3-way contention); orchestrator does authoritative in-browser
++ independent-DuckDB verification. Anchors: 2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34.
+## C1 spawning (3 parallel).

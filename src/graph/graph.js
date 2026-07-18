@@ -397,7 +397,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
               </div>
             </div>
             <div class="graph-player-actions">
-              <button type="button" class="link-btn" data-role="reset-players">Reset to filtered set</button>
+              <button type="button" class="link-btn" data-role="reset-players">Reset to full filtered set</button>
             </div>
             <p class="graph-cap-note" data-role="cap-note" hidden></p>
           </div>
