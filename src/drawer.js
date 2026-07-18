@@ -34,7 +34,7 @@ import {
   effectiveNamespace,
   eligibleMetrics,
 } from "./state.js";
-import { getMetric, matchupBucketLabel } from "./metrics.js";
+import { getMetric, matchupBucketLabel, metricDisplayLabel } from "./metrics.js";
 import {
   OPERATORS,
   activeConditionCount,
@@ -434,9 +434,9 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
   // can still be added from it (they attach to the shared singleton rows above,
   // OUTSIDE every group). "Dismissal type" (task 3) sits between Match and Basic
   // metrics and holds the dismissal COUNT metrics moved out of Advanced.
-  function metricLabel(metricKey, ns) {
+  function metricLabel(metricKey, ns, formats) {
     const m = getMetric(metricKey, ns) || getMetric(metricKey);
-    return m ? m.label : metricKey;
+    return m ? metricDisplayLabel(m, formats) : metricKey;
   }
 
   // Display-only override for the "+ Add condition…" dropdown OPTION label
@@ -478,7 +478,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       )}</option>`;
     };
     const singletonOpts = (order) => order.map(singletonOpt).join("");
-    const metricOpt = (m, label) => `<option value="m:${escAttr(m.key)}">${escHtml(label ?? m.label)}</option>`;
+    const metricOpt = (m, label) => `<option value="m:${escAttr(m.key)}">${escHtml(label ?? metricDisplayLabel(m, s.formats))}</option>`;
     const metricOpts = (list) => list.map((m) => metricOpt(m)).join("");
     // Basic metrics group: standard metric options, with the "Regular position"
     // singleton (c:rpos) injected right after the "Innings" option (item 7).
@@ -583,7 +583,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     });
   }
 
-  function conditionRowHTML(cond, gi, ci, ns) {
+  function conditionRowHTML(cond, gi, ci, ns, formats) {
     const hasError = showErrors && conditionHasError(cond);
     const valueFields =
       cond.operator === "between"
@@ -595,7 +595,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       <div class="cond-row cond-row--metric ${hasError ? "cond-row--error" : ""}" data-gi="${gi}" data-ci="${ci}">
         <div class="cond-row__line">
           <div class="cond-row__main">
-            <span class="cond-row__type">${escHtml(metricLabel(cond.metricKey, ns))}</span>
+            <span class="cond-row__type">${escHtml(metricLabel(cond.metricKey, ns, formats))}</span>
             <select class="select" data-role="operator">
               ${OPERATORS.map((o) => `<option value="${o.key}" ${cond.operator === o.key ? "selected" : ""}>${o.label}</option>`).join("")}
             </select>
@@ -625,7 +625,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
          <span class="cond-group__match">of</span>`
       : "";
     const head = showOp || removeBtn ? `<div class="cond-group__head">${opControl}${removeBtn}</div>` : "";
-    const rows = g.conds.map((c, ci) => conditionRowHTML(c, gi, ci, ns)).join("");
+    const rows = g.conds.map((c, ci) => conditionRowHTML(c, gi, ci, ns, s.formats)).join("");
     return `
       <div class="cond-group${multi ? " is-multi" : ""}" data-gi="${gi}">
         ${head}

@@ -17,7 +17,7 @@
 
 import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, hasActiveProfileFilter, matchupVsActive, effectiveNamespace } from "./state.js";
 import { isConditionComplete, removeConditionAt } from "./advanced.js";
-import { metricsFor, getMetric } from "./metrics.js";
+import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
 
 // Symbol style (not a word phrasing like "at least 300") — matches the worked
@@ -32,7 +32,7 @@ function metricLabelFor(metricKey, state) {
   const ns = effectiveNamespace(state);
   const inNs = metricsFor(ns).find((m) => m.key === metricKey);
   const metric = inNs || getMetric(metricKey);
-  return metric ? metric.label : metricKey;
+  return metric ? metricDisplayLabel(metric, state.formats) : metricKey;
 }
 
 function conditionPillLabel(cond, state) {

@@ -8,7 +8,7 @@
 // advanced-filter conditions on rate/ratio metrics and to render "—" for
 // no-data cells (NULL already renders "—"; this module never coalesces ratios).
 
-import { getMetric, hasMetricData, matchupBucketLabel, DISMISSAL_KINDS } from "./metrics.js";
+import { getMetric, hasMetricData, matchupBucketLabel, DISMISSAL_KINDS, metricDisplayLabel } from "./metrics.js";
 import { query } from "./db.js";
 import { buildScopeClauses, buildCoreScopeClauses, whereWithPinExemption, gateWithPinExemption } from "./filters.js";
 import { activeGroups } from "./advanced.js";
@@ -2296,7 +2296,7 @@ export function mountTable(
                .map(
                  (m) => `<label class="columns-popover__item">
                    <input type="checkbox" data-key="${m.key}" ${visible.has(m.key) ? "checked" : ""} />
-                   <span>${m.label}</span>
+                   <span>${metricDisplayLabel(m, state.formats)}</span>
                  </label>`
                )
                .join("")}

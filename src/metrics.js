@@ -1881,3 +1881,25 @@ export function matchupBucketLabel(bucket) {
   if (bucket === "Pace") return "Pace (unspecified)";
   return bucket;
 }
+
+/**
+ * Format-aware display label (Wave A1 item 4). The "(Innings)" suffix on
+ * Best Bowling (plain + matchup) only makes sense when a multi-innings
+ * format is in scope: FORMAT_BUCKETS' "Red Ball" (Test/MDM) is the only
+ * bucket with real multiple-innings-per-match bowling; "50 Over" and "T20"
+ * are single-innings, so the suffix would misread there. Rule: keep the
+ * suffix iff `formats` includes "Red Ball" (including mixed scopes, where
+ * multi-innings figures genuinely exist alongside single-innings ones);
+ * strip it otherwise. Display-only — metric.label/key/sqlExpression/
+ * sortExpression are untouched; this is read at render time by callers that
+ * need the resolved text instead of `metric.label` directly. Generic on any
+ * "… (Innings)"-suffixed label (not hard-coded to the `best` key), though
+ * today only Best Bowling carries the suffix.
+ */
+export function metricDisplayLabel(metric, formats) {
+  if (!metric || !metric.label) return metric ? metric.label : metric;
+  if (metric.label.endsWith(" (Innings)") && !(formats || []).includes("Red Ball")) {
+    return metric.label.slice(0, -" (Innings)".length);
+  }
+  return metric.label;
+}
