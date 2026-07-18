@@ -357,7 +357,15 @@ Verification (all on localhost:8000, 0 console errors):
   (fpop-keep-columns/pill--no-innings/search-select/table-toolbar__clear-btn), only styles.css touched
   (-155 lines), braces 580/580, no visual regression.
 - ANCHOR after Wave C: 2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34 reproduced on screen.
-STOPPED for owner gate. Two items to surface: (a) 4e selection-staleness edge case (pick a Team/Event/
-Venue then narrow date so it leaves the window → picker checkbox clears but pill+query still honor it;
-clean fix lives in filters.js = number-adjacent + out of A9 scope → owner decision); (b) docs (4f-C)
-deferred to AFTER Wave B. NEXT (on owner go) = Wave B (matchup-aware Graph).
+STOPPED for owner gate. (a) docs (4f-C) deferred to AFTER Wave B.
+## 4e FOLLOW-UP — owner ruled (2026-07-18) EXTEND the clearing logic, no special-case (see
+[[feedback-build-foundations]]). BUILT + orchestrator-verified (commit after 92c18b1). filters.js:
+format change + dateFrom + dateTo + applyPreset now clear teams/event/venue/opposition (mirroring the
+existing gender/team-type handlers); profile kept (as team-type does). buildScopeClauses BYTE-IDENTICAL
+(only the 4 UI change-handlers touched); node --check pass. In-browser: committed Team=India CLEARS on
+both a format change (untick Red Ball) and a date change (pill gone, picker→"All teams"); baseline
+2,813 held (clear is a no-op on empty picks). NEW expected behaviour to note at review: a format/date
+change now drops any Team/Opp/Event/Venue pick, same as a gender/team-type change. (Earlier confusion
+"India still showing" was a test-timing race with the multi-select's deferred commit, not a bug.)
+NEXT = Wave B (matchup-aware Graph) — owner signalled proceed ("review all three when done"); I'll open
+Wave B with the charts.js approach + per-chart-type plan for a quick pre-build check (handoff mandate).
