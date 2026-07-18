@@ -34,4 +34,25 @@ enabling them needs an owner decision (metrics.js change, outside my authority).
   value computed at chart time => correct for finding candidates. Left plain, flagged.
 - applyGraphFilters ~2006 sort-key validity check left on plain discipline per brief.
 
-## Status: STARTING
+## Status: COMPLETE — all units committed + self-verified in browser
+
+Commits: B1a wrapper/footer/helpers · B1b repoints+Line-grey · B1c charts.js branch ·
+B1d benchmark+phases · B1e players seed. Forbidden files (table/filters/metrics/state/
+drawer/timeseries) untouched; charts.js PLAIN branch byte-identical.
+
+VERIFIED (localhost:8000, 0 console errors throughout):
+- PLAIN baseline via buildQuery: 2,813 players / Karanbir 2,454; plain fetch branch
+  returns Karanbir 2,454 (matchupVsActive=false path untouched).
+- Vs=Spin bar fetch == independent DuckDB: Waseem 701, Virandeep 688, Anshuman 677,
+  K Kadowaki-Fleming 664, RK Paudel 644, SD Hope 615; charted Buttler 470 / de Kock 272 /
+  Kohli 44 / Jadeja 11 all == DuckDB.
+- benchmark/radar pool preserves Vs (701/688/677/664); window (slope/dumbbell) SR ==
+  DuckDB (A. Russell WinA 193.33 / WinB 171.43).
+- On screen under Vs=Spin: Bar, Scatter, Radar, Phases (3-phase), Benchmark, Slope,
+  Dumbbell all render with correct/sane values + footer "…, vs Spin". Line = (unavailable).
+- graphMetrics: plain byte-identical; matchup drops matches/high_score/runs_per_innings/
+  comp_* (vsTableOnly+composition). benchmark drops runs_per_innings too.
+
+FLAG (owner): vsTableOnly (decision 47c, "never the graph") EXCLUDES High Score / Matches /
+Runs-per-Innings / Best Bowling from the graph. The B-plan expected High Score chartable;
+honoring the owner flag instead. Enabling them = an owner decision (metrics.js change).
