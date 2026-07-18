@@ -434,3 +434,21 @@ NaN/broken) — a consistency fix, flag it. MUST NOT touch buildQuery/buildMatch
 metrics.js aggregation; values come from the existing builders. Verify (independent): High Score vs Spin
 SA Yadav=47; Matches=38; RPI=11.95; Best Bowling vs RHB Bumrah label "2-9" (rank 1991); plain best now
 charts by rank; non-Vs numbers byte-identical. ## B3 spawning.
+## B3 COMPLETE + orchestrator-verified (commits 2ce5494/10b6818) + follow-up (790185d). Only
+graph/graph.js + timeseries.js + charts.js touched; sacred files 0 diff; chartValue accessor is
+byte-identical for numeric metrics (only str-peak best uses __sort). INDEPENDENT: High Score vs Spin
+SA Yadav=47, Matches=38, Runs/Innings=11.95, Best Bowling vs RHB Bumrah "2-9"/rank 1991; byte-id Karanbir
+2454 + Waseem 701. ON SCREEN: Best Bowling bar renders under Vs=RHB sorted by rank (AU Rashid 4-3 top →
+4-10 → 4-14 → 3-x → 2-x → 1-x) with "W-R" labels; metric list offers HS/Matches/RPI. Orchestrator
+follow-up (790185d, per Rule 2 + owner ruling): (a) benchmarkEligibleMetrics dropped !vsTableOnly →
+runs_per_innings benchmarkable (matches/high_score/best still excluded by kind/hib/str; plain list
+unchanged); (b) deriveChecked Best/Worst ranking routes through exported chartValue so Best Bowling ranks
+by figure not NaN. node-check + 0 console errors. 
+## ===== WAVE B COMPLETE (B1+B2+B3+follow-up) + orchestrator-verified. =====
+All chart types plot Vs metrics with numbers IDENTICAL to the table (reuse buildQuery→buildMatchupQuery);
+Line by year via new buildMatchupTimeseriesQuery; the 4 vsTableOnly stats graphable (Best Bowling by
+rank+W-R label). Plain graph byte-identical; anchors hold. Owner flags at gate: (1) graph shows "Best
+Bowling (Innings)" under T20 (Stats drawer drops it — minor label inconsistency); (2) Best Bowling bar
+axis is the ranking scale (readable via W-R labels). NEXT: fresh-eyes Opus review of the Wave B graph diff
+(Phase 5) + present full 3-wave review checklist to owner. Round-4 review-checklist = review/
+DESIGN_ROUND4_REVIEW_CHECKLIST.md (Waves A+C+B). Docs sync (4f-C) still deferred to after owner sign-off.
