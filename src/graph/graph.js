@@ -10,7 +10,7 @@
 // buildScopeClauses (via charts.js/players.js), table.js's buildQuery (via
 // players.js, for seeding).
 
-import { eligibleMetrics, pruneIneligibleState, effectiveNamespace, matchupVsActive } from "../state.js";
+import { eligibleMetrics, pruneIneligibleState, effectiveNamespace } from "../state.js";
 import { getMetric, hasMetricData } from "../metrics.js";
 import { escHtml, escAttr } from "../html.js";
 import { getManifest, query } from "../db.js";
@@ -1729,13 +1729,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // reasons/strings).
     const poolReason = poolReasonOverride !== undefined ? poolReasonOverride : poolStatusReason();
     if (poolReason) return { ok: false, reason: poolReason };
-    // Wave B: Line (by-year) for Vs metrics is NOT built yet (B2's job) — grey
-    // it under Vs with an honest note so selecting it shows guidance rather than
-    // running buildTimeseriesQuery with a matchup metric. Checked before the
-    // generic byyear metric check below.
-    if (typeKey === "byyear" && matchupVsActive(state)) {
-      return { ok: false, reason: "Not available for Vs metrics yet." };
-    }
+    // Wave B2: Line (by-year) is now Vs-aware — the interim "Not available for
+    // Vs metrics yet" grey-out is removed. Availability under Vs falls through
+    // to the generic byyear metric check below (does the effective namespace
+    // offer any trend-able metric for this scope?), exactly like plain mode.
     // NIT5: the base scope-eligible metric list is identical across the
     // slope/byyear/dumbbell branches below (all keyed on the effective
     // namespace + state.formats). syncChartTypeButtons() computes it ONCE and
@@ -2621,7 +2618,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // grouped by (player, year), never re-derived here per §8.2) instead of
       // fetchSelectedPlayerMetrics's flat per-player grouping.
       if (chartType === "byyear") {
-        const metrics = eligibleMetrics(discipline, state.formats).filter((m) => timeseriesSupported(m));
+        // Wave B2: resolve the metric + build the query in the EFFECTIVE
+        // namespace (matchup_* under Vs) so a Vs Line trends the matchup metric
+        // over matchup_batting/matchup_bowling. Plain scope => ns === discipline
+        // => byte-identical to before. config.discipline stays plain (the card
+        // eyebrow), mirroring Slope and every other B1 chart type.
+        const metrics = eligibleMetrics(ns, state.formats).filter((m) => timeseriesSupported(m));
         const metric = metrics.find((m) => m.key === byYearMetricKey); // item 4: no auto-pick
         if (!metric) {
           showChartGuidance(noMetricGuidance("byyear"));
@@ -2629,7 +2631,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         }
 
         const ids = players.map((p) => p.id);
-        const sql = buildTimeseriesQuery({ discipline, metricKey: metric.key, playerIds: ids, filters: state });
+        const sql = buildTimeseriesQuery({ discipline: ns, metricKey: metric.key, playerIds: ids, filters: state });
         const { rows } = await query(sql);
         if (token !== loadToken) return;
         hideStatus();

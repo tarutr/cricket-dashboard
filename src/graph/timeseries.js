@@ -53,20 +53,34 @@
 
 import { getMetric } from "../metrics.js";
 import { buildScopeClauses } from "../filters.js";
-import { escSql } from "../state.js";
+import { escSql, matchupVsActive } from "../state.js";
 
 // Local copies of table.js's per-discipline column maps. table.js does not
 // export these constants and this module must not modify other files, so they
 // are duplicated here (kept byte-identical to table.js's VIEW_FOR_DISCIPLINE /
-// ID_COL / NAME_COL / TEAM_COL / OPP_COL). Only the two innings disciplines are
-// supported — the progression chart plots plain career progression, not the
-// matchup_* namespaces (which have their own coverage semantics and no year
-// grain wired for charting).
+// ID_COL / NAME_COL / TEAM_COL / OPP_COL).
 const VIEW = { batting: "batting", bowling: "bowling" };
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
 const NAME_COL = { batting: "batter_name", bowling: "bowler_name" };
 const TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
 const OPP_COL = { batting: "bowling_team", bowling: "batting_team" };
+
+// Matchup-namespace equivalents (Wave B2). When a "Vs" bucket is active the
+// year-by-year line trends the metric over the matchup_* views instead of the
+// plain innings views — same duplication rationale as the plain maps above
+// (table.js's MATCHUP_* maps are not exported). Both matchup views carry a
+// `year` column and the bucket-dimension columns buildMatchupQuery slices on
+// (bowling_group / bowling_type on matchup_batting, batting_hand on
+// matchup_bowling), plus the per-innings BALLS column used as the yearly
+// sample (balls_faced batting / balls bowling) — verified against the live
+// parquet schema. Kept byte-identical to table.js's MATCHUP_* maps.
+const MATCHUP_VIEW = { batting: "matchup_batting", bowling: "matchup_bowling" };
+const MATCHUP_NS = { batting: "matchup_batting", bowling: "matchup_bowling" };
+const MATCHUP_ID_COL = { batting: "batter_id", bowling: "bowler_id" };
+const MATCHUP_NAME_COL = { batting: "batter_name", bowling: "bowler_name" };
+const MATCHUP_TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
+const MATCHUP_OPP_COL = { batting: "bowling_team", bowling: "batting_team" };
+const MATCHUP_BALLS_COL = { batting: "balls_faced", bowling: "balls" };
 
 /**
  * Per-year sample floor for honesty on a yearly point (decision 43; OWNER
@@ -164,13 +178,40 @@ export function sampleExpression(discipline) {
  * matches-batted/bowled-in that year rather than all appearances — a different
  * stat. Excluding it avoids that dishonest reinterpretation.
  *
+ * ── Matchup ("Vs") metrics (source "matchup", Wave B2) ──────────────────────
+ * A Vs by-year line trends a matchup-namespace metric over the matchup_* view
+ * (see buildTimeseriesQuery's matchup branch). The SAME recombination rule
+ * applies: a total/rate/percent whose sqlExpression is a SUM (or a ratio of
+ * SUMs ×100) of additive per-innings columns regroups cleanly into
+ * (player, year) buckets and recombines to the career-vs-bucket figure by the
+ * same arithmetic the anchor check verifies. So matchup total/rate/percent
+ * metrics are trend-able — with two deliberate exclusions:
+ *  • `vsTableOnly` metrics (Matches, Runs per Innings, High Score, Best
+ *    Bowling — decision 47c) are LEADERBOARD-Vs-TABLE ONLY by owner ruling and
+ *    were excluded from every graph type in Wave B1; they stay out here. (Two
+ *    of them — High Score / Best Bowling — are also kind "peak" and would fail
+ *    the kind check anyway; the other two — Matches / Runs per Innings — are
+ *    total/rate, so the vsTableOnly guard is what keeps them off the line.)
+ *  • kind "peak" (non-additive MAX / arg_max "W-R") and "composition"
+ *    (descriptive un-bucketed %s) are excluded by the same kind check as the
+ *    innings path.
+ *
  * @param {object} metricDef a metrics.js metric definition (from getMetric)
  * @returns {boolean}
  */
 export function timeseriesSupported(metricDef) {
   if (!metricDef) return false;
+  const trendableKind =
+    metricDef.kind === "total" || metricDef.kind === "rate" || metricDef.kind === "percent";
+  if (metricDef.source === "matchup") {
+    // vsTableOnly (Matches / Runs per Innings / High Score / Best Bowling) is
+    // never charted — table-only by owner ruling (decision 47c), honoured by
+    // Wave B1 for every other chart type and by this Line path too.
+    if (metricDef.vsTableOnly) return false;
+    return trendableKind;
+  }
   if (metricDef.source !== "innings") return false; // drops "matches" (player_matches-sourced)
-  return metricDef.kind === "total" || metricDef.kind === "rate" || metricDef.kind === "percent";
+  return trendableKind;
 }
 
 /**
@@ -182,15 +223,27 @@ export function timeseriesSupported(metricDef) {
  * for `metricKey` (SPEC §8.2 — never an independent formula here); the sample
  * is sampleExpression(discipline).
  *
+ * ── Matchup ("Vs") branch (Wave B2) ─────────────────────────────────────────
+ * When a Vs bucket is active for the current discipline (matchupVsActive), the
+ * PLAIN path below is bypassed for buildMatchupTimeseriesQuery(): the SAME
+ * per-year grain, sample floor, roster-id restriction and shared scope builder,
+ * but over the matchup_* view with the bucket predicate applied and the
+ * metric's matchup-namespace sqlExpression — so a Vs-by-year point equals the
+ * table's Vs number for that year (see that function). The plain path is left
+ * byte-identical (it simply never runs while Vs is active).
+ *
  * @param {object} params
- * @param {"batting"|"bowling"} params.discipline
- * @param {string} params.metricKey  a metrics.js key in that discipline; must
+ * @param {"batting"|"bowling"|"matchup_batting"|"matchup_bowling"} params.discipline
+ *   The effective namespace (graph.js passes effectiveNamespace(state)); a
+ *   matchup namespace only ever accompanies an active Vs bucket, which the
+ *   matchup branch detects via matchupVsActive(filters).
+ * @param {string} params.metricKey  a metrics.js key in that namespace; must
  *   satisfy timeseriesSupported() or this throws.
  * @param {string[]} params.playerIds  the selected players' ids (batter_id /
  *   bowler_id). Empty array → a query that returns zero rows (never "all").
  * @param {object} params.filters  the app state object (gender, formats,
- *   dateFrom, dateTo, teamType, teams, opposition, positions, profile, …) —
- *   the same shape table.js/players.js read.
+ *   dateFrom, dateTo, teamType, teams, opposition, positions, profile,
+ *   matchupVs, …) — the same shape table.js/players.js read.
  * @returns {string} a SQL string. Executed, it yields rows of shape:
  *   {
  *     player_id:   string,        // batter_id / bowler_id
@@ -206,6 +259,14 @@ export function timeseriesSupported(metricDef) {
  *   zero — honest about "didn't play" vs "played and scored 0").
  */
 export function buildTimeseriesQuery({ discipline, metricKey, playerIds, filters }) {
+  // Matchup ("Vs") by-year branch (Wave B2): route to the matchup builder when
+  // a Vs bucket is active — mirrors table.js's buildQuery auto-dispatch to
+  // buildMatchupQuery on matchupVsActive(state). The PLAIN path below stays
+  // byte-identical (never reached while Vs is active).
+  if (matchupVsActive(filters)) {
+    return buildMatchupTimeseriesQuery({ metricKey, playerIds, filters });
+  }
+
   const view = VIEW[discipline];
   if (!view) throw new Error(`buildTimeseriesQuery: unsupported discipline "${discipline}"`);
 
@@ -248,6 +309,106 @@ export function buildTimeseriesQuery({ discipline, metricKey, playerIds, filters
     `       year,`,
     `       ${metric.sqlExpression} AS value,`,
     `       ${sampleExpression(discipline)} AS sample`,
+    `FROM ${view}`,
+    `WHERE ${whereClauses.join(" AND ")}`,
+    `GROUP BY ${idCol}, year`,
+    `ORDER BY player_id, year`,
+  ].join("\n");
+
+  return sql;
+}
+
+/**
+ * Matchup ("Vs") by-year query (Wave B2). Same contract and output-row shape as
+ * buildTimeseriesQuery's plain path, but over the matchup_* view, sliced to the
+ * active Vs bucket, so a Vs-by-year point equals the leaderboard's Vs number
+ * for that player-year. Only reached via buildTimeseriesQuery when
+ * matchupVsActive(filters) is true.
+ *
+ * Why this reproduces the table's Vs numbers exactly — and why it can put the
+ * bucket predicate in WHERE where table.js's buildMatchupQuery uses a
+ * per-aggregate FILTER:
+ *   • For any metric, `SUM(x) FILTER (WHERE bucket)` over the scope rows equals
+ *     `SUM(x)` over the (scope AND bucket) rows. buildMatchupQuery uses FILTER
+ *     ONLY so it can ALSO total un-bucketed balls for its coverage column in
+ *     one scan; the by-year line needs no coverage, so the bucket goes straight
+ *     into WHERE and the metric's UN-appended sqlExpression is used verbatim —
+ *     numerically identical to the FILTER'd form (SPEC §8.2: never re-derived).
+ *   • Row set: buildMatchupQuery keeps only (id) groups with ≥1 bucket innings
+ *     (its `__innings_gate >= 1`). Bucket-in-WHERE gives exactly the same
+ *     grain-appropriate result here — a (player, year) with no bucket innings
+ *     produces no row (an honest gap: "didn't face this bucket that year"),
+ *     mirroring the plain path's "no innings that year → no row".
+ *   • Scope: the SAME shared buildScopeClauses helper with the SAME options
+ *     buildMatchupQuery passes (includeTeams / team-opp columns / idColumn /
+ *     includePositions:true — both matchup views carry batting_position). The
+ *     roster is an explicit id list (as the plain path), so — like the plain
+ *     path — no name-search or pin exemption is applied; a Vs by-year line
+ *     describes the same slice the Vs table shows for a player in the roster.
+ *
+ * Name variants: grouping by (id, year) with MAX(name) collapses a player's
+ * multiple registry spellings into one point per year — exactly as the plain
+ * path does — so summing a player's yearly totals reconstructs their full
+ * career-vs-bucket figure (verified: SA Yadav runs-vs-Spin 141+92+63+158 = 454,
+ * the standing anchor).
+ *
+ * @param {object} params
+ * @param {string} params.metricKey  a matchup-namespace metric key; must
+ *   satisfy timeseriesSupported() or this throws.
+ * @param {string[]} params.playerIds  selected roster ids (batter_id/bowler_id).
+ * @param {object} params.filters  the app state (must have an active matchupVs).
+ * @returns {string} SQL producing the same row shape as buildTimeseriesQuery.
+ */
+function buildMatchupTimeseriesQuery({ metricKey, playerIds, filters }) {
+  const state = filters;
+  // matchupVsActive guarantees state.discipline is the base discipline that
+  // matches the active bucket dim (batting for group/type, bowling for hand).
+  const base = state.discipline;
+  const view = MATCHUP_VIEW[base];
+  if (!view) throw new Error(`buildMatchupTimeseriesQuery: unsupported discipline "${base}"`);
+  const ns = MATCHUP_NS[base];
+  const idCol = MATCHUP_ID_COL[base];
+  const nameCol = MATCHUP_NAME_COL[base];
+  const teamCol = MATCHUP_TEAM_COL[base];
+  const oppCol = MATCHUP_OPP_COL[base];
+  const ballsCol = MATCHUP_BALLS_COL[base];
+
+  const metric = getMetric(metricKey, ns);
+  if (!metric) throw new Error(`buildMatchupTimeseriesQuery: unknown metric "${metricKey}" for ${ns}`);
+  if (!timeseriesSupported(metric)) {
+    throw new Error(`buildMatchupTimeseriesQuery: metric "${metricKey}" (kind ${metric.kind}) is not trend-able`);
+  }
+
+  // Bucket predicate — identical column/value mapping to buildMatchupQuery
+  // (hand → batting_hand, type → bowling_type, group → bowling_group).
+  const mv = state.matchupVs;
+  const bucketCol = mv.dim === "hand" ? "batting_hand" : mv.dim === "type" ? "bowling_type" : "bowling_group";
+  const bucketClause = `${bucketCol} = '${escSql(mv.value)}'`;
+
+  // Scope: the SAME options buildMatchupQuery uses for the matchup view.
+  const whereClauses = buildScopeClauses(state, {
+    includeTeams: true,
+    teamColumn: teamCol,
+    idColumn: idCol,
+    oppositionColumn: oppCol,
+    includePositions: true,
+  });
+  whereClauses.push(bucketClause);
+
+  // Roster restriction (explicit id list, as the plain path). Empty → no rows.
+  const ids = Array.isArray(playerIds) ? playerIds.filter((x) => x != null) : [];
+  if (ids.length > 0) {
+    whereClauses.push(`${idCol} IN (${ids.map((id) => `'${escSql(id)}'`).join(", ")})`);
+  } else {
+    whereClauses.push("FALSE");
+  }
+
+  const sql = [
+    `SELECT ${idCol} AS player_id,`,
+    `       MAX(${nameCol}) AS player_name,`,
+    `       year,`,
+    `       ${metric.sqlExpression} AS value,`,
+    `       SUM(${ballsCol}) AS sample`,
     `FROM ${view}`,
     `WHERE ${whereClauses.join(" AND ")}`,
     `GROUP BY ${idCol}, year`,
