@@ -51,3 +51,17 @@ Scope: gender=male, T20+IT20, international, 2023-07-01..(app: <2026-08-01).
 - The 4 vsTableOnly stats stay OUT (owner ruling; B1 precedent). Do NOT chart them.
 - Bucket-in-WHERE == buildMatchupQuery's FILTER for the stat value; FILTER there
   exists only to co-compute coverage in one scan (not needed for the line).
+
+## Browser verification (localhost:8000, Vs=Spin, 0 console errors)
+- Chart-type dropdown under Vs: "Line" listed with NO "(unavailable)" suffix (un-grey works).
+- Selected Line + metric Strike Rate: metric picker offered the MATCHUP vocabulary
+  (Average (vs style), phase SRs) and CORRECTLY EXCLUDED the 4 vsTableOnly stats
+  (High Score/Matches/Runs per Innings/Best Bowling) and composition % columns.
+- Chart RENDERED: title "Strike Rate — Line — 6 most-capped players", subtitle
+  "Men's T20s (international), Jul 2023 – Jul 2026, vs Spin", x-axis 2023-2026.
+- Rendered per-year SR-vs-Spin == INDEPENDENT DuckDB, digit-for-digit, all 6 players:
+  JC Buttler 186.57/141.67/140.32/147.92; GJ Maxwell 142.31/191.53/139.13/124.39;
+  DA Miller 147.62/124.24/66.67/163.64; RG Sharma 2024=175; Shakib 2024=100;
+  V Kohli 2024=115.79 (last three: one season in range -> single point).
+- Thin-sample floor works on matchup sample: DA Miller 2025 = 6 balls -> faded point.
+- Zero console errors throughout.
