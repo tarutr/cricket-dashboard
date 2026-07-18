@@ -59,3 +59,26 @@ UI: two-box "Best Bowling >= [W] wickets for <= [R] runs" renders w/ NO operator
   select; pills "Best Bowling >=5W for <=20R" / "High Score >= 47"; High Score +
   Best Bowling now in the Vs condition picker. VS-filter parity guard PASSES.
 STATUS: COMPLETE, awaiting orchestrator gate.
+
+## ORCHESTRATOR INDEPENDENT VERIFICATION (2026-07-18) — PASS
+Read full diff (ba673fa..HEAD): NO aggregation string (sqlExpression/sortExpression/
+peakInner/peakOuter/peakOuterSort) added or removed anywhere; filters.js UNTOUCHED;
+the byte-identity guarantee is architecturally sound (condition-only peaks materialize
+in the peak CTE but are EXCLUDED from peakSelectParts, so no-condition output rows are
+byte-identical while the filter references peak.<col> in the final WHERE). node --check
+all 6 touched files PASS. describeScope IS live in the Graph (graph.js:320, :2351) — so
+item-4's conditionScopeLabel format-aware fix + A2's two-box label there have a real surface.
+IN-BROWSER (orchestrator, localhost:8000, modules cache-reloaded), against MY OWN pre-build
+independent DuckDB targets (scratchpad/waveA_verification_targets.md):
+- Anchor after A2, NO condition: 2,813 / Karanbir 2,454 / SA Yadav 60/1,544/29.13/150.34 on screen.
+- SA Yadav vs Spin displayed 38/322/454/140.99 (unchanged) inside the HS>=47 result.
+- Item 3: Vs=Spin, HS>=47 -> 83 players, SA Yadav present (row 17); HS>=48 -> 73, SA Yadav gone.
+- Item 2 Vs: Vs=Right-handers, >=2W for <=9R -> 800; <=8R -> 781 (Bumrah 2-9 drops at the boundary).
+- Item 2 plain: bowling, Vs=Everyone, >=5W for <=20R -> 72 (BBI column shows real figures;
+  R Shepherd 5-20 = rank 4980 exactly, correctly INCLUDED at the boundary).
+- Two-box control renders "Best Bowling >= [W] wickets for <= [R] runs" (no operator select);
+  High Score single box; pills exact. Zero console errors throughout.
+ALL counts EXACTLY match the independently-derived targets. WAVE A COMPLETE + orchestrator-verified.
+FLAG for owner at gate: (a) toolbar hardcoded "Vs" label unchanged — rename to "Matchup (Vs)"?
+(b) A2 consistency note — a plain-authored HS/Best-Bowling condition now re-scores vs the bucket
+in Vs mode (consistent with decision 47b re-score model; surfaced for transparency).

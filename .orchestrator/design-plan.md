@@ -300,3 +300,16 @@ ability 600-623) → ONE owner. Nearly all items overlap drawer.js/table.js/metr
   drawer.js (conditionRowHTML two-box), pills.js (two-value pill).
 Note: item 3 is Stats-table-only in practice this wave (Graph nulls matchupVs until Wave B).
 ## A1 spawning.
+## A1 COMPLETE + orchestrator-verified (commits 978e30a/88b0069 + 2bc377b state.js completion).
+Items 1+4 display-only; anchors byte-identical (2,813 reproduced on screen); "Matchup (Vs)"
+first in "+ Add condition" in BOTH Stats+Graph; Best Bowling label format-aware (T20->no
+"(Innings)", Red Ball/mixed->"(Innings)") incl. the describeScope scope sentence (live in Graph).
+## A2 COMPLETE + orchestrator-verified (commits f9895dd/b54091e). Items 2+3 number-adjacent.
+Independent DuckDB targets all matched EXACTLY on screen: item3 HS>=47 vs Spin=83 (SA Yadav in)/
+>=48=73 (out); item2 Vs >=2W<=9R vs RHB=800 (Bumrah in)/<=8R=781 (out); item2 plain >=5W<=20R=72.
+No aggregation string changed; filters.js untouched; plain fingerprint 3307620867/1430 held;
+2,813 baseline reproduced after A2. Two-box UI + single-box HS + pills all correct.
+## WAVE A COMPLETE + orchestrator-verified. STOPPED for owner gate before Wave B (per instruction).
+Open flags for owner: (a) toolbar "Vs" label left unchanged (rename to match?); (b) plain-authored
+HS/Best-Bowling condition re-scores vs bucket in Vs mode (consistent w/ decision 47b); (c) old
+4d/4e/4f queue reconciliation (handoff #2 reorganized into Wave A+B — still wanted?).
