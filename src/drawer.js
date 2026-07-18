@@ -84,16 +84,20 @@ function orderBy(present, order) {
 // `group` field, which is now documentation only). This array's order drives the
 // applied-ROW render order in the singleton-rows container.
 const SINGLETON_TYPES = [
+  // "Matchup (Vs)" (R3.2, relabelled + moved to top Wave A1 item 1): the
+  // matchup opponent selector, mirroring the toolbar's bonded Vs control —
+  // both edit state.matchupVs, synced via the shared store. Rendered as its
+  // own top-level entry ABOVE the Player/Match/Basic optgroups (see
+  // addSelectOptionsHTML), not inside the Basic-metrics group. Leads this
+  // array too, so its applied row renders first among the singleton rows
+  // (SINGLETON_TYPES order also drives applied-row order). Men-only
+  // (matchupVsActive hard-gates on male; coverage is ~0% for women).
+  { key: "vs", label: "Matchup (Vs)", group: "Basic", menOnly: true },
   { key: "team", label: "Team", group: "Player", menOnly: false },
   { key: "opposition", label: "Opposition", group: "Player", menOnly: false },
   { key: "hand", label: "Batting hand", group: "Player", menOnly: true },
   { key: "bowling", label: "Bowling style", group: "Player", menOnly: true },
   { key: "role", label: "Role", group: "Player", menOnly: true },
-  // "Vs" (R3.2): the matchup opponent selector, mirroring the toolbar's bonded
-  // Vs control — both edit state.matchupVs, synced via the shared store. Injected
-  // into the Basic-metrics dropdown group right after "Innings" (see basicOpts).
-  // Men-only (matchupVsActive hard-gates on male; coverage is ~0% for women).
-  { key: "vs", label: "Vs", group: "Basic", menOnly: true },
   { key: "rpos", label: "R. Pos.", group: "Basic", menOnly: false },
   { key: "event", label: "Event", group: "Match", menOnly: false },
   { key: "venue", label: "Venue", group: "Match", menOnly: false },
@@ -488,29 +492,30 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     const basicOpts = () => {
       const rposEligible = s.discipline === "batting" || matchupVsActive(s);
       const rposOpt = rposEligible ? singletonOpt("rpos") : "";
-      // "Vs" (R3.2): injected right AFTER Innings, before R. Pos. Available in
-      // both disciplines (batting → pace/spin/type; bowling → hand); singletonOpt
-      // returns "" for women (menOnly) and disables it once the row is present.
-      const vsOpt = singletonOpt("vs");
       const parts = [];
       let injected = false;
       for (const m of basic) {
         parts.push(metricOpt(m));
         if (m.key === "innings") {
-          parts.push(vsOpt);
           parts.push(rposOpt);
           injected = true;
         }
       }
       if (!injected) { // no Innings option (edge) — append
-        parts.push(vsOpt);
         parts.push(rposOpt);
       }
       return parts.join("");
     };
     const dismissalOpts = dismissal.map((m) => metricOpt(m, stripOutPrefix(m.label))).join("");
+    // "Matchup (Vs)" (Wave A1 item 1): a standalone top-level entry ABOVE every
+    // optgroup, so it reads as the first thing in the whole "+ Add condition"
+    // list rather than merely first in a group. singletonOpt returns "" for
+    // women (menOnly) — no stray empty option — and disables it once the vs
+    // row is already present, same as any other singleton option.
+    const vsTopOpt = singletonOpt("vs");
     return `
       <option value="">+ Add condition…</option>
+      ${vsTopOpt}
       <optgroup label="Player">${singletonOpts(PLAYER_ADD_ORDER)}</optgroup>
       <optgroup label="Match">${singletonOpts(MATCH_ADD_ORDER)}</optgroup>
       <optgroup label="Basic metrics">${basicOpts()}</optgroup>
