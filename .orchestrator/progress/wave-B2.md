@@ -65,3 +65,15 @@ Scope: gender=male, T20+IT20, international, 2023-07-01..(app: <2026-08-01).
   V Kohli 2024=115.79 (last three: one season in range -> single point).
 - Thin-sample floor works on matchup sample: DA Miller 2025 = 6 balls -> faded point.
 - Zero console errors throughout.
+
+## Plain-Line regression check (Vs switched back to Everyone)
+- Plain Line renders; subtitle "Men's T20s (international), Jul 2023 – Jul 2026" (NO "vs Spin").
+- JC Buttler plain SR by year rendered 151.77/164.41/164.38/148.48 == independent
+  plain `batting` view query, digit-for-digit; distinct from the vs-Spin values
+  (186.57/141.67/140.32/147.92) — plain and matchup paths produce their own correct numbers.
+- Plain "Runs by year" SA Yadav 466/376/218/484 = 1,544 (SA Yadav runs anchor).
+- Plain SQL shape byte-identical (FROM batting ... GROUP BY batter_id, year).
+- 0 console errors.
+
+## STATUS: COMPLETE. Touched ONLY src/graph/timeseries.js + src/graph/graph.js
+(timeseriesChart.js NOT needed — row shape unchanged). No forbidden file touched.
