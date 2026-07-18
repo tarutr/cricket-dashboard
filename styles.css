@@ -654,22 +654,6 @@ a { color: var(--color-accent); }
    (see the unified :disabled rules below) — no wrapper-level opacity here,
    so it can't stack with a control's own disabled styling. */
 
-/* Blank/prompt state for the results table (owner: explicit "Show results"). */
-.table-prompt {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-7) var(--space-4);
-  text-align: center;
-}
-
-.table-prompt__text {
-  margin: 0;
-  color: var(--color-muted);
-  font-size: 1rem;
-}
-
 /* ── One disabled language, everywhere ────────────────────────────────────────
    Recolor only — muted foreground on panel background, no opacity. Opacity
    used to live on wrapper elements too (.is-disabled) and stacked with a
@@ -1005,8 +989,6 @@ a { color: var(--color-accent); }
   color: var(--color-muted);
   font-variant-numeric: tabular-nums;
 }
-
-.table-toolbar__actions { position: relative; }
 
 /* ── Toolbar left cluster: Filters button + relocated table-search (F2) ─────
    Persistent (built once by table.js's ensureSkeleton(), never touched by
@@ -1917,24 +1899,6 @@ a { color: var(--color-accent); }
   .filter-drawer__footer .btn { width: 100%; }
 }
 
-/* ── Table toolbar preset chips (owner decision 29) ────────────────────────── */
-
-.table-toolbar__presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1); /* space-2 → space-1: R3 Wave 4 one-row budget */
-  align-items: center;
-}
-
-.chip--preset {
-  /* R3 Wave 4: horizontal padding trimmed from space-3 to space-2 — part of
-     the width budget for fitting the whole toolbar (Filters, search, count,
-     all 5 presets, Vs, Graph/Columns/Clear) on one row at 1280px. */
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--text-sm2);
-  min-height: 32px;
-}
-
 /* ── Scope strip: mobile/tablet grid (polish B1, tasks 1-2) ─────────────────
    Owner ruling: the old ≤480px behavior (every .filter-group full-width,
    stacked one per row) "looks ugly" — six stacked rows ran to ~900px tall,
@@ -2779,48 +2743,6 @@ a { color: var(--color-accent); }
 }
 .graph-roster-item__remove { flex: 0 0 auto; }
 .graph-roster-item.is-disabled .graph-roster-item__name { color: var(--color-muted); }
-
-/* Benchmark chart's "Metrics…" multi-select dropdown (B8b, decision 44e) —
-   reuses the shared .dropdown/.dropdown__toggle/.dropdown__panel/
-   .dropdown__item classes (see the ".dropdown" block above); only the
-   panel's sizing (mirrors .graph-roster-panel's own width/overflow reasoning
-   — a fixed max-height plus scroll, width capped to the viewport rather than
-   forced to the sidebar's fixed width) and the kind-group labels are new. */
-.graph-benchmark-metrics__panel {
-  width: min(20rem, calc(100vw - 2rem));
-  max-height: 20rem;
-  overflow-y: auto;
-}
-.graph-benchmark-metrics__group-label {
-  font-size: var(--text-xs);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--color-muted);
-  font-weight: 600;
-  margin: var(--space-3) var(--space-2) var(--space-1);
-}
-.graph-benchmark-metrics__group-label:first-child { margin-top: var(--space-1); }
-
-/* Radar chart's "Metrics (axes)…" multi-select dropdown (R4 Wave 1b, item 3) —
-   reuses the shared .dropdown/.dropdown__toggle/.dropdown__panel/
-   .dropdown__item classes; panel sizing mirrors the Benchmark picker's
-   (fixed max-height + scroll, width capped to the viewport rather than forced
-   to the sidebar width) so it stays overflow-safe at ~380px. */
-.graph-radar-metrics__panel {
-  width: min(20rem, calc(100vw - 2rem));
-  max-height: 20rem;
-  overflow-y: auto;
-}
-.graph-radar-metrics__group-label {
-  font-size: var(--text-sm2);
-  color: var(--color-muted);
-  margin: var(--space-2);
-}
-.graph-radar-metrics__note {
-  font-size: var(--text-xs);
-  color: var(--color-muted);
-  margin: var(--space-2) var(--space-2) var(--space-1);
-}
 
 .graph-player-actions { display: flex; gap: var(--space-3); }
 .graph-cap-note { font-size: var(--text-sm2); color: var(--color-accent); margin: 0; }
@@ -4352,48 +4274,7 @@ a { color: var(--color-accent); }
 
 /* ── Leaderboard matchup mode (D4 R3, decision 33) ──────────────────────────
    "Vs" comparison: a fixed-column table where every row also carries a
-   coverage figure. Reuses .select/.table-toolbar primitives; adds the
-   coverage cell and the toolbar note that replaces presets/Customise. R3
-   Wave 4: the "Group rows" control that used to share this cluster with Vs
-   is gone — .table-toolbar__controls now holds Vs alone. */
-
-.table-toolbar__actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  /* B1 mechanical fix: .table-toolbar__actions is itself one flex item of
-     .table-toolbar (which uses justify-content: space-between across
-     row-count / presets / this block) — without flex-grow it only ever
-     shrink-wraps its own content (Vs next to Graph+Columns), so
-     .table-toolbar__graph-columns' margin-left: auto below had no leftover
-     width in THIS box to push against and Graph/Columns sat bunched right
-     next to Vs instead of flush against the toolbar's true right
-     edge. flex: 1 lets this box claim all the row's remaining width (or,
-     once wrapped onto its own line on narrow viewports, the full line width)
-     so the auto-margin has real room to work. */
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-/* Decision 44d: Vs packs on the left; Graph + Columns (+ Clear,
-   F2) are a distinct right-most cluster (margin-left: auto keeps it flush to
-   the card's right edge, and lets it drop to its own line — still
-   right-aligned on that line — before the left cluster does on narrow
-   viewports). */
-.table-toolbar__controls {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.table-toolbar__graph-columns {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-}
+   coverage figure. Reuses .select/.table-toolbar primitives. */
 
 /* Clear (F2): red/danger-tinted, rightmost in the Graph/Columns cluster.
    Recolors the .btn/.btn--ghost base (padding/radius/min-height/border
@@ -4407,42 +4288,6 @@ a { color: var(--color-accent); }
 .table-toolbar__clear-btn:hover {
   background: var(--color-bad-bg);
   border-color: var(--color-bad);
-}
-
-/* Generic "label wrapping a compact select" look — historically shared by
-   Vs and the now-removed Group rows control (R3 Wave 4), Vs is its only user
-   today. Name kept as-is (not user-visible; renaming risks an unrelated
-   diff). */
-.table-toolbar__group-label {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-sm2);
-  color: var(--color-muted);
-  white-space: nowrap;
-}
-
-/* Bowling-type optgroup can carry long style names ("Slow left-arm
-   orthodox") — cap the closed-select width so the toolbar doesn't stretch,
-   the dropdown panel itself still renders at full label width. Self-
-   contained (not reliant on the .table-toolbar__group-label ancestor) so
-   the modifier works wherever a compact select is reused. */
-.select--compact {
-  /* 11rem → 8.5rem: R3 Wave 4 one-row toolbar budget; dropdown panel still
-     opens at full label width, only the closed control is capped. */
-  max-width: 8.5rem;
-}
-
-.table-toolbar__matchup-note {
-  font-size: var(--text-md);
-  color: var(--color-muted);
-  font-style: italic;
-}
-
-@media (max-width: 480px) {
-  .select--compact {
-    max-width: 9rem;
-  }
 }
 
 /* ── "Graph this player" chooser (owner decision 46) ─────────────────────────
