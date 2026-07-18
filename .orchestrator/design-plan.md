@@ -452,3 +452,22 @@ Bowling (Innings)" under T20 (Stats drawer drops it — minor label inconsistenc
 axis is the ranking scale (readable via W-R labels). NEXT: fresh-eyes Opus review of the Wave B graph diff
 (Phase 5) + present full 3-wave review checklist to owner. Round-4 review-checklist = review/
 DESIGN_ROUND4_REVIEW_CHECKLIST.md (Waves A+C+B). Docs sync (4f-C) still deferred to after owner sign-off.
+## FRESH-EYES REVIEW of Wave B graph diff (Opus, fresh context, read-only) — NO BLOCKERS, NO CORRECTNESS
+BUGS. Independently CONFIRMED: Rule 1 (table.js/filters.js/metrics.js untouched, no sqlExpression change);
+plain path byte-identical (fetchSelectedPlayerMetrics plain branch unchanged; chartValue = Number(row[key])
+for all finite; timeseries/phaseFamilies plain byte-identical); NO missed repoints (every graph metric
+lookup uses effectiveNamespace/graphMetrics; remaining state.discipline reads all intentional); peak
+handling sound (best→__sort, high_score→value; peaks never reach slope/dumbbell/byyear/benchmark/phases);
+per-chart eligibility matches fetch+render; describeScope view override safe; cache keys include matchupVs;
+node-check all 6. Findings = 5 NITS only: (1) Best Bowling on a SCATTER axis shows raw rank tick numbers
+(same theme as the bar-axis flag; tooltip/title correct) — ties to the owner's Best-Bowling-axis decision;
+(2) benchmark curated DEFAULT_KEYS has no matchup set → under Vs the backstop pads from eligible (works;
+stale comment) [B1 already suggested curated matchup defaults]; (3) byyear render uses eligibleMetrics vs
+siblings' graphMetrics (functionally identical); (4) sort-key coherence check on plain discipline (NOT in
+Wave B diff; byte-identical to main.js; deliberate); (5) readScope now a passthrough (trivial). Reviewer's
+2 "please live-check" items ALREADY confirmed by orchestrator: `year` column exists on BOTH matchup views
+(schema dump + B2's per-year Line renders for batting AND bowling); on-screen 454 Vs bar/line + Best Bowling
+rank-bar-with-W-R-labels + 0 console errors all verified. Nits (2)(3)(5) → fold into the deferred docs/
+hygiene pass; nit (1) → part of the owner's Best-Bowling-axis flag. ROUND 4 (Waves A+C+B) COMPLETE +
+orchestrator-verified + fresh-eyes-reviewed. Awaiting owner's hands-on review (checklist) + sign-off; then
+docs sync (4f-C); merge to main = separate owner decision.
