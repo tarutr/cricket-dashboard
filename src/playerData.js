@@ -232,19 +232,29 @@ export async function searchPlayers(term) {
   return rows;
 }
 
-// ── Match-level option loaders (Batch 1B, task 1B-1) ─────────────────────────
-// Gender- + team-type-scoped relevance lists for the Team/Event/Venue picker
-// UIs (1B-2 builds the pickers; this module only supplies their data). Unlike
-// the rest of this file (player-page queries scoped to one player_id), these
-// three query `matches` directly and are scoped by GENDER and TEAM TYPE only —
-// no format/date narrowing — per the Batch 1B design (a picker's option list
-// should reflect "everything that exists for this gender + team type," not
-// shrink as format/date filters are set). ROUND 3 (bug 7a) added the team-type
-// dimension: on International, the Event picker must NOT list domestic-only
-// competitions (e.g. the IPL, which has 0 international matches); on Domestic it
-// must. See teamTypeMatchClause above. With teamType 'both' the constraint is
-// dropped, so the counts are byte-identical to the pre-ROUND-3 gender-only
-// lists (regression guard: "India 1,013 games" is unchanged under 'both').
+// ── Match-level option loaders (Batch 1B, task 1B-1; A9 rescope) ─────────────
+// Relevance lists for the Team/Opposition/Event/Venue picker UIs. Unlike the
+// rest of this file (player-page queries scoped to one player_id), these three
+// query `matches` directly.
+//
+// A9 (decision 47e): the lists now scope to the FULL Search Conditions —
+// gender + format + date + team type — so e.g. "Men's, last month" lists only
+// the teams/events/venues that actually occur in that window. This SUPERSEDES
+// the original Batch 1B design, which deliberately scoped to gender + team type
+// only (no format/date narrowing). ROUND 3 (bug 7a) added team type: on
+// International the Event list drops domestic-only competitions (e.g. the IPL,
+// with 0 international matches); on Domestic they reappear. See
+// teamTypeMatchClause and matchOptionScope below.
+//
+// The format + date narrowing is OPTIONAL and ADDITIVE (matchOptionScope): when
+// a caller omits `formats` the query is byte-identical to the pre-A9 gender +
+// team-type-only list, so nothing breaks for a call that doesn't pass the extra
+// scope. When supplied, the gender/format/date/team-type predicate comes from
+// filters.js's buildCoreScopeClauses — the SAME builder the main leaderboard
+// query uses — so the format-bucket→match_type expansion (T20 → T20 + IT20) and
+// the day-bounded date edge-cases can never drift from the numbers the table
+// shows. The ONLY caller is drawerInnings.js, which passes state.formats +
+// state.dateFrom/dateTo (verified: no other caller).
 //
 // Relevance ordering (flagged judgment call — see final report): rows whose
 // name contains the search term (case-insensitive substring, matching this
@@ -286,20 +296,52 @@ function teamTypeMatchClause(teamType) {
 }
 
 /**
- * Distinct teams appearing in `matches` for `gender` (UNION ALL of team_1 and
- * team_2 — a team never occupies both sides of the same match, so summing
- * appearances across the two slots is exactly "number of matches this team
- * appears in"). Feeds the new single Team picker (1B-2); state.teams itself
- * and its query-side handling are untouched by this task.
+ * WHERE predicate scoping a `matches`-based option list to the current Search
+ * Conditions (A9, decision 47e). Gender + team type are ALWAYS applied. Format +
+ * date narrowing is applied ONLY when `formats` is supplied — the two new A9
+ * dimensions are OPTIONAL and ADDITIVE, so a call that omits them is
+ * byte-identical to the pre-A9 gender + team-type-only list (nothing breaks for
+ * a caller that doesn't pass the extra scope).
+ *
+ * When `formats` is supplied the whole gender/format/date/team-type predicate is
+ * produced by filters.js's buildCoreScopeClauses — the SAME function the main
+ * leaderboard query (buildQuery / buildMatchupQuery) uses for its inescapable
+ * core scope — so the option list's format-bucket→match_type expansion (T20 →
+ * T20 + IT20 via expandFormats) and its day-bounded date edge-cases can never
+ * drift from the numbers the table shows. buildCoreScopeClauses reads only
+ * gender / match_type / match_date / team_type, every one of which the exported
+ * `matches` parquet carries (verified against the live schema). It is an
+ * AND-only chain, so callers append their own "<entity> IS NOT NULL" with a
+ * bare ` AND `.
  */
-export async function searchTeams(term, gender, teamType = "both") {
+function matchOptionScope(gender, teamType, formats, dateFrom, dateTo) {
+  if (formats == null) {
+    // Pre-A9 fallback: gender + team type only. No live caller uses this (the
+    // drawer always passes formats), but it keeps the loaders usable
+    // gender+team-type-only per the additive contract.
+    return `gender = '${esc(gender)}'${teamTypeMatchClause(teamType)}`;
+  }
+  return buildCoreScopeClauses({ gender, formats, dateFrom, dateTo, teamType }).join(" AND ");
+}
+
+/**
+ * Distinct teams appearing in `matches` for the current scope (UNION ALL of
+ * team_1 and team_2 — a team never occupies both sides of the same match, so
+ * summing appearances across the two slots is exactly "number of matches this
+ * team appears in"). Feeds the Team picker AND (same loader) the Opposition
+ * picker; state.teams / state.opposition and their query-side handling are
+ * untouched by this task. `formats` (bucket keys) + `dateFrom`/`dateTo` are the
+ * A9 additions (optional/additive — see matchOptionScope); state.teams itself
+ * and its query-side handling are untouched.
+ */
+export async function searchTeams(term, gender, teamType = "both", formats = null, dateFrom = null, dateTo = null) {
   const orderBy = relevanceOrderBy("team", term, "games DESC, team ASC");
-  const tt = teamTypeMatchClause(teamType);
+  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo);
   const sql = [
     `WITH sides AS (`,
-    `  SELECT team_1 AS team FROM matches WHERE gender = '${esc(gender)}'${tt}`,
+    `  SELECT team_1 AS team FROM matches WHERE ${scope}`,
     `  UNION ALL`,
-    `  SELECT team_2 AS team FROM matches WHERE gender = '${esc(gender)}'${tt}`,
+    `  SELECT team_2 AS team FROM matches WHERE ${scope}`,
     `)`,
     `SELECT team AS value, team AS label, COUNT(*) AS games`,
     `FROM sides`,
@@ -312,19 +354,21 @@ export async function searchTeams(term, gender, teamType = "both") {
 }
 
 /**
- * Distinct event_name values in `matches` for `gender`. games = match count;
- * latestDate = MAX(match_date). event_name is one label per tournament SERIES,
- * not per edition/year (verified against live data — e.g. "ICC Men's T20 World
- * Cup" spans matches dated 2014 through 2026 under the one name), so `games`
- * here is the event's full multi-year total, matching what the picker's
- * "games" column should mean for a series name.
+ * Distinct event_name values in `matches` for the current scope. games = match
+ * count; latestDate = MAX(match_date). event_name is one label per tournament
+ * SERIES, not per edition/year (verified against live data — e.g. "ICC Men's
+ * T20 World Cup" spans matches dated 2014 through 2026 under the one name), so
+ * `games` here is the event's total WITHIN the active scope, matching what the
+ * picker's "games" column should mean for a series name. `formats`/`dateFrom`/
+ * `dateTo` are the A9 additions (optional/additive — see matchOptionScope).
  */
-export async function searchEvents(term, gender, teamType = "both") {
+export async function searchEvents(term, gender, teamType = "both", formats = null, dateFrom = null, dateTo = null) {
   const orderBy = relevanceOrderBy("event_name", term, "games DESC, latestDate DESC, event_name ASC");
+  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo);
   const sql = [
     `SELECT event_name AS value, event_name AS label, COUNT(*) AS games, MAX(match_date) AS latestDate`,
     `FROM matches`,
-    `WHERE gender = '${esc(gender)}' AND event_name IS NOT NULL${teamTypeMatchClause(teamType)}`,
+    `WHERE ${scope} AND event_name IS NOT NULL`,
     `GROUP BY event_name`,
     orderBy,
   ].join("\n");
@@ -332,13 +376,16 @@ export async function searchEvents(term, gender, teamType = "both") {
   return rows;
 }
 
-/** Distinct venue values in `matches` for `gender`. games = match count. */
-export async function searchVenues(term, gender, teamType = "both") {
+/** Distinct venue values in `matches` for the current scope. games = match
+ * count. `formats`/`dateFrom`/`dateTo` are the A9 additions (optional/additive
+ * — see matchOptionScope). */
+export async function searchVenues(term, gender, teamType = "both", formats = null, dateFrom = null, dateTo = null) {
   const orderBy = relevanceOrderBy("venue", term, "games DESC, venue ASC");
+  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo);
   const sql = [
     `SELECT venue AS value, venue AS label, COUNT(*) AS games`,
     `FROM matches`,
-    `WHERE gender = '${esc(gender)}' AND venue IS NOT NULL${teamTypeMatchClause(teamType)}`,
+    `WHERE ${scope} AND venue IS NOT NULL`,
     `GROUP BY venue`,
     orderBy,
   ].join("\n");

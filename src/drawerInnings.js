@@ -21,19 +21,19 @@
 //
 // Team/Opposition/Event/Venue share mountScopedMultiSelect(): a thin wrapper
 // over searchSelect.js's mountSearchMultiSelect (portal:true, so its panel
-// escapes the Filters popup's overflow clip) fed the SAME relevance-ranked,
-// gender- + team-type-scoped option lists as before (playerData.js's
-// searchTeams/searchEvents/searchVenues). The loaders are UNCHANGED — called
-// once per gender|teamType with term="" (the full scoped list, ordered
-// games-desc; events also recency-desc) — and each picker writes the SAME state
+// escapes the Filters popup's overflow clip) fed the relevance-ranked option
+// lists from playerData.js (searchTeams/searchEvents/searchVenues). A9
+// (decision 47e): those lists now scope to the FULL Search Conditions —
+// gender + format + date + team type — so the four callers below pass the active
+// state.formats + state.dateFrom/state.dateTo alongside gender + team type. This
+// changes only which OPTIONS are OFFERED; each picker still writes the SAME state
 // field it always did, so the built query and every leaderboard/graph number is
-// unchanged; only the control's look/behaviour (typeahead + keyboard + ARIA)
-// changes (Design Round 2, wave R2-2b-ii). Options load lazily (on the row
-// becoming visible / first open) and reload when gender OR team type changes
-// (ROUND 3 task 8 — on International the Event list must drop domestic-only
-// competitions like IPL). Team/Event/Venue rows show a "<name>  N games" meta;
-// Opposition keeps its plain list (no meta) and greys out off International
-// (decision 20).
+// unchanged. Options load lazily (on the row becoming visible / first open) and
+// reload when ANY scope dimension changes — gender, team type, format, or date
+// (the cacheKey below carries all four). ROUND 3 task 8 (team type): on
+// International the Event list drops domestic-only competitions like the IPL.
+// Team/Event/Venue rows show a "<name>  N games" meta; Opposition keeps its plain
+// list (no meta) and greys out off International (decision 20).
 
 import { wirePortalDropdown } from "./filters.js";
 import { matchupVsActive } from "./state.js";
@@ -221,24 +221,29 @@ function gamesMeta(o) {
 }
 
 /**
- * Shared gender- + team-type-scoped searchable MULTI-select for Team /
- * Opposition / Event / Venue (Design Round 2, wave R2-2b-ii). Wraps
- * searchSelect.js's mountSearchMultiSelect (portal:true so its panel escapes the
- * Filters popup's overflow clip) and feeds it the SAME async, relevance-ranked
- * option lists as before via `config.loader` (playerData.js's searchTeams/
- * searchEvents/searchVenues — UNCHANGED). The picker writes the SAME state field
- * it always did, so the built query — and every leaderboard/graph number — is
- * unchanged; only the control changes.
+ * Shared searchable MULTI-select for Team / Opposition / Event / Venue (Design
+ * Round 2, wave R2-2b-ii). Wraps searchSelect.js's mountSearchMultiSelect
+ * (portal:true so its panel escapes the Filters popup's overflow clip) and feeds
+ * it the async, relevance-ranked option lists from playerData.js (searchTeams/
+ * searchEvents/searchVenues) via `config.loader`. A9 (decision 47e): the loader
+ * now scopes those lists to the FULL Search Conditions (gender + format + date +
+ * team type — see each caller below). The picker still writes the SAME state
+ * field it always did, so the built query — and every leaderboard/graph number —
+ * is unchanged; A9 changes only which OPTIONS are offered.
  *
  * `config`:
  *   { get(state)->string[], set(store,arr), loader(gender,teamType)->Promise<rows>,
  *     emptyLabel, singular, plural, ariaLabel, searchPlaceholder,
  *     showGames?:bool, disabledWhen?(state)->bool, disabledNote?:string }
+ * (the loader closes over `store` to read the format/date scope; the wrapper
+ * still calls it with gender + team type.)
  *
  * Options load lazily — on the row becoming visible OR first toggle interaction
- * — and reload when the gender|teamType scope changes (filters.js clears the
- * selection on such a change, so a stale pick never survives). Returns `{ sync }`.
- */
+ * — and reload when ANY scope dimension changes (gender, team type, format, or
+ * date; see cacheKey). filters.js clears the selection on a gender OR team-type
+ * change, so a stale pick never survives those; a format/date change reloads the
+ * list but does NOT clear the selection (see the final report's CONCERNS).
+ * Returns `{ sync }`. */
 function mountScopedMultiSelect(container, store, onChange, config) {
   container.innerHTML = `
     <div class="filter-group filter-group--ms" data-role="ms-group">
@@ -282,14 +287,19 @@ function mountScopedMultiSelect(container, store, onChange, config) {
 
   const toggleEl = hostEl.querySelector(".search-select__toggle");
 
-  // ── Async option loading (gender|teamType scoped, lazy) ────────────────────
+  // ── Async option loading (full-scope: gender|teamType|format|date, lazy) ────
+  // A9 (decision 47e): the option lists scope to the FULL Search Conditions, so
+  // the cache key carries every scope dimension — a change to gender, team type,
+  // format, OR date invalidates the cache and reloads the list for the new scope
+  // (sync() below diffs loadedKey against this on every store change while the
+  // popup is open, which is how a format/date edit live-refreshes the list).
   let optionsCache = [];
   let loadedKey = null;
   let loadToken = 0;
   let loading = false;
   const cacheKey = () => {
     const s = store.get();
-    return `${s.gender}|${s.teamType}`;
+    return `${s.gender}|${s.teamType}|${(s.formats || []).join(",")}|${s.dateFrom || ""}|${s.dateTo || ""}`;
   };
   async function ensureLoaded() {
     const key = cacheKey();
@@ -359,7 +369,10 @@ export function mountTeam(container, store, onChange) {
   return mountScopedMultiSelect(container, store, onChange, {
     get: (s) => s.teams || [],
     set: (st, arr) => st.set({ teams: arr }),
-    loader: (gender, teamType) => searchTeams("", gender, teamType),
+    loader: (gender, teamType) => {
+      const s = store.get(); // A9: scope the Team list to the full Search Conditions
+      return searchTeams("", gender, teamType, s.formats, s.dateFrom, s.dateTo);
+    },
     emptyLabel: "All teams",
     singular: "team",
     plural: "teams",
@@ -374,7 +387,10 @@ export function mountEvent(container, store, onChange) {
   return mountScopedMultiSelect(container, store, onChange, {
     get: (s) => s.event || [],
     set: (st, arr) => st.set({ event: arr }),
-    loader: (gender, teamType) => searchEvents("", gender, teamType),
+    loader: (gender, teamType) => {
+      const s = store.get(); // A9: scope the Event list to the full Search Conditions
+      return searchEvents("", gender, teamType, s.formats, s.dateFrom, s.dateTo);
+    },
     emptyLabel: "Any event",
     singular: "event",
     plural: "events",
@@ -389,7 +405,10 @@ export function mountVenue(container, store, onChange) {
   return mountScopedMultiSelect(container, store, onChange, {
     get: (s) => s.venue || [],
     set: (st, arr) => st.set({ venue: arr }),
-    loader: (gender, teamType) => searchVenues("", gender, teamType),
+    loader: (gender, teamType) => {
+      const s = store.get(); // A9: scope the Venue list to the full Search Conditions
+      return searchVenues("", gender, teamType, s.formats, s.dateFrom, s.dateTo);
+    },
     emptyLabel: "Any venue",
     singular: "venue",
     plural: "venues",
@@ -401,9 +420,10 @@ export function mountVenue(container, store, onChange) {
 
 /**
  * "Against opposition" — team picker over state.opposition. The option list is
- * the EXACT SAME mechanism as the "Played for" Team picker (searchTeams, scoped
- * by gender + team type only, games-desc — R7 owner correction, item 5), so the
- * big cricketing nations lead. INTERNATIONAL-only (decision 20): the toggle
+ * the EXACT SAME mechanism as the "Played for" Team picker (searchTeams, now
+ * scoped to the full Search Conditions per A9 / decision 47e, games-desc — R7
+ * owner correction, item 5), so the big cricketing nations lead. INTERNATIONAL-
+ * only (decision 20): the toggle
  * greys + shows the note off International, and oppositionFilterActive() keeps
  * the query/pill/subtitle honest regardless. No games meta (its historic plain
  * list). The `embedded` arg is accepted for call-site parity (the row's type
@@ -414,7 +434,10 @@ export function mountOpposition(container, store, onChange, { embedded = false }
   return mountScopedMultiSelect(container, store, onChange, {
     get: (s) => s.opposition || [],
     set: (st, arr) => st.set({ opposition: arr }),
-    loader: (gender, teamType) => searchTeams("", gender, teamType),
+    loader: (gender, teamType) => {
+      const s = store.get(); // A9: scope the Opposition list to the full Search Conditions
+      return searchTeams("", gender, teamType, s.formats, s.dateFrom, s.dateTo);
+    },
     emptyLabel: "Any opposition",
     singular: "opponent",
     plural: "opponents",
