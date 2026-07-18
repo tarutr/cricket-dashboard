@@ -56,6 +56,11 @@ function normalizeOptions(opts) {
  * @param {string} [opts.ariaLabel]
  * @param {boolean} [opts.disabled]
  * @param {(opt:object) => string} [opts.renderRow] custom option-row inner HTML
+ * @param {boolean} [opts.portal] lift the OPEN panel to <body> (position:fixed,
+ *   placed under the toggle, repositioned on scroll/resize) so it escapes a
+ *   clipping `overflow` ancestor — same technique as mountSearchMultiSelect's
+ *   own `portal` option below (added for src/playerFilters.js's popup drawer,
+ *   whose panel is `overflow-y: auto`, Wave C item 4f).
  * @returns {{setValue:Function,setOptions:Function,getValue:Function,setInvalid:Function,open:Function,close:Function,destroy:Function}}
  */
 export function mountSearchSelect(hostEl, {
@@ -70,6 +75,7 @@ export function mountSearchSelect(hostEl, {
   disabled = false,
   renderRow = null,
   allowEmptyLabel = null,
+  portal = false,
 } = {}) {
   const uid = `ssel-${++uidCounter}`;
   let allOptions = normalizeOptions(options);

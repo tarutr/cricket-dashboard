@@ -10,7 +10,7 @@
 // apply here — the page's own honest scope line states exactly this.
 
 import { query } from "./db.js";
-import { buildScopeClauses } from "./filters.js";
+import { buildScopeClauses, buildCoreScopeClauses } from "./filters.js";
 import { getMetric, DISMISSAL_KINDS, metricsFor } from "./metrics.js";
 import { escSql as esc } from "./state.js";
 

@@ -330,15 +330,20 @@ export function mountPlayerFilters(hostEl, { onApply }) {
 
   function renderAll() {
     const { minMonth, maxMonth } = dateBounds();
-    els.dateFrom.innerHTML = monthOptionsHTML(minMonth, maxMonth, toMonthValue(pending.dateFrom ?? ctx.pageState.dateFrom));
-    els.dateTo.innerHTML = monthOptionsHTML(minMonth, maxMonth, toMonthValue(pending.dateTo ?? ctx.pageState.dateTo));
+    const monthOpts = monthOptionsList(minMonth, maxMonth);
+    dateFromSelect.setOptions(monthOpts);
+    dateFromSelect.setValue(toMonthValue(pending.dateFrom ?? ctx.pageState.dateFrom) || null);
+    dateToSelect.setOptions(monthOpts);
+    dateToSelect.setValue(toMonthValue(pending.dateTo ?? ctx.pageState.dateTo) || null);
     renderPositions();
     // R7 (owner: opposition "show everything"): the vs-opposition splits table
     // is no longer international-only, so the in-popup opposition-NARROWING
     // control is un-gated too — usable for all team types (its option list is
     // the player's actual opponents in scope, club/franchise included). The old
-    // "international-only" note is always hidden now.
-    els.opposition.disabled = false;
+    // "international-only" note is always hidden now. (The control's own
+    // `disabled: false` at mount time already encodes the un-gating — no
+    // per-render toggle needed now that it's a searchSelect, not a native
+    // <select>.)
     els.oppNote.hidden = true;
   }
 
@@ -381,29 +386,35 @@ export function mountPlayerFilters(hostEl, { onApply }) {
     try {
       const oppOptions = await fetchOppositionOptions(playerId, discipline, pageState);
       if (ctx.playerId !== playerId || els.drawer.hidden) return; // superseded or closed meanwhile
-      els.opposition.innerHTML = optionsHTML(oppOptions, pending.opposition, "Any opposition");
+      oppositionSelect.setOptions(withStaleSelected(oppOptions, pending.opposition));
+      oppositionSelect.setValue(pending.opposition);
     } catch {
-      els.opposition.innerHTML = `<option value="">Couldn't load teams — reopen to retry</option>`;
+      // Same "reopen to retry" honest-failure text the native <select> showed
+      // as its sole option — here as a single disabled row so it still reads
+      // as the toggle's closed-state text (optionByValue() resolves it even
+      // though it's disabled; picking it is a no-op, same effective dead end).
+      oppositionSelect.setOptions([{ value: "__error", label: "Couldn't load teams — reopen to retry", disabled: true }]);
+      oppositionSelect.setValue("__error");
     }
 
     if (showBattingOnly) {
       try {
         const vsTypes = await fetchVsTypeOptions(playerId, pageState);
         if (ctx.playerId !== playerId || els.drawer.hidden) return;
-        const current = pending.vs;
-        const opts = [`<option value="">Everyone</option>`];
-        opts.push(`<optgroup label="Pace / spin">`);
-        opts.push(`<option value="Pace" ${current === "Pace" ? "selected" : ""}>Pace</option>`);
-        opts.push(`<option value="Spin" ${current === "Spin" ? "selected" : ""}>Spin</option>`);
-        opts.push(`</optgroup>`);
-        opts.push(`<optgroup label="Bowling type">`);
-        for (const t of vsTypes) {
-          opts.push(`<option value="${escAttr(t)}" ${t === current ? "selected" : ""}>${escHtml(t)}</option>`);
-        }
-        opts.push(`</optgroup>`);
-        els.vs.innerHTML = opts.join("");
+        // Same option ORDER as before (Pace, Spin, then the specific types) —
+        // the old <optgroup> visual clustering doesn't carry over to the flat
+        // searchSelect list (a cosmetic loss inherent to the shared
+        // component; flagged in the wave report, not built around here).
+        const vsOptions = [
+          { value: "Pace", label: "Pace" },
+          { value: "Spin", label: "Spin" },
+          ...vsTypes.map((t) => ({ value: t, label: t })),
+        ];
+        vsSelect.setOptions(vsOptions);
+        vsSelect.setValue(pending.vs);
       } catch {
-        els.vs.innerHTML = `<option value="">Couldn't load bowling types — reopen to retry</option>`;
+        vsSelect.setOptions([{ value: "__error", label: "Couldn't load bowling types — reopen to retry", disabled: true }]);
+        vsSelect.setValue("__error");
       }
     }
   }

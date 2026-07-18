@@ -339,6 +339,12 @@ export function createInitialState(maxMonth) {
                    // (not greyed) in Vs mode too.
     search: "",
     sort: { key: "runs", dir: "desc" },
+    keepColumns: false, // "Keep Selected Columns" toggle (4d/A5): OFF (default) lets a
+                   // discipline/format change re-sync the visible columns to that scope's
+                   // default (main.js's reapplyDefaultColumnsIfUnmodified, unless already
+                   // customized); ON skips that resync entirely, so whatever columns +
+                   // order are currently showing simply carry into the next Search.
+                   // Display-only — never read by any query builder.
     columns: {
       batting: [...DEFAULT_COLUMNS.batting],
       bowling: [...DEFAULT_COLUMNS.bowling],

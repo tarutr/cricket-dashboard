@@ -115,7 +115,21 @@ const MATCH_ADD_ORDER = ["event", "venue"];
  * Mount the condition builder into `advancedHost` (the Advanced Filters section
  * body). Returns `{ onShow, onHide, sync, activeCount, validate }` for main.js.
  */
-export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
+export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, { onChange }) {
+  // "Keep Selected Columns" toggle (4d/A5): a plain checkbox in the popup
+  // footer (main.js queries it statically from index.html and hands it in
+  // here since drawer.js owns the popup's non-Search controls). Reads/writes
+  // state.keepColumns directly — display-only, no query builder ever reads
+  // it. main.js's reapplyDefaultColumnsIfUnmodified() is the thing this
+  // gates (see its own comment for the OFF/ON behaviour).
+  if (keepColumnsCheckbox) {
+    keepColumnsCheckbox.checked = Boolean(store.get().keepColumns);
+    keepColumnsCheckbox.addEventListener("change", () => {
+      store.set({ keepColumns: keepColumnsCheckbox.checked });
+      onChange();
+    });
+  }
+
   // ── Stable skeleton (built once) ───────────────────────────────────────────
   const singletonRowsHTML = SINGLETON_TYPES.map(
     (t) => `
@@ -816,6 +830,7 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
     const s = store.get();
     syncSingletonRows();
     renderNumeric(s);
+    if (keepColumnsCheckbox) keepColumnsCheckbox.checked = Boolean(s.keepColumns);
   }
 
   /** Badge count: only filters ACTUALLY applied right now (inert selections

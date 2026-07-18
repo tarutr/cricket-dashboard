@@ -187,6 +187,12 @@ function columnsAreDefault(discipline) {
 
 function reapplyDefaultColumnsIfUnmodified() {
   const state = store.get();
+  // 4d/A5 "Keep Selected Columns" toggle: ON skips this resync entirely — the
+  // columns currently showing (whatever they are) simply carry into the next
+  // Search untouched, discipline/format change or not. OFF (default) is the
+  // pre-existing behaviour below, gated only on the user not having already
+  // customized this discipline's columns.
+  if (state.keepColumns) return;
   const discipline = state.discipline;
   if (!columnsAreDefault(discipline)) return; // user customized — leave alone
   const next = defaultColumnsFor(discipline, state.formats);
@@ -507,7 +513,13 @@ function boot() {
       // (never blanks the table); the popup's "Search" button is the one query
       // trigger.
       drawerController = mountFilterDrawer(
-        { advancedHost: document.getElementById("popup-advanced-host") },
+        {
+          advancedHost: document.getElementById("popup-advanced-host"),
+          // 4d/A5: static footer checkbox from index.html — present from page
+          // load, so querying it here (ahead of the filtersPopupEl lookups
+          // below) is safe.
+          keepColumnsCheckbox: document.querySelector('[data-role="fpop-keep-columns"]'),
+        },
         store,
         {
           onChange: () => {

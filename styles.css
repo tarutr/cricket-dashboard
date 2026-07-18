@@ -3500,11 +3500,31 @@ a { color: var(--color-accent); }
 
 .filters-popup__footer {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--space-3);
   padding: var(--space-4) var(--space-5);
   border-top: 1px solid var(--color-line);
   background: var(--color-bg);
+}
+
+/* "Keep Selected Columns" toggle (4d/A5) — sits to the left of Search; the
+   auto right-margin pushes the Search button to its usual flex-end spot. */
+.fpop-keep-columns {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-right: auto;
+  font-size: var(--text-sm2);
+  color: var(--color-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.fpop-keep-columns input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--color-accent);
+  cursor: pointer;
 }
 
 @media (max-width: 640px) {
