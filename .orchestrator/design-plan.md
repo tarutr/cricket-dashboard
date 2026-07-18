@@ -397,3 +397,19 @@ browser to self-verify; orchestrator does authoritative independent pass.
 ### B2 (data-engineer / Opus, number-adjacent) — Line-by-year for Vs: NEW matchup-innings-by-year query
 in graph/timeseries.js + wire graph.js byyear site + un-grey Line under Vs. AFTER B1 (shares graph.js).
 Independent DuckDB verification. ## B1 spawning.
+## B1 COMPLETE + orchestrator-verified (commits 2076ca2..a60e9eb). Only src/graph/* touched; table.js/
+filters.js/metrics.js/state.js/drawer.js/timeseries* = 0 diff; node --check pass. charts.js
+fetchSelectedPlayerMetrics: matchup branch ADDED (routes through buildQuery, wrap+filter-by-id idiom),
+plain branch BYTE-IDENTICAL. INDEPENDENT verification via the exported fetch: PLAIN Karanbir 2,454 /
+SA Yadav 1,544 (leaderboard-identical); Vs=Spin SA Yadav 454 / Waseem 701 / Virandeep 688 (== my DuckDB).
+On screen under Vs=Spin: Bar renders (JC Buttler 470 == independent DuckDB), subtitle "…vs Spin", metric
+list = matchup namespace, Line shows "(unavailable)", other 7 types available, console clean.
+### KEY FINDING / owner decision (vsTableOnly): the 4 Wave-4c stats (High Score, Matches, Runs/Innings,
+Best Bowling) carry `vsTableOnly:true` in metrics.js ("table only, never the graph") AND handoff Part D
+DEFERRED "popup/graph parity for the 4 new Vs stats." So B1 CORRECTLY excluded them from the graph
+(honoring the ruling + deferral) — this CONTRADICTS my earlier "High Score charts fine" statement to the
+owner (my error). Wave B charts all standard Vs metrics (runs/SR/avg/dismissals/dot%/boundary%/phase SRs
+etc.); charting the 4 vsTableOnly stats would need relaxing the flag (metrics.js) = a separate owner-ruled
+follow-up. SURFACED to owner as an honest correction + decision. B1's other flags (comp_* excluded =
+correct; applyGraphFilters sort-key on plain = benign order-only; dirty-dot test artifact) = non-issues.
+## B2 spawning (Line matchup-by-year).
