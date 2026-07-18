@@ -36,9 +36,26 @@ WHERE ${scope} AND <entity> IS NOT NULL.
 cacheKey now: `${gender}|${teamType}|${formats.join(",")}|${dateFrom}|${dateTo}`.
 
 ## Status
-- [in progress] loaders + callers + cacheKey
-## Next
-- node --check, git status proof, independent DuckDB SQL for orchestrator.
-## Gotchas
-- Selection staleness on format/date change (picked team can leave the narrowed
-  list; state not auto-cleared — clearing lives in filters.js, out of scope).
+- [DONE] loaders + callers + cacheKey. Committed 040229b (only playerData.js +
+  drawerInnings.js staged; other dirty files belong to concurrent C1a/C1c workers).
+- node --check: both files OK. filters.js NO DIFF (buildScopeClauses untouched).
+  buildCoreScopeClauses confirmed exported (filters.js:97).
+
+## Independent DuckDB (raw parquet, hand-written; scratchpad/a9_verify.sql)
+Scope: male / T20 bucket / international / 2023-07-01..2026-07-02 (day-bounded
+=> match_date < 2026-07-03). Narrow = last 30d (2026-06-02..2026-07-03).
+- teams : full 105, narrow 41, narrow-not-in-full 0  (subset, shorter)
+- events: full 228, narrow 15, narrow-not-in-full 0  (subset, shorter)
+- venues: full 179, narrow 13, narrow-not-in-full 0  (subset, shorter)
+- pre-A9 teams (gender+intl only, all fmt/dates) = 110; A9 full = 105; A9-not-in-
+  preA9 = 0 => A9 narrows by 5, all still ⊆ old list.
+- T20 bucket = T20 (1723) + IT20 (1) => match_type IN ('T20','IT20') correct.
+- exact loader Team SQL returns 105 distinct; top row Indonesia 105 games.
+
+## Gotchas / CONCERNS
+- Selection staleness on format/date change: picked team/event/venue can leave the
+  narrowed list; searchSelect setValues/setOptions drop it from the picker display
+  WITHOUT firing onChange, so state.teams/event/venue keeps the pick (pill + query
+  still honor it). filters.js clears these on gender/teamType change but NOT on
+  format/date — clearing lives in filters.js (out of scope, forbidden). Flagged to
+  orchestrator; NOT fixed.
