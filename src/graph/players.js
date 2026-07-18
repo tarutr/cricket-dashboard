@@ -17,7 +17,7 @@ import { getMetric } from "../metrics.js";
 import { query } from "../db.js";
 import { buildScopeClauses } from "../filters.js";
 import { buildQuery } from "../table.js";
-import { escSql as esc } from "../state.js";
+import { escSql as esc, effectiveNamespace } from "../state.js";
 
 // Batch 3 (graphs, part 1): caps became {min, max} per owner ruling
 // (decision 43) — below `min` the chart can't be meaningfully drawn (the
@@ -114,9 +114,13 @@ function compareSeedRows(a, b, metric, key, dir) {
  */
 export async function seedFromFilteredSet(store) {
   const state = store.get();
-  const discipline = state.discipline;
   const sortKey = state.sort.key;
-  const sortMetric = getMetric(sortKey, discipline);
+  // Wave B: buildQuery below auto-dispatches to buildMatchupQuery under Vs, so
+  // the seed already ranks by the matchup values. Resolve the sort metric in the
+  // EFFECTIVE namespace (matchup_* under Vs) so its `__sort` shadow column (if
+  // any) is read correctly by the client-side compare. Plain scope => the plain
+  // discipline, byte-identical.
+  const sortMetric = getMetric(sortKey, effectiveNamespace(state));
 
   // Lean projection: only the active sort metric's column(s). Requesting the
   // sort key (even `matches`) makes buildQuery emit the right source query
@@ -154,6 +158,16 @@ export async function seedFromFilteredSet(store) {
  * "Kohli finds nothing" symptom). It now returns all matches; graph.js's result
  * list marks the ones already in the roster and, on click, simply (re)checks
  * them instead of erroring — so a searched name always comes back.
+ *
+ * Wave B (matchup Graph): this stays a PLAIN-view name→id lookup even under Vs.
+ * That is correct — a player's batter_id/bowler_id is the same across the plain
+ * and matchup views, so a name found here maps to the right id, and the chart
+ * fetch (charts.js's matchup branch) computes that id's real vs-bucket value at
+ * draw time (a player who never faced the bucket simply shows as excluded/no
+ * data). The plain view is a SUPERSET of the matchup roster, so no in-bucket
+ * player is ever missed; only the COUNT(*) ordering hint differs. Routing this
+ * through buildMatchupQuery would only change that ordering, not which ids are
+ * addable — deliberately left plain.
  */
 export async function searchPlayers(store, searchText) {
   const state = store.get();
