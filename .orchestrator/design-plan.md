@@ -339,3 +339,25 @@ grep-proven unused). ### Docs (4f-C) deferred to after Wave B.
 Agents do NOT drive the browser (avoid 3-way contention); orchestrator does authoritative in-browser
 + independent-DuckDB verification. Anchors: 2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34.
 ## C1 spawning (3 parallel).
+## WAVE C COMPLETE + orchestrator-verified (2026-07-18). Commits: 5d95e4e/40ad503 (4d), 040229b (4e),
+cd351ba (4f popup), d590583 (4f-D hygiene) + progress notes. NOTE: parallel workers share one working
+dir; C1a's broad `git add` tangled commit ATTRIBUTION (4f files landed in a 4d commit) — CODE is intact
+(disjoint file ownership held; final working tree verified per-file). Cosmetic history only, not a defect.
+Verification (all on localhost:8000, 0 console errors):
+- 4d-A5 Keep-Columns checkbox present (footer, left of Search, default OFF). 4d-A6 "(no innings)" pill
+  verified live (pinned NR Sciver-Brunt → "+ NR Sciver-Brunt (no innings)", count stays 2,813). 4d-A8
+  graph button reads "Reset to full filtered set".
+- 4e/A9: app loaders == INDEPENDENT DuckDB EXACTLY — full(male/T20/intl/2023-07-01→2026-07-02)=105 teams/
+  228 events/179 venues; narrow(2026-06-01→07-02)=41/15/13 (strict subset); no-format/date fallback=110
+  (backward-compat). filters.js UNTOUCHED, buildQuery byte-identical → main anchors unaffected.
+- 4f popup: pf-dateFrom/pf-dateTo/pf-opposition/pf-vs all now <div class="search-select"> (searchable,
+  35 opposition options, opens with search input). searchSelect.js gained a portal for mountSearchSelect
+  (needed — popup panel is overflow:auto; flagged, legit). Clear-button visual-reset bug also fixed.
+- 4f-D hygiene: 11 dead class rules removed (each grep-proven 0-ref), in-use classes kept
+  (fpop-keep-columns/pill--no-innings/search-select/table-toolbar__clear-btn), only styles.css touched
+  (-155 lines), braces 580/580, no visual regression.
+- ANCHOR after Wave C: 2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34 reproduced on screen.
+STOPPED for owner gate. Two items to surface: (a) 4e selection-staleness edge case (pick a Team/Event/
+Venue then narrow date so it leaves the window → picker checkbox clears but pill+query still honor it;
+clean fix lives in filters.js = number-adjacent + out of A9 scope → owner decision); (b) docs (4f-C)
+deferred to AFTER Wave B. NEXT (on owner go) = Wave B (matchup-aware Graph).
