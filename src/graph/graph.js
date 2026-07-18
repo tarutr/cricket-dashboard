@@ -267,20 +267,26 @@ function wireDropdown(toggleEl, panelEl) {
 // SUPERSET of every metric the old curated radarGroups.js groups ever offered
 // (all of those had a defined direction), so nothing that was radar-able before
 // is lost — the group *structure* is gone, the metric vocabulary is not.
-// Wave B (matchup-aware Graph): the ONE metric-eligibility gate for the graph's
-// chart-metric pickers. It is `eligibleMetrics` (phase-gated per format) MINUS
-// the two matchup-only kinds the graph must not offer:
-//   • `vsTableOnly` — owner decision 47(c): matches / high_score /
-//     runs_per_innings / best belong to the leaderboard Vs TABLE only ("never
-//     … the graph" per metrics.js). Honoured here rather than reversed.
+// Wave B (matchup-aware Graph); Wave B3 (owner ruling 2026-07-18): the ONE
+// metric-eligibility gate for the graph's chart-metric pickers. It is
+// `eligibleMetrics` (phase-gated per format) MINUS only the metrics the graph
+// can never chart:
 //   • `kind === "composition"` — the coverage-breakdown columns (comp_*) are a
 //     table-display % breakdown with a placeholder sqlExpression, not a
 //     standalone chartable stat.
-// PLAIN namespaces (batting/bowling) carry NEITHER flag, so for a plain scope
-// this returns exactly what eligibleMetrics did — the plain graph path stays
-// byte-identical. Only matchup_batting/matchup_bowling are narrowed.
+// The four `vsTableOnly` matchup stats (matches / high_score / runs_per_innings
+// / best) USED to be excluded here too (decision 47(c) had held them to the
+// leaderboard Vs table). The owner reversed that on 2026-07-18 — they must be
+// GRAPHABLE — so the vsTableOnly exclusion is gone from this gate. They now
+// enter the pool and the EXISTING per-chart filters decide applicability:
+// radar keeps higherIsBetter≠null (matches excluded), slope/dumbbell keep
+// rate/percent (only runs_per_innings), line keeps timeseriesSupported (the two
+// non-peak ones), and str-peak `best` plots by its numeric rank (see charts.js
+// chartValue). PLAIN namespaces (batting/bowling) never carried vsTableOnly, so
+// for a plain scope this still returns exactly what eligibleMetrics did — the
+// plain graph path stays byte-identical.
 function graphMetrics(ns, formats) {
-  return eligibleMetrics(ns, formats).filter((m) => !m.vsTableOnly && m.kind !== "composition");
+  return eligibleMetrics(ns, formats).filter((m) => m.kind !== "composition");
 }
 function radarEligibleMetrics(ns, formats) {
   return graphMetrics(ns, formats).filter((m) => m.higherIsBetter !== null);

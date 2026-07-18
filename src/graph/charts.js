@@ -157,6 +157,30 @@ export function labelForValue(metric, value) {
   }
 }
 
+/**
+ * The numeric value a chart PLOTS for one metric row — the ONE place a row is
+ * turned into a bar height / axis coordinate / percentile input (Wave B3).
+ *
+ * For every normal numeric metric this is exactly `Number(row[key])` — the same
+ * read the chart builders did inline before B3, so their numbers stay
+ * byte-identical. The one exception is a str-format PEAK (Best Bowling, whose
+ * display value `row[key]` is the compound "W-R" string, e.g. "2-9"): Number()
+ * of that is NaN, so we fall back to the metric's NUMERIC peak rank in the
+ * row's `<key>__sort` shadow column (wickets*1000 − runs, emitted by
+ * buildQuery/buildMatchupQuery for any metric with a sortExpression). So Best
+ * Bowling plots by RANK height (more wickets first, fewer runs breaking ties).
+ *
+ * The DISPLAY LABEL is never taken from this — callers label bars/points/
+ * tooltips with `row[key]` via labelForValue, so a Best Bowling bar is drawn at
+ * its rank height but LABELLED "2-9". Callers guard with hasMetricData(row[key])
+ * before calling this, so `row[key]` is always real data here; if a str peak's
+ * `__sort` column is somehow absent the fallback is NaN (never a throw).
+ */
+function chartValue(metric, row) {
+  const v = Number(row[metric.key]);
+  return Number.isFinite(v) ? v : Number(row[metric.key + "__sort"]);
+}
+
 // Charts render INSIDE the paper card, which is a fixed light "printed
 // artifact" regardless of the site theme (card.js). So chart colors are the
 // fixed paper palette — never the live theme variables, which would produce
@@ -219,7 +243,10 @@ export function buildBarChart(canvas, chartRef, { metric, rowsById, players, sty
     const row = rowsById.get(p.id);
     const raw = row ? row[metric.key] : null;
     if (row && hasMetricData(metric, raw)) {
-      included.push({ id: p.id, name: p.name, value: Number(raw) });
+      // `value` is what the bar is drawn/sorted by (numeric — the peak RANK for
+      // a str metric like Best Bowling, see chartValue); `raw` is the display
+      // figure the label shows ("2-9" / the number itself), never Number()'d.
+      included.push({ id: p.id, name: p.name, value: chartValue(metric, row), raw });
     } else {
       excluded.push(p.name);
     }
@@ -266,7 +293,10 @@ export function buildBarChart(canvas, chartRef, { metric, rowsById, players, sty
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: (ctx) => `${metric.label}: ${labelForValue(metric, ctx.raw)}`,
+            // Label from the DISPLAY figure (displayOrder[i].raw), not the
+            // plotted value — identical for numeric metrics, but shows "2-9"
+            // (not the rank) for a str peak like Best Bowling.
+            label: (ctx) => `${metric.label}: ${labelForValue(metric, displayOrder[ctx.dataIndex].raw)}`,
           },
         },
         datalabels: false,
@@ -303,7 +333,7 @@ export function buildBarChart(canvas, chartRef, { metric, rowsById, players, sty
               ctx.arc(bar.x, bar.y, 5, 0, Math.PI * 2);
               ctx.fill();
             }
-            const text = labelForValue(metric, val);
+            const text = labelForValue(metric, displayOrder[i].raw);
             const textWidth = ctx.measureText(text).width;
             const gap = isDots ? 10 : 6;
             const outsideX = bar.x + gap;
@@ -462,7 +492,9 @@ export function buildScatterChart(canvas, chartRef, { metricX, metricY, rowsById
     const rawX = row ? row[metricX.key] : null;
     const rawY = row ? row[metricY.key] : null;
     if (row && hasMetricData(metricX, rawX) && hasMetricData(metricY, rawY)) {
-      included.push({ id: p.id, name: p.name, x: Number(rawX), y: Number(rawY) });
+      // x/y are the plotted coordinates (numeric — peak RANK for a str metric,
+      // see chartValue); rawX/rawY are the display figures the tooltip shows.
+      included.push({ id: p.id, name: p.name, x: chartValue(metricX, row), y: chartValue(metricY, row), rawX, rawY });
     } else {
       excluded.push(p.name);
     }
@@ -493,7 +525,9 @@ export function buildScatterChart(canvas, chartRef, { metricX, metricY, rowsById
             title: (items) => (items.length ? included[items[0].dataIndex].name : ""),
             label: (ctx) => {
               const r = included[ctx.dataIndex];
-              return [`${metricX.shortLabel}: ${labelForValue(metricX, r.x)}`, `${metricY.shortLabel}: ${labelForValue(metricY, r.y)}`];
+              // Display figures (rawX/rawY), not the plotted coordinates —
+              // identical for numeric metrics, "2-9" for a str peak.
+              return [`${metricX.shortLabel}: ${labelForValue(metricX, r.rawX)}`, `${metricY.shortLabel}: ${labelForValue(metricY, r.rawY)}`];
             },
           },
         },
@@ -948,7 +982,9 @@ export function buildRadarSmallMultiples(canvas, chartRef, { metrics, players, p
   poolRows = poolRows || [];
   const distributions = metrics.map((m) =>
     poolRows
-      .map((r) => Number(r[m.key]))
+      // chartValue: the numeric ranking input — identical to Number(r[m.key])
+      // for a normal metric, the peak RANK for a str peak (Best Bowling).
+      .map((r) => chartValue(m, r))
       .filter((v, i) => hasMetricData(m, poolRows[i][m.key]))
       .sort((a, b) => a - b)
   );
@@ -1021,7 +1057,7 @@ export function buildRadarSmallMultiples(canvas, chartRef, { metrics, players, p
         labels: metrics.map((m) => m.shortLabel),
         datasets: [
           {
-            data: metrics.map((m, mi) => percentileFor(mi, Number(r.row[m.key])) ?? 0),
+            data: metrics.map((m, mi) => percentileFor(mi, chartValue(m, r.row)) ?? 0),
             borderColor: pal.accent,
             backgroundColor: pal.accent + "33",
             pointBackgroundColor: pal.accent,
@@ -1040,10 +1076,13 @@ export function buildRadarSmallMultiples(canvas, chartRef, { metrics, players, p
               // so the reader sees both "SR 142.0" and "89th pct of the field".
               label: (ctx) => {
                 const metric = metrics[ctx.dataIndex];
-                const raw = Number(r.row[metric.key]);
-                const pct = percentileFor(ctx.dataIndex, raw);
+                // Numeric value drives the percentile; the DISPLAY figure
+                // (row[key]) is what the label shows — they differ only for a
+                // str peak (Best Bowling: rank vs "2-9").
+                const numericVal = chartValue(metric, r.row);
+                const pct = percentileFor(ctx.dataIndex, numericVal);
                 const pctText = pct == null ? "" : ` — ${Math.round(pct)}th pct`;
-                return `${metric.label}: ${labelForValue(metric, raw)}${pctText}`;
+                return `${metric.label}: ${labelForValue(metric, r.row[metric.key])}${pctText}`;
               },
             },
           },

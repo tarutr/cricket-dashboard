@@ -178,23 +178,23 @@ export function sampleExpression(discipline) {
  * matches-batted/bowled-in that year rather than all appearances — a different
  * stat. Excluding it avoids that dishonest reinterpretation.
  *
- * ── Matchup ("Vs") metrics (source "matchup", Wave B2) ──────────────────────
+ * ── Matchup ("Vs") metrics (source "matchup", Wave B2/B3) ───────────────────
  * A Vs by-year line trends a matchup-namespace metric over the matchup_* view
  * (see buildTimeseriesQuery's matchup branch). The SAME recombination rule
  * applies: a total/rate/percent whose sqlExpression is a SUM (or a ratio of
  * SUMs ×100) of additive per-innings columns regroups cleanly into
  * (player, year) buckets and recombines to the career-vs-bucket figure by the
  * same arithmetic the anchor check verifies. So matchup total/rate/percent
- * metrics are trend-able — with two deliberate exclusions:
- *  • `vsTableOnly` metrics (Matches, Runs per Innings, High Score, Best
- *    Bowling — decision 47c) are LEADERBOARD-Vs-TABLE ONLY by owner ruling and
- *    were excluded from every graph type in Wave B1; they stay out here. (Two
- *    of them — High Score / Best Bowling — are also kind "peak" and would fail
- *    the kind check anyway; the other two — Matches / Runs per Innings — are
- *    total/rate, so the vsTableOnly guard is what keeps them off the line.)
- *  • kind "peak" (non-additive MAX / arg_max "W-R") and "composition"
- *    (descriptive un-bucketed %s) are excluded by the same kind check as the
- *    innings path.
+ * metrics are trend-able. Wave B3 (owner ruling 2026-07-18) made the four
+ * previously-vsTableOnly stats graphable, so there is no longer a vsTableOnly
+ * exclusion here — the kind check alone decides:
+ *  • Matches (total) and Runs per Innings (rate) now trend by year.
+ *  • High Score / Best Bowling are kind "peak" (non-additive MAX / arg_max
+ *    "W-R" display string) and stay excluded by the kind check, exactly as the
+ *    innings path excludes peaks — a year-over-year line of a single-innings
+ *    extreme is not the volume/rate trend this chart is for.
+ *  • "composition" (descriptive un-bucketed %s) stays excluded by the same
+ *    kind check as the innings path.
  *
  * @param {object} metricDef a metrics.js metric definition (from getMetric)
  * @returns {boolean}
@@ -204,10 +204,12 @@ export function timeseriesSupported(metricDef) {
   const trendableKind =
     metricDef.kind === "total" || metricDef.kind === "rate" || metricDef.kind === "percent";
   if (metricDef.source === "matchup") {
-    // vsTableOnly (Matches / Runs per Innings / High Score / Best Bowling) is
-    // never charted — table-only by owner ruling (decision 47c), honoured by
-    // Wave B1 for every other chart type and by this Line path too.
-    if (metricDef.vsTableOnly) return false;
+    // Wave B3 (owner ruling 2026-07-18): the vsTableOnly stats are now
+    // graphable, so the old `if (metricDef.vsTableOnly) return false;` guard is
+    // gone. The kind check below is what now decides: Matches (total) and Runs
+    // per Innings (rate) become Line-able by year; High Score and Best Bowling
+    // (kind "peak") stay excluded exactly as the innings path excludes them
+    // (non-additive MAX / a "W-R" display string — not a recombining trend).
     return trendableKind;
   }
   if (metricDef.source !== "innings") return false; // drops "matches" (player_matches-sourced)
