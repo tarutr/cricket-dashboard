@@ -369,3 +369,31 @@ change now drops any Team/Opp/Event/Venue pick, same as a gender/team-type chang
 "India still showing" was a test-timing race with the multi-select's deferred commit, not a bug.)
 NEXT = Wave B (matchup-aware Graph) — owner signalled proceed ("review all three when done"); I'll open
 Wave B with the charts.js approach + per-chart-type plan for a quick pre-build check (handoff mandate).
+
+## ===== WAVE B (matchup-aware Graph) — approach APPROVED + Line ruled IN (owner 2026-07-18) =====
+Charting-layer map (Explore, 2026-07-18) confirmed the approach. CORE INSIGHT: the table computes all Vs
+numbers via ONE builder — buildQuery auto-dispatches to buildMatchupQuery when matchupVsActive(state)
+(table.js:739-744). The Graph BLOCKS Vs by nulling matchupVs in a read-through store wrapper
+(graph.js:309-321). Fix = stop nulling + route the graph's fetch through the SAME builder so Vs values
+are IDENTICAL to the table (no parallel number logic). Reusable machinery CONFIRMED: fetchWindowMetric
+(charts.js:109) already runs buildQuery unchanged (slope/dumbbell nearly free); benchmark.js
+fetchBenchmarkPool DELIBERATELY forces matchupVs:null (documented) — just un-force + repoint. HARDEST
+item: charts.js fetchSelectedPlayerMetrics (37-81) hand-rolls plain-only SQL (backs bar/scatter/phases +
+Best/Worst ranker) — needs a matchup branch routing through buildQuery (wrap+filter by id, the
+fetchWindowMetric pattern), PLAIN path left byte-identical. ~25 metric-picker sites in graph.js use raw
+state.discipline/getMetric(k,discipline)/eligibleMetrics(discipline) → repoint to effectiveNamespace(state)
+(already accepts a matchup-namespace string). Owner per-chart ruling: ALL types get Vs including LINE
+(new matchup-by-year query approved). buildMatchupQuery NOT exported but buildQuery IS + auto-dispatches.
+Owner FYI accepted: Vs is shared Stats+Graph state (fixes the live bug); peaks — High Score charts fine,
+Best Bowling (compound "W-R") greyed where a single number is needed.
+### B1 (frontend-heavy / Opus, number-adjacent) — Bar/Scatter/Radar/Phases/Benchmark/Slope/Dumbbell Vs-aware.
+Owns graph/graph.js (un-null wrapper 309-321 + repoint all ~25 sites), graph/charts.js
+(fetchSelectedPlayerMetrics matchup branch via buildQuery + fetchWindowMetric enablement; PLAIN byte-
+identical), graph/benchmark.js (un-force matchupVs:null + repoint), graph/phaseFamilies.js (matchup
+families + repoint), graph/players.js (searchPlayers matchup branch iff roster/add needs it). Line/byyear:
+GREY under Vs (interim, must not error) — B2 implements it. Best Bowling: grey where single-number needed.
+MUST NOT touch buildQuery/buildMatchupQuery/buildScopeClauses/metrics.js aggregation. Solo → may drive
+browser to self-verify; orchestrator does authoritative independent pass.
+### B2 (data-engineer / Opus, number-adjacent) — Line-by-year for Vs: NEW matchup-innings-by-year query
+in graph/timeseries.js + wire graph.js byyear site + un-grey Line under Vs. AFTER B1 (shares graph.js).
+Independent DuckDB verification. ## B1 spawning.
