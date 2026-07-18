@@ -656,7 +656,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * for the discipline).
    */
   function applyAutoSelect(keys, state) {
-    const discipline = state.discipline;
+    // Metric-namespace lookups use the EFFECTIVE namespace (matchup_* when Vs is
+    // active) so the auto-selected chart is built from the right vocabulary.
+    const discipline = effectiveNamespace(state);
     const valid = keys.filter((k) => getMetric(k, discipline));
     if (!valid.length) return null;
 
@@ -704,7 +706,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * Never overrides a hand-built chart. */
   function maybeAutoSelectFromFilters() {
     const state = store.get();
-    const keys = metricConditionKeys(state).filter((k) => getMetric(k, state.discipline));
+    const keys = metricConditionKeys(state).filter((k) => getMetric(k, effectiveNamespace(state)));
     if (keys.length === 0) {
       // Conditions cleared. Revert to the empty rules-table state only if the
       // current config was itself auto-derived (a hand-built chart is left
@@ -866,8 +868,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * candidate pool — so those fall back to "the seed sort" in deriveChecked()
    * (returns null here to signal that fallback). */
   function rankMetricForActiveType(state) {
-    if (chartType === "bar") return getMetric(barMetricKey, state.discipline);
-    if (chartType === "scatter") return getMetric(scatterYKey, state.discipline);
+    const ns = effectiveNamespace(state);
+    if (chartType === "bar") return getMetric(barMetricKey, ns);
+    if (chartType === "scatter") return getMetric(scatterYKey, ns);
     return null;
   }
 
@@ -985,7 +988,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     if (token !== rankDeriveToken) return;
     selection.setChecked(ranked.slice(0, cap).map((p) => p.id), { dirty: false });
     lastRankMetricKey = metric ? metric.key : null;
-    lastRankMetricDiscipline = metric ? state.discipline : null;
+    // Track the EFFECTIVE namespace (matchup_* under Vs) so resolveSeedMetric()
+    // re-resolves the title's ranking metric in the same vocabulary it ranked by.
+    lastRankMetricDiscipline = metric ? effectiveNamespace(state) : null;
   }
 
   /** Wired to the bar/scatter-Y metric selects — the ones that feed
@@ -1077,7 +1082,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     }
     metricControlSelects = [];
     const state = store.get();
-    const discipline = state.discipline;
+    // Metric pickers resolve against the EFFECTIVE namespace (matchup_* while a
+    // Vs bucket is active), and use graphMetrics() so the matchup table-only/
+    // composition metrics never surface here. Plain scope => identical to before.
+    const discipline = effectiveNamespace(state);
     const formats = state.formats;
 
     // R7 Wave 2 (item 17a): a metric is pickable BEFORE any chart type. With no
@@ -1088,7 +1096,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // chart renders yet (renderChart still shows the rules-table empty state
     // until a type is picked); this only records the intended metric.
     if (!chartType) {
-      const metrics = eligibleMetrics(discipline, formats);
+      const metrics = graphMetrics(discipline, formats);
       const selected = adoptChosenMetric(metrics);
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
@@ -1104,7 +1112,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     }
 
     if (chartType === "bar") {
-      const metrics = eligibleMetrics(discipline, formats);
+      const metrics = graphMetrics(discipline, formats);
       barMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
@@ -1118,7 +1126,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         onRankMetricChanged();
       });
     } else if (chartType === "scatter") {
-      const metrics = eligibleMetrics(discipline, formats);
+      const metrics = graphMetrics(discipline, formats);
       // item 4: no auto-pick. The Y axis carries the shared chosen metric; X is
       // scatter-local. Both start on the "Choose a metric…" placeholder until
       // explicitly picked. (R6: the checked set is auto-selected by whole-DB
@@ -1216,7 +1224,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         metricControlSelects.push(handle);
       }
     } else if (chartType === "slope") {
-      const metrics = eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent");
+      const metrics = graphMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent");
       slopeMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
       // Item 4a: no window auto-fill — the inputs render blank (value="") until
       // the user picks both ends.
@@ -1263,7 +1271,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // Batch 4 wave 2, task 1: metrics whose sqlExpression recombines
       // cleanly per (player, year) — timeseries.js's own whitelist (kind
       // total/rate, innings-sourced); never re-derived here (§8.2).
-      const metrics = eligibleMetrics(discipline, formats).filter((m) => timeseriesSupported(m));
+      const metrics = graphMetrics(discipline, formats).filter((m) => timeseriesSupported(m));
       byYearMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
       els.metricControls.innerHTML = `
         <span class="graph-control-label">Metric</span>
@@ -1282,7 +1290,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // month range each — since it draws Slope's exact data (fetchWindowMetric
       // per window) as dot-bar-dot. Works for batting AND bowling, any gender;
       // no availability gate.
-      const metrics = eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent");
+      const metrics = graphMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent");
       dumbbellMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
       // Item 4a: no window auto-fill — the inputs render blank (value="") until
       // the user picks both ends.
@@ -1721,19 +1729,27 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // reasons/strings).
     const poolReason = poolReasonOverride !== undefined ? poolReasonOverride : poolStatusReason();
     if (poolReason) return { ok: false, reason: poolReason };
+    // Wave B: Line (by-year) for Vs metrics is NOT built yet (B2's job) — grey
+    // it under Vs with an honest note so selecting it shows guidance rather than
+    // running buildTimeseriesQuery with a matchup metric. Checked before the
+    // generic byyear metric check below.
+    if (typeKey === "byyear" && matchupVsActive(state)) {
+      return { ok: false, reason: "Not available for Vs metrics yet." };
+    }
     // NIT5: the base scope-eligible metric list is identical across the
-    // slope/byyear/dumbbell branches below (all keyed on state.discipline +
-    // state.formats). syncChartTypeButtons() computes it ONCE and threads it in
-    // here so a single sync pass doesn't rebuild it per type; other callers
-    // (the "Graph this player" chooser) omit the override and recompute exactly
-    // as before. Note: the radar/benchmark branches read their own
-    // wrapper predicates (benchmarkEligibleMetrics lives in benchmark.js,
-    // outside this file), so those are intentionally left untouched.
-    const eligibleForScope = eligibleMetricsForScope !== undefined ? eligibleMetricsForScope : eligibleMetrics(state.discipline, state.formats);
-    if (typeKey === "radar" && radarEligibleMetrics(state.discipline, state.formats).length < RADAR_MIN_METRICS) {
+    // slope/byyear/dumbbell branches below (all keyed on the effective
+    // namespace + state.formats). syncChartTypeButtons() computes it ONCE and
+    // threads it in here so a single sync pass doesn't rebuild it per type;
+    // other callers (the "Graph this player" chooser) omit the override and
+    // recompute exactly as before. Wave B: metric-eligibility uses the EFFECTIVE
+    // namespace (matchup_* under Vs) via graphMetrics()/the wrapper predicates,
+    // so a Vs scope offers exactly the matchup metrics each type can draw.
+    const ns = effectiveNamespace(state);
+    const eligibleForScope = eligibleMetricsForScope !== undefined ? eligibleMetricsForScope : graphMetrics(ns, state.formats);
+    if (typeKey === "radar" && radarEligibleMetrics(ns, state.formats).length < RADAR_MIN_METRICS) {
       return { ok: false, reason: `Needs at least ${RADAR_MIN_METRICS} radar metrics for this scope` };
     }
-    if (typeKey === "phases" && eligiblePhaseFamilies(state.discipline, state.formats).length === 0) {
+    if (typeKey === "phases" && eligiblePhaseFamilies(ns, state.formats).length === 0) {
       return { ok: false, reason: "No phase metric families available for this scope" };
     }
     if (typeKey === "slope" && eligibleForScope.filter((m) => m.kind === "rate" || m.kind === "percent").length === 0) {
@@ -1753,7 +1769,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // can actually fail is a scope so metric-starved fewer than 4 qualify at
     // all — kept as an explicit, honestly-worded disabled reason rather than
     // silently falling through to a confusing "Add at least 1 player" alone.
-    if (typeKey === "benchmark" && benchmarkEligibleMetrics(state.discipline, state.formats).length < 4) {
+    if (typeKey === "benchmark" && benchmarkEligibleMetrics(ns, state.formats).length < 4) {
       return { ok: false, reason: "Not enough eligible metrics for this scope" };
     }
     const capDef = CHART_CAPS[typeKey];
@@ -1780,9 +1796,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   function syncChartTypeButtons() {
     const state = store.get();
     // NIT5: compute the scope-eligible metric base ONCE and reuse it across
-    // every evaluateTypeStatus() call in this pass (identical discipline +
+    // every evaluateTypeStatus() call in this pass (identical namespace +
     // formats for the whole loop) instead of rebuilding it in each type branch.
-    const eligibleForScope = eligibleMetrics(state.discipline, state.formats);
+    // Wave B: graphMetrics() over the effective namespace (matchup_* under Vs).
+    const eligibleForScope = graphMetrics(effectiveNamespace(state), state.formats);
     const statuses = {};
     for (const t of CHART_TYPES) statuses[t.key] = evaluateTypeStatus(t.key, state, { eligibleMetricsForScope: eligibleForScope });
 
@@ -2149,7 +2166,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // under — this is the fallback title provenance resolveSeedMetric() uses
       // for Best/Worst on chart types with no single rankable metric.
       seedSortKey = state.sort.key;
-      seedSortDiscipline = state.discipline;
+      // EFFECTIVE namespace (matchup_* under Vs): the seed ranks by the matchup
+      // sort under Vs, so resolveSeedMetric() must resolve the title metric in
+      // that same namespace. Plain scope => state.discipline, unchanged.
+      seedSortDiscipline = effectiveNamespace(state);
       clearCapNote();
       // A fresh seed replaces the candidate POOL only — `checked` is then
       // derived per the CURRENTLY active mode ("auto-check per the active
@@ -2192,13 +2212,16 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * time), which is exactly right for the "seed sort" fallback types
    * (radar/phases/slope/byyear/dumbbell) since their checked set's order
    * literally IS that seed order (or its reverse, for "worst"). Returns null if
-   * there's been no seed yet, or either happened under a DIFFERENT discipline. */
-  function resolveSeedMetric(discipline) {
-    if (lastRankMetricKey && lastRankMetricDiscipline === discipline) {
-      return getMetric(lastRankMetricKey, discipline) || null;
+   * there's been no seed yet, or either happened under a DIFFERENT namespace.
+   * `ns` is the EFFECTIVE namespace (Wave B): matchup_* under Vs, else the plain
+   * discipline — the same namespace lastRankMetricDiscipline/seedSortDiscipline
+   * were recorded under, so the title metric resolves in its real vocabulary. */
+  function resolveSeedMetric(ns) {
+    if (lastRankMetricKey && lastRankMetricDiscipline === ns) {
+      return getMetric(lastRankMetricKey, ns) || null;
     }
-    if (!seedSortKey || seedSortDiscipline !== discipline) return null;
-    return getMetric(seedSortKey, discipline) || null;
+    if (!seedSortKey || seedSortDiscipline !== ns) return null;
+    return getMetric(seedSortKey, ns) || null;
   }
 
   /** roster-provenance block passed to card.js on every config — see its
@@ -2210,12 +2233,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    *   - manual / dirty / unknown provenance    -> "N players"
    * careerGamesRank (topnames) and seedByMetric (best/worst) are mutually
    * exclusive by mode, so card.js can check them in order. */
-  function currentRosterMeta(discipline) {
+  function currentRosterMeta(ns) {
     const mode = selection.getMode();
     return {
       dirty: selection.isDirty(),
       careerGamesRank: currentCareerGamesRank(),
-      seedByMetric: mode === "best" || mode === "worst" ? resolveSeedMetric(discipline) : null,
+      seedByMetric: mode === "best" || mode === "worst" ? resolveSeedMetric(ns) : null,
       rankDir: mode === "worst" ? "bottom" : "top",
     };
   }
@@ -2230,7 +2253,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * silent auto-swap. `typeKey` is a CHART_RULES key. */
   function noMetricGuidance(typeKey) {
     if (metricEverChosen && chosenMetricKey) {
-      const m = getMetric(chosenMetricKey, store.get().discipline);
+      const m = getMetric(chosenMetricKey, effectiveNamespace(store.get()));
       return chartPurposeMessage(typeKey, m ? m.label : "That metric");
     }
     return chartPurposeMessage(typeKey, null);
@@ -2256,32 +2279,36 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * chart type has no valid metric/group selected at all (nothing to title). */
   function buildTitleOnlyConfig(playerCount) {
     const state = store.get();
+    // `discipline` (plain) → the card config's discipline field (card.js's
+    // eyebrow "CRICDB · BATTING"). `ns` (effective) → every metric lookup, so a
+    // Vs chart titles from the matchup vocabulary. Plain scope => ns === discipline.
     const discipline = state.discipline;
-    const roster = currentRosterMeta(discipline);
+    const ns = effectiveNamespace(state);
+    const roster = currentRosterMeta(ns);
     if (chartType === "bar") {
-      const metric = getMetric(barMetricKey, discipline);
+      const metric = getMetric(barMetricKey, ns);
       return metric ? { type: "bar", discipline, metric, playerCount, roster } : null;
     }
     if (chartType === "scatter") {
-      const metricX = getMetric(scatterXKey, discipline);
-      const metricY = getMetric(scatterYKey, discipline);
+      const metricX = getMetric(scatterXKey, ns);
+      const metricY = getMetric(scatterYKey, ns);
       return metricX && metricY ? { type: "scatter", discipline, metricX, metricY, playerCount, roster } : null;
     }
     if (chartType === "radar") {
       // item 3: title is honest only once >= RADAR_MIN_METRICS axes are chosen.
-      const eligible = radarEligibleMetrics(discipline, state.formats);
-      const metrics = radarMetricKeys.map((k) => getMetric(k, discipline)).filter((m) => m && eligible.some((e) => e.key === m.key));
+      const eligible = radarEligibleMetrics(ns, state.formats);
+      const metrics = radarMetricKeys.map((k) => getMetric(k, ns)).filter((m) => m && eligible.some((e) => e.key === m.key));
       return metrics.length >= RADAR_MIN_METRICS
         ? { type: "radar", discipline, metricKeys: metrics.map((m) => m.key), metrics, playerCount, roster }
         : null;
     }
     if (chartType === "phases") {
-      const families = eligiblePhaseFamilies(discipline, state.formats);
+      const families = eligiblePhaseFamilies(ns, state.formats);
       const family = families.find((f) => f.id === phaseFamilyId); // item 4: no auto-pick
       return family ? { type: "phases", discipline, family, playerCount, roster } : null;
     }
     if (chartType === "slope") {
-      const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
+      const metrics = graphMetrics(ns, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
       const metric = metrics.find((m) => m.key === slopeMetricKey); // item 4: no auto-pick
       return metric
         ? {
@@ -2298,12 +2325,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         : null;
     }
     if (chartType === "byyear") {
-      const metrics = eligibleMetrics(discipline, state.formats).filter((m) => timeseriesSupported(m));
+      const metrics = graphMetrics(ns, state.formats).filter((m) => timeseriesSupported(m));
       const metric = metrics.find((m) => m.key === byYearMetricKey); // item 4: no auto-pick
       return metric ? { type: "byyear", discipline, metric, playerCount, roster } : null;
     }
     if (chartType === "dumbbell") {
-      const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
+      const metrics = graphMetrics(ns, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
       const metric = metrics.find((m) => m.key === dumbbellMetricKey); // item 4: no auto-pick
       // labelA/labelB and sideAKey/sideBKey mirror what the render branch
       // emits (see below) so card.js's autoTitle/regenKeyFor read the same
@@ -2337,7 +2364,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const rosterList = selection.get();
       const anchor = rosterList.find((p) => p.id === benchmarkAnchorId) || rosterList[0] || null;
       const keys = benchmarkMetricKeys || [];
-      const metrics = keys.map((k) => getMetric(k, discipline)).filter(Boolean);
+      const metrics = keys.map((k) => getMetric(k, ns)).filter(Boolean);
       return keys.length
         ? {
             type: "benchmark",
@@ -2404,7 +2431,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
   async function renderChart() {
     const state = store.get();
+    // `discipline` (plain) → each config's discipline field (card.js eyebrow) +
+    // the by-year/timeseries path (greyed under Vs; B2's domain). `ns` (effective)
+    // → every chart-metric lookup, so a Vs chart draws matchup values. Plain
+    // scope => ns === discipline, so the plain render path is unchanged.
     const discipline = state.discipline;
+    const ns = effectiveNamespace(state);
     const token = ++loadToken;
 
     // decision 46f: no chart type picked yet — no chart, no chart-shaped
@@ -2499,7 +2531,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     showStatus("Running query…");
 
     try {
-      const roster = currentRosterMeta(discipline);
+      const roster = currentRosterMeta(ns);
 
       // Slope is handled entirely separately from the bar/scatter/
       // radar/phases chain below: it needs TWO independent queries (one per
@@ -2509,7 +2541,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // isn't known until after those queries return, unlike every other type
       // where playerCount is just the selection size.
       if (chartType === "slope") {
-        const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
+        const metrics = graphMetrics(ns, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
         const metric = metrics.find((m) => m.key === slopeMetricKey); // item 4: no auto-pick
         if (!metric) {
           showChartGuidance(noMetricGuidance("slope"));
@@ -2651,7 +2683,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // idiom Slope uses; works for batting AND bowling, any gender (no
       // availability gate — see the removed dumbbellAvailable note up top).
       if (chartType === "dumbbell") {
-        const metrics = eligibleMetrics(discipline, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
+        const metrics = graphMetrics(ns, state.formats).filter((m) => m.kind === "rate" || m.kind === "percent");
         const metric = metrics.find((m) => m.key === dumbbellMetricKey); // item 4: no auto-pick
         if (!metric) {
           showChartGuidance(noMetricGuidance("dumbbell"));
@@ -2732,7 +2764,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // computeBenchmarkRows) from that one query's rows, so the "#1 other" is
       // always one of the candidates the user is actually comparing.
       if (chartType === "benchmark") {
-        const eligible = benchmarkEligibleMetrics(discipline, state.formats);
+        const eligible = benchmarkEligibleMetrics(ns, state.formats);
         const keys = (benchmarkMetricKeys || []).filter((k) => eligible.some((m) => m.key === k));
         if (keys.length < 4) {
           hideStatus();
@@ -2824,8 +2856,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // client-side in buildRadarSmallMultiples — the values themselves are
       // unchanged, just ranked (numbers rule).
       if (chartType === "radar") {
-        const eligible = radarEligibleMetrics(discipline, state.formats);
-        const metrics = radarMetricKeys.map((k) => getMetric(k, discipline)).filter((m) => m && eligible.some((e) => e.key === m.key));
+        const eligible = radarEligibleMetrics(ns, state.formats);
+        const metrics = radarMetricKeys.map((k) => getMetric(k, ns)).filter((m) => m && eligible.some((e) => e.key === m.key));
         if (metrics.length < RADAR_MIN_METRICS) {
           showChartGuidance(chartPurposeMessage("radar", null));
           return;
@@ -2874,13 +2906,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       let config;
 
       if (chartType === "bar") {
-        const metric = getMetric(barMetricKey, discipline); // item 4: no auto-pick
+        const metric = getMetric(barMetricKey, ns); // item 4: no auto-pick
         if (!metric) { showChartGuidance(noMetricGuidance("bar")); return; }
         metricKeys = [metric.key];
         config = { type: "bar", discipline, metric, playerCount: players.length, style: barStyle, roster };
       } else if (chartType === "scatter") {
-        const metricX = getMetric(scatterXKey, discipline);
-        const metricY = getMetric(scatterYKey, discipline);
+        const metricX = getMetric(scatterXKey, ns);
+        const metricY = getMetric(scatterYKey, ns);
         if (!metricX || !metricY) {
           // item 3: scatter needs BOTH axes — the rich what-it's-for message.
           showChartGuidance(chartPurposeMessage("scatter", null));
@@ -2889,13 +2921,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         metricKeys = [metricX.key, metricY.key];
         config = { type: "scatter", discipline, metricX, metricY, playerCount: players.length, roster };
       } else if (chartType === "phases") {
-        const families = eligiblePhaseFamilies(discipline, state.formats);
+        const families = eligiblePhaseFamilies(ns, state.formats);
         const family = families.find((f) => f.id === phaseFamilyId); // item 4: no auto-pick
         if (!family) {
           showChartGuidance(chartPurposeMessage("phases", null));
           return;
         }
-        const metrics = family.members.map((mm) => getMetric(mm.key, discipline)).filter(Boolean);
+        const metrics = family.members.map((mm) => getMetric(mm.key, ns)).filter(Boolean);
         metricKeys = metrics.map((m) => m.key);
         config = { type: "phases", discipline, family, metrics, playerCount: players.length, roster };
       }
@@ -3096,7 +3128,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * already fills in their own sensible defaults (group/family/anchor+keys)
    * once enterWithChoiceImpl() sets chartType, so the chooser just says so. */
   function metricFieldFor(typeKey, state) {
-    const { discipline, formats } = state;
+    // Wave B: the chooser previews the same metric vocabulary the Builder would
+    // offer — the EFFECTIVE namespace (matchup_* under Vs), via graphMetrics().
+    const formats = state.formats;
+    const discipline = effectiveNamespace(state);
     const single = (metrics) => ({
       kind: "single",
       options: metrics.map((m) => ({ key: m.key, label: m.label })),
@@ -3104,16 +3139,16 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     });
     switch (typeKey) {
       case "bar":
-        return single(eligibleMetrics(discipline, formats));
+        return single(graphMetrics(discipline, formats));
       case "slope":
-        return single(eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent"));
+        return single(graphMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent"));
       case "byyear":
-        return single(eligibleMetrics(discipline, formats).filter((m) => timeseriesSupported(m)));
+        return single(graphMetrics(discipline, formats).filter((m) => timeseriesSupported(m)));
       case "dumbbell":
         // Time-window Dumbbell shares Slope's exact metric set (rate/percent).
-        return single(eligibleMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent"));
+        return single(graphMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent"));
       case "scatter": {
-        const metrics = eligibleMetrics(discipline, formats);
+        const metrics = graphMetrics(discipline, formats);
         const options = metrics.map((m) => ({ key: m.key, label: m.label }));
         return { kind: "xy", xOptions: options, yOptions: options, defaultX: metrics[0]?.key ?? null, defaultY: (metrics[1] || metrics[0])?.key ?? null };
       }
@@ -3232,13 +3267,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       if (newType === "radar") {
         // Default to the first few radar-valid metrics (>= RADAR_MIN_METRICS)
         // when the user has none checked yet, so the chooser confirm draws.
-        const eligible = radarEligibleMetrics(gs.discipline, gs.formats);
+        const eligible = radarEligibleMetrics(effectiveNamespace(gs), gs.formats);
         const stillValid = radarMetricKeys.filter((k) => eligible.some((m) => m.key === k));
         radarMetricKeys = stillValid.length >= RADAR_MIN_METRICS
           ? stillValid
           : eligible.slice(0, Math.min(5, RADAR_MAX_METRICS)).map((m) => m.key);
       } else if (newType === "phases") {
-        const families = eligiblePhaseFamilies(gs.discipline, gs.formats);
+        const families = eligiblePhaseFamilies(effectiveNamespace(gs), gs.formats);
         if (families[0] && !families.some((f) => f.id === phaseFamilyId)) phaseFamilyId = families[0].id;
       }
       metricEverChosen = true;
