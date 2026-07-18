@@ -176,7 +176,7 @@ export function labelForValue(metric, value) {
  * before calling this, so `row[key]` is always real data here; if a str peak's
  * `__sort` column is somehow absent the fallback is NaN (never a throw).
  */
-function chartValue(metric, row) {
+export function chartValue(metric, row) {
   const v = Number(row[metric.key]);
   return Number.isFinite(v) ? v : Number(row[metric.key + "__sort"]);
 }

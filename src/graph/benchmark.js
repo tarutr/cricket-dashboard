@@ -91,12 +91,12 @@ export function benchmarkEligibleMetrics(discipline, formats) {
     (m) =>
       (m.kind === "total" || m.kind === "rate" || m.kind === "percent") &&
       m.higherIsBetter !== null &&
-      m.format !== "str" &&
-      // Wave B: the matchup namespaces' `vsTableOnly` metrics (runs_per_innings
-      // is the only one that would otherwise pass here) are leaderboard-Vs-table
-      // only (owner decision 47c) — never the graph. Plain metrics never carry
-      // the flag, so this is a no-op for a plain scope.
-      !m.vsTableOnly
+      m.format !== "str"
+      // Owner ruling 2026-07-18: the matchup `vsTableOnly` stats are graphable.
+      // Only runs_per_innings (rate) reaches here — matches has higherIsBetter
+      // null; high_score/best are kind "peak" — so it is benchmark-able like any
+      // other rate, consistent with every other chart type. Plain metrics never
+      // carry the flag, so plain scope is unaffected.
   );
 }
 

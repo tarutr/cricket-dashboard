@@ -32,6 +32,7 @@ import {
   buildRadarSmallMultiples,
   buildPhasesChart,
   buildSlopeChart,
+  chartValue,
 } from "./charts.js";
 import { mountCard } from "./card.js";
 import { eligiblePhaseFamilies } from "./phaseFamilies.js";
@@ -978,8 +979,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           return row && hasMetricData(metric, row[metric.key]);
         });
         withData.sort((a, b) => {
-          const va = Number(rowsById.get(a.id)[metric.key]);
-          const vb = Number(rowsById.get(b.id)[metric.key]);
+          // chartValue: numeric ranking input — identical to Number(row[key])
+          // for every normal metric, the peak RANK for a str peak (Best Bowling),
+          // so Best/Worst mode ranks Best Bowling by its figure instead of NaN
+          // (B3 follow-up — same accessor the charts use for the bar heights).
+          const va = chartValue(metric, rowsById.get(a.id));
+          const vb = chartValue(metric, rowsById.get(b.id));
           const diff = metric.higherIsBetter ? vb - va : va - vb; // best-first order
           return newMode === "worst" ? -diff : diff;
         });
