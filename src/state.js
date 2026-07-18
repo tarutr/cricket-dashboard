@@ -23,7 +23,7 @@
 // match_type values — "T20" here means the T20-bucket (T20 + IT20), matching the
 // Phase 2 brief's owner decision that Cricsheet mislabels internationals.
 
-import { metricsFor, matchupBucketLabel, getMetric } from "./metrics.js";
+import { metricsFor, matchupBucketLabel, getMetric, metricDisplayLabel } from "./metrics.js";
 
 /**
  * The three format buckets surfaced in the UI, and the match_type values each
@@ -240,7 +240,9 @@ function conditionScopeLabel(c, state) {
   const ns = effectiveNamespace(state);
   const inNs = metricsFor(ns).find((m) => m.key === c.metricKey);
   const metric = inNs || getMetric(c.metricKey);
-  const label = metric ? metric.label : c.metricKey;
+  // metricDisplayLabel keeps the "(Innings)" suffix logic in sync with pills.js
+  // (this function is the hand-duplicated twin noted above) — Wave A1 item 4.
+  const label = metric ? metricDisplayLabel(metric, state.formats) : c.metricKey;
   if (c.operator === "between") return `${label} ${c.v1}–${c.v2}`;
   return `${label} ${CONDITION_OP_SYMBOLS[c.operator] ?? c.operator} ${c.v1}`;
 }
