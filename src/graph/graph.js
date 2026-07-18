@@ -10,7 +10,7 @@
 // buildScopeClauses (via charts.js/players.js), table.js's buildQuery (via
 // players.js, for seeding).
 
-import { eligibleMetrics, pruneIneligibleState } from "../state.js";
+import { eligibleMetrics, pruneIneligibleState, effectiveNamespace, matchupVsActive } from "../state.js";
 import { getMetric, hasMetricData } from "../metrics.js";
 import { escHtml, escAttr } from "../html.js";
 import { getManifest, query } from "../db.js";
@@ -151,14 +151,10 @@ function metricConditionKeys(state) {
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 // R7 Wave 2 (item 16): the graph-local scope clone is gone — the Graph Builder
-// now SHARES the Stats filter store (see mountGraph's `store`). The only thing
-// the old clone did beyond copying was strip matchupVs so the graph ignores
-// matchup ("Vs") mode end-to-end (there is no matchup chart type). That job now
-// lives in the shared-store read wrapper inside mountGraph, which nulls
-// matchupVs on read WITHOUT mutating the shared state — so query paths ignore
-// the "Vs" bucket while the Stats table keeps it. (describeScope already
-// view-guards the matchup token to the table view, so the card footer stays
-// honest on its own.)
+// now SHARES the Stats filter store (see mountGraph's `store`). Wave B made the
+// sharing complete: the graph HONOURS matchup ("Vs") mode too (matchup metrics
+// in its drawer, Vs-aware fetches through buildQuery), so the read wrapper no
+// longer strips matchupVs — see mountGraph's `store`.
 
 // ── Day-level date helpers (R3 Wave 3, item 10) ─────────────────────────────
 // The Slope/Dumbbell Window A/B pickers are now DAY-level native <input
@@ -271,8 +267,23 @@ function wireDropdown(toggleEl, panelEl) {
 // SUPERSET of every metric the old curated radarGroups.js groups ever offered
 // (all of those had a defined direction), so nothing that was radar-able before
 // is lost — the group *structure* is gone, the metric vocabulary is not.
-function radarEligibleMetrics(discipline, formats) {
-  return eligibleMetrics(discipline, formats).filter((m) => m.higherIsBetter !== null);
+// Wave B (matchup-aware Graph): the ONE metric-eligibility gate for the graph's
+// chart-metric pickers. It is `eligibleMetrics` (phase-gated per format) MINUS
+// the two matchup-only kinds the graph must not offer:
+//   • `vsTableOnly` — owner decision 47(c): matches / high_score /
+//     runs_per_innings / best belong to the leaderboard Vs TABLE only ("never
+//     … the graph" per metrics.js). Honoured here rather than reversed.
+//   • `kind === "composition"` — the coverage-breakdown columns (comp_*) are a
+//     table-display % breakdown with a placeholder sqlExpression, not a
+//     standalone chartable stat.
+// PLAIN namespaces (batting/bowling) carry NEITHER flag, so for a plain scope
+// this returns exactly what eligibleMetrics did — the plain graph path stays
+// byte-identical. Only matchup_batting/matchup_bowling are narrowed.
+function graphMetrics(ns, formats) {
+  return eligibleMetrics(ns, formats).filter((m) => !m.vsTableOnly && m.kind !== "composition");
+}
+function radarEligibleMetrics(ns, formats) {
+  return graphMetrics(ns, formats).filter((m) => m.higherIsBetter !== null);
 }
 // Min axes to draw a meaningful radar polygon; max the user may check at once.
 const RADAR_MIN_METRICS = 3;
@@ -297,27 +308,27 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // effect here: it's a shortcut to edit the same filters without leaving the
   // tab, NOT a separate scope.
   //
-  // The one thing the old clone did that must survive: the graph ignores
-  // matchup ("Vs") mode (there is no matchup chart type). So `store` is a thin
-  // read-through wrapper over `statsStore` that nulls matchupVs ON READ only —
-  // the shared state itself is never mutated, so the Stats table keeps its "Vs"
-  // bucket. `set` passes straight through, so every graph filter edit is a real
-  // write to the shared store (that's what makes sharing bidirectional). The
-  // shallow spread preserves every nested reference (advanced.groups, profile,
-  // the filter arrays), so drawer.js's in-place condition mutation still reaches
-  // the shared store exactly as before.
-  const readScope = () => {
-    const s = statsStore.get();
-    return s.matchupVs == null ? s : { ...s, matchupVs: null };
-  };
+  // Wave B (matchup-aware Graph): the read wrapper NO LONGER nulls matchupVs —
+  // the graph now honours the shared "Vs" bucket end-to-end (its drawer offers
+  // matchup metrics, and its fetches route through the SAME buildQuery ->
+  // buildMatchupQuery the Stats table uses, so charted Vs numbers are identical
+  // to the table's). This also fixes the old live bug where setting Vs from
+  // inside the Graph silently flipped the Stats table while the Graph ignored it
+  // — now they honestly share one matchup state. `get` returns the shared state
+  // verbatim; `set`/`subscribe` pass straight through.
+  const readScope = () => statsStore.get();
   const store = {
     get: readScope,
     set: statsStore.set,
     subscribe: statsStore.subscribe,
-    // Describe the SAME matchupVs-nulled scope the graph queries against, so the
-    // card footer (§8.4) never states a matchup/positions filter the query
-    // didn't apply.
-    describeScope: () => statsStore.describeScope(readScope()),
+    // Card footer (§8.4): describeScope guards its matchup token to the TABLE
+    // view (state.js), so in graph view it would omit "vs Spin" even though the
+    // graph now DOES apply the bucket — that would under-state the real scope.
+    // Force `view: "table"` for the describe call ONLY so the footer honestly
+    // names the active Vs bucket; the matchup token is describeScope's only
+    // view-dependent branch, so nothing else changes, and when no Vs is active
+    // (matchupVsActive false) the token never fires regardless.
+    describeScope: () => statsStore.describeScope({ ...readScope(), view: "table" }),
   };
   // Item 16: seeding is gated on whether a scope has actually been committed —
   // a Stats search (hasStatsResults) OR the graph's own "Apply to graph". This
