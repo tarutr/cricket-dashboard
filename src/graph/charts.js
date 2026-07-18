@@ -19,7 +19,7 @@ import { getMetric, hasMetricData } from "../metrics.js";
 import { query } from "../db.js";
 import { buildScopeClauses } from "../filters.js";
 import { buildQuery } from "../table.js";
-import { escSql as esc } from "../state.js";
+import { escSql as esc, matchupVsActive } from "../state.js";
 
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
 const NAME_COL = { batting: "batter_name", bowling: "bowler_name" };
@@ -36,6 +36,28 @@ const TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
  */
 export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   if (playerIds.length === 0 || metricKeys.length === 0) return new Map();
+
+  // Wave B — matchup ("Vs") branch: when a Vs bucket is active, the charted
+  // numbers must be IDENTICAL to what the Stats table shows for that bucket, so
+  // route through the SAME builder the table uses instead of this module's
+  // bespoke plain-view SELECT. buildQuery auto-dispatches to buildMatchupQuery
+  // when matchupVsActive(state) (table.js), emitting `id`, `name`, the metric
+  // key columns (+ `<key>__sort` where defined), plus the coverage/composition
+  // columns it always carries — we read only the requested metric keys. Then
+  // restrict to the selected roster via the exact "wrap the builder's SQL,
+  // filter in an outer SELECT ... WHERE id IN (...)" idiom fetchWindowMetric()
+  // and benchmark.js's fetchBenchmarkPool() already use. NO new SQL grammar,
+  // and the PLAIN branch below is left byte-identical.
+  if (matchupVsActive(state)) {
+    const { sql } = buildQuery(state, metricKeys);
+    const idsSql = playerIds.map((id) => `'${esc(id)}'`).join(", ");
+    const outerSql = `SELECT * FROM (\n${sql}\n) matchup_q\nWHERE id IN (${idsSql})`;
+    const { rows } = await query(outerSql);
+    const byId = new Map();
+    for (const row of rows) byId.set(row.id, row);
+    return byId;
+  }
+
   const discipline = state.discipline;
   const view = discipline;
   const idCol = ID_COL[discipline];
