@@ -266,3 +266,37 @@ Runs/Innings ALSO auto-exposed as Vs stat-conditions (consistent with the re-sco
 HS/Best Bowling are columns-only; keep or restrict. (c) popup/graph parity deferred.
 Remaining R4 queue: 4d (keep-columns + no-data pin + graph rename), 4e (A9 option-list scope),
 4f (popup selects + docs + hygiene).
+
+## ===== DESIGN ROUND 4 — HANDOFF #2 CONTINUATION (fresh session 2026-07-18) =====
+Authoritative brief = review/DESIGN_ROUND4_HANDOFF_2.md (supersedes the 4d/4e/4f queue
+line above for THIS session's scope). Owner instruction THIS session: build Wave A (4
+filter/condition fixes) → STOP for owner go → Wave B (matchup-aware Graph). Player-popup
+filters explicitly DEFERRED (not this scope). Orchestrator = Opus 4.8.
+Baseline re-proven on localhost:8000 (2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34).
+Open reconciliation to raise at gate: whether owner still wants the old 4d/4e/4f queue
+(handoff #2 reorganized the remaining work into Wave A + Wave B and did not list them).
+
+### Wave A — filter & condition fixes (shared drawer.js → land in BOTH Stats + Graph)
+Code map (Explore, 2026-07-18) → items 2+3 share guard lines (advanced.js isMetricRemoved-
+FromFilters 167-176; table.js conditionToHaving matchup-peak guard 552-563 + conditionApplic-
+ability 600-623) → ONE owner. Nearly all items overlap drawer.js/table.js/metrics.js/pills.js
+→ minimal safe parallelism → two SERIAL stages, split by tier:
+- **A1 (frontend-engineer / Sonnet-high)** — item 1 (rename "Vs"→"Matchup (Vs)" in
+  SINGLETON_TYPES + move to TOP of "+ Add condition" list) + item 4 (drop "(Innings)" from
+  Best Bowling label for single-innings formats T20/50-Over, keep for Red Ball/Test).
+  DISPLAY-ONLY. Owns drawer.js, metrics.js (label strings ONLY — no sqlExpression/sortExpr/
+  kind changes), pills.js, table.js (toolbar literal line 1245 ONLY — must NOT touch
+  conditionToHaving/buildQuery/buildMatchupQuery). Anchors byte-identical by construction.
+  Flag (do NOT build): toolbar hardcoded "Vs" (table.js:1245) does NOT auto-rename — surface
+  to owner at gate, don't extend scope.
+- **A2 (data-engineer / Opus, xhigh-thoroughness)** — item 2 (Best Bowling TWO-box condition
+  "≥ W wickets for ≤ R runs", rank ≥ W*1000−R, plain AND Vs; new condition input type) +
+  item 3 (High Score as a Vs condition, single box, MAX per-innings runs vs bucket). Both need
+  the same peak-wiring machinery (unblock matchup-peak guard for best/high_score; wire peak.*
+  into buildMatchupQuery final WHERE — which today is built BEFORE the peak CTE exists).
+  NUMBER-ADJACENT → orchestrator does independent hand-written DuckDB verification.
+  Runs AFTER A1 commits + orchestrator-verifies. Owns table.js (conditionToHaving/
+  buildMatchupQuery/conditionApplicability), advanced.js, metrics.js (best/high_score),
+  drawer.js (conditionRowHTML two-box), pills.js (two-value pill).
+Note: item 3 is Stats-table-only in practice this wave (Graph nulls matchupVs until Wave B).
+## A1 spawning.

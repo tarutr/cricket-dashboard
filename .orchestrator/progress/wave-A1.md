@@ -51,3 +51,26 @@ under CONCERNS, not fixed — needs an explicit follow-up task or owner call.
   only matches are inside my own new doc-comment (the words appear as prose
   saying they're untouched), no actual field/query line changed.
 - No browser driven (per brief — orchestrator owns that verification pass).
+
+## ORCHESTRATOR follow-up + verification (2026-07-18, commit 2bc377b)
+- CONCERN #2 (conditionScopeLabel twin) CONFIRMED REAL and FIXED inline by the
+  orchestrator: state.js:243 now routes through metricDisplayLabel(metric,
+  state.formats) (import added line 26). metrics.js does not import state.js →
+  no cycle; state.formats is in scope in describeScope. node --check state.js PASS;
+  git diff shows no query/scope-logic (buildScopeClauses/expandFormats/FORMAT_BUCKETS)
+  touched. This completes item 4 across the Stats subtitle + Graph card footer.
+- CONCERN #1 (toolbar hardcoded "Vs" at table.js:1245) left as-is — a FLAG for the
+  owner at the Wave A gate (rename toolbar to match, or leave). Not built.
+- IN-BROWSER verification (orchestrator, localhost:8000, modules cache-reloaded):
+  * Item 1: "Matchup (Vs)" is the FIRST "+ Add condition" entry in BOTH the Stats
+    drawer AND the Graph drawer (shared mountFilterDrawer). Old "Vs"-after-Innings gone.
+  * Item 4: metricDisplayLabel unit-checked on the real plain + matchup `best` metrics —
+    T20 / 50 Over / empty => "Best Bowling"; Red Ball / mixed(Red Ball+T20) =>
+    "Best Bowling (Innings)". LIVE: bowling condition dropdown reads "Best Bowling"
+    under T20-only, "Best Bowling (Innings)" after ticking Red Ball.
+  * Scope-sentence (state.js) live confirmation DEFERRED to the A2 gate — it needs a
+    WORKING Best Bowling condition (item 2) to appear in the subtitle; the wiring is
+    diff-confirmed + the helper is proven.
+  * ANCHOR GUARD: 2,813 baseline re-run on screen AFTER A1 — Karanbir 2,454 top,
+    SA Yadav 64/60/1,544/29.13/150.34. Byte-identical. Zero console errors.
+- A1 VERIFIED. Proceeding to A2 (items 2+3).
