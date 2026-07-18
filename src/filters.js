@@ -592,7 +592,15 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
       } else {
         set.delete(key);
       }
-      store.set({ formats: [...set] });
+      // Format is a scope dimension like gender/team-type (owner decision
+      // 2026-07-18: the clearing logic must be consistent across ALL scope
+      // dimensions, not special-cased). A format switch re-scopes the
+      // Team/Event/Venue/opposition vocabularies (playerData.js loaders +
+      // the A9 full-scope option lists), so clear those picks — a stale
+      // selection must not silently survive into a scope where it no longer
+      // occurs. Profile filters are format-independent, so (like team-type)
+      // they are intentionally kept.
+      store.set({ formats: [...set], teams: [], event: [], venue: [], opposition: [] });
       syncFormatDropdown();
       if (onFormatsChanged) onFormatsChanged();
       onChange();
@@ -698,7 +706,9 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
     from = clampDate(from, minDate, maxDate);
     to = clampDate(to, minDate, maxDate);
     if (from > to) from = to;
-    store.set({ dateFrom: from, dateTo: to });
+    // A preset changes the date window → same scope-change vocab clear as a
+    // manual date edit (see the From/To handlers, owner decision 2026-07-18).
+    store.set({ dateFrom: from, dateTo: to, teams: [], event: [], venue: [], opposition: [] });
     syncDateInputs();
     validateDate();
     onChange();
@@ -734,13 +744,17 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
   });
 
   els.dateFrom.addEventListener("change", () => {
-    store.set({ dateFrom: els.dateFrom.value || null });
+    // Date is a scope dimension too (owner decision 2026-07-18) — clear the
+    // Team/Event/Venue/opposition vocab picks on a window change, exactly as
+    // gender/team-type/format do, so the full-scope (A9) option lists and any
+    // selection stay consistent. Profile filters are date-independent, kept.
+    store.set({ dateFrom: els.dateFrom.value || null, teams: [], event: [], venue: [], opposition: [] });
     els.datePresets.value = ""; // a manual edit no longer matches any preset — reset the label
     validateDate();
     onChange();
   });
   els.dateTo.addEventListener("change", () => {
-    store.set({ dateTo: els.dateTo.value || null });
+    store.set({ dateTo: els.dateTo.value || null, teams: [], event: [], venue: [], opposition: [] }); // scope-change vocab clear (see dateFrom)
     els.datePresets.value = ""; // a manual edit no longer matches any preset — reset the label
     validateDate();
     onChange();
