@@ -324,6 +324,11 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     for (const c of g.conds) {
       const m = getMetric(c.metricKey, ns);
       if (!m) continue; // not applicable in this namespace — conditionApplicability() already notes this
+      // Peak conditions (Wave A2: High Score / Best Bowling) are NOT step-1
+      // aggregates — their placeholder sqlExpression ("__PEAK__") must never
+      // enter the `agg` SELECT. They are materialized in the peak CTE and
+      // referenced as `peak.<col>` in the final WHERE (peakCondMetrics below).
+      if (m.source === "matchup" && m.kind === "peak") continue;
       let alias = aliasByKey.get(m.key);
       if (!alias) {
         alias = `__cond_${condIdx++}`;
@@ -333,6 +338,25 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
       condAliasMap.set(c, alias);
     }
   }
+
+  // Peak metrics needed ONLY as a stat condition (Wave A2): a High Score / Best
+  // Bowling condition can be active without that column being visible, so the
+  // peak CTE must still materialize its value to filter on. Union'd with the
+  // displayed peak metrics below (deduped by key); peakSelectParts stays limited
+  // to DISPLAYED peaks so a condition-only peak adds NO output column (rows with
+  // no peak condition remain byte-identical).
+  const peakKeysSeen = new Set(peakMetrics.map((m) => m.key));
+  const peakCondMetrics = [];
+  for (const g of activeGroups(state.advanced)) {
+    for (const c of g.conds) {
+      const m = getMetric(c.metricKey, ns);
+      if (m && m.source === "matchup" && m.kind === "peak" && !peakKeysSeen.has(m.key)) {
+        peakKeysSeen.add(m.key);
+        peakCondMetrics.push(m);
+      }
+    }
+  }
+  const peakCteMetrics = [...peakMetrics, ...peakCondMetrics];
 
   // Step 1 (`agg`): FILTER'd stat columns, FILTER'd extra columns (innings
   // gate / condition-only metrics), and unfiltered per-(id,name) coverage
@@ -451,7 +475,17 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // bucket innings but non-zero balls elsewhere still contribute to the
   // windowed coverage totals in step 2 before being dropped by this gate.
   const finalWhereParts = [`${inningsGateAlias} >= 1`];
-  const advWhere = advancedToHaving(state.advanced, ns, (cond) => condAliasMap.get(cond));
+  // exprFn resolves each condition's LHS. Non-peak conditions reuse their
+  // step-1 alias (a `windowed` column). Peak conditions (Wave A2) reference the
+  // joined peak CTE instead: Best Bowling filters on the numeric rank column
+  // `peak.best__sort`; High Score on `peak.high_score` (the same values shown in
+  // those Vs columns). conditionToHaving assembles the actual comparison.
+  const advWhere = advancedToHaving(state.advanced, ns, (cond, metric) => {
+    if (metric && metric.source === "matchup" && metric.kind === "peak") {
+      return metric.conditionInput === "bowlingFigures" ? `peak.${metric.key}__sort` : `peak.${metric.key}`;
+    }
+    return condAliasMap.get(cond);
+  });
   if (advWhere) finalWhereParts.push(advWhere);
   // Pinned players (Wave 4b, decision 47a): exempt from the step-3 gate too, so a
   // pinned player still shows even with 0 innings vs the bucket (the existence
@@ -462,10 +496,10 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // `finalWhereParts.join(" AND ")`.
   const finalWhereSql = gateWithPinExemption(finalWhereParts.join(" AND "), "id", pins);
 
-  // Peak CTE (decision 47c): emitted ONLY when a peak column (High Score / Best
-  // Bowling) is actually selected — with none, `peakCteSql` stays null and the
-  // final query below is BYTE-IDENTICAL to the pre-47c matchup query. The
-  // pre-aggregation groups by (id, match, innings) with the bucket in WHERE
+  // Peak CTE (decision 47c; Wave A2): emitted when a peak (High Score / Best
+  // Bowling) is DISPLAYED or filtered on. With neither, `peakCteSql` stays null
+  // and the final query below is BYTE-IDENTICAL to the pre-47c matchup query.
+  // The pre-aggregation groups by (id, match, innings) with the bucket in WHERE
   // (the proven live method: WITH per_innings ... GROUP BY match, innings),
   // reusing the SAME scope/search/pin WHERE (`whereSql`) as `agg` so pins keep
   // their exemption and the bucket is applied consistently. It is a second scan
@@ -474,18 +508,27 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // single discipline share ONE inner pre-aggregation (their inner columns just
   // concatenate). A missing player (no bucket innings — only pins, via the
   // step-3 exemption) LEFT-JOINs to NULL and renders "—".
+  // Wave A2: the CTE materializes peakCteMetrics (displayed ∪ condition-only),
+  // so a condition-only peak still yields `peak.<col>` for the final WHERE — but
+  // peakSelectParts (the DISPLAY columns appended to the final SELECT) covers
+  // ONLY the displayed `peakMetrics`, so a condition-only peak adds no output
+  // column and rows without a peak condition stay byte-identical.
   let peakCteSql = null;
   const peakSelectParts = [];
-  if (peakMetrics.length) {
+  if (peakCteMetrics.length) {
     const peakWhere = `(${whereSql}) AND (${bucketClause})`;
     const innerParts = [];
     const outerParts = [];
-    for (const m of peakMetrics) {
+    for (const m of peakCteMetrics) {
       innerParts.push(m.peakInner);
       outerParts.push(`${m.peakOuter} AS ${m.key}`);
-      peakSelectParts.push(`peak.${m.key} AS ${m.key}`);
       if (m.peakOuterSort) {
         outerParts.push(`${m.peakOuterSort} AS ${m.key}__sort`);
+      }
+    }
+    for (const m of peakMetrics) {
+      peakSelectParts.push(`peak.${m.key} AS ${m.key}`);
+      if (m.peakOuterSort) {
         peakSelectParts.push(`peak.${m.key}__sort AS ${m.key}__sort`);
       }
     }
@@ -549,18 +592,28 @@ function conditionToHaving(cond, discipline, exprFn) {
   // this guard is the same belt-and-braces defence r_pos gets just above, so a
   // stray composition-keyed condition can never reach SQL.
   if (metric.kind === "composition") return null;
-  // Matchup peak metrics (decision 47c: matchup_batting high_score /
-  // matchup_bowling best) have a placeholder sqlExpression — their real value
-  // exists only via buildMatchupQuery's joined peak CTE, never a static
-  // per-condition aggregate — so they can never be a stat condition (belt-and-
-  // braces with advanced.js's isMetricRemovedFromFilters, which keeps them out
-  // of the picker). This ALSO stops a PLAIN-mode "High Score ≥ N" / "Best …"
-  // condition (plain namespace, real expression) from surviving into matchup
-  // mode and resolving to the placeholder metric there: getMetric returned null
-  // for these keys before the matchup metrics existed, so this preserves that
-  // inert "doesn't apply here" behavior. Plain peaks (source "innings") are
-  // untouched.
-  if (metric.source === "matchup" && metric.kind === "peak") return null;
+  // Best Bowling TWO-box condition (Wave A2 item 2, conditionInput
+  // "bowlingFigures"): "≥ W wickets for ≤ R runs" compiles to ONE numeric
+  // comparison against the metric's PEAK RANK — wickets*1000 - runs (more
+  // wickets always ranks above fewer; fewer runs breaks ties) — NOT its "W-R"
+  // display string. LHS rank:
+  //   plain best  → metric.sortExpression   (MAX(wickets*1000 - runs_conceded))
+  //   matchup best→ exprFn returns peak.best__sort (MAX(__pk_w*1000 - __pk_r))
+  // RHS = W*1000 - R. Comparison is implicit >= (the drawer suppresses the
+  // operator select), so operator/v-guard handling below is bypassed.
+  if (metric.conditionInput === "bowlingFigures") {
+    const rankExpr = exprFn ? exprFn(cond, metric) : metric.sortExpression;
+    if (!rankExpr) return null;
+    const w = parseInt(cond.v1, 10);
+    const r = parseInt(cond.v2, 10);
+    if (!Number.isFinite(w) || !Number.isFinite(r)) return null;
+    return `((${rankExpr}) >= ${w * 1000 - r})`;
+  }
+  // Matchup peaks that ARE simple single-box numerics (Wave A2 item 3: High
+  // Score = MAX per-innings runs vs the bucket) fall through to the generic
+  // path below; in matchup mode exprFn resolves them to the joined peak CTE
+  // column `peak.<key>` (materialized in buildMatchupQuery). Plain peaks
+  // (source "innings") evaluate their real sqlExpression directly, unchanged.
   const expr = exprFn ? exprFn(cond, metric) : metric.sqlExpression;
   if (!expr) return null;
   // §8.1: rate/ratio metrics (zeroIsData:false) treat 0 as "no data" too, so a
@@ -605,18 +658,13 @@ function conditionApplicability(advanced, ns) {
     for (const c of g.conds) {
       total += 1;
       const m = getMetric(c.metricKey, ns);
-      // kind "position" (R. Pos.), kind "composition" (the descriptive matchup
-      // %-mix columns), and matchup peaks (decision 47c: placeholder-SQL High
-      // Score / Best Bowling) are never usable conditions — see
+      // kind "position" (R. Pos.) and kind "composition" (the descriptive
+      // matchup %-mix columns) are never usable conditions — see
       // conditionToHaving's guards just above, which this must stay honest
-      // about (never silently count them as "applied").
-      if (
-        m &&
-        m.kind !== "position" &&
-        m.kind !== "composition" &&
-        !(m.source === "matchup" && m.kind === "peak")
-      )
-        applied += 1;
+      // about (never silently count them as "applied"). Wave A2 (items 2+3):
+      // matchup peaks (High Score / Best Bowling) DO now compile to a filter
+      // (against the joined peak CTE), so they count as applied here.
+      if (m && m.kind !== "position" && m.kind !== "composition") applied += 1;
     }
   }
   return { total, applied };

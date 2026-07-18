@@ -683,6 +683,12 @@ const BOWLING_METRICS = [
     higherIsBetter: true, format: "str",
     isPhaseMetric: null, zeroIsData: true,
     kind: "peak",
+    // Wave A2 (item 2): drives the TWO-box stat condition "≥ W wickets for ≤ R
+    // runs". A display/behaviour flag only — the drawer renders two inputs and
+    // suppresses the operator select, and table.js's conditionToHaving compiles
+    // `sortExpression >= (W*1000 - R)` (the numeric peak rank, NOT the "W-R"
+    // display string). No aggregation string above changes.
+    conditionInput: "bowlingFigures",
     minSampleComponent: "COUNT(*)",
   },
   // Wicket-type breakdown (D4): the bowler-credited wickets split by dismissal
@@ -1472,6 +1478,11 @@ const MATCHUP_BOWLING_METRICS = [
     higherIsBetter: true, format: "str",
     isPhaseMetric: null, zeroIsData: true,
     kind: "peak",
+    // Wave A2 (item 2, Vs): same TWO-box condition as the plain `best`. In
+    // matchup mode conditionToHaving compiles against the peak CTE's numeric
+    // rank column `peak.best__sort` (= peakOuterSort) — not this placeholder
+    // sqlExpression/sortExpression. Flag only; no aggregation string changes.
+    conditionInput: "bowlingFigures",
     vsTableOnly: true,
     minSampleComponent: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
   },

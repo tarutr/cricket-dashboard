@@ -20,6 +20,24 @@
 // each into a HAVING predicate using the metric's sqlExpression and ANDs in a
 // hasMetricData guard for rate/ratio metrics (§8.1) so no-data players can never
 // satisfy a condition by accident.
+//
+// Wave A2 (item 2): a "bowlingFigures" metric (Best Bowling, plain + Vs) is a
+// COMPOUND condition — "≥ W wickets for ≤ R runs" — storing W in v1 and R in v2
+// with the operator fixed at ">= rank" (the drawer suppresses the operator
+// select). Both v1 and v2 are required. isBowlingFiguresCondition() resolves the
+// metric (via metrics.js's catalogue, which is namespace-agnostic here) so the
+// data-model helpers below can require both inputs.
+
+import { getMetric } from "./metrics.js";
+
+/** True when this condition's metric uses the two-box Best-Bowling input
+ * (Wave A2 item 2). metrics.js is the single catalogue (no view-module cycle);
+ * getMetric(key) with no discipline matches the first metric of that key, and
+ * BOTH `best` entries carry conditionInput:"bowlingFigures", so the answer is
+ * namespace-independent. */
+export function isBowlingFiguresCondition(cond) {
+  return getMetric(cond.metricKey)?.conditionInput === "bowlingFigures";
+}
 
 export const OPERATORS = [
   { key: "gte", label: "at least (≥)" },
@@ -45,11 +63,13 @@ export function ensureGroup(store) {
   return store.get().advanced.groups[0];
 }
 
-/** Conditions that are fully filled in (metric chosen + numeric value(s) valid). */
+/** Conditions that are fully filled in (metric chosen + numeric value(s) valid).
+ * Wave A2 item 2: a bowlingFigures condition (Best Bowling) needs BOTH v1 (W)
+ * and v2 (R) — same two-value requirement the "between" operator already has. */
 export function isConditionComplete(cond) {
   if (!cond.metricKey) return false;
   if (cond.v1 === "" || cond.v1 === null || cond.v1 === undefined || Number.isNaN(parseFloat(cond.v1))) return false;
-  if (cond.operator === "between") {
+  if (cond.operator === "between" || isBowlingFiguresCondition(cond)) {
     if (cond.v2 === "" || cond.v2 === null || cond.v2 === undefined || Number.isNaN(parseFloat(cond.v2))) return false;
   }
   return true;
@@ -166,12 +186,12 @@ const BASIC_METRIC_KEYS = new Set([
  * refuses them too, so this keeps them out of the picker in the first place). */
 export function isMetricRemovedFromFilters(metric) {
   if (metric.kind === "composition") return true;
-  // Matchup peak metrics (decision 47c: matchup_batting high_score /
-  // matchup_bowling best) have a placeholder sqlExpression — computed only in
-  // table.js's buildMatchupQuery joined peak CTE, never as a static aggregate,
-  // so they can't be a numeric stat condition (conditionToHaving refuses them
-  // too). Plain-namespace peaks (source "innings") are unaffected.
-  if (metric.source === "matchup" && metric.kind === "peak") return true;
+  // Wave A2 (items 2+3): matchup peak metrics (matchup_batting high_score /
+  // matchup_bowling best) are NOW usable stat conditions. buildMatchupQuery
+  // materializes their value in the joined peak CTE and conditionToHaving
+  // compiles a filter against `peak.<col>` (High Score) / `peak.best__sort`
+  // (Best Bowling). The former guard that hid both from the picker is removed;
+  // they are the only two matchup peaks and both are wanted.
   return metric.section === "dismissal" && metric.format === "pct1";
 }
 

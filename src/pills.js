@@ -16,7 +16,7 @@
 // queries the database.
 
 import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, hasActiveProfileFilter, matchupVsActive, effectiveNamespace } from "./state.js";
-import { isConditionComplete, removeConditionAt } from "./advanced.js";
+import { isConditionComplete, removeConditionAt, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
 
@@ -37,6 +37,9 @@ function metricLabelFor(metricKey, state) {
 
 function conditionPillLabel(cond, state) {
   const label = metricLabelFor(cond.metricKey, state);
+  // Best Bowling (Wave A2 item 2): two-box "≥ W wickets for ≤ R runs" — render
+  // as "Best Bowling ≥2W for ≤9R" (W = v1, R = v2).
+  if (isBowlingFiguresCondition(cond)) return `${label} ≥${cond.v1}W for ≤${cond.v2}R`;
   if (cond.operator === "between") return `${label} ${cond.v1}–${cond.v2}`;
   return `${label} ${OP_SYMBOLS[cond.operator] ?? cond.operator} ${cond.v1}`;
 }

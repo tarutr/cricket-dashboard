@@ -45,6 +45,7 @@ import {
   setGroupOp,
   removeConditionAt,
   partitionFilterMetrics,
+  isBowlingFiguresCondition,
 } from "./advanced.js";
 import {
   mountRegularPositions,
@@ -585,20 +586,36 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
 
   function conditionRowHTML(cond, gi, ci, ns, formats) {
     const hasError = showErrors && conditionHasError(cond);
-    const valueFields =
-      cond.operator === "between"
-        ? `<input type="number" class="input cond-row__value-input" data-role="v1" value="${escAttr(cond.v1)}" placeholder="min" />
+    // Best Bowling (Wave A2 item 2): a COMPOUND "≥ [W] wickets for ≤ [R] runs"
+    // condition — two labelled boxes (W→v1, R→v2) with NO operator select (the
+    // comparison is implicit: at least W wickets conceding at most R runs in a
+    // single innings). Every other metric keeps the operator + value layout.
+    const isFigures = isBowlingFiguresCondition(cond);
+    let valueFields;
+    if (isFigures) {
+      valueFields = `<span class="cond-row__and">≥</span>
+           <input type="number" min="0" step="1" class="input cond-row__value-input" data-role="v1" value="${escAttr(cond.v1)}" placeholder="W" aria-label="wickets" />
+           <span class="cond-row__and">wickets for ≤</span>
+           <input type="number" min="0" step="1" class="input cond-row__value-input" data-role="v2" value="${escAttr(cond.v2)}" placeholder="R" aria-label="runs" />
+           <span class="cond-row__and">runs</span>`;
+    } else if (cond.operator === "between") {
+      valueFields = `<input type="number" class="input cond-row__value-input" data-role="v1" value="${escAttr(cond.v1)}" placeholder="min" />
            <span class="cond-row__and">and</span>
-           <input type="number" class="input cond-row__value-input" data-role="v2" value="${escAttr(cond.v2)}" placeholder="max" />`
-        : `<input type="number" class="input cond-row__value-input" data-role="v1" value="${escAttr(cond.v1)}" placeholder="value" />`;
+           <input type="number" class="input cond-row__value-input" data-role="v2" value="${escAttr(cond.v2)}" placeholder="max" />`;
+    } else {
+      valueFields = `<input type="number" class="input cond-row__value-input" data-role="v1" value="${escAttr(cond.v1)}" placeholder="value" />`;
+    }
+    const operatorSelect = isFigures
+      ? ""
+      : `<select class="select" data-role="operator">
+              ${OPERATORS.map((o) => `<option value="${o.key}" ${cond.operator === o.key ? "selected" : ""}>${o.label}</option>`).join("")}
+            </select>`;
     return `
       <div class="cond-row cond-row--metric ${hasError ? "cond-row--error" : ""}" data-gi="${gi}" data-ci="${ci}">
         <div class="cond-row__line">
           <div class="cond-row__main">
             <span class="cond-row__type">${escHtml(metricLabel(cond.metricKey, ns, formats))}</span>
-            <select class="select" data-role="operator">
-              ${OPERATORS.map((o) => `<option value="${o.key}" ${cond.operator === o.key ? "selected" : ""}>${o.label}</option>`).join("")}
-            </select>
+            ${operatorSelect}
             ${valueFields}
           </div>
           <button type="button" class="icon-btn cond-row__remove" data-role="remove-metric" title="Remove condition">&times;</button>
@@ -725,14 +742,18 @@ export function mountFilterDrawer({ advancedHost }, store, { onChange }) {
       const cond = group && group.conds[ci];
       if (!cond) return;
 
+      // Best Bowling (bowlingFigures) rows suppress the operator select, so it
+      // may be absent — bind only when present.
       const opSel = rowEl.querySelector('[data-role="operator"]');
-      opSel.addEventListener("change", () => {
-        const wasBetween = cond.operator === "between";
-        cond.operator = opSel.value;
-        store.set({ advanced: { ...store.get().advanced } });
-        if (wasBetween !== (cond.operator === "between")) renderNumeric(store.get(), true);
-        onChange();
-      });
+      if (opSel) {
+        opSel.addEventListener("change", () => {
+          const wasBetween = cond.operator === "between";
+          cond.operator = opSel.value;
+          store.set({ advanced: { ...store.get().advanced } });
+          if (wasBetween !== (cond.operator === "between")) renderNumeric(store.get(), true);
+          onChange();
+        });
+      }
 
       rowEl.querySelectorAll('[data-role="v1"],[data-role="v2"]').forEach((input) => {
         input.addEventListener("input", () => {

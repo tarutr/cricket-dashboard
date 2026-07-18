@@ -227,10 +227,19 @@ export function venueFilterActive(state) {
 // Keep the two phrasings in sync by hand if either ever changes.
 const CONDITION_OP_SYMBOLS = { gte: "≥", lte: "≤", eq: "=" };
 
+// Wave A2 item 2: Best Bowling is a two-value ("W" + "R") condition, like
+// "between". Detected via the catalogue flag (namespace-agnostic — both `best`
+// entries carry it). Kept as a local check because state.js can't import from
+// advanced.js (advanced.js imports FROM state.js — a cycle), mirroring the
+// hand-duplicated conditionIsComplete twin noted above.
+function conditionIsBowlingFigures(c) {
+  return getMetric(c.metricKey)?.conditionInput === "bowlingFigures";
+}
+
 function conditionIsComplete(c) {
   if (!c.metricKey) return false;
   if (c.v1 === "" || c.v1 === null || c.v1 === undefined || Number.isNaN(parseFloat(c.v1))) return false;
-  if (c.operator === "between") {
+  if (c.operator === "between" || conditionIsBowlingFigures(c)) {
     if (c.v2 === "" || c.v2 === null || c.v2 === undefined || Number.isNaN(parseFloat(c.v2))) return false;
   }
   return true;
@@ -243,6 +252,8 @@ function conditionScopeLabel(c, state) {
   // metricDisplayLabel keeps the "(Innings)" suffix logic in sync with pills.js
   // (this function is the hand-duplicated twin noted above) — Wave A1 item 4.
   const label = metric ? metricDisplayLabel(metric, state.formats) : c.metricKey;
+  // Best Bowling (Wave A2 item 2): "Best Bowling ≥2W for ≤9R" — matches pills.js.
+  if (conditionIsBowlingFigures(c)) return `${label} ≥${c.v1}W for ≤${c.v2}R`;
   if (c.operator === "between") return `${label} ${c.v1}–${c.v2}`;
   return `${label} ${CONDITION_OP_SYMBOLS[c.operator] ?? c.operator} ${c.v1}`;
 }
