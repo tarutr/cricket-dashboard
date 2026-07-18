@@ -58,16 +58,31 @@ const PHASE_FAMILIES = {
   ],
 };
 
+// Wave B (matchup-aware Graph): the matchup namespaces reuse the plain
+// discipline's family definitions — matchup_batting has the same phase-SR keys
+// (pp_/mid_/death_strike_rate) as plain batting; matchup_bowling has
+// pp_economy/death_economy like plain bowling. A namespace that isn't a key of
+// PHASE_FAMILIES (matchup_*) maps to its plain discipline here.
+const FAMILY_DISCIPLINE_FOR_NS = { matchup_batting: "batting", matchup_bowling: "bowling" };
+
 /**
- * Families currently eligible for `discipline` under the current `formats`
- * scope — an all-members-must-be-eligible gate. "Innings build-up SR" uses
- * non-phase metric keys, so
- * it's always eligible; the T20 phase families are restricted to the T20
- * bucket because their member metrics fail phaseMetricAllowed elsewhere.
+ * Families currently eligible for `ns` (a discipline OR a matchup namespace)
+ * under the current `formats` scope. A family member is kept only when its
+ * metric key resolves via eligibleMetrics(ns, formats) — so the T20 phase
+ * families stay restricted to the T20 bucket (their member metrics fail
+ * phaseMetricAllowed elsewhere), and a member absent from the namespace (e.g.
+ * the "Innings build-up SR" keys, which the matchup namespaces don't define —
+ * X-ball SR vs a style was ruled meaningless) is dropped GRACEFULLY rather than
+ * crashing; a family that keeps >= 2 phases is offered. For a PLAIN namespace
+ * this is byte-identical to the old all-members gate: every plain family's
+ * members share the same phase-gating, so they're all eligible together or not
+ * at all (never a partial set), and every family has >= 2 members.
  */
-export function eligiblePhaseFamilies(discipline, formats) {
-  const allowedKeys = new Set(eligibleMetrics(discipline, formats).map((m) => m.key));
-  const families = PHASE_FAMILIES[discipline] || [];
-  return families.filter((f) => f.members.every((mm) => allowedKeys.has(mm.key)));
+export function eligiblePhaseFamilies(ns, formats) {
+  const allowedKeys = new Set(eligibleMetrics(ns, formats).map((m) => m.key));
+  const families = PHASE_FAMILIES[ns] || PHASE_FAMILIES[FAMILY_DISCIPLINE_FOR_NS[ns]] || [];
+  return families
+    .map((f) => ({ ...f, members: f.members.filter((mm) => allowedKeys.has(mm.key)) }))
+    .filter((f) => f.members.length >= 2);
 }
 

@@ -19,26 +19,17 @@
 // Compare Stats table would show; when N was set by search it is exactly those
 // searched players. Gate-free since decision 44c (no base min-innings HAVING).
 //
-// JUDGMENT CALL — matchup ("Vs") mode is deliberately ignored here, exactly
-// like every OTHER non-Dumbbell chart type in this file already does. Every
-// metric this module offers comes from eligibleMetrics(discipline, formats)
-// — the PLAIN batting/bowling namespace — never matchup_batting/
-// matchup_bowling. buildQuery() auto-dispatches into buildMatchupQuery()
-// whenever state.js's matchupVsActive(state) is true, which would look up
-// these plain-namespace keys under the WRONG namespace (matchup_batting/
-// matchup_bowling) — some keys collide harmlessly (e.g. "average",
-// "strike_rate" exist in both with the same shape), but others don't exist
-// there at all (e.g. bowling's "maidens") and would silently vanish from the
-// aggregate with no error. Rather than let that happen, fetchBenchmarkPool()
-// always forces `matchupVs: null` on the state it hands to buildQuery() —
-// same effective behavior as charts.js's fetchSelectedPlayerMetrics(), which
-// queries the plain `batting`/`bowling` view directly and never even looks at
-// matchupVs. This means a Benchmark chart is scoped to the plain filter bar
-// scope even if the Compare Stats table happens to be in Vs mode when the
-// user switches to this chart type — flagged for owner review since it's a
-// deviation from "every other filter carries over unchanged" (though so is
-// Dumbbell's OWN gender/discipline gate, for the same underlying reason: this
-// chart's vocabulary doesn't exist in the matchup namespace).
+// Wave B (matchup-aware Graph): matchup ("Vs") mode is now HONORED. When a Vs
+// bucket is active, fetchBenchmarkPool() preserves matchupVs so buildQuery()
+// dispatches into buildMatchupQuery() and the pool carries the bucket's matchup
+// values — and benchmarkEligibleMetrics() offers the matchup-namespace metrics
+// (which graph.js resolves via effectiveNamespace), never plain keys under the
+// wrong namespace. The vocabulary always matches the namespace, so the
+// "silently vanishing plain key" hazard the old force-to-null guarded against
+// cannot arise. When Vs is NOT active, matchupVs is still force-cleared so an
+// inert/stale bucket can never flip the plain pool (byte-identical to before).
+// Matchup-only display stats (vsTableOnly, kind:"composition") are excluded from
+// the benchmark picker — see benchmarkEligibleMetrics below.
 //
 // ── Sample floors — REMOVED (R3 Wave 5 polish, owner decision) ─────────────
 // table.js no longer exports SAMPLE_FLOORS/sampleFloorFor (the whole
@@ -54,7 +45,7 @@
 // as it was.
 
 import { hasMetricData } from "../metrics.js";
-import { eligibleMetrics, escSql as esc } from "../state.js";
+import { eligibleMetrics, escSql as esc, matchupVsActive } from "../state.js";
 import { buildQuery } from "../table.js";
 import { query } from "../db.js";
 
@@ -97,7 +88,15 @@ export const BENCHMARK_KIND_LABELS = { total: "Volume", rate: "Tempo", percent: 
  */
 export function benchmarkEligibleMetrics(discipline, formats) {
   return eligibleMetrics(discipline, formats).filter(
-    (m) => (m.kind === "total" || m.kind === "rate" || m.kind === "percent") && m.higherIsBetter !== null && m.format !== "str"
+    (m) =>
+      (m.kind === "total" || m.kind === "rate" || m.kind === "percent") &&
+      m.higherIsBetter !== null &&
+      m.format !== "str" &&
+      // Wave B: the matchup namespaces' `vsTableOnly` metrics (runs_per_innings
+      // is the only one that would otherwise pass here) are leaderboard-Vs-table
+      // only (owner decision 47c) — never the graph. Plain metrics never carry
+      // the flag, so this is a no-op for a plain scope.
+      !m.vsTableOnly
   );
 }
 
@@ -152,7 +151,13 @@ export function defaultBenchmarkMetricKeys(discipline) {
  * @returns {Promise<Array<object>>} pool rows: {id, name, [key]}
  */
 export async function fetchBenchmarkPool(state, metricKeys, restrictIds = null) {
-  const poolState = { ...state, matchupVs: null };
+  // Wave B: when a Vs bucket is active, PRESERVE it so the pool query dispatches
+  // to buildMatchupQuery — the Benchmark/Radar pool then holds the bucket's own
+  // matchup values, matching the metric keys graph.js resolves in the matchup
+  // namespace. When Vs is NOT active, force matchupVs:null so a stale/inert
+  // bucket can never accidentally flip the plain pool (byte-identical to the
+  // pre-Wave-B behaviour for a plain scope).
+  const poolState = matchupVsActive(state) ? state : { ...state, matchupVs: null };
   const { sql } = buildQuery(poolState, metricKeys);
   let finalSql = sql;
   if (restrictIds && restrictIds.length) {
