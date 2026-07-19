@@ -1135,16 +1135,6 @@ a { color: var(--color-accent); }
 /* Player count — greyed before the first search has produced results. */
 .table-toolbar__row-count.is-disabled { opacity: 0.5; }
 
-/* Honesty note (matchup mode / partial stat-condition applicability), between
-   the toolbar and the pills. Collapses out of flow when empty. */
-.table-toolbar__note {
-  font-size: var(--text-sm2);
-  color: var(--color-muted);
-  font-style: italic;
-  padding: var(--space-2) var(--space-5) 0;
-}
-.table-toolbar__note[hidden] { display: none; }
-
 /* Empty-state hint inside the table area (first load / no matches). */
 .table-body-hint {
   padding: var(--space-6) var(--space-5);

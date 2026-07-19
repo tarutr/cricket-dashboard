@@ -323,7 +323,7 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   for (const g of activeGroups(state.advanced)) {
     for (const c of g.conds) {
       const m = getMetric(c.metricKey, ns);
-      if (!m) continue; // not applicable in this namespace — conditionApplicability() already notes this
+      if (!m) continue; // not applicable in this namespace — advancedToHaving drops it (returns null)
       // Peak conditions (Wave A2: High Score / Best Bowling) are NOT step-1
       // aggregates — their placeholder sqlExpression ("__PEAK__") must never
       // enter the `agg` SELECT. They are materialized in the peak CTE and
@@ -583,8 +583,8 @@ function conditionToHaving(cond, discipline, exprFn) {
   // (advanced.js/drawer.js, outside this wave's scope) still lists it as a
   // pickable metric, so this guard is what keeps a user's pick from ever
   // reaching SQL — treated as "doesn't apply here", the same honest
-  // degradation an out-of-namespace condition already gets (see
-  // conditionApplicability just below, which this stays in step with).
+  // degradation an out-of-namespace condition already gets (returns null, so
+  // advancedToHaving simply drops it).
   if (metric.kind === "position") return null;
   // Composition columns (Coverage-breakdown wave) are descriptive display-only
   // percentages with a placeholder sqlExpression (see metrics.js) — never a
@@ -638,36 +638,6 @@ function conditionToHaving(cond, discipline, exprFn) {
     default:
       return null;
   }
-}
-
-/**
- * Honest applicability count for the active stat conditions against a given
- * namespace (§8.4): total = every active (complete) condition, regardless of
- * which vocabulary it was authored in; applied = the subset whose metricKey
- * resolves in `ns`. The rest are silently skipped by conditionToHaving /
- * advancedToHaving (a condition authored in the OTHER mode, e.g. a
- * matchup-only "dis_caught" condition while viewing the plain table, or a
- * plain-only condition while in matchup mode) — so the toolbar must say so
- * out loud rather than let the mismatch pass silently.
- */
-function conditionApplicability(advanced, ns) {
-  const groups = activeGroups(advanced);
-  let total = 0;
-  let applied = 0;
-  for (const g of groups) {
-    for (const c of g.conds) {
-      total += 1;
-      const m = getMetric(c.metricKey, ns);
-      // kind "position" (R. Pos.) and kind "composition" (the descriptive
-      // matchup %-mix columns) are never usable conditions — see
-      // conditionToHaving's guards just above, which this must stay honest
-      // about (never silently count them as "applied"). Wave A2 (items 2+3):
-      // matchup peaks (High Score / Best Bowling) DO now compile to a filter
-      // (against the joined peak CTE), so they count as applied here.
-      if (m && m.kind !== "position" && m.kind !== "composition") applied += 1;
-    }
-  }
-  return { total, applied };
 }
 
 function advancedToHaving(advanced, discipline, exprFn) {
@@ -1207,7 +1177,6 @@ export function mountTable(
   let searchBtnEl = null;
   let columnsBtnEl = null;
   let clearBtnEl = null;
-  let noteEl = null;
   let bodyHintEl = null;
   // Manifest date bounds (min/max "YYYY-MM-DD"), stashed via setDateBounds so a
   // skeleton rebuild (Clear/error→Search) can re-apply them to the fresh date
@@ -1301,7 +1270,6 @@ export function mountTable(
           <button type="button" class="btn btn--ghost table-toolbar__clear-btn" data-role="toolbar-clear-btn">Clear</button>
         </div>
       </div>
-      <div class="table-toolbar__note" data-role="toolbar-note" hidden></div>
       <div class="table-pills-host" data-role="table-pills-host"></div>
       <div class="table-body-wrap" data-role="table-body-wrap">
         <div class="table-loading-overlay" aria-live="polite" hidden>Running query…</div>
@@ -1332,7 +1300,6 @@ export function mountTable(
     searchBtnEl = container.querySelector('[data-role="toolbar-search"]');
     columnsBtnEl = container.querySelector('[data-role="columns-btn"]');
     clearBtnEl = container.querySelector('[data-role="toolbar-clear-btn"]');
-    noteEl = container.querySelector('[data-role="toolbar-note"]');
     presetOptionsDiscipline = null; // force a fresh option build in syncToolbar
 
     if (showMoreBtnEl) {
@@ -1469,7 +1436,6 @@ export function mountTable(
     searchBtnEl = null;
     columnsBtnEl = null;
     clearBtnEl = null;
-    noteEl = null;
     presetOptionsDiscipline = null;
   }
 
@@ -1997,20 +1963,10 @@ export function mountTable(
       searchBtnEl.classList.toggle("is-dirty", active);
     }
 
-    // Honesty note — describes the DISPLAYED (applied) table: matchup mode +
-    // any partial stat-condition applicability (§8.4). Hidden before a search.
-    if (noteEl) {
-      let noteText = "";
-      if (results) {
-        const appliedNs = effectiveDiscipline(applied);
-        const { total, applied: appliedCount } = conditionApplicability(applied.advanced, appliedNs);
-        const condNote = total > 0 && appliedCount < total ? `${appliedCount} of ${total} stat conditions apply here` : "";
-        const matchupApplied = matchupVsActive(applied);
-        noteText = matchupApplied ? (condNote ? `Matchup mode, ${condNote}` : "Matchup mode") : condNote;
-      }
-      noteEl.textContent = noteText;
-      noteEl.hidden = !noteText;
-    }
+    // R5-A #1: the toolbar honesty note ("Matchup mode" / "N of M stat conditions
+    // apply here") was REMOVED — the toolbar already carries the scope (dates/Vs/
+    // preset) and, with conditions now per-discipline (#7), nothing is ever inert,
+    // so the "N of M" note is moot. No note element remains.
 
     // Body hint (empty-state guidance inside the table area).
     if (bodyHintEl) {
