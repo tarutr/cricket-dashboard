@@ -238,17 +238,6 @@ const BATTING_METRICS = [
     kind: "rate",
   },
   {
-    key: "runs_per_innings",
-    label: "Runs per Innings",
-    shortLabel: "RPI",
-    discipline: "batting",
-    source: "innings",
-    sqlExpression: "SUM(runs) * 1.0 / NULLIF(COUNT(*), 0)",
-    higherIsBetter: true, format: "dec1",
-    isPhaseMetric: null, zeroIsData: false,
-    kind: "rate",
-  },
-  {
     key: "fours",
     label: "Fours",
     shortLabel: "4s",
@@ -918,24 +907,6 @@ const MATCHUP_BATTING_METRICS = [
     higherIsBetter: true, format: "int",
     isPhaseMetric: null, zeroIsData: true,
     kind: "peak",
-    vsTableOnly: true,
-  },
-  {
-    key: "runs_per_innings",
-    label: "Runs per Innings",
-    shortLabel: "RPI",
-    discipline: "matchup_batting",
-    source: "matchup",
-    // Decision 47(c): runs vs the bucket ÷ innings vs the bucket. Denominator
-    // mirrors this namespace's own "innings" metric — COUNT(DISTINCT
-    // match:innings), NOT COUNT(*) — so it stays correct under the coarse
-    // (Pace/Spin) grouping where one innings spans several bowling_type rows.
-    // Both aggregates get the per-bucket FILTER in buildMatchupQuery.
-    sqlExpression:
-      "SUM(runs) * 1.0 / NULLIF(COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR)), 0)",
-    higherIsBetter: true, format: "dec1",
-    isPhaseMetric: null, zeroIsData: false,
-    kind: "rate",
     vsTableOnly: true,
   },
   {

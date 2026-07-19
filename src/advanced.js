@@ -172,7 +172,7 @@ const BASIC_METRIC_KEYS = new Set([
   "matches", "innings",
   // batting core
   "runs", "balls_faced", "high_score", "average", "strike_rate",
-  "balls_per_dismissal", "runs_per_innings", "fours", "sixes",
+  "balls_per_dismissal", "fours", "sixes",
   // bowling core
   "wickets", "balls", "runs_conceded", "maidens", "economy", "best", "wickets_per_innings",
   // matchup-only extras

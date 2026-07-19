@@ -92,11 +92,12 @@ export function benchmarkEligibleMetrics(discipline, formats) {
       (m.kind === "total" || m.kind === "rate" || m.kind === "percent") &&
       m.higherIsBetter !== null &&
       m.format !== "str"
-      // Owner ruling 2026-07-18: the matchup `vsTableOnly` stats are graphable.
-      // Only runs_per_innings (rate) reaches here — matches has higherIsBetter
-      // null; high_score/best are kind "peak" — so it is benchmark-able like any
-      // other rate, consistent with every other chart type. Plain metrics never
-      // carry the flag, so plain scope is unaffected.
+      // Owner ruling 2026-07-18: the matchup `vsTableOnly` stats were made
+      // graphable, but none survive THIS chart's own filter — Matches has
+      // higherIsBetter null, and High Score / Best Bowling are kind "peak"
+      // (format "str"). (The fourth such stat was removed from the whole
+      // catalogue in R5-C #20.) Plain metrics never carry the flag, so plain
+      // scope is unaffected.
   );
 }
 

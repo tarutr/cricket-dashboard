@@ -188,7 +188,8 @@ export function sampleExpression(discipline) {
  * metrics are trend-able. Wave B3 (owner ruling 2026-07-18) made the four
  * previously-vsTableOnly stats graphable, so there is no longer a vsTableOnly
  * exclusion here — the kind check alone decides:
- *  • Matches (total) and Runs per Innings (rate) now trend by year.
+ *  • Matches (total) now trends by year. (The other non-peak vsTableOnly stat
+ *    was removed from the catalogue in R5-C #20.)
  *  • High Score / Best Bowling are kind "peak" (non-additive MAX / arg_max
  *    "W-R" display string) and stay excluded by the kind check, exactly as the
  *    innings path excludes peaks — a year-over-year line of a single-innings
