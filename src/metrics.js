@@ -63,8 +63,6 @@
 //                    view, meaningless for a non-additive metric) — it filters
 //                    on this flag directly rather than re-deriving additivity
 //                    from format/zeroIsData.
-//   minSampleComponent — aggregate SQL for the sample size backing the metric
-//                        (e.g. "SUM(balls_faced)" for SR), for min-sample gates.
 //   kind           — metric taxonomy (decision 43): "total" (additive counting
 //                    stat — runs/balls/innings/wickets/dismissal counts/…),
 //                    "rate" (per-something ratio — average/SR/economy/…),
@@ -117,7 +115,6 @@ const BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "COUNT(DISTINCT match_id)",
   },
   {
     key: "innings",
@@ -130,7 +127,6 @@ const BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "COUNT(*)",
   },
   {
     key: "runs",
@@ -143,7 +139,6 @@ const BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(runs)",
   },
   {
     key: "balls_faced",
@@ -156,7 +151,6 @@ const BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(balls_faced)",
   },
   {
     key: "high_score",
@@ -168,7 +162,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "int",
     isPhaseMetric: null, zeroIsData: true,
     kind: "peak",
-    minSampleComponent: "COUNT(*)",
   },
   {
     key: "average",
@@ -182,7 +175,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(dismissed)",
   },
   {
     key: "strike_rate",
@@ -194,7 +186,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(balls_faced)",
   },
   {
     key: "balls_per_dismissal",
@@ -206,7 +197,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "dec1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(dismissed)",
   },
   {
     key: "dot_pct",
@@ -220,7 +210,6 @@ const BATTING_METRICS = [
     isPhaseMetric: null,
     zeroIsData: false,
     kind: "percent",
-    minSampleComponent: "SUM(balls_faced)",
   },
   {
     key: "boundary_pct",
@@ -234,7 +223,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "pct1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
-    minSampleComponent: "SUM(balls_faced)",
   },
   {
     key: "balls_per_boundary",
@@ -248,7 +236,6 @@ const BATTING_METRICS = [
     isPhaseMetric: null,
     zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(fours_hit) + SUM(sixes_hit)",
   },
   {
     key: "runs_per_innings",
@@ -260,7 +247,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "dec1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "COUNT(*)",
   },
   {
     key: "fours",
@@ -273,7 +259,6 @@ const BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(fours_hit)",
   },
   {
     key: "sixes",
@@ -286,7 +271,6 @@ const BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(sixes_hit)",
   },
   {
     key: "not_out_pct",
@@ -299,7 +283,6 @@ const BATTING_METRICS = [
     higherIsBetter: null, format: "pct1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
-    minSampleComponent: "COUNT(*)",
   },
   // Faced-ball progression strike rates (D4): how a batter scores across the
   // first 10 balls faced in an innings, then balls 11–20, then 21+. These are
@@ -317,7 +300,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(fb1_10_balls)",
   },
   {
     key: "sr_11_20",
@@ -329,7 +311,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(fb11_20_balls)",
   },
   {
     key: "sr_21plus",
@@ -341,7 +322,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(fb21p_balls)",
   },
   // Phase strike rates — T20 ranges (pp 0–5, mid 6–14, death 15–19).
   {
@@ -354,7 +334,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: "t20", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(pp_balls)",
   },
   {
     key: "mid_strike_rate",
@@ -366,7 +345,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: "t20", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(mid_balls)",
   },
   {
     key: "death_strike_rate",
@@ -378,7 +356,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: "t20", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(death_balls)",
   },
   // Phase strike rates — ODI ranges (pp 0–9, mid 10–39, death 40–49).
   {
@@ -391,7 +368,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: "odi", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(odi_pp_balls)",
   },
   {
     key: "odi_mid_strike_rate",
@@ -403,7 +379,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: "odi", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(odi_mid_balls)",
   },
   {
     key: "odi_death_strike_rate",
@@ -415,7 +390,6 @@ const BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: "odi", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(odi_death_balls)",
   },
   // R. Pos. column (owner decision 46, R3 Wave 5 polish): the player's
   // statistical MODE of batting_position — ties broken to the LOWEST position
@@ -484,7 +458,6 @@ for (const d of DISMISSAL_KINDS) {
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(dismissed)",
   });
   BATTING_METRICS.push({
     key: `${d.key}_pct`,
@@ -497,7 +470,6 @@ for (const d of DISMISSAL_KINDS) {
     higherIsBetter: null, format: "pct1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
-    minSampleComponent: "SUM(dismissed)",
   });
 }
 
@@ -514,7 +486,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "COUNT(DISTINCT match_id)",
   },
   {
     key: "innings",
@@ -527,7 +498,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "COUNT(*)",
   },
   {
     key: "wickets",
@@ -540,7 +510,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wickets)",
   },
   {
     key: "balls",
@@ -553,7 +522,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(balls)",
   },
   {
     key: "runs_conceded",
@@ -566,7 +534,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(runs_conceded)",
   },
   {
     key: "average",
@@ -580,7 +547,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null,
     zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(wickets)",
   },
   {
     key: "economy",
@@ -594,7 +560,6 @@ const BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(balls)",
   },
   {
     key: "strike_rate",
@@ -608,7 +573,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null,
     zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(wickets)",
   },
   {
     key: "dot_pct",
@@ -622,7 +586,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null,
     zeroIsData: false,
     kind: "percent",
-    minSampleComponent: "SUM(balls)",
   },
   {
     key: "boundary_pct_conceded",
@@ -638,7 +601,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null,
     zeroIsData: false,
     kind: "percent",
-    minSampleComponent: "SUM(balls)",
   },
   {
     key: "maidens",
@@ -651,7 +613,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(maidens)",
   },
   {
     key: "wickets_per_innings",
@@ -663,7 +624,6 @@ const BOWLING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "COUNT(*)",
   },
   {
     key: "best",
@@ -689,7 +649,6 @@ const BOWLING_METRICS = [
     // `sortExpression >= (W*1000 - R)` (the numeric peak rank, NOT the "W-R"
     // display string). No aggregation string above changes.
     conditionInput: "bowlingFigures",
-    minSampleComponent: "COUNT(*)",
   },
   // Wicket-type breakdown (D4): the bowler-credited wickets split by dismissal
   // kind. The six sum exactly to `wickets` (verified against raw deliveries).
@@ -705,7 +664,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wickets_bowled)",
   },
   {
     key: "wkt_lbw",
@@ -718,7 +676,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wickets_lbw)",
   },
   {
     key: "wkt_caught",
@@ -731,7 +688,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wickets_caught)",
   },
   {
     key: "wkt_caught_and_bowled",
@@ -744,7 +700,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wickets_caught_and_bowled)",
   },
   {
     key: "wkt_stumped",
@@ -757,7 +712,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wickets_stumped)",
   },
   {
     key: "wkt_hit_wicket",
@@ -770,7 +724,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wickets_hit_wicket)",
   },
   // Phase economy + wickets — T20 ranges.
   {
@@ -783,7 +736,6 @@ const BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: "t20", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(pp_balls)",
   },
   {
     key: "death_economy",
@@ -795,7 +747,6 @@ const BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: "t20", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(death_balls)",
   },
   {
     key: "pp_wickets",
@@ -808,7 +759,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: "t20", zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(pp_wickets)",
   },
   {
     key: "death_wickets",
@@ -821,7 +771,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: "t20", zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(death_wickets)",
   },
   // Phase economy + wickets — ODI ranges.
   {
@@ -834,7 +783,6 @@ const BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: "odi", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(odi_pp_balls)",
   },
   {
     key: "odi_death_economy",
@@ -846,7 +794,6 @@ const BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: "odi", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(odi_death_balls)",
   },
   {
     key: "odi_pp_wickets",
@@ -859,7 +806,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: "odi", zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(odi_pp_wickets)",
   },
   {
     key: "odi_death_wickets",
@@ -872,7 +818,6 @@ const BOWLING_METRICS = [
     isPhaseMetric: "odi", zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(odi_death_wickets)",
   },
 ];
 
@@ -905,7 +850,6 @@ const MATCHUP_BATTING_METRICS = [
     additive: true,
     kind: "total",
     vsTableOnly: true,
-    minSampleComponent: "COUNT(DISTINCT match_id)",
   },
   {
     key: "innings",
@@ -929,7 +873,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
   },
   {
     key: "balls",
@@ -942,7 +885,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(balls_faced)",
   },
   {
     key: "runs",
@@ -955,7 +897,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(runs)",
   },
   {
     key: "high_score",
@@ -978,7 +919,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     kind: "peak",
     vsTableOnly: true,
-    minSampleComponent: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
   },
   {
     key: "runs_per_innings",
@@ -997,7 +937,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
     vsTableOnly: true,
-    minSampleComponent: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
   },
   {
     key: "strike_rate",
@@ -1009,7 +948,6 @@ const MATCHUP_BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(balls_faced)",
   },
   {
     key: "average",
@@ -1023,7 +961,6 @@ const MATCHUP_BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(dismissals)",
   },
   {
     key: "dismissals",
@@ -1038,7 +975,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(dismissals)",
   },
   {
     key: "dot_pct",
@@ -1051,7 +987,6 @@ const MATCHUP_BATTING_METRICS = [
     format: "pct1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
-    minSampleComponent: "SUM(balls_faced)",
   },
   {
     key: "boundary_pct",
@@ -1063,7 +998,6 @@ const MATCHUP_BATTING_METRICS = [
     higherIsBetter: true, format: "pct1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
-    minSampleComponent: "SUM(balls_faced)",
   },
   {
     key: "fours",
@@ -1076,7 +1010,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(fours_hit)",
   },
   {
     key: "sixes",
@@ -1089,7 +1022,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(sixes_hit)",
   },
   {
     key: "balls_per_boundary",
@@ -1102,7 +1034,6 @@ const MATCHUP_BATTING_METRICS = [
     format: "dec1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(fours_hit) + SUM(sixes_hit)",
   },
   {
     key: "balls_per_dismissal",
@@ -1114,7 +1045,6 @@ const MATCHUP_BATTING_METRICS = [
     higherIsBetter: true, format: "dec1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(dismissals)",
   },
   // Dismissal-kind breakdown (D4 R3 follow-up): bowler-credited dismissal kinds
   // against this bucket. Counts, so zeroIsData:true. NOTE: the dis_* columns
@@ -1132,7 +1062,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(dis_bowled)",
   },
   {
     key: "dis_lbw",
@@ -1146,7 +1075,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(dis_lbw)",
   },
   {
     key: "dis_caught",
@@ -1160,7 +1088,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(dis_caught)",
   },
   {
     key: "dis_caught_and_bowled",
@@ -1174,7 +1101,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(dis_caught_and_bowled)",
   },
   {
     key: "dis_stumped",
@@ -1188,7 +1114,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(dis_stumped)",
   },
   {
     key: "dis_hit_wicket",
@@ -1202,7 +1127,6 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(dis_hit_wicket)",
   },
   // Phase strike rates — T20 ranges. Same pp_*/mid_*/death_* column family as
   // the main batting namespace's phase metrics (not yet live on R2 for the
@@ -1217,7 +1141,6 @@ const MATCHUP_BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: "t20", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(pp_balls)",
   },
   {
     key: "mid_strike_rate",
@@ -1229,7 +1152,6 @@ const MATCHUP_BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: "t20", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(mid_balls)",
   },
   {
     key: "death_strike_rate",
@@ -1241,7 +1163,6 @@ const MATCHUP_BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: "t20", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(death_balls)",
   },
   // Phase strike rates — ODI ranges.
   {
@@ -1254,7 +1175,6 @@ const MATCHUP_BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: "odi", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(odi_pp_balls)",
   },
   {
     key: "odi_mid_strike_rate",
@@ -1266,7 +1186,6 @@ const MATCHUP_BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: "odi", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(odi_mid_balls)",
   },
   {
     key: "odi_death_strike_rate",
@@ -1278,7 +1197,6 @@ const MATCHUP_BATTING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: "odi", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(odi_death_balls)",
   },
   // ── Composition columns (Coverage-breakdown wave) ─────────────────────────
   // Each = (that bowling_group's UNFILTERED balls faced) ÷ (the player's TOTAL
@@ -1356,7 +1274,6 @@ const MATCHUP_BOWLING_METRICS = [
     additive: true,
     kind: "total",
     vsTableOnly: true,
-    minSampleComponent: "COUNT(DISTINCT match_id)",
   },
   {
     key: "innings",
@@ -1375,7 +1292,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
   },
   {
     key: "balls",
@@ -1388,7 +1304,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(balls)",
   },
   {
     key: "runs_conceded",
@@ -1401,7 +1316,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(runs_conceded)",
   },
   {
     key: "wickets",
@@ -1414,7 +1328,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wickets)",
   },
   {
     key: "economy",
@@ -1426,7 +1339,6 @@ const MATCHUP_BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(balls)",
   },
   {
     key: "average",
@@ -1438,7 +1350,6 @@ const MATCHUP_BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(wickets)",
   },
   {
     key: "strike_rate",
@@ -1450,7 +1361,6 @@ const MATCHUP_BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(wickets)",
   },
   {
     key: "best",
@@ -1484,7 +1394,6 @@ const MATCHUP_BOWLING_METRICS = [
     // sqlExpression/sortExpression. Flag only; no aggregation string changes.
     conditionInput: "bowlingFigures",
     vsTableOnly: true,
-    minSampleComponent: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
   },
   {
     key: "dot_pct",
@@ -1497,7 +1406,6 @@ const MATCHUP_BOWLING_METRICS = [
     format: "pct1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
-    minSampleComponent: "SUM(balls)",
   },
   {
     key: "boundary_pct_conceded",
@@ -1509,7 +1417,6 @@ const MATCHUP_BOWLING_METRICS = [
     higherIsBetter: false, format: "pct1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
-    minSampleComponent: "SUM(balls)",
   },
   {
     key: "fours_conceded",
@@ -1522,7 +1429,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(fours_conceded)",
   },
   {
     key: "sixes_conceded",
@@ -1535,7 +1441,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(sixes_conceded)",
   },
   {
     key: "wickets_per_innings",
@@ -1551,7 +1456,6 @@ const MATCHUP_BOWLING_METRICS = [
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))",
   },
   // Wicket-kind breakdown (D4 R3 follow-up): bowler-credited wicket kinds
   // against this batting-hand bucket. Counts, so zeroIsData:true. NOTE: the
@@ -1569,7 +1473,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wkt_bowled)",
   },
   {
     key: "wkt_lbw",
@@ -1583,7 +1486,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wkt_lbw)",
   },
   {
     key: "wkt_caught",
@@ -1597,7 +1499,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wkt_caught)",
   },
   {
     key: "wkt_caught_and_bowled",
@@ -1611,7 +1512,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wkt_caught_and_bowled)",
   },
   {
     key: "wkt_stumped",
@@ -1625,7 +1525,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wkt_stumped)",
   },
   {
     key: "wkt_hit_wicket",
@@ -1639,7 +1538,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(wkt_hit_wicket)",
   },
   // Phase economy + wickets — T20 ranges. Same pp_*/mid_*/death_* column
   // family as the main bowling namespace's phase metrics (not yet live on R2
@@ -1654,7 +1552,6 @@ const MATCHUP_BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: "t20", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(pp_balls)",
   },
   {
     key: "mid_economy",
@@ -1666,7 +1563,6 @@ const MATCHUP_BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: "t20", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(mid_balls)",
   },
   {
     key: "death_economy",
@@ -1678,7 +1574,6 @@ const MATCHUP_BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: "t20", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(death_balls)",
   },
   {
     key: "pp_wickets",
@@ -1691,7 +1586,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: "t20", zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(pp_wickets)",
   },
   {
     key: "mid_wickets",
@@ -1704,7 +1598,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: "t20", zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(mid_wickets)",
   },
   {
     key: "death_wickets",
@@ -1717,7 +1610,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: "t20", zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(death_wickets)",
   },
   // Phase economy + wickets — ODI ranges.
   {
@@ -1730,7 +1622,6 @@ const MATCHUP_BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: "odi", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(odi_pp_balls)",
   },
   {
     key: "odi_mid_economy",
@@ -1742,7 +1633,6 @@ const MATCHUP_BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: "odi", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(odi_mid_balls)",
   },
   {
     key: "odi_death_economy",
@@ -1754,7 +1644,6 @@ const MATCHUP_BOWLING_METRICS = [
     higherIsBetter: false, format: "dec2",
     isPhaseMetric: "odi", zeroIsData: false,
     kind: "rate",
-    minSampleComponent: "SUM(odi_death_balls)",
   },
   {
     key: "odi_pp_wickets",
@@ -1767,7 +1656,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: "odi", zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(odi_pp_wickets)",
   },
   {
     key: "odi_mid_wickets",
@@ -1780,7 +1668,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: "odi", zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(odi_mid_wickets)",
   },
   {
     key: "odi_death_wickets",
@@ -1793,7 +1680,6 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: "odi", zeroIsData: true,
     additive: true,
     kind: "total",
-    minSampleComponent: "SUM(odi_death_wickets)",
   },
   // ── Composition columns (Coverage-breakdown wave) ─────────────────────────
   // Bowling analogue of matchup_batting's comp_* metrics above (see that block
