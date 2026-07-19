@@ -628,3 +628,12 @@ change requires a new owner decision recorded here. Dates are decision dates.
     ("why can't we have it all"); PLUS **per-over** via a test-first pipeline data extension (owner: "let's
     do per over" — browser loads aggregates, so per-over needs new parquet columns). Replaces the old
     year-only line entirely. Build order R5-A…R5-F in the handoff. Branch polish-b1-mechanical; merge = separate decision.
+
+52. **Sort arrow = active-sort indicator ONLY (owner ruling at the R5-A gate, 2026-07-19).** After R5-A's
+    #4 (a toolbar-only change preserves row order instead of re-sorting), the column header still showed its
+    ▲/▼ arrow even though that column was no longer ordering the table. Owner: "The arrow should not exist on
+    a column that it isn't sorting. The logic is backwards. Once the column sorts, the arrow shows up —
+    therefore there can be no arrow on a column that isn't sorted." → The sort arrow (and the sorted-column
+    styling) appears ONLY when the current row order is the direct result of an active sort on that column
+    (a fresh/popup Search that ranks, or a column-header click). After an order-preserving toolbar commit, NO
+    column shows an arrow. Folded into Wave R5-B (same files). Display-only; anchors unaffected.
