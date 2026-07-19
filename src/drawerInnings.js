@@ -343,21 +343,26 @@ function mountScopedMultiSelect(container, store, onChange, config) {
     if (disabled) handle.close();
 
     if (loadedKey !== null && loadedKey !== cacheKey()) {
-      // Gender/team-type changed since the last load — drop the cache and reload
-      // for the new scope (the selection was already cleared upstream).
+      // Any scope dimension changed since the last load (gender/team-type/format/
+      // date — see cacheKey) — drop the cache and reload the OPTION list for the
+      // new scope. ensureLoaded() re-applies the selection against the fresh
+      // options (setOptions + setValues) when it resolves.
       loadedKey = null;
       ensureLoaded();
     } else if (loadedKey === null && hostEl.offsetParent !== null) {
       // Row is visible (popup open, condition present) and nothing loaded yet —
       // pre-load so the first open shows a populated list, not a flash of empty.
       ensureLoaded();
-    } else {
-      // Keep the toggle summary honest even without a reload (e.g. a pill
-      // removal / Clear-all cleared the selection, or the other popup's instance
-      // changed it). setValues filters against loaded options; when nothing is
-      // loaded yet the selection is empty at boot, so this is a safe no-op.
-      handle.setValues(config.get(s));
     }
+    // R5-A #15: ALWAYS force the toggle summary + (if open) the option list to
+    // re-render against the CURRENT selection now — never deferred to the async
+    // reload above. Previously this ran ONLY in the scope-unchanged branch, so a
+    // cleared/changed selection (Clear-all, a pill ×, or a scope change) left the
+    // stale team/event/venue name lingering on the toggle until the row was
+    // clicked or the async load landed. The state was always correct; only the
+    // display lagged. setValues filters against the loaded options and never fires
+    // onChange, so this is a cheap, safe idempotent refresh.
+    handle.setValues(config.get(s));
   }
 
   sync();
