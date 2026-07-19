@@ -538,4 +538,30 @@ touched (+ progress). Independent verification (my own pass):
   = "11" then 1,2,3) — worker's honest-rank choice vs renumbering pins; (b) pin-COLUMN toggle is instant both
   ways while the pin-PILL × stays a pending soft-delete (decision 47g) — inconsistent, owner may want unified;
   (c) #6 runs regardless of Keep-Columns + ranks by the FIRST filtered metric when several apply.
-STOPPED for owner gate → R5-C.
+OWNER GATE (post-outage): access to live_db restored via ccd_directory grant + app restart (owner keeps
+scoped-to-live_db access on purpose; won't grant Desktop-wide). Owner: keep momentum, review at the end,
+run the disjoint cleanup waves. R5-C + R5-F run back-to-back (share styles.css → sequential), present together.
+
+## R5-C (graph cleanup) — 6 of 7 built + orchestrator-verified; #18 STOPPED & flagged. frontend-heavy/Opus,
+commits f9e0efb(#23) · 9a0fcd0(#22) · 70227e3(Scatter) · 5bbc553(#13) · 97346a8(#19) · 008545e(#20) · ea84e66(note).
+Only src/graph/* + metrics.js + advanced.js + styles.css touched. Independent verification (my pass):
+- SACRED: table.js/filters.js = 0 diff; metrics.js deletion-ONLY (0 additions; the 2 runs_per_innings blocks
+  removed, no other sqlExpression/sortExpr/kind changed); buildQuery/buildMatchupQuery/conditionToHaving/
+  advancedToHaving BYTE-IDENTICAL. `grep runs_per_innings|Runs per Innings src/` = empty.
+- ANCHORS on screen: 2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34; SA Yadav vs Spin 454·140.99
+  (builder unchanged). 0 console errors on BOTH Stats + Graphs.
+- #20 RPI: gone everywhere (hasRunsPerInnings=false in doc + batting + bowling metric pickers + add-condition
+  list + Columns). #22 Best Bowling: ABSENT from graph metric picker in batting AND bowling (definitive test);
+  stays as BBI table column + two-box condition. #23 metricDisplayLabel routed into graph.js/charts.js — no
+  "(Innings)" anywhere. #13 "Reset to full player set", greyed when roster=full, boxed with the x-of-x dropdown.
+  #19 red needs-input outline now on chart-type + empty metric pickers (+ existing windows), clears on fill.
+  Scatter: X excludes Y's pick and vice-versa.
+- OPEN — #18 needs an OWNER DECISION (worker correctly built nothing per its guardrail): the standalone
+  "Matchup mode" note was ALREADY removed by R5-A, and NO personal-data coverage note exists anywhere in Stats
+  (never did; Part B's ~89%/71% were investigation figures, not rendered content). So #18 as written would
+  require INVENTING a new note + a live coverage computation. Question queued for owner: create it? wording?
+  which figure (in-scope % / men-overall / live-per-scope)? when shown (always / with profile filters / Vs)?
+- EYEBALL — #19 fresh-load: on a pristine Graphs tab the chart-type picker shows the red outline (built per
+  literal brief/acceptance); owner may want it suppressed until the first Update (1-line change).
+- Non-issue: card.js chart title uses raw label but is moot (no "(Innings)" metric graphable after #22).
+STOPPED → running R5-F next (back-to-back), then present C+F together.
