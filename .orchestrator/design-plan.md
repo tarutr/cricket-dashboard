@@ -565,3 +565,22 @@ Only src/graph/* + metrics.js + advanced.js + styles.css touched. Independent ve
   literal brief/acceptance); owner may want it suppressed until the first Update (1-line change).
 - Non-issue: card.js chart title uses raw label but is moot (no "(Innings)" metric graphable after #22).
 STOPPED → running R5-F next (back-to-back), then present C+F together.
+
+## R5-F (club opposition #14 + popup-drawer tidy #16) COMPLETE + orchestrator-verified. frontend-engineer/
+Sonnet, commits e672ec7(#14) · 424b399(#16). Only state.js/drawerInnings.js/playerFilters.js/styles.css touched.
+- SACRED: filters.js + table.js = 0 diff. state.js's only behavioural change = `oppositionFilterActive` drops
+  the `teamType==="international"` requirement (now true whenever an opposition is picked) — the whole #14
+  query-side change, achieved WITHOUT editing buildScopeClauses.
+- #14 independent DuckDB (my own): club vs Punjab Kings, COUNT(DISTINCT batter_id) with team_type='club' +
+  bowling_team='Punjab Kings' + date scope = 152 — matches the app's narrowed count exactly. International
+  anchor unchanged (2,810 ids + 3 dual-name = 2,813; opposition empty → gate false → SQL identical).
+  Team-name normalization correctly NOT attempted (decision 51 defers it).
+- #16: player-popup Filters drawer restyled to main-drawer density — Date window one row, Batting position +
+  Vs paired on one row, narrower 320px panel reusing --space-*/--text tokens. Verified on screen (SA Yadav
+  popup: header 60·1544·29.13·150.34, pos-4 = 34·967·32.23·150.39). 0 console errors; app boots clean.
+- FLAG: for #16 the worker merged the posSection/vsSection hide-toggles into one battingRow (a small markup
+  restructure, not pure CSS) so the two controls share a 2-col grid row — no query/behaviour/scope change;
+  show/hide on batting↔bowling still works. Judged within "grid layout"; noted.
+- Worker also caught+fixed a self-introduced module bug (backticks inside an HTML comment in a template
+  literal) before reporting; app now boots clean (re-verified).
+STOPPED → consolidated gate: present C+F + #18 question + #19 eyeball + R5-D Line design check.
