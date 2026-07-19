@@ -85,14 +85,13 @@ function orderBy(present, order) {
 // `group` field, which is now documentation only). This array's order drives the
 // applied-ROW render order in the singleton-rows container.
 const SINGLETON_TYPES = [
-  // "Matchup (Vs)" (R3.2, relabelled + moved to top Wave A1 item 1): the
-  // matchup opponent selector, mirroring the toolbar's bonded Vs control —
-  // both edit state.matchupVs, synced via the shared store. Rendered as its
-  // own top-level entry ABOVE the Player/Match/Basic optgroups (see
-  // addSelectOptionsHTML), not inside the Basic-metrics group. Leads this
-  // array too, so its applied row renders first among the singleton rows
-  // (SINGLETON_TYPES order also drives applied-row order). Men-only
-  // (matchupVsActive hard-gates on male; coverage is ~0% for women).
+  // "Matchup (Vs)" (R3.2; relabelled Wave A1 item 1; R5-A #5 moved it to the
+  // FIRST entry INSIDE the "Advanced metrics" optgroup, directly above Dot Ball
+  // %): the matchup opponent selector, mirroring the toolbar's bonded Vs control
+  // — both edit state.matchupVs, synced via the shared store (see
+  // addSelectOptionsHTML). Leads this array too, so its applied row renders
+  // first among the singleton rows (SINGLETON_TYPES order also drives applied-row
+  // order). Men-only (matchupVsActive hard-gates on male; coverage is ~0% for women).
   { key: "vs", label: "Matchup (Vs)", group: "Basic", menOnly: true },
   { key: "team", label: "Team", group: "Player", menOnly: false },
   { key: "opposition", label: "Opposition", group: "Player", menOnly: false },
@@ -100,6 +99,13 @@ const SINGLETON_TYPES = [
   { key: "bowling", label: "Bowling style", group: "Player", menOnly: true },
   { key: "role", label: "Role", group: "Player", menOnly: true },
   { key: "rpos", label: "R. Pos.", group: "Basic", menOnly: false },
+  // Striker "Batting position" (R5-A #8): the MATCHUP-ONLY ball-level filter on
+  // the batter-faced position (state.positions) — the one that powers the Bumrah-
+  // vs-openers anchor. Split OUT of the R. Pos. row so it never auto-appears when
+  // a Vs bucket is picked; its OWN addable "+ Add condition" entry, offered only
+  // in matchup mode (isPresent gates it on matchupVsActive). Men-only in practice
+  // (matchup coverage ~0% for women; matchupVsActive hard-gates on male anyway).
+  { key: "strikerpos", label: "Batting position", group: "Basic", menOnly: true },
   { key: "event", label: "Event", group: "Match", menOnly: false },
   { key: "venue", label: "Venue", group: "Match", menOnly: false },
 ];
@@ -355,29 +361,17 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     renderProfileEditors();
   }
 
-  // ── Editors for R.Pos / matchup position / Team / Opposition / Event / Venue ─
-  // R. Pos. row hosts BOTH the plain R.Pos control and the matchup striker
-  // control in two separate sub-hosts (each controller sets its own host's
-  // innerHTML, so they must not share one); each self-hides in the other mode,
-  // so exactly one shows and the single row covers both.
-  // Wave 4b (decision 47a): in BATTING matchup both controls show at once (R. Pos.
-  // roster + striker position), so the striker sub-host gets its own inline caption
-  // — the row's shared type label serves R. Pos. (see syncSingletonRows). The
-  // caption is a sibling of the sub-hosts (NOT inside them), so neither controller's
-  // innerHTML wipes it. It stays hidden except in batting matchup, where alone the
-  // two controls coexist; in every other mode exactly one control shows and the
-  // row's own type label suffices.
-  editorHosts.rpos.innerHTML =
-    `<div data-role="rpos-plain"></div>` +
-    `<span class="cond-row__subtype" data-role="rpos-striker-cap" hidden>Batting position</span>` +
-    `<div data-role="rpos-matchup"></div>`;
-  const strikerCapEl = editorHosts.rpos.querySelector('[data-role="rpos-striker-cap"]');
-  const regularPositionController = mountRegularPositions(
-    editorHosts.rpos.querySelector('[data-role="rpos-plain"]'), store, onChange, { embedded: true }
-  );
-  const matchupPositionController = mountBattingPosition(
-    editorHosts.rpos.querySelector('[data-role="rpos-matchup"]'), store, onChange, { embedded: true }
-  );
+  // ── Editors for R.Pos / striker position / Team / Opposition / Event / Venue ─
+  // R5-A #8: R. Pos. (plain modal-position filter, state.regularPositions) and the
+  // matchup striker "Batting position" (ball-level batter-faced filter,
+  // state.positions) now live in SEPARATE rows/editor hosts. Previously they
+  // shared one row and the striker control un-hid whenever a Vs bucket was picked,
+  // so choosing Vs=Spin sprouted a second dropdown inside the R. Pos. row. They no
+  // longer share a host: R. Pos. mounts in its own `rpos` row (batting contexts),
+  // the striker mounts in its own `strikerpos` row (matchup only, never auto-shown).
+  // Neither filter's QUERY changed — only where each control lives.
+  const regularPositionController = mountRegularPositions(editorHosts.rpos, store, onChange, { embedded: true });
+  const matchupPositionController = mountBattingPosition(editorHosts.strikerpos, store, onChange, { embedded: true });
   const teamController = mountTeam(editorHosts.team, store, onChange);
   const oppositionController = mountOpposition(editorHosts.opposition, store, onChange, { embedded: true });
   const eventController = mountEvent(editorHosts.event, store, onChange);
@@ -395,15 +389,16 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
       case "hand": return Boolean(s.profile.battingHand);
       case "bowling": return Boolean(s.profile.bowlingType);
       case "vs": return matchupVsActive(s); // present iff a Vs bucket applies to the current discipline
-      // Wave 4b: presence tracks only the control(s) actually applicable now — the
-      // R. Pos. roster in batting contexts, the striker position in matchup — so a
-      // value left over from another discipline/mode never renders an empty row
-      // (R. Pos. is inert on bowling views; striker is inert outside matchup).
+      // R5-A #8: R. Pos. (regularPositions) and the striker position (positions)
+      // are now separate rows. R. Pos. is a batting concept — present in batting
+      // contexts when it has a value; the striker is matchup-only — present when
+      // it has a value (isPresent additionally gates strikerpos on matchupVsActive
+      // so it never shows outside matchup, and never merely because a Vs bucket
+      // was picked with no position chosen).
       case "rpos":
-        return (
-          (s.discipline === "batting" && (s.regularPositions || []).length > 0) ||
-          (matchupVsActive(s) && (s.positions || []).length > 0)
-        );
+        return s.discipline === "batting" && (s.regularPositions || []).length > 0;
+      case "strikerpos":
+        return (s.positions || []).length > 0;
       case "team": return (s.teams || []).length > 0;
       case "opposition": return (s.opposition || []).length > 0;
       case "event": return (s.event || []).length > 0;
@@ -414,6 +409,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
 
   function isPresent(t, s) {
     if (t.menOnly && s.gender === "female") return false;
+    // R5-A #8: the striker "Batting position" is matchup-only — it never shows
+    // (nor auto-appears) outside matchup mode, even if a stale position value or a
+    // session-add lingers. Inside matchup it follows the normal presence rule.
+    if (t.key === "strikerpos" && !matchupVsActive(s)) return false;
     return hasValue(t.key, s) || Boolean(sessionAdded[t.key]);
   }
 
@@ -423,7 +422,8 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
       case "hand": setProfile({ battingHand: null }); break;
       case "bowling": setProfile({ bowlingType: null }); break;
       case "vs": store.set({ matchupVs: null }); break;
-      case "rpos": store.set({ regularPositions: [], positions: [] }); break;
+      case "rpos": store.set({ regularPositions: [] }); break;
+      case "strikerpos": store.set({ positions: [] }); break;
       case "team": store.set({ teams: [] }); break;
       case "opposition": store.set({ opposition: [] }); break;
       case "event": store.set({ event: [] }); break;
@@ -495,46 +495,47 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     const singletonOpts = (order) => order.map(singletonOpt).join("");
     const metricOpt = (m, label) => `<option value="m:${escAttr(m.key)}">${escHtml(label ?? metricDisplayLabel(m, s.formats))}</option>`;
     const metricOpts = (list) => list.map((m) => metricOpt(m)).join("");
-    // Basic metrics group: standard metric options, with the "Regular position"
-    // singleton (c:rpos) injected right after the "Innings" option (item 7).
-    // BATTING ONLY (R3.1 task 2): R. Pos. (state.regularPositions) is a batting
-    // concept — a player's own regular BATTING position — so it must not be
-    // addable while the plain discipline is bowling. Matchup mode is untouched:
-    // matchupVsActive keeps c:rpos available there under its "Batting position"
-    // label for BOTH matchup_batting (batter's own position) and matchup_bowling
-    // (the STRIKER's position faced, decision 46, anchor-verified) — an
-    // orthogonal, already-shipped feature this gate must not disturb.
+    // Basic metrics group: standard metric options, with the position singletons
+    // injected right after the "Innings" option. R5-A #8 splits them:
+    //   • c:rpos ("Reg. Batting Position") — R. Pos. (state.regularPositions), a
+    //     BATTING concept, so offered in every batting context (plain batting AND
+    //     batting matchup); never while the plain discipline is bowling.
+    //   • c:strikerpos ("Batting position") — the MATCHUP-ONLY striker/batter-
+    //     faced position filter (state.positions), offered whenever a Vs bucket is
+    //     active (batting matchup: batter's own position; bowling matchup: the
+    //     STRIKER's position faced, decision 46, anchor-verified).
     const basicOpts = () => {
-      const rposEligible = s.discipline === "batting" || matchupVsActive(s);
-      const rposOpt = rposEligible ? singletonOpt("rpos") : "";
+      const rposOpt = s.discipline === "batting" ? singletonOpt("rpos") : "";
+      const strikerOpt = matchupVsActive(s) ? singletonOpt("strikerpos") : "";
+      const posOpts = `${rposOpt}${strikerOpt}`;
       const parts = [];
       let injected = false;
       for (const m of basic) {
         parts.push(metricOpt(m));
         if (m.key === "innings") {
-          parts.push(rposOpt);
+          parts.push(posOpts);
           injected = true;
         }
       }
       if (!injected) { // no Innings option (edge) — append
-        parts.push(rposOpt);
+        parts.push(posOpts);
       }
       return parts.join("");
     };
     const dismissalOpts = dismissal.map((m) => metricOpt(m, stripOutPrefix(m.label))).join("");
-    // "Matchup (Vs)" (Wave A1 item 1): a standalone top-level entry ABOVE every
-    // optgroup, so it reads as the first thing in the whole "+ Add condition"
-    // list rather than merely first in a group. singletonOpt returns "" for
-    // women (menOnly) — no stray empty option — and disables it once the vs
-    // row is already present, same as any other singleton option.
+    // "Matchup (Vs)" (R5-A #5): the FIRST entry INSIDE the "Advanced metrics"
+    // optgroup (directly above the first advanced metric, Dot Ball %), NOT a
+    // standalone entry above the optgroups. singletonOpt returns "" for women
+    // (menOnly) — no stray empty option — and disables it once the vs row is
+    // already present, same as any other singleton option. The Advanced group
+    // renders when there is any advanced metric OR the vs option (men) to hold.
     const vsTopOpt = singletonOpt("vs");
     return `
       <option value="">+ Add condition…</option>
-      ${vsTopOpt}
       <optgroup label="Player">${singletonOpts(PLAYER_ADD_ORDER)}</optgroup>
       <optgroup label="Match">${singletonOpts(MATCH_ADD_ORDER)}</optgroup>
       <optgroup label="Basic metrics">${basicOpts()}</optgroup>
-      ${advanced.length ? `<optgroup label="Advanced metrics">${metricOpts(advanced)}</optgroup>` : ""}
+      ${advanced.length || vsTopOpt ? `<optgroup label="Advanced metrics">${vsTopOpt}${metricOpts(advanced)}</optgroup>` : ""}
       ${dismissal.length ? `<optgroup label="Dismissal type">${dismissalOpts}</optgroup>` : ""}`;
   }
 
@@ -544,15 +545,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     for (const t of SINGLETON_TYPES) {
       rowEls[t.key].hidden = !isPresent(t, s);
     }
-    // R. Pos. row label + striker caption (Wave 4b). In every BATTING context the
-    // R. Pos. control is present, so the row's type label serves it ("R. Pos.").
-    // In batting matchup the striker-position control also shows, below R. Pos.,
-    // labelled by its own inline caption. In a BOWLING matchup only the striker
-    // control shows, so the row label serves it directly ("Batting position") and
-    // the caption stays hidden.
-    const battingMatchup = matchupVsActive(s) && s.discipline === "batting";
-    typeLabelEls.rpos.textContent = s.discipline === "batting" ? "R. Pos." : "Batting position";
-    strikerCapEl.hidden = !battingMatchup;
+    // R5-A #8: R. Pos. and the striker "Batting position" are separate rows now,
+    // each with its own static type label ("R. Pos." / "Batting position" from
+    // SINGLETON_TYPES) — no dynamic relabel or shared-row caption needed. R. Pos.
+    // is present only in batting contexts; the striker only in matchup.
 
     renderVsEditor();
     regularPositionController.sync();
