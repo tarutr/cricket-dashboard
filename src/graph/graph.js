@@ -1153,17 +1153,29 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         <span class="graph-control-label">Y axis</span>
         <div class="graph-metric-select" data-role="scatter-y"></div>
       `;
-      mountMetricSelect("scatter-x", metrics, scatterXKey, (val) => {
+      // Scatter axis mutual-exclusion (R5-C, from the Line discussion): each axis
+      // dropdown EXCLUDES the metric currently chosen on the OTHER axis, so a
+      // metric can never sit on both axes (no metric-vs-itself diagonal). This is
+      // axis-VALIDITY, not data-policing. When one axis changes, the other's
+      // option list is refreshed via setOptions — which preserves that axis's own
+      // value (never the just-picked key, since it was already excluded from that
+      // axis's options).
+      const scatterOptionsExcluding = (excludeKey) => metricSelectOptions(metrics.filter((m) => m.key !== excludeKey));
+      let scatterXHandle = null;
+      let scatterYHandle = null;
+      scatterXHandle = mountMetricSelect("scatter-x", metrics.filter((m) => m.key !== scatterYKey), scatterXKey, (val) => {
         noteManualChartEdit();
         scatterXKey = val || null;
         if (scatterXKey) metricEverChosen = true;
+        if (scatterYHandle) scatterYHandle.setOptions(scatterOptionsExcluding(scatterXKey));
         syncChartTypeButtons();
         markDirty({ paramsChanged: true });
       }, { ariaLabel: "X axis metric" });
-      mountMetricSelect("scatter-y", metrics, scatterYKey, (val) => {
+      scatterYHandle = mountMetricSelect("scatter-y", metrics.filter((m) => m.key !== scatterXKey), scatterYKey, (val) => {
         noteManualChartEdit();
         scatterYKey = val || null;
         if (scatterYKey) markMetricChosen(scatterYKey);
+        if (scatterXHandle) scatterXHandle.setOptions(scatterOptionsExcluding(scatterYKey));
         syncChartTypeButtons();
         onRankMetricChanged();
       }, { ariaLabel: "Y axis metric" });
