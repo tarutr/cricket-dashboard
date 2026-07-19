@@ -483,3 +483,35 @@ rank-bar-with-W-R-labels + 0 console errors all verified. Nits (2)(3)(5) → fol
 hygiene pass; nit (1) → part of the owner's Best-Bowling-axis flag. ROUND 4 (Waves A+C+B) COMPLETE +
 orchestrator-verified + fresh-eyes-reviewed. Awaiting owner's hands-on review (checklist) + sign-off; then
 docs sync (4f-C); merge to main = separate owner decision.
+
+## ===== ROUND 5 EXECUTION (fresh session, Opus 4.8 orchestrator, 2026-07-19) =====
+Baseline re-proven on localhost:8000 before building: 2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34;
+independent DuckDB COUNT(DISTINCT batter_id)=2,810 (+3 dual-name = 2,813, documented). 0 console errors.
+Order: R5-A → R5-B → R5-C → R5-D → R5-E → R5-F, each gated (owner go between waves).
+
+## R5-A (interaction rules & regressions) COMPLETE + orchestrator-verified. frontend-heavy/Opus, 9 commits
+(537494a #1 · 2df5ea3 housekeeping-a · 6d869bb #5+#8 · fd24d5a #10 · b320207 #15 · af835b9 #7 · 4740b27 #9 ·
+1d32da3 #4 · c2bad39 progress). Display/state only. Independent verification (my own pass):
+- SACRED: filters.js/advanced.js/graph/* = 0 diff; metrics.js deletion-only (minSampleComponent, 114 lines);
+  buildQuery BYTE-IDENTICAL, buildMatchupQuery/conditionToHaving differ by COMMENT LINES ONLY (renamed dead
+  helper ref) — SQL generation unchanged.
+- ANCHORS on screen + independent DuckDB: 2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34; SA Yadav
+  vs Spin 38·454·140.99 (on screen row 11 + hand-written DuckDB); Bumrah vs RHB pos1,2 27·177·9 (DuckDB).
+- ITEMS: #1 no toolbar note ✅; #4 toolbar-commit PRESERVES row order (Karanbir stays top, values swap) +
+  header-click RE-SORTS (Waseem 701 top) ✅; #5 "Matchup (Vs)" first in Advanced-metrics optgroup above Dot
+  Ball % ✅; #7 per-discipline conditions ✅ (impl: state.advanced = current discipline, state.advancedBy-
+  Discipline archives both, swapped in createStore.set via swapAdvancedForDiscipline; identity filters
+  profile/teams in separate state fields → persist; escape-hatch honors explicit reset patches); #8 striker
+  "Batting position" is own addable entry, no auto-added dropdown when Vs active ✅; #9 filters popup fully
+  staged — table stays on APPLIED state through drawer edits + close (pills from applied) ✅; #10 Keep-Columns
+  greyed on blank + discipline-mismatch ✅; #15 picker resync (worker-verified). 0 console errors.
+- FLAGS for owner: (a) housekeeping-b MIN_BALLS_PER_YEAR NOT removed — its only consumer is a point-fade in
+  graph/timeseriesChart.js (must-not-touch this wave; R5-D rewrites the Line and removes it). So the old
+  thin-sample fade still lives in the CURRENT Line chart until R5-D; decision-49 fully satisfied at R5-D, not
+  R5-A. (b) sort-arrow honesty: after an order-preserving toolbar commit the header still shows its ▼ arrow
+  though rows aren't in that order — intended per #4 "values swap in place", but the arrow can mislead; owner
+  may want it dimmed/cleared (NEW decision, not part of #4). (c) #7 storage-shape divergence flagged by worker
+  (archive pattern vs literal state.advanced.batting/.bowling) to respect the graph.js must-not-touch boundary
+  — same behaviour, byte-identical SQL, impl reviewed clean.
+- Minor: one stale comment at drawer.js:498 still names the removed conditionApplicability() helper (cosmetic).
+STOPPED for owner gate → R5-B.
