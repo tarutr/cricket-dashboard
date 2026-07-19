@@ -40,7 +40,33 @@ filters.js MUST NOT be edited (uses whereWithPinExemption/gateWithPinExemption).
   - "–": pin P Nissanka (pure batsman, 0 bowling rows) → all "—" cells + rank "—", pill "(no innings)",
     count unchanged 1,660.
   - buildQuery byte-identical after wave (same 482/2182256011, 2500/3064880972). filters.js 0 diff.
-- #6 auto-add filtered column: TODO
+- #6 auto-add filtered column: DONE (code landed in 518ce86 with the main.js changes; verified here).
+  Repro: bowling, remove Best Bowling via Columns, add condition "Best Bowling ≥3W for ≤20R", popup Search
+  → BBI column re-appears + table sorts by it (BBI ▼, 8-7, 7-7, 7-8, 7-19, 6-2, 6-3, 6-7, 6-8), 680 players.
+  Removable: Columns picker shows BBI checked; unchecking removes it.
+  INDEPENDENT DuckDB (ROW_NUMBER window, NOT the app's arg_max/MAX):
+    - top-8 by best figure = identical ids/names/BBI + order to the app.
+    - condition count: best-rank >= 3000-20 = 2980 → 680 (by-id AND by-id-name), matches app exactly.
+      (My first naive qual `wkts>=3 AND runs<=20` gave 599 — wrong reading of the two-box condition,
+      which is a rank threshold that also admits any 4+ wkt innings; the app's 680 is correct.)
+
+## FINAL VERIFICATION (post-wave, clean reload, 0 console errors)
+- buildQuery byte-identical: plain 482/2182256011, matchup(Spin) 2500/3064880972 — SAME as pre-wave.
+- Anchors on screen + DuckDB: 2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34; SA Yadav vs Spin
+  38·454·140.99 (DuckDB).
+- filters.js / drawer.js / advanced.js / metrics.js / graph/* = 0 diff across the whole wave.
+- Commits: c6fb042 (#0) · 518ce86 (#3/#2/#11/#12 + #6 code).
+
+## SCOPE FLAGS (for owner)
+- Pin-column toggle is INSTANT both ways (pin + unpin); the pin PILL's ×/+ stays a pending soft-delete
+  (decision 47g, untouched). Owner may want them unified.
+- Rank cell = TRUE base-order rank: a floated pin keeps its real leaderboard rank (e.g. SA Yadav "1,329");
+  a no-data pin shows "—". Chosen as the most honest; flag for confirmation.
+- Row-count label counts real query rows only (a no-data synthetic pin does NOT inflate "N players").
+- #6 auto-add runs on EVERY popup Search regardless of "Keep Selected Columns" (Keep-Columns governs the
+  default-resync on discipline/format change, a separate concern). Multi-condition: rank by the FIRST
+  filtered metric; all missing filtered columns are added.
+- Reset trigger is the POPUP Search button specifically; a toolbar Search keeps pins (matches brief).
 
 ## Gotchas
 - styles.css is at REPO ROOT.
