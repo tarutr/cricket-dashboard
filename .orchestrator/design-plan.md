@@ -514,4 +514,28 @@ Order: R5-A → R5-B → R5-C → R5-D → R5-E → R5-F, each gated (owner go b
   (archive pattern vs literal state.advanced.batting/.bowling) to respect the graph.js must-not-touch boundary
   — same behaviour, byte-identical SQL, impl reviewed clean.
 - Minor: one stale comment at drawer.js:498 still names the removed conditionApplicability() helper (cosmetic).
-STOPPED for owner gate → R5-B.
+STOPPED for owner gate → R5-B. OWNER GATE PASSED: ruled the sort arrow = active-sort-only (decision 52,
+folded into R5-B); "will check the rest after the waves are done"; go for R5-B.
+
+## R5-B (pin system + sort-arrow ruling) COMPLETE + orchestrator-verified. frontend-heavy/Opus, commits
+c6fb042 (#0 arrow) · 518ce86 (#3/#2/#11/#12 pins) · bb35083 (#6 auto-add). Only table.js/main.js/styles.css
+touched (+ progress). Independent verification (my own pass):
+- SACRED: filters.js/drawer.js/advanced.js/metrics.js/graph = 0 diff; buildQuery/buildMatchupQuery/
+  conditionToHaving/advancedToHaving ALL byte-identical (extractor diff, 828a90d..HEAD).
+- ANCHORS on screen: 2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34; SA Yadav vs Spin 454·140.99
+  (builder unchanged → matchup anchors hold).
+- #0 arrow (decision 52): fresh Search shows RUNS ▼; after an order-preserving TOOLBAR Vs Search, DOM shows
+  NO header with an arrow or is-sorted class (anyArrowOrSorted=[]); a header click brings it back. ✅
+- #3 pin column: pinned SA Yadav → is-pinned/aria-pressed=true, floats to top keeping TRUE rank "11" (top
+  reads 11,1,2,3…); DOM confirms only ONE row pinned (the A-Sharafu "dark pin" was a hover artifact, not
+  state); persists through a toolbar Vs Search; resets on popup Search (code-confirmed). ✅
+- #6 (number-adjacent): autoAddFilteredColumns appends only an EXISTING metric's column + sets sort to it;
+  no-op without conditions → anchor byte-identical; runs on popup Search only. Worker independent DuckDB
+  (ROW_NUMBER, not app's arg_max) matched top-8 + count 680. ✅
+- #2 search-floats-to-top / #11 no-data pin shows in-scope record or "–" / #12 marking — worker-verified
+  (SA Yadav bowling vs LHB = 1inns/4balls/1wkt/4runs == DuckDB; P Nissanka pinned → all "–", count steady).
+- OWNER-DECISION FLAGS (surfaced, not blockers): (a) a floated pin shows its TRUE leaderboard rank in # (top
+  = "11" then 1,2,3) — worker's honest-rank choice vs renumbering pins; (b) pin-COLUMN toggle is instant both
+  ways while the pin-PILL × stays a pending soft-delete (decision 47g) — inconsistent, owner may want unified;
+  (c) #6 runs regardless of Keep-Columns + ranks by the FIRST filtered metric when several apply.
+STOPPED for owner gate → R5-C.
