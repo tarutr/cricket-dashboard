@@ -1099,6 +1099,19 @@ export function mountTable(
 ) {
   let lastRows = [];
   let loadToken = 0;
+  // R5-B #0 (owner ruling 2026-07-19): whether the CURRENT displayed row order
+  // is an ACTIVE column sort — true only when the last render ordered `lastRows`
+  // via applySort (a fresh/popup Search that ranks, or a column-header click),
+  // false after an order-PRESERVING toolbar-only commit (reorderPreservingPrevious).
+  // The sort ▲/▼ arrow + `is-sorted` styling appear ONLY when this is true AND
+  // state.sort.key matches the column (see headerCellHTML + the Player header),
+  // so a column that isn't actually sorting the rows carries no arrow. Set at the
+  // sort/preserve sites in load() and true in applySortKey(); a pure column
+  // drag-reorder, a tab switch, and Show More re-render without touching it (they
+  // don't change row order), so the flag survives them. A pin float/reset does
+  // NOT flip it either (pins float on top AFTER ordering — the non-pinned rows
+  // stay in whatever order applies), which is why the pin requery preserves it.
+  let orderIsActiveSort = true;
   // Snapshot (serializeQueryState) of the state that produced lastRows, or
   // null before any successful load. Only used as a "has a result ever been
   // loaded" sentinel now (hasResults()) — enterView() used to also compare
@@ -1525,7 +1538,11 @@ export function mountTable(
   }
 
   function headerCellHTML(metric, state) {
-    const isSorted = state.sort.key === metric.key;
+    // R5-B #0: the arrow + is-sorted styling show ONLY when the displayed order
+    // is an active column sort (orderIsActiveSort) AND this is the sort column.
+    // After an order-preserving toolbar-only commit, orderIsActiveSort is false,
+    // so no column shows an arrow even though state.sort.key still names one.
+    const isSorted = orderIsActiveSort && state.sort.key === metric.key;
     const dir = isSorted ? state.sort.dir : null;
     const arrow = isSorted ? (dir === "asc" ? " ▲" : " ▼") : "";
     // `data-table__th--draggable` (task 2): every metric column can be
@@ -2072,7 +2089,7 @@ export function mountTable(
     // A–Z, then Z–A, with the same caret the metric headers show. Stays sticky
     // and is deliberately NOT draggable (no --draggable class). The sort +
     // mobile double-click-to-expand (task 7) listeners are wired below.
-    const nameSorted = state.sort.key === "name";
+    const nameSorted = orderIsActiveSort && state.sort.key === "name";
     const nameArrow = nameSorted ? (state.sort.dir === "asc" ? " ▲" : " ▼") : "";
     const playerTh = `<th data-key="name" class="data-table__th data-table__th--sticky ${nameSorted ? "is-sorted" : ""}" scope="col">
         <button type="button" class="data-table__sort-btn">Player${nameArrow}</button>
@@ -2142,6 +2159,9 @@ export function mountTable(
         sort = { key, dir: metric && metric.higherIsBetter === false ? "asc" : "desc" };
       }
       store.set({ sort }); // pending store (excluded from dirty → no Search light)
+      // R5-B #0: a column-header click IS a sort — the arrow shows on the clicked
+      // column and the rows re-order by it.
+      orderIsActiveSort = true;
       if (lastLoadedState) {
         lastLoadedState = { ...lastLoadedState, sort };
         lastQueryStateKey = serializeQueryState(lastLoadedState);
@@ -2467,7 +2487,7 @@ export function mountTable(
     openColumnsPopoverState = { el: popover, anchor, onDocClick, onKeydown, onScroll, onResize };
   }
 
-  async function load(scopeState = null, { resort = true } = {}) {
+  async function load(scopeState = null, { resort = true, preserveSortFlag = false } = {}) {
     let state;
     if (scopeState) {
       // R4 Wave 4a (A1): the INSTANT Columns picker requeries against the FROZEN
@@ -2529,11 +2549,19 @@ export function mountTable(
       // / column change) preserves the prior visual order via
       // reorderPreservingPrevious. Column-header clicks re-sort client-side
       // elsewhere (applySortKey), untouched by this.
-      const sorted =
-        resort || !prevRows || prevRows.length === 0
-          ? applySort(merged, state)
-          : reorderPreservingPrevious(merged, prevRows, state);
+      const doSort = resort || !prevRows || prevRows.length === 0;
+      const sorted = doSort ? applySort(merged, state) : reorderPreservingPrevious(merged, prevRows, state);
 
+      // R5-B #0: a genuine sort (doSort) makes the displayed order an active
+      // column sort → the arrow shows; an order-preserving commit clears it.
+      // A pin requery passes preserveSortFlag so pinning never flips the arrow
+      // (the pin only floats a row on top; the non-pinned order is unchanged).
+      if (!preserveSortFlag) orderIsActiveSort = doSort;
+
+      // R5-B #3: `lastRows` is the BASE ordered array (NOT pin-floated) — the
+      // pin float is applied at RENDER time (renderLoaded → floatPinsToTop), so
+      // unpinning returns a player to their true ranked slot and reorderPreserving-
+      // Previous preserves the un-floated order across a toolbar-only commit.
       lastRows = sorted;
       lastQueryStateKey = serializeQueryState(state);
       lastLoadedState = state; // F2: enterView() renders against this snapshot
