@@ -3448,6 +3448,14 @@ a { color: var(--color-accent); }
   accent-color: var(--color-accent);
   cursor: pointer;
 }
+/* R5-A #10: greyed when it can't apply (blank table / discipline mismatch). */
+.fpop-keep-columns.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.fpop-keep-columns.is-disabled input[type="checkbox"] {
+  cursor: not-allowed;
+}
 
 @media (max-width: 640px) {
   .filters-popup__panel {

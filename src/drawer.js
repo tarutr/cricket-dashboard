@@ -121,19 +121,39 @@ const MATCH_ADD_ORDER = ["event", "venue"];
  * Mount the condition builder into `advancedHost` (the Advanced Filters section
  * body). Returns `{ onShow, onHide, sync, activeCount, validate }` for main.js.
  */
-export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, { onChange }) {
+export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, { onChange, isKeepColumnsDisabled }) {
   // "Keep Selected Columns" toggle (4d/A5): a plain checkbox in the popup
   // footer (main.js queries it statically from index.html and hands it in
   // here since drawer.js owns the popup's non-Search controls). Reads/writes
   // state.keepColumns directly — display-only, no query builder ever reads
   // it. main.js's reapplyDefaultColumnsIfUnmodified() is the thing this
   // gates (see its own comment for the OFF/ON behaviour).
+  //
+  // R5-A #10: greyed out when the toggle can't do anything useful — on a blank
+  // table (nothing searched yet) or when the pending discipline differs from the
+  // last-searched one (the columns it would "keep" belong to the other view).
+  // main.js decides that via isKeepColumnsDisabled(); syncKeepColumns() applies
+  // it on open + on every store change while the popup is visible.
+  const keepColumnsLabelEl = keepColumnsCheckbox ? keepColumnsCheckbox.closest(".fpop-keep-columns") : null;
+  function syncKeepColumns() {
+    if (!keepColumnsCheckbox) return;
+    const s = store.get();
+    keepColumnsCheckbox.checked = Boolean(s.keepColumns);
+    const disabled = isKeepColumnsDisabled ? Boolean(isKeepColumnsDisabled()) : false;
+    keepColumnsCheckbox.disabled = disabled;
+    if (keepColumnsLabelEl) {
+      keepColumnsLabelEl.classList.toggle("is-disabled", disabled);
+      keepColumnsLabelEl.title = disabled
+        ? "Available once you've searched — and only while staying on the same discipline"
+        : "";
+    }
+  }
   if (keepColumnsCheckbox) {
-    keepColumnsCheckbox.checked = Boolean(store.get().keepColumns);
     keepColumnsCheckbox.addEventListener("change", () => {
       store.set({ keepColumns: keepColumnsCheckbox.checked });
       onChange();
     });
+    syncKeepColumns();
   }
 
   // ── Stable skeleton (built once) ───────────────────────────────────────────
@@ -826,7 +846,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     const s = store.get();
     syncSingletonRows();
     renderNumeric(s);
-    if (keepColumnsCheckbox) keepColumnsCheckbox.checked = Boolean(s.keepColumns);
+    syncKeepColumns();
   }
 
   /** Badge count: only filters ACTUALLY applied right now (inert selections

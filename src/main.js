@@ -578,6 +578,15 @@ function boot() {
           onChange: () => {
             onFiltersChanged();
           },
+          // R5-A #10: "Keep Selected Columns" is greyed when it can't do anything —
+          // on a blank table (nothing searched yet) OR when the pending discipline
+          // differs from the last-searched one (the columns it would carry belong
+          // to the other view). Display-only; never read by a query builder.
+          isKeepColumnsDisabled: () => {
+            if (!tableController || !tableController.hasResults()) return true;
+            const applied = appliedState || store.get();
+            return store.get().discipline !== applied.discipline;
+          },
         }
       );
 
