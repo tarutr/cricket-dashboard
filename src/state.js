@@ -17,6 +17,10 @@
 //   sort: { key: string, dir: "asc" | "desc" },
 //   columns: { batting: string[], bowling: string[] },   // visible metric keys, in order, per discipline
 //   advanced: { op: "AND"|"OR", groups: [{ op: "AND"|"OR", conds: [{metricKey, operator, v1, v2}] }] },
+//     // R5-A #7: the CURRENT discipline's numeric stat conditions (shape above).
+//   advancedByDiscipline: { batting: {op,groups}, bowling: {op,groups} },
+//     // the per-discipline archive; createStore.set swaps `advanced` <-> here on a
+//     // discipline change so conditions never leak batting<->bowling.
 // }
 //
 // `formats` stores owner-facing bucket keys (see FORMAT_BUCKETS below), not raw
@@ -291,6 +295,11 @@ const DEFAULT_MATCHUP_COLUMNS = {
   ],
 };
 
+/** A fresh, empty numeric-stat-condition block ({ op, groups }). */
+export function emptyAdvancedBlock() {
+  return { op: "AND", groups: [] };
+}
+
 /**
  * Build the initial state. `maxMonth` ("YYYY-MM") comes from the manifest's
  * max match_date once known; until then dateTo is null and the filter bar
@@ -351,7 +360,16 @@ export function createInitialState(maxMonth) {
       matchup_batting: [...DEFAULT_MATCHUP_COLUMNS.matchup_batting],
       matchup_bowling: [...DEFAULT_MATCHUP_COLUMNS.matchup_bowling],
     },
-    advanced: { op: "AND", groups: [] },
+    // Numeric stat conditions (SPEC §5.2). R5-A #7 (decision 50) made them
+    // PER-DISCIPLINE: `advanced` always holds the CURRENT discipline's conditions
+    // (shape unchanged — { op, groups } — so every reader stays byte-identical:
+    // buildQuery/conditionToHaving, the drawer, pills, describeScope, and the
+    // graph's metricConditionKeys), while `advancedByDiscipline` archives the
+    // other discipline's. createStore.set() swaps them on any discipline change
+    // (see swapAdvancedForDiscipline). Identity filters (profile/teams) are NOT
+    // here, so they persist across the toggle as the owner ruled (#15/decision 50).
+    advanced: emptyAdvancedBlock(),
+    advancedByDiscipline: { batting: emptyAdvancedBlock(), bowling: emptyAdvancedBlock() },
   };
 }
 
@@ -516,20 +534,40 @@ export function pruneIneligibleState(store) {
     ...eligibleMetrics("matchup_bowling", s.formats).map((m) => m.key),
   ]);
 
-  const groups = (s.advanced.groups || [])
-    .map((g) => ({
-      ...g,
-      // keep incomplete conditions (blank metric) — they're inert edit rows
-      conds: g.conds.filter((c) => !c.metricKey || advancedAllowed.has(c.metricKey)),
-    }))
-    .filter((g) => g.conds.length > 0);
+  // Prune one condition block ({ op, groups }) against advancedAllowed.
+  const pruneBlock = (block) =>
+    (block.groups || [])
+      .map((g) => ({
+        ...g,
+        // keep incomplete conditions (blank metric) — they're inert edit rows
+        conds: g.conds.filter((c) => !c.metricKey || advancedAllowed.has(c.metricKey)),
+      }))
+      .filter((g) => g.conds.length > 0);
+
+  const groups = pruneBlock(s.advanced);
   const condsChanged = JSON.stringify(groups) !== JSON.stringify(s.advanced.groups || []);
 
-  if (!colsChanged && !matchupChanged && !condsChanged) return false;
+  // R5-A #7: also prune the ARCHIVED (inactive-discipline) condition blocks so a
+  // now-ineligible condition (e.g. a phase metric after a format change) can't
+  // resurface when the user switches back to that discipline. Same wide allow-set.
+  const archive = s.advancedByDiscipline || { batting: emptyAdvancedBlock(), bowling: emptyAdvancedBlock() };
+  const newArchive = { ...archive };
+  let archiveChanged = false;
+  for (const d of ["batting", "bowling"]) {
+    const block = archive[d] || emptyAdvancedBlock();
+    const prunedGroups = pruneBlock(block);
+    if (JSON.stringify(prunedGroups) !== JSON.stringify(block.groups || [])) {
+      newArchive[d] = { ...block, groups: prunedGroups };
+      archiveChanged = true;
+    }
+  }
+
+  if (!colsChanged && !matchupChanged && !condsChanged && !archiveChanged) return false;
   if (colsChanged) newMatchupColumns[s.discipline] = prunedCols;
   store.set({
     columns: colsChanged || matchupChanged ? newMatchupColumns : s.columns,
     advanced: condsChanged ? { ...s.advanced, groups } : s.advanced,
+    ...(archiveChanged ? { advancedByDiscipline: newArchive } : {}),
   });
   return true;
 }
@@ -551,6 +589,27 @@ function formatsLabel(formats) {
   return formats.join(" + ");
 }
 
+/**
+ * R5-A #7 (decision 50): per-discipline numeric stat conditions. `state.advanced`
+ * always mirrors the CURRENT discipline's conditions; `state.advancedByDiscipline`
+ * archives BOTH. On a discipline change (from ANY caller — the leaderboard AND the
+ * graph each mount their own discipline <select>, and both go through store.set),
+ * stash the outgoing discipline's conditions and restore the incoming one's. This
+ * keeps `state.advanced`'s shape ({ op, groups }) unchanged, so every reader
+ * (buildQuery/conditionToHaving, drawer, pills, describeScope, graph
+ * metricConditionKeys) works untouched — a bowling condition simply isn't in
+ * `state.advanced` while batting is active, so it can never leak into the batting
+ * query, and switching back restores it. Identity filters (profile/teams) live
+ * elsewhere in state, so they persist across the toggle (owner ruling).
+ */
+function swapAdvancedForDiscipline(prev, next) {
+  if (!prev || prev.discipline === next.discipline) return next;
+  const archive = { ...(next.advancedByDiscipline || {}) };
+  archive[prev.discipline] = prev.advanced || emptyAdvancedBlock();
+  const restored = archive[next.discipline] || emptyAdvancedBlock();
+  return { ...next, advanced: restored, advancedByDiscipline: archive };
+}
+
 export function createStore(initial) {
   let state = initial;
   const listeners = new Set();
@@ -560,7 +619,14 @@ export function createStore(initial) {
   }
 
   function set(patch) {
-    state = typeof patch === "function" ? patch(state) : { ...state, ...patch };
+    const prev = state;
+    const next = typeof patch === "function" ? patch(prev) : { ...prev, ...patch };
+    // A caller that explicitly manages the archive (a full reset / clearAll passes
+    // advancedByDiscipline in the patch) is honoured verbatim — otherwise a
+    // discipline change triggers the per-discipline condition swap.
+    const managesArchive =
+      patch && typeof patch !== "function" && Object.prototype.hasOwnProperty.call(patch, "advancedByDiscipline");
+    state = managesArchive ? next : swapAdvancedForDiscipline(prev, next);
     notify();
   }
 
