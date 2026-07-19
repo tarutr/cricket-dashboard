@@ -463,26 +463,26 @@ function triggerHeaderFilterTable(text, matches) {
  * nodes and their listeners are simply left behind for GC).
  */
 function mountTableToolbarExtras({ searchInputEl, searchResultsEl, pillsHostEl }) {
-  // R4 Wave 4a (A2): the pills row renders from the LIVE (pending) store, not
-  // the frozen applied snapshot — a pending edit (popup filter, toolbar
-  // control, pin add, pill ×/+) surfaces as a pill IMMEDIATELY, matching the
-  // other pending toolbar controls.
-  //
-  // Every pill's ×/+ — FILTER and PIN alike — is PENDING: it soft-deletes (A4:
-  // red outline + "+") and only takes effect on the table at the next Search.
-  // The ADDENDUM's INSTANT behaviour (owner ruling 2026-07-17) is scoped to
-  // *adding* a pin from the results search — pinPlayer() → onPinsChanged() —
-  // NOT to a pill's ×/+, so mountPills gets the single pending onChange.
+  // R5-A #9: the FILTER pills render from the APPLIED snapshot (the frozen state
+  // the table actually reflects), NOT the live/pending store — so a filter edited
+  // inside the Filters popup (a High-Score condition, team/opp/event/venue, a
+  // popup date, Vs) does NOT surface as a pill until the popup's Search commits it.
+  // This REVERSES Wave 4a's "pills reflect pending" (owner was emphatic: a
+  // High-Score pill leaking onto the table mid-edit is wrong). The already-approved
+  // carve-outs are preserved inside pills.js: PIN pills read the LIVE store (so
+  // picking a player from the results search drops its pill in immediately, and a
+  // pin ×/+ soft-delete stays pending with its red-outline undo), and every pill's
+  // ×/+ still soft-deletes and commits on Search (decision 47g).
   pillsController = mountPills(
     pillsHostEl,
     store,
     () => {
       onFiltersChanged();
     },
-    // onPinChange + getState default to onChange / the live store, so a pill's
-    // ×/+ is pending and the pills reflect pending edits.
-    undefined,
-    undefined,
+    undefined, // onPinChange defaults to onChange (a pin ×/+ stays pending)
+    // getState = the APPLIED snapshot (filter pills render from it); pills.js reads
+    // the live store directly for PIN pills so pin add/remove stay instant/pending.
+    () => appliedState || store.get(),
     // 4d/A6: hands pills.js the live no-innings-pin id set so a pinned
     // player's own pill can read "(no innings)" once reportPinCoverage()
     // learns that from a completed load().

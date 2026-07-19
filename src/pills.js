@@ -6,17 +6,17 @@
 // position picked while viewing bowling) shows no pill, matching the rule
 // that describeScope() and every query already follow.
 //
-// B2R wave 2 (decision 42): stat-condition pills now read the condition
-// itself ("Runs ≥ 300") instead of a count ("1 stat condition") — one pill
-// per active condition, each independently removable via the same
-// removeConditionAt() advanced.js's own remove-condition button uses, so the
-// two paths can never diverge.
+// B2R wave 2 (decision 42): stat-condition pills read the condition itself
+// ("Runs ≥ 300") instead of a count ("1 stat condition") — one pill per active
+// condition, each independently removable. R5-A #9 made the pills derive from the
+// APPLIED snapshot, so a condition pill's × removes the matching condition from
+// the LIVE store by CONTENT (removeConditionByContent) rather than by index.
 //
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
 import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, hasActiveProfileFilter, matchupVsActive, effectiveNamespace } from "./state.js";
-import { isConditionComplete, removeConditionAt, isBowlingFiguresCondition } from "./advanced.js";
+import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
 
@@ -60,11 +60,15 @@ function conditionPillLabel(cond, state) {
  * a pill's ×/+. Defaults to `onChange` so a caller that never pins anything
  * needs to pass only one callback.
  *
- * R4 Wave 4a (A2): `getState` now defaults to — and main.js passes — the LIVE
- * (pending) store, so a pending edit (popup filter, toolbar control, pin add,
- * pill ×) surfaces as a pill IMMEDIATELY, matching the other pending toolbar
- * controls. The table body still only moves on Search; the pills are a live
- * indicator of what the NEXT Search will apply.
+ * R5-A #9: `getState` returns the APPLIED snapshot (main.js passes
+ * `() => appliedState`) — FILTER pills derive from it, so a filter edited inside
+ * the Filters popup shows NO pill until the popup's Search commits it (reversing
+ * Wave 4a's "pills reflect pending"). PIN pills instead read the LIVE store
+ * directly (see render()), preserving the approved carve-outs: a pin added via
+ * the results search shows instantly, and a pin ×/+ soft-delete stays pending.
+ * Every pill's ×/+ still soft-deletes with a red-outline undo and commits on
+ * Search (decision 47g); the staged set wins over active so a soft-deleted filter
+ * keeps showing staged even though APPLIED still carries it until Search.
  *
  * `getNoInningsIds` (4d/A6): returns the Set of pinned player ids main.js
  * learned, from the LAST completed load(), have zero rows in the searched
@@ -90,6 +94,44 @@ export function mountPills(
   // Clear commit (clearStaged), at which point the removal is permanent.
   const staged = new Map();
 
+  // R5-A #9: content-based condition remove/restore on the LIVE (pending) store's
+  // current-discipline block (state.advanced). Filter pills now derive from the
+  // APPLIED snapshot, so the applied gi/ci indices can drift from the live block —
+  // matching by CONTENT keeps a pill's × removing the RIGHT live condition (and
+  // no-ops safely if it isn't in the live block, e.g. after a pending discipline
+  // switch). advanced stays the current discipline's block (R5-A #7), so this
+  // writes to whichever discipline is active.
+  function condMatches(a, b) {
+    return (
+      a.metricKey === b.metricKey &&
+      a.operator === b.operator &&
+      String(a.v1) === String(b.v1) &&
+      String(a.v2) === String(b.v2)
+    );
+  }
+  function removeConditionByContent(cond) {
+    const adv = store.get().advanced;
+    const groups = (adv.groups || []).map((g) => ({ ...g, conds: g.conds.slice() }));
+    let removed = false;
+    for (const g of groups) {
+      const i = g.conds.findIndex((c) => condMatches(c, cond));
+      if (i >= 0) {
+        g.conds.splice(i, 1);
+        removed = true;
+        break;
+      }
+    }
+    if (!removed) return;
+    store.set({ advanced: { ...adv, groups: groups.filter((g) => g.conds.length > 0) } });
+  }
+  function restoreConditionByContent(cond, groupOp) {
+    const adv = store.get().advanced;
+    const groups = (adv.groups || []).map((g) => ({ ...g, conds: g.conds.slice() }));
+    if (groups.length) groups[0].conds.push({ ...cond });
+    else groups.push({ op: groupOp || "AND", conds: [{ ...cond }] });
+    store.set({ advanced: { ...adv, groups } });
+  }
+
   // Stable display order of pill keys, first-seen order — keeps a pill in place
   // when it transitions active <-> staged instead of jumping to the end. Pruned
   // each render to the keys currently present (active or staged).
@@ -105,7 +147,13 @@ export function mountPills(
   }
 
   function render() {
+    // R5-A #9: FILTER pills derive from `s` = the APPLIED snapshot (getState),
+    // so a filter edited in the popup shows no pill until Search commits it. PIN
+    // pills instead derive from `live` = the pending store, so picking a player
+    // from the results search drops its pill in immediately and a pin ×/+ soft-
+    // delete stays pending — both already-approved carve-outs (decision 50/47g).
     const s = getState();
+    const live = store.get();
     const pills = []; // { key, label, remove(), restore(), inert?, pinned?, title? }
 
     // "Current team" mode (owner decision 46): one removable pill per team,
@@ -204,13 +252,12 @@ export function mountPills(
     }
 
     // Stat conditions (decision 42): one pill per ACTIVE condition (metric +
-    // valid value), reading the condition itself. Iterates the raw
-    // state.advanced.groups (not advanced.js's activeGroups()) so gi/ci here
-    // are the TRUE indices removeConditionAt() needs — activeGroups() filters
-    // out incomplete rows first, which would shift indices whenever a blank
-    // edit-row sits before a complete one.
-    (s.advanced.groups || []).forEach((g, gi) => {
-      g.conds.forEach((c, ci) => {
+    // valid value), reading the condition itself, from the APPLIED snapshot's
+    // current-discipline block (R5-A #7/#9). Remove/restore act on the LIVE store
+    // by CONTENT (removeConditionByContent above), so no index bookkeeping is
+    // needed here.
+    (s.advanced.groups || []).forEach((g) => {
+      g.conds.forEach((c) => {
         if (!isConditionComplete(c)) return;
         // Stable key by CONTENT (not gi/ci — those re-index when a sibling
         // condition is removed, which would collide across active/staged).
@@ -219,16 +266,11 @@ export function mountPills(
         pills.push({
           key: `cond:${c.metricKey}:${c.operator}:${c.v1}:${c.v2}`,
           label: conditionPillLabel(c, s),
-          remove: () => removeConditionAt(store, gi, ci),
-          // Undo: re-insert the captured condition into its group (append), or
-          // recreate the group if it was collapsed when the last cond left it.
-          restore: () => {
-            const adv = store.get().advanced;
-            const groups = (adv.groups || []).map((gr) => ({ ...gr, conds: [...gr.conds] }));
-            if (groups[gi]) groups[gi].conds.push(condCopy);
-            else groups.push({ op: groupOp, conds: [condCopy] });
-            store.set({ advanced: { ...adv, groups } });
-          },
+          // R5-A #9: derived from APPLIED state; remove/restore act on the LIVE
+          // store by CONTENT (see removeConditionByContent above). Soft-delete
+          // stages the pill (red outline) and commits on Search.
+          remove: () => removeConditionByContent(condCopy),
+          restore: () => restoreConditionByContent(condCopy, groupOp),
         });
       });
     });
@@ -250,8 +292,12 @@ export function mountPills(
     // "Filter the table" toast above but per-pin and pill-attached rather
     // than toast-only. main.js also fires the toast once per Search/pin-add;
     // this pill annotation is the persistent half of that feedback.
+    // R5-A #9: pin pills read the LIVE store (not the applied snapshot `s`) — a
+    // pin ADDED via the results search must show instantly, and a pin ×/+ soft-
+    // delete must stage (it's removed from live, so it drops out of `active` and
+    // the staged descriptor renders its red-outline undo).
     const noInningsIds = getNoInningsIds();
-    for (const p of s.pinnedPlayers || []) {
+    for (const p of live.pinnedPlayers || []) {
       const noInnings = noInningsIds.has(String(p.id));
       pills.push({
         key: `pin:${p.id}`,
@@ -268,22 +314,22 @@ export function mountPills(
       });
     }
 
-    // A4: merge the ACTIVE pills (derived above from the pending state) with the
-    // STAGED pills (soft-deleted — no longer in state, so not derived; kept in
-    // the `staged` Map with their captured descriptor + restore). A key can't be
-    // both (staging removes it from state); if one somehow reappears active
-    // (e.g. the same team re-added via another control), the active one wins and
-    // its stale staged entry is dropped.
+    // R5-A #9: merge ACTIVE pills (derived above) with STAGED (soft-deleted) ones.
+    // STAGED wins over active: a FILTER pill derives from the APPLIED snapshot, so
+    // after its × the filter is still in applied (unchanged until Search) and would
+    // otherwise re-derive as active — the staged entry must keep showing its red-
+    // outline undo instead. A PIN pill's × removes it from the live store, so it
+    // isn't active anyway (staged-wins is a harmless no-op there). A restored pill
+    // is deleted from `staged` (see the ×/+ handler), so it returns to active.
     const active = new Map(pills.map((p) => [p.key, p]));
-    for (const k of active.keys()) staged.delete(k);
     reconcileOrder([...active.keys()], [...staged.keys()]);
 
     const display = orderList
       .map((k) => {
-        const a = active.get(k);
-        if (a) return { ...a, staged: false };
         const st = staged.get(k);
-        return st ? { ...st, staged: true } : null;
+        if (st) return { ...st, staged: true };
+        const a = active.get(k);
+        return a ? { ...a, staged: false } : null;
       })
       .filter(Boolean);
 
