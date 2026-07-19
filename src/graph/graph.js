@@ -1090,6 +1090,48 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     }
   }
 
+  /** R5-C #19: red-outline EVERY empty REQUIRED control for the CURRENT chart
+   * type — the chart-type picker when none is chosen, and each empty metric
+   * picker (bar / scatter X & Y / slope-dumbbell metric + windows / byyear
+   * metric / radar & benchmark metric lists / phase family). Previously only
+   * the slope/dumbbell date windows got this cue; the picker naming message
+   * ("Choose a chart type", "Pick a metric") is still shown by renderChart()'s
+   * stage guidance — this adds the matching VISIBLE cue on the control itself.
+   * Re-run on every render AND on every picker/type change (via
+   * syncChartTypeButtons), so an outline clears the instant its control is
+   * satisfied. This is a validation CUE only — it never gates or blocks drawing
+   * beyond what already happens (no data-policing). The searchSelect toggle
+   * carries class `.select`, which the shared
+   * `.graph-builder__controls .select.needs-input` rule already styles, so no
+   * new CSS is needed for the pickers. */
+  function syncNeedsInput() {
+    const toggleOf = (host) => host && host.querySelector(".search-select__toggle");
+    const metricToggle = (role) => toggleOf(els.metricControls.querySelector(`[data-role="${role}"]`));
+    // Chart-type picker: outlined only while no type is chosen.
+    setNeedsInput(toggleOf(els.chartType), !chartType);
+    if (!chartType) return;
+    if (chartType === "bar") {
+      setNeedsInput(metricToggle("bar-metric"), !barMetricKey);
+    } else if (chartType === "scatter") {
+      setNeedsInput(metricToggle("scatter-x"), !scatterXKey);
+      setNeedsInput(metricToggle("scatter-y"), !scatterYKey);
+    } else if (chartType === "radar") {
+      setNeedsInput(metricToggle("radar-metrics"), radarMetricKeys.length < RADAR_MIN_METRICS);
+    } else if (chartType === "phases") {
+      setNeedsInput(metricToggle("phase-family"), !phaseFamilyId);
+    } else if (chartType === "slope") {
+      setNeedsInput(metricToggle("slope-metric"), !slopeMetricKey);
+      syncWindowNeedsInput("slope");
+    } else if (chartType === "byyear") {
+      setNeedsInput(metricToggle("byyear-metric"), !byYearMetricKey);
+    } else if (chartType === "dumbbell") {
+      setNeedsInput(metricToggle("dumbbell-metric"), !dumbbellMetricKey);
+      syncWindowNeedsInput("dumbbell");
+    } else if (chartType === "benchmark") {
+      setNeedsInput(metricToggle("benchmark-metrics"), (benchmarkMetricKeys || []).length < 4);
+    }
+  }
+
   function renderMetricControls() {
     // R2-2a/R2-2b-i: dispose the previous render's searchSelect pickers (each
     // holds a document click listener) before their host nodes are replaced by
@@ -1127,6 +1169,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         // Re-sync only — no chart to render without a type yet.
         syncChartTypeButtons();
       });
+      syncNeedsInput(); // item #19: outline the chart-type picker (none chosen yet)
       return;
     }
 
@@ -1467,6 +1510,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         metricControlSelects.push(metricsHandle);
       }
     }
+    // item #19: after rebuilding the metric controls, outline whichever required
+    // controls are still empty for this chart type (clears as they're filled).
+    syncNeedsInput();
   }
 
   // ── Player list UI (Batch 8, task 1 — v1's two-list model) ─────────────────
@@ -1847,6 +1893,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       chartTypeSelect.setOptions(chartTypeOptions(statuses));
       chartTypeSelect.setValue(chartType);
     }
+    // item #19: every picker/type/roster change routes through here, so this is
+    // the shared point to refresh the empty-required-control outlines.
+    syncNeedsInput();
   }
 
   // "Bars ⇄ Dots" style toggle — bar chart only (lollipop rendering, same
