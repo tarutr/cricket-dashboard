@@ -4289,12 +4289,17 @@ a { color: var(--color-accent); }
   z-index: 110;
 }
 
+/* R5-F #16 (density pass): matches the main "Filters" popup's compact
+   Search Conditions density — same spacing tokens (--space-*, --text-sm2/
+   --text-md) as `.filters-popup`'s own compact rules further down, not new
+   sizes. Panel narrowed (380px → 320px, still `min(…, 100vw)` so phones are
+   unaffected) since the controls no longer need to stretch full-width. */
 .player-filters-drawer__panel {
   position: absolute;
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(380px, 100vw);
+  width: min(320px, 100vw);
   background: var(--color-bg);
   box-shadow: var(--shadow-popover);
   display: flex;
@@ -4307,7 +4312,7 @@ a { color: var(--color-accent); }
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-5);
+  padding: var(--space-4) var(--space-5);
   border-bottom: 1px solid var(--color-line);
   position: sticky;
   top: 0;
@@ -4319,22 +4324,25 @@ a { color: var(--color-accent); }
   margin: 0;
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 1.2rem;
+  font-size: 1.1rem;
 }
 
+/* Grid, not flex-column: a single-column track for the section list, tighter
+   gap (--space-3, was --space-5) — same "compact stack" reasoning as the main
+   drawer's own tightened rhythm (see the R7 Wave B comment near
+   `.filters-popup .filter-bar` further down). */
 .player-filters-drawer__body {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   flex: 1;
-  padding: var(--space-5);
-  gap: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  gap: var(--space-3);
 }
 
 .player-filters-drawer__section {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding-bottom: var(--space-4);
+  gap: var(--space-1);
+  padding-bottom: var(--space-3);
   border-bottom: 1px solid var(--color-line);
 }
 
@@ -4347,7 +4355,50 @@ a { color: var(--color-accent); }
   margin: 0;
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: var(--text-md);
+}
+
+/* Batting position + Vs (R5-F #16): both batting-only, both show/hide
+   together (playerFilters.js's `showBattingOnly`) — a 2-column grid row
+   pairs them so neither control needs to stretch the panel's full width. */
+.player-filters-drawer__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+.player-filters-drawer__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* Compact control sizing — the SAME rule as the main popup's
+   `.filters-popup .filter-bar .select, .dropdown__toggle, .date-range__input`
+   further down (min-height 34px vs the app-wide 40px default, tighter
+   padding, --text-sm2 type). Also covers `.search-select__toggle`
+   (searchSelect.js) since this drawer's Date/Opposition/Vs controls are
+   searchSelect instances, unlike the main popup's row. */
+.player-filters-drawer .select,
+.player-filters-drawer .dropdown__toggle,
+.player-filters-drawer .date-range__input,
+.player-filters-drawer .search-select__toggle {
+  min-height: 34px;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm2);
+}
+
+/* Date window as ONE row (From – To), not three stacked lines: searchSelect's
+   root element is 100%-width by default (`.search-select { width: 100% }`),
+   which inside a wrapping flex row means each date box claims the full row
+   and wraps past the separator. Force one line and let the two share it,
+   same shape as the main drawer's native from/to date inputs. */
+.player-filters-drawer .date-range { flex-wrap: nowrap; }
+.player-filters-drawer .date-range .search-select {
+  width: auto;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 @media (max-width: 480px) {

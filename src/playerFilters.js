@@ -142,16 +142,31 @@ export function mountPlayerFilters(hostEl, { onApply }) {
             </div>
           </section>
 
-          <section class="player-filters-drawer__section" data-role="pf-section-positions">
-            <h4 class="player-filters-drawer__section-title">Batting position</h4>
-            <div class="dropdown" data-role="pf-pos-dropdown">
-              <button type="button" class="select dropdown__toggle" data-role="pf-pos-toggle" aria-haspopup="true" aria-expanded="false">Any position</button>
-              <div class="dropdown__panel" data-role="pf-pos-panel" hidden>
-                <div class="dropdown__list" data-role="pf-pos-list">
-                  ${POSITIONS.map(
-                    (p) => `<label class="dropdown__item"><input type="checkbox" data-position="${p}" /><span>${p}</span></label>`
-                  ).join("")}
+          <!-- R5-F #16 (density pass): Batting position + Vs are always shown/
+               hidden together (both batting-only, see showBattingOnly below),
+               so they share ONE bordered section + a 2-column grid row instead
+               of two separate full-width stacked sections — narrower controls,
+               same information, less scrolling. pf-section-battingrow is the
+               single hide/show target that replaces the old separate
+               els.posSection/els.vsSection toggles. -->
+          <section class="player-filters-drawer__section" data-role="pf-section-battingrow">
+            <div class="player-filters-drawer__row">
+              <div class="player-filters-drawer__field">
+                <h4 class="player-filters-drawer__section-title">Batting position</h4>
+                <div class="dropdown" data-role="pf-pos-dropdown">
+                  <button type="button" class="select dropdown__toggle" data-role="pf-pos-toggle" aria-haspopup="true" aria-expanded="false">Any position</button>
+                  <div class="dropdown__panel" data-role="pf-pos-panel" hidden>
+                    <div class="dropdown__list" data-role="pf-pos-list">
+                      ${POSITIONS.map(
+                        (p) => `<label class="dropdown__item"><input type="checkbox" data-position="${p}" /><span>${p}</span></label>`
+                      ).join("")}
+                    </div>
+                  </div>
                 </div>
+              </div>
+              <div class="player-filters-drawer__field">
+                <h4 class="player-filters-drawer__section-title">Vs</h4>
+                <div data-role="pf-vs"></div>
               </div>
             </div>
           </section>
@@ -160,11 +175,6 @@ export function mountPlayerFilters(hostEl, { onApply }) {
             <h4 class="player-filters-drawer__section-title">Against (opposition)</h4>
             <div data-role="pf-opposition"></div>
             <p class="player-page__footnote" data-role="pf-opp-note" hidden>International cricket only for now.</p>
-          </section>
-
-          <section class="player-filters-drawer__section" data-role="pf-section-vs">
-            <h4 class="player-filters-drawer__section-title">Vs</h4>
-            <div data-role="pf-vs"></div>
           </section>
         </div>
         <div class="filter-drawer__footer">
@@ -182,13 +192,12 @@ export function mountPlayerFilters(hostEl, { onApply }) {
     closeBtn: hostEl.querySelector('[data-role="pf-close"]'),
     dateFrom: hostEl.querySelector('[data-role="pf-dateFrom"]'),
     dateTo: hostEl.querySelector('[data-role="pf-dateTo"]'),
-    posSection: hostEl.querySelector('[data-role="pf-section-positions"]'),
+    battingRow: hostEl.querySelector('[data-role="pf-section-battingrow"]'),
     posToggle: hostEl.querySelector('[data-role="pf-pos-toggle"]'),
     posPanel: hostEl.querySelector('[data-role="pf-pos-panel"]'),
     posList: hostEl.querySelector('[data-role="pf-pos-list"]'),
     opposition: hostEl.querySelector('[data-role="pf-opposition"]'),
     oppNote: hostEl.querySelector('[data-role="pf-opp-note"]'),
-    vsSection: hostEl.querySelector('[data-role="pf-section-vs"]'),
     vs: hostEl.querySelector('[data-role="pf-vs"]'),
     clearBtn: hostEl.querySelector('[data-role="pf-clear"]'),
     applyBtn: hostEl.querySelector('[data-role="pf-apply"]'),
@@ -375,9 +384,10 @@ export function mountPlayerFilters(hostEl, { onApply }) {
     // untouched in `pending` (and therefore in the overlay Apply builds) even
     // while hidden; it still narrows whatever section can honor it (e.g.
     // bowling.matchups' striker position), matching PLAYER_SECTION_SUPPORT.
+    // R5-F #16: they share one row (see the markup above), so ONE hide toggle
+    // now covers both instead of two separate section elements.
     const showBattingOnly = discipline === "batting";
-    els.posSection.hidden = !showBattingOnly;
-    els.vsSection.hidden = !showBattingOnly;
+    els.battingRow.hidden = !showBattingOnly;
 
     els.drawer.hidden = false;
     els.panel.focus();
