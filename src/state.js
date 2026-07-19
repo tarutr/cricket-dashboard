@@ -120,10 +120,12 @@ function profileScopeTokens(state) {
 }
 
 // ── Innings-level filters (D4 Piece 3) ───────────────────────────────────────
-// Two innings-level filters (batting position, opposition). Opposition is
-// INTERNATIONAL cricket only (decision 20 — club team names are unnormalized),
-// so the filter applies ONLY while teamType === "international"; the controls
-// grey out elsewhere (decision-21 treatment: inert, never silently wrong).
+// Two innings-level filters (batting position, opposition). Opposition used to
+// be international-cricket-only (decision 20 — club team names are
+// unnormalized), gated on teamType === "international". Decision 51 (R5-F #14)
+// REVERSES that: opposition now applies for club/domestic scope too, on the
+// same raw (un-normalized) team names the Team filter already runs on — team-
+// name normalization for both is a deferred post-round to-do.
 // Positions are a batting concept and apply only in the batting discipline.
 //
 // The old table-only "Split by" breakdown (SPLIT_DIMENSIONS / splitAllowed /
@@ -197,9 +199,13 @@ export function effectiveNamespace(state) {
   return state.discipline === "batting" ? "matchup_batting" : "matchup_bowling";
 }
 
-/** True if the opposition filter is currently narrowing the innings set. */
+/** True if the opposition filter is currently narrowing the innings set.
+ * Decision 51 (R5-F #14) reverses the old international-only gate (decision
+ * 20): opposition now works for club/domestic scope too, on the same raw
+ * (un-normalized) team names the Team filter already uses. Team-name
+ * normalization for both filters is a deferred post-round to-do. */
 export function oppositionFilterActive(state) {
-  return state.teamType === "international" && Array.isArray(state.opposition) && state.opposition.length > 0;
+  return Array.isArray(state.opposition) && state.opposition.length > 0;
 }
 
 // ── Match filters: Event / Venue (Batch 1B, task 1B-1) ──────────────────────
@@ -331,7 +337,9 @@ export function createInitialState(maxMonth) {
     regularPositions: [], // R. Pos. (owner decision 46): plain-mode filter on a player's MOST COMMON
                    // batting position within the current gender/format/date/team-type scope. [] = no
                    // predicate. Applies in plain mode only (matchup mode keeps its own `positions`).
-    opposition: [], // opposition team names; [] = no predicate. International only (decision 20).
+    opposition: [], // opposition team names; [] = no predicate. Was international-only
+                   // (decision 20); decision 51 (R5-F #14) enables it for club/domestic
+                   // too, on the same raw team names.
     event: [], // event_name values (Batch 1B, task 1B-1); [] = no predicate. NOT gated on teamType
                // (event_name is meaningful for domestic competitions too, unlike opposition) — see
                // eventFilterActive() and filters.js buildScopeClauses' gender-scoped matches join.
@@ -675,7 +683,8 @@ export function createStore(initial) {
     }
 
     // Free splits (D4 Piece 3) — only tokens for filters actually applied:
-    // positions apply in batting only, opposition in international only.
+    // positions apply in batting only; opposition applies in any team-type
+    // scope since decision 51 (R5-F #14).
     if (oppositionFilterActive(s)) {
       parts.push(s.opposition.length <= 3 ? `vs ${s.opposition.join(", ")}` : `vs ${s.opposition.length} opponents`);
     }

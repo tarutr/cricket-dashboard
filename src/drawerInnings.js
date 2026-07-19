@@ -12,8 +12,9 @@
 //                           plain-mode filter on a player's most common batting
 //                           position within scope (modal semi-join lives in
 //                           filters.js). Both disciplines + both genders.
-//   mountOpposition       — "Against opposition" (state.opposition); INTERNATIONAL
-//                           only (decision 20), so it greys out otherwise.
+//   mountOpposition       — "Against opposition" (state.opposition); enabled for
+//                           every team type (decision 51, R5-F #14 — reverses the
+//                           old international-only gate, decision 20).
 //   mountTeam             — "Played for" (state.teams); single gender-scoped team
 //                           picker (owner 1B-2 removed the Current/Historic split).
 //   mountEvent            — "Event" (state.event, Batch 1B); gender-scoped.
@@ -33,7 +34,7 @@
 // (the cacheKey below carries all four). ROUND 3 task 8 (team type): on
 // International the Event list drops domestic-only competitions like the IPL.
 // Team/Event/Venue rows show a "<name>  N games" meta; Opposition keeps its plain
-// list (no meta) and greys out off International (decision 20).
+// list (no meta) and, since decision 51 (R5-F #14), is enabled for every team type.
 
 import { wirePortalDropdown } from "./filters.js";
 import { matchupVsActive } from "./state.js";
@@ -332,10 +333,11 @@ function mountScopedMultiSelect(container, store, onChange, config) {
 
   function sync() {
     const s = store.get();
-    // Disabled state (Opposition = international only, decision 20): grey the
-    // toggle (:disabled styling) + show the note; a disabled toggle can't open.
-    // The query-side gate (oppositionFilterActive) keeps an inert selection from
-    // ever filtering, so greying is purely a UI affordance.
+    // Generic disabled-state affordance (config.disabledWhen/disabledNote): grey
+    // the toggle (:disabled styling) + show a note when a caller opts in. No
+    // current caller does (Opposition's international-only gate was removed by
+    // decision 51 / R5-F #14) — kept as shared infrastructure for any future
+    // scope-gated picker.
     const disabled = config.disabledWhen ? config.disabledWhen(s) : false;
     if (noteEl) noteEl.hidden = !disabled;
     groupEl.classList.toggle("is-disabled", disabled);
@@ -427,12 +429,13 @@ export function mountVenue(container, store, onChange) {
  * "Against opposition" — team picker over state.opposition. The option list is
  * the EXACT SAME mechanism as the "Played for" Team picker (searchTeams, now
  * scoped to the full Search Conditions per A9 / decision 47e, games-desc — R7
- * owner correction, item 5), so the big cricketing nations lead. INTERNATIONAL-
- * only (decision 20): the toggle
- * greys + shows the note off International, and oppositionFilterActive() keeps
- * the query/pill/subtitle honest regardless. No games meta (its historic plain
- * list). The `embedded` arg is accepted for call-site parity (the row's type
- * label already names it) but unused — the wrapper never renders its own label.
+ * owner correction, item 5), so the big cricketing nations lead. Used to be
+ * International-only (decision 20); decision 51 (R5-F #14) enables it for
+ * club/domestic too, on the same raw (un-normalized) team names — so the
+ * control is always usable and never greys out. No games meta (its historic
+ * plain list). The `embedded` arg is accepted for call-site parity (the row's
+ * type label already names it) but unused — the wrapper never renders its own
+ * label.
  */
 export function mountOpposition(container, store, onChange, { embedded = false } = {}) {
   void embedded;
@@ -449,7 +452,5 @@ export function mountOpposition(container, store, onChange, { embedded = false }
     ariaLabel: "Against opposition",
     searchPlaceholder: "Search teams…",
     showGames: false,
-    disabledWhen: (s) => s.teamType !== "international",
-    disabledNote: "International cricket only for now",
   });
 }
