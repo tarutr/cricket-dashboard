@@ -452,6 +452,18 @@ Bowling (Innings)" under T20 (Stats drawer drops it — minor label inconsistenc
 axis is the ranking scale (readable via W-R labels). NEXT: fresh-eyes Opus review of the Wave B graph diff
 (Phase 5) + present full 3-wave review checklist to owner. Round-4 review-checklist = review/
 DESIGN_ROUND4_REVIEW_CHECKLIST.md (Waves A+C+B). Docs sync (4f-C) still deferred to after owner sign-off.
+
+## ===== ROUND 5 (owner 2026-07-19, 23-item review batch + Line redesign) — HANDED OFF TO NEW SESSION =====
+Round 4 reviewed by owner ("looks good") → 23-item batch. All decisions captured in
+**review/DESIGN_ROUND5_HANDOFF.md** (self-contained continuation spec, written via /opus-spec-writer) and
+logged as decisions 49-51 in review/owner_decisions.md. NOT yet built — the new session executes it.
+Build waves R5-A (interaction/regressions) → R5-B (pin system) → R5-C (graph cleanup) → R5-D (Line
+redesign: Y×X-dimension multi-line, no floors) → R5-E (per-over pipeline extension) → R5-F (club
+opposition + popup drawer tidy). Standing rules now include NO DATA-POLICING (decision 49). Anchors
+unchanged. Investigation verdicts (handedness correct, RPI≠avg, coverage %, club-name fragmentation,
+per-discipline condition root cause, Line-was-year-only, graph-label divergence, floors-already-mostly-
+removed) are in the handoff Part B — do NOT re-investigate. This session ends here; new session picks up
+from the handoff.
 ## FRESH-EYES REVIEW of Wave B graph diff (Opus, fresh context, read-only) — NO BLOCKERS, NO CORRECTNESS
 BUGS. Independently CONFIRMED: Rule 1 (table.js/filters.js/metrics.js untouched, no sqlExpression change);
 plain path byte-identical (fetchSelectedPlayerMetrics plain branch unchanged; chartValue = Number(row[key])

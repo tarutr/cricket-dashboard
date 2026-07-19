@@ -587,3 +587,44 @@ change requires a new owner decision recorded here. Dates are decision dates.
     ruling: agents may fix real defects they trip over (report under "Also fixed")
     but must never reverse/extend an owner-ruled behaviour; orchestrator briefs must
     trace every behavioural item to an owner sentence.
+
+## 2026-07-19 — Round 5 review batch (23 items) — full detail in review/DESIGN_ROUND5_HANDOFF.md
+
+49. **NO DATA-POLICING (standing rule, reverses 44c/45/46e/44e).** Strip ALL sample-floor fading/
+    muting/greying/thin-sample controls; plot everything however thin the sample; keep only
+    NULLIF divide-by-zero guards. Owner: "user's prerogative — provide optionality, don't control
+    for the user; don't assume the user needs parental controls." Verified in code: most floors were
+    ALREADY removed in an earlier pass; only MIN_BALLS_PER_YEAR remained (dies with the Line redesign)
+    and `minSampleComponent` is now dead metadata to delete.
+
+50. **Round-5 fixes (owner-approved, unbuilt — see handoff for exact resolutions):**
+    #1 remove ALL toolbar note text (dates always match popup — verified). #2/#3/#11 PIN SYSTEM: a pin
+    checkbox column left of #, pinned players float to top, resets on filters-popup change, persists
+    through toolbar-only change, no-data pin shows in-scope data or "–"; searching an existing player
+    lifts them to top. #4 toolbar-only changes must NOT reorder the table. #5 Matchup(Vs) = first entry
+    INSIDE Advanced metrics (above Dot Ball %), not a standalone subheader. #6 a filtered metric
+    auto-adds its column. #7 conditions become PER-DISCIPLINE (like columns) — numeric conditions don't
+    leak batting↔bowling; **identity filters (role/hand/bowling-style/teams) PERSIST** across the toggle
+    (player-level), everything numeric is per-discipline (#15 ruling). #8 separate the striker Batting-
+    position from R.Pos (stop it auto-appearing with Vs). #9 filters popup FULLY STAGED — pills + table
+    render from APPLIED state only, nothing until Search (reverses Wave 4a "pills reflect pending").
+    #10 grey Keep-Columns on discipline-switch/blank. #13 graph reset link → "Reset to full player set",
+    grey when full, boxed with the x-of-x dropdown. #16 tidy the player-popup drawer to main-drawer
+    density. #18 personal-data coverage note right-aligned in the pills row; REMOVE the "Matchup mode"
+    note row. #19 red-outline EVERY empty required graph control + naming message (today only slope/
+    dumbbell windows get it). #22 remove Best Bowling from graph pickers (table column + two-box filter
+    stay; reverses Round-4 graphable ruling). #23 route the graph chart-metric labels through
+    metricDisplayLabel so they can't diverge from the shared drawer (the drawer is already one shared
+    component in both surfaces). #12/#17 NO code change (handedness filter verified correct; bowling-
+    style-as-batting-filter is intentional/documented). Scatter: X/Y dropdowns exclude each other's pick.
+
+51. **#20 "Runs per Innings" — REMOVED ENTIRELY** from the UI (owner never authorised it; ≠ batting
+    average). **#14 club/domestic opposition ENABLED now** on raw team names (consistent with the Team
+    filter, which already runs on the same un-normalized names) — **team-name normalization (Team +
+    Opposition) is the FIRST POST-ROUND to-do**, not this round (reverses decision 20's international-only
+    gate). **#21 LINE GRAPH REDEFINED:** Y-metric × X-dimension × up to 6–8 lines (exact cap on sight),
+    NO floors; X-dimensions = Innings (index) / Date(month) / Date(year) / Date(event) / Phase / Batting
+    position / Vs bowling type / Opposition / Venue / Innings-of-match / Match result — ALL built together
+    ("why can't we have it all"); PLUS **per-over** via a test-first pipeline data extension (owner: "let's
+    do per over" — browser loads aggregates, so per-over needs new parquet columns). Replaces the old
+    year-only line entirely. Build order R5-A…R5-F in the handoff. Branch polish-b1-mechanical; merge = separate decision.
