@@ -631,7 +631,7 @@ function boot() {
         filtersPopupEl.hidden = true;
         drawerController.onHide();
       }
-      function runSearch() {
+      function runSearch({ fromToolbar = false } = {}) {
         // The ONE query trigger (R3.2: shared by BOTH the popup's "Search"
         // button AND the toolbar's SEARCH button). Date is REQUIRED (owner
         // 1B-2): block first and surface the message; then validate the advanced
@@ -668,14 +668,20 @@ function boot() {
         // 4d/A6: a committed Search is the primary no-data-pin detection point
         // — recompute + annotate/toast for whichever pinned players (if any)
         // came back with zero rows in this scope, plain or matchup mode alike.
-        if (store.get().view === "table") tableController.load().then((result) => reportPinCoverage(result));
+        // R5-A #4: the POPUP's Search is a fresh leaderboard → re-sort; the
+        // TOOLBAR's Search commits toolbar-only tweaks (Vs/preset/…) → preserve the
+        // current row order (disqualified rows drop, new qualifiers append at the
+        // bottom). Only a popup Search or a column-header click re-sorts.
+        if (store.get().view === "table") {
+          tableController.load(null, { resort: !fromToolbar }).then((result) => reportPinCoverage(result));
+        }
       }
 
       filtersPopup = { open: openPopup, close: closePopup, isOpen: () => !filtersPopupEl.hidden };
 
       fpopCloseEl.addEventListener("click", closePopup);
       fpopBackdropEl.addEventListener("click", closePopup);
-      fpopSearchEl.addEventListener("click", runSearch);
+      fpopSearchEl.addEventListener("click", () => runSearch()); // popup Search → re-sort (#4)
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && filtersPopup.isOpen()) closePopup();
       });
@@ -763,7 +769,7 @@ function boot() {
         // the popup's Search uses (commit pending → applied, then load). The
         // Stats↔Graphs top-strip toggle now carries the "turn into graph" seed
         // instead (see the view-toggle handler below).
-        onSearch: () => runSearch(),
+        onSearch: () => runSearch({ fromToolbar: true }), // toolbar Search → preserve row order (#4)
         // R3.2: a toolbar date edit re-syncs the popup's own date inputs +
         // preset label + date-required note (both sets bind state.dateFrom/To);
         // syncToolbar (via the store hook) refreshes the toolbar side.

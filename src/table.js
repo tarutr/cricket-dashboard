@@ -1547,6 +1547,25 @@ export function mountTable(
     return metric ? rows.slice().sort((a, b) => compareRows(a, b, metric, s.sort.dir)) : rows;
   }
 
+  /** R5-A #4: reorder a freshly-loaded row set to PRESERVE the previous visual
+   * order — players keep their positions and their values simply swap in place;
+   * rows that no longer qualify drop out; NEW qualifiers append at the BOTTOM (in
+   * fresh-sort order among themselves). Used on a toolbar-only commit (Vs / preset
+   * / a column toggle) so those never reshuffle the leaderboard — only a
+   * column-header click or a popup Search triggers a true re-sort (applySort). */
+  function reorderPreservingPrevious(newRows, prevRows, s) {
+    const prevIndex = new Map();
+    prevRows.forEach((r, i) => prevIndex.set(String(r.id), i));
+    const kept = [];
+    const appended = [];
+    for (const r of newRows) {
+      if (prevIndex.has(String(r.id))) kept.push(r);
+      else appended.push(r);
+    }
+    kept.sort((a, b) => prevIndex.get(String(a.id)) - prevIndex.get(String(b.id)));
+    return [...kept, ...applySort(appended, s)];
+  }
+
   /** The "Vs" select's <option> markup for the current discipline. Value encodes
    * "dim:value" (e.g. "type:Off-spin"); "" means Everyone (no matchup filter). */
   function matchupVsOptionsHTML(state, bowlingTypes) {
@@ -1662,7 +1681,9 @@ export function mountTable(
     const allowed = new Set(eligibleMetrics(baseNs, base.formats).map((m) => m.key));
     const frozenCols = cols.filter((k) => allowed.has(k));
     const frozen = { ...base, columns: { ...base.columns, [baseNs]: frozenCols } };
-    load(frozen);
+    // R5-A #4: toggling a column is a toolbar-only change — preserve the current
+    // row order (values swap in place; a dropped sort-column doesn't reshuffle).
+    load(frozen, { resort: false });
   }
 
   /** R4 Wave 4a ADDENDUM (owner ruling 2026-07-17): *picking* a player from the
@@ -2446,7 +2467,7 @@ export function mountTable(
     openColumnsPopoverState = { el: popover, anchor, onDocClick, onKeydown, onScroll, onResize };
   }
 
-  async function load(scopeState = null) {
+  async function load(scopeState = null, { resort = true } = {}) {
     let state;
     if (scopeState) {
       // R4 Wave 4a (A1): the INSTANT Columns picker requeries against the FROZEN
@@ -2478,6 +2499,9 @@ export function mountTable(
     const cols = state.columns[ns];
     const { sql, matchesSql } = buildQuery(state, cols);
     const token = ++loadToken;
+    // R5-A #4: capture the currently-displayed row order BEFORE this load replaces
+    // it, so a toolbar-only commit (resort:false) can preserve it.
+    const prevRows = lastRows;
     renderLoadingState(state);
     try {
       const [{ rows }, matchesResult, bowlingTypes] = await Promise.all([
@@ -2500,13 +2524,21 @@ export function mountTable(
       // composition % columns (comp_*), which arrive already-computed on each
       // row like any other column.
 
-      const sorted = applySort(merged, state);
+      // R5-A #4: a fresh re-sort (popup Search, or a first load with no prior
+      // rows) uses applySort; a toolbar-only commit (resort:false — a Vs / preset
+      // / column change) preserves the prior visual order via
+      // reorderPreservingPrevious. Column-header clicks re-sort client-side
+      // elsewhere (applySortKey), untouched by this.
+      const sorted =
+        resort || !prevRows || prevRows.length === 0
+          ? applySort(merged, state)
+          : reorderPreservingPrevious(merged, prevRows, state);
 
       lastRows = sorted;
       lastQueryStateKey = serializeQueryState(state);
       lastLoadedState = state; // F2: enterView() renders against this snapshot
       // Task 3: every fresh query (a search, a preset, a column/Vs change) is
-      // "a new view of the data" — back to page 1, same as a re-sort.
+      // "a new view of the data" — back to page 1.
       visibleRowCount = PAGE_SIZE;
       renderLoaded(sorted, state, bowlingTypes);
       // The columns popover (if open) lives outside `container` precisely so
