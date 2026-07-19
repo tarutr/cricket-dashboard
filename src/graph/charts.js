@@ -15,7 +15,7 @@
 // excluded from that chart, with a visible "Excluded (no data): …" note.
 // Ratios are never coalesced to 0 (NULL/0-for-rate-metrics stay excluded).
 
-import { getMetric, hasMetricData } from "../metrics.js";
+import { getMetric, hasMetricData, metricDisplayLabel } from "../metrics.js";
 import { query } from "../db.js";
 import { buildScopeClauses } from "../filters.js";
 import { buildQuery } from "../table.js";
@@ -234,7 +234,7 @@ export function destroyIfExists(chartRef) {
  * endpoint dot) toggled from the sidebar (Batch 3, decision 43). Same data,
  * same sort, same caps — purely how the value is drawn.
  */
-export function buildBarChart(canvas, chartRef, { metric, rowsById, players, style = "bars" }) {
+export function buildBarChart(canvas, chartRef, { metric, rowsById, players, style = "bars", formats = [] }) {
   destroyIfExists(chartRef);
 
   const included = [];
@@ -296,7 +296,7 @@ export function buildBarChart(canvas, chartRef, { metric, rowsById, players, sty
             // Label from the DISPLAY figure (displayOrder[i].raw), not the
             // plotted value — identical for numeric metrics, but shows "2-9"
             // (not the rank) for a str peak like Best Bowling.
-            label: (ctx) => `${metric.label}: ${labelForValue(metric, displayOrder[ctx.dataIndex].raw)}`,
+            label: (ctx) => `${metricDisplayLabel(metric, formats)}: ${labelForValue(metric, displayOrder[ctx.dataIndex].raw)}`,
           },
         },
         datalabels: false,
@@ -482,7 +482,7 @@ export function buildDonutChart(canvas, chartRef, { metric, rowsById, players })
  * tooltip + short labels. A player failing hasMetricData for EITHER metric is
  * excluded (visible note).
  */
-export function buildScatterChart(canvas, chartRef, { metricX, metricY, rowsById, players }) {
+export function buildScatterChart(canvas, chartRef, { metricX, metricY, rowsById, players, formats = [] }) {
   destroyIfExists(chartRef);
 
   const included = [];
@@ -534,12 +534,12 @@ export function buildScatterChart(canvas, chartRef, { metricX, metricY, rowsById
       },
       scales: {
         x: {
-          title: { display: true, text: metricX.label, color: pal.muted },
+          title: { display: true, text: metricDisplayLabel(metricX, formats), color: pal.muted },
           grid: { color: pal.line },
           ticks: { color: pal.muted },
         },
         y: {
-          title: { display: true, text: metricY.label, color: pal.muted },
+          title: { display: true, text: metricDisplayLabel(metricY, formats), color: pal.muted },
           grid: { color: pal.line },
           ticks: { color: pal.muted },
         },
@@ -639,7 +639,7 @@ function shortenName(name) {
  * all and is dropped from the chart entirely (`excluded`), with a "N of M"
  * summary note the caller can show alongside the standard exclusion list.
  */
-export function buildPhasesChart(canvas, chartRef, { family, metrics, rowsById, players }) {
+export function buildPhasesChart(canvas, chartRef, { family, metrics, rowsById, players, formats = [] }) {
   destroyIfExists(chartRef);
 
   const included = [];
@@ -683,7 +683,7 @@ export function buildPhasesChart(canvas, chartRef, { family, metrics, rowsById, 
           callbacks: {
             label: (ctx) => {
               const m = metrics[ctx.datasetIndex];
-              const phaseLabel = family.members[ctx.datasetIndex]?.phaseLabel ?? m.label;
+              const phaseLabel = family.members[ctx.datasetIndex]?.phaseLabel ?? metricDisplayLabel(m, formats);
               return `${phaseLabel}: ${labelForValue(m, ctx.raw)}`;
             },
           },
@@ -962,7 +962,7 @@ export function buildSlopeChart(canvas, chartRef, { metric, labelA, labelB, rows
  * destroyIfExists(chartRef)) cleans this up for free, no special-casing
  * needed elsewhere.
  */
-export function buildRadarSmallMultiples(canvas, chartRef, { metrics, players, poolRows }) {
+export function buildRadarSmallMultiples(canvas, chartRef, { metrics, players, poolRows, formats = [] }) {
   destroyIfExists(chartRef);
 
   const chartArea = canvas.parentElement;
@@ -1082,7 +1082,7 @@ export function buildRadarSmallMultiples(canvas, chartRef, { metrics, players, p
                 const numericVal = chartValue(metric, r.row);
                 const pct = percentileFor(ctx.dataIndex, numericVal);
                 const pctText = pct == null ? "" : ` — ${Math.round(pct)}th pct`;
-                return `${metric.label}: ${labelForValue(metric, r.row[metric.key])}${pctText}`;
+                return `${metricDisplayLabel(metric, formats)}: ${labelForValue(metric, r.row[metric.key])}${pctText}`;
               },
             },
           },

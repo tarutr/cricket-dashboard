@@ -11,7 +11,7 @@
 // players.js, for seeding).
 
 import { eligibleMetrics, pruneIneligibleState, effectiveNamespace } from "../state.js";
-import { getMetric, hasMetricData } from "../metrics.js";
+import { getMetric, hasMetricData, metricDisplayLabel } from "../metrics.js";
 import { escHtml, escAttr } from "../html.js";
 import { getManifest, query } from "../db.js";
 import { mountFilters, buildScopeClauses } from "../filters.js";
@@ -1023,9 +1023,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   /** R2-2a: searchSelect options for a single-metric picker (value = metric
    * key, label from the catalogue). No placeholder ROW — the component's own
    * placeholder text covers the "no metric picked yet" state (item 4: no
-   * auto-pick). */
+   * auto-pick). R5-C #23: the label is routed through metricDisplayLabel so the
+   * graph's picker can never show a format-inappropriate suffix (e.g. "Best
+   * Bowling (Innings)") when the shared Filters drawer — which already routes
+   * through metricDisplayLabel — does not. Display-only: metric.label/key are
+   * untouched. */
   function metricSelectOptions(metrics) {
-    return metrics.map((m) => ({ value: m.key, label: m.label }));
+    const formats = store.get().formats;
+    return metrics.map((m) => ({ value: m.key, label: metricDisplayLabel(m, formats) }));
   }
 
   /** R2-2a: mount a per-type metric searchSelect into the metric-controls host
@@ -1182,7 +1187,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const radarHost = els.metricControls.querySelector('[data-role="radar-metrics"]');
       if (radarHost) {
         const handle = mountSearchMultiSelect(radarHost, {
-          options: eligible.map((m) => ({ value: m.key, label: m.label })),
+          options: eligible.map((m) => ({ value: m.key, label: metricDisplayLabel(m, formats) })),
           values: radarMetricKeys,
           placeholder: eligible.length ? "Choose metrics…" : "No metrics available",
           filterPlaceholder: "Search metrics…",
@@ -1425,7 +1430,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         // CHECKED row disables (can't drop below 4); at the cap of 12 every
         // UNchecked row disables.
         const metricsHandle = mountSearchMultiSelect(metricsHost, {
-          options: eligible.map((m) => ({ value: m.key, label: m.label })),
+          options: eligible.map((m) => ({ value: m.key, label: metricDisplayLabel(m, formats) })),
           values: benchmarkMetricKeys,
           placeholder: "Choose metrics…",
           filterPlaceholder: "Search metrics…",
@@ -2894,7 +2899,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         hideStatus();
 
         const canvas = card.getCanvas();
-        const result = buildRadarSmallMultiples(canvas, chartRef, { metrics, players, poolRows });
+        const result = buildRadarSmallMultiples(canvas, chartRef, { metrics, players, poolRows, formats: state.formats });
         renderExclusions(result?.excluded ?? [], result?.note);
 
         const excludedCount = result?.excluded?.length ?? 0;
@@ -2952,11 +2957,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       let result;
       const canvas = card.getCanvas();
       if (config.type === "bar") {
-        result = buildBarChart(canvas, chartRef, { metric: config.metric, rowsById, players, style: config.style });
+        result = buildBarChart(canvas, chartRef, { metric: config.metric, rowsById, players, style: config.style, formats: state.formats });
       } else if (config.type === "scatter") {
-        result = buildScatterChart(canvas, chartRef, { metricX: config.metricX, metricY: config.metricY, rowsById, players });
+        result = buildScatterChart(canvas, chartRef, { metricX: config.metricX, metricY: config.metricY, rowsById, players, formats: state.formats });
       } else if (config.type === "phases") {
-        result = buildPhasesChart(canvas, chartRef, { family: config.family, metrics: config.metrics, rowsById, players });
+        result = buildPhasesChart(canvas, chartRef, { family: config.family, metrics: config.metrics, rowsById, players, formats: state.formats });
       }
 
       renderExclusions(result?.excluded ?? [], result?.note);
