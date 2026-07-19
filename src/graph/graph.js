@@ -403,17 +403,22 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
               <input type="text" class="input" data-role="player-search" placeholder="Add a player…" aria-label="Search players to add" />
               <div class="graph-player-search__results" data-role="player-search-results" hidden></div>
             </div>
-            <div class="dropdown graph-roster-dropdown" data-role="roster-dropdown">
-              <button type="button" class="select dropdown__toggle graph-roster-toggle" data-role="roster-toggle" aria-haspopup="true" aria-expanded="false"></button>
-              <div class="dropdown__panel graph-roster-panel" data-role="roster-panel" hidden>
-                <div class="graph-roster-filter" data-role="roster-filter-wrap" hidden>
-                  <input type="text" class="input graph-roster-filter__input" data-role="roster-filter" placeholder="Filter players…" aria-label="Filter the player list" />
+            <!-- R5-C #13: the "N of M selected" roster dropdown and its reset
+                 link are BOXED together (.graph-roster-box) so the link's target
+                 — the roster — is unmistakable. -->
+            <div class="graph-roster-box" data-role="roster-box">
+              <div class="dropdown graph-roster-dropdown" data-role="roster-dropdown">
+                <button type="button" class="select dropdown__toggle graph-roster-toggle" data-role="roster-toggle" aria-haspopup="true" aria-expanded="false"></button>
+                <div class="dropdown__panel graph-roster-panel" data-role="roster-panel" hidden>
+                  <div class="graph-roster-filter" data-role="roster-filter-wrap" hidden>
+                    <input type="text" class="input graph-roster-filter__input" data-role="roster-filter" placeholder="Filter players…" aria-label="Filter the player list" />
+                  </div>
+                  <div class="dropdown__list graph-roster-list" data-role="roster-list"></div>
                 </div>
-                <div class="dropdown__list graph-roster-list" data-role="roster-list"></div>
               </div>
-            </div>
-            <div class="graph-player-actions">
-              <button type="button" class="link-btn" data-role="reset-players">Reset to full filtered set</button>
+              <div class="graph-player-actions">
+                <button type="button" class="link-btn" data-role="reset-players">Reset to full player set</button>
+              </div>
             </div>
             <p class="graph-cap-note" data-role="cap-note" hidden></p>
           </div>
@@ -1523,6 +1528,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
     els.rosterToggle.textContent = `${checkedCount} of ${total} selected`;
     els.rosterToggle.title = mode !== "manual" ? `Auto-selected: ${rosterModeLabel(mode)}` : "";
+
+    // R5-C #13: the reset link is only meaningful once the roster has been
+    // hand-edited away from the clean seeded full set. selection.isDirty() is
+    // the codebase's own "the checked set was shaped by a manual add/remove/
+    // toggle" flag (the same one that flips the honest title from "top N" to
+    // "N players"); when it's false — including the never-seeded empty pool —
+    // a reset would reproduce exactly what's already shown, so the link greys
+    // out and is unclickable. It re-enables the instant the roster is edited.
+    if (els.resetPlayers) els.resetPlayers.disabled = total === 0 || !selection.isDirty();
 
     // R7 Wave 2 (item 21): the "Show: Top names | Best | Worst | Manual" row is
     // visible whenever there's a roster at all (total > 0) — surfaced in the

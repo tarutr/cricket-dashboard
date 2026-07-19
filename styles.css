@@ -2790,6 +2790,35 @@ a { color: var(--color-accent); }
 .graph-roster-item.is-disabled .graph-roster-item__name { color: var(--color-muted); }
 
 .graph-player-actions { display: flex; gap: var(--space-3); }
+
+/* R5-C #13: box the "N of M selected" roster dropdown together with its reset
+   link so the link's target (the roster) is unmistakable. A light bordered
+   container with the reset row sitting directly under the dropdown, divided by
+   a hairline. */
+.graph-roster-box {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.graph-roster-box .graph-player-actions {
+  border-top: 1px solid var(--color-line);
+  padding-top: var(--space-2);
+}
+
+/* R5-C #13: a disabled link button (the reset link when the roster already
+   equals the full filtered set — nothing to reset) reads muted and is
+   unclickable, rather than the live accent colour. */
+.link-btn:disabled,
+.link-btn[disabled] {
+  color: var(--color-muted);
+  cursor: default;
+  text-decoration: none;
+  pointer-events: none;
+}
+
 .graph-cap-note { font-size: var(--text-sm2); color: var(--color-accent); margin: 0; }
 
 /* Unusable chart-type tiles (decision 46f) — greyed as a PASSIVE hint only.
