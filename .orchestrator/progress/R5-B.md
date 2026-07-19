@@ -27,12 +27,19 @@ filters.js MUST NOT be edited (uses whereWithPinExemption/gateWithPinExemption).
   by first auto-added. Always runs regardless of keepColumns — FLAG. Multi-condition: rank by first — FLAG.
 
 ## Items
-- baseline repro: TODO
-- #0 arrow honesty: TODO
-- #3 pin column + float + reset/persist + "–": TODO
-- #2 search-add float: TODO
-- #11 in-scope data (SA Yadav bowling vs LHB): TODO
-- #12 marking: TODO (pin column)
+- baseline repro: DONE (2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34; 0 errors)
+  buildQuery fingerprints: plain 482/2182256011, matchup(Spin) 2500/3064880972 (before-change)
+- #0 arrow honesty: DONE (commit c6fb042). Verified fresh→▼, toolbar Vs Search→no arrow, header click→▼+resort.
+- #3/#2/#11/#12 pin system: DONE. Verified in browser:
+  - pin mid-table (SA Yadav rank11) → floats top, active pin, true rank 11 kept, non-pinned unchanged, arrow kept.
+  - unpin → returns to rank 11.
+  - persist: pin + toolbar Vs→Spin + toolbar Search → pin stays (arrow cleared, correct #0).
+  - reset: popup Search → pins cleared, no pin pills, arrow restored.
+  - #11: bowling + Vs=LHB, pin SA Yadav via results search → row shows REAL 1/4/1/4/6.00/4.00/4.00
+    (matches DuckDB 1inns/4balls/1wkt/4runs); search NOT lit. Composition RHB33.3/LHB66.7.
+  - "–": pin P Nissanka (pure batsman, 0 bowling rows) → all "—" cells + rank "—", pill "(no innings)",
+    count unchanged 1,660.
+  - buildQuery byte-identical after wave (same 482/2182256011, 2500/3064880972). filters.js 0 diff.
 - #6 auto-add filtered column: TODO
 
 ## Gotchas

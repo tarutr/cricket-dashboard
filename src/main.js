@@ -5,7 +5,8 @@
 // and do the initial render.
 
 import { initDB, getManifest } from "./db.js";
-import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState } from "./state.js";
+import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, effectiveNamespace } from "./state.js";
+import { isConditionComplete } from "./advanced.js";
 import { mountFilters } from "./filters.js";
 import { mountFilterDrawer } from "./drawer.js";
 import { mountPills } from "./pills.js";
@@ -437,6 +438,74 @@ function pinPlayer(id, name) {
 }
 
 /**
+ * R5-B #3: unpin a player — the instant inverse of pinPlayer, driven by the pin
+ * COLUMN's toggle (togglePin below). Removes them from state.pinnedPlayers and
+ * requeries the frozen scope via onPinsChanged → applyPinnedPlayers, so they drop
+ * out of the float and return to their true ranked slot (if they still qualify) or
+ * disappear (if the narrowing filters excluded them). This is deliberately INSTANT,
+ * unlike a pin PILL's × (which stays a pending soft-delete per decision 47g) — the
+ * pin column is the same direct-manipulation surface as picking a player from the
+ * results search (also instant), so both directions of the column toggle apply now.
+ */
+function unpinPlayer(id) {
+  const state = store.get();
+  if (!(state.pinnedPlayers || []).some((p) => p.id === id)) return; // not pinned
+  store.set({ pinnedPlayers: (state.pinnedPlayers || []).filter((p) => p.id !== id) });
+  onPinsChanged();
+}
+
+/** R5-B #3: the pin column's per-row toggle — pin if not pinned, unpin if pinned.
+ * table.js calls this with the row's id + name; it reads the LIVE store to decide
+ * the direction. */
+function togglePin(id, name) {
+  const pinned = (store.get().pinnedPlayers || []).some((p) => p.id === id);
+  if (pinned) unpinPlayer(id);
+  else pinPlayer(id, name);
+}
+
+/**
+ * R5-B #6: on a POPUP Search, auto-add a column for every numeric stat CONDITION
+ * whose metric isn't already visible, so the user can see (and rank by) what they
+ * filtered on — e.g. a Best-Bowling condition surfaces the Best Bowling column and
+ * the table ranks by it, instead of an unrelated default. Resolves each condition's
+ * metric in the CURRENT effective namespace (so a matchup condition adds a matchup
+ * column) and appends any missing one to state.columns[ns]; it's removable via the
+ * Columns picker afterward. When any column is added, the sort is set to the FIRST
+ * auto-added metric so the ranking is meaningful.
+ *
+ * SCOPE FLAGS (see report): (a) with MULTIPLE conditions on different missing
+ * metrics, all are added and the table ranks by the FIRST; (b) this runs on every
+ * popup Search regardless of the "Keep Selected Columns" toggle — Keep-Columns
+ * governs the default-resync on a discipline/format change, a separate concern, so
+ * it does not suppress showing a freshly-filtered column. Display/state only:
+ * buildQuery just SELECTs one more existing metric expression — no aggregation
+ * change, and with no conditions this is a no-op (anchor byte-identical).
+ */
+function autoAddFilteredColumns() {
+  const state = store.get();
+  const ns = effectiveNamespace(state);
+  const cols = [...(state.columns[ns] || [])];
+  const added = [];
+  for (const g of state.advanced.groups || []) {
+    for (const c of g.conds) {
+      if (!isConditionComplete(c)) continue;
+      const m = getMetric(c.metricKey, ns);
+      // Skip non-column placeholders (R. Pos. / composition never render as a
+      // rankable data column) and metrics that don't exist in this namespace.
+      if (!m || m.kind === "position" || m.kind === "composition") continue;
+      if (cols.includes(c.metricKey) || added.includes(c.metricKey)) continue;
+      cols.push(c.metricKey);
+      added.push(c.metricKey);
+    }
+  }
+  if (added.length === 0) return;
+  const firstKey = added[0];
+  const firstMetric = getMetric(firstKey, ns);
+  const dir = firstMetric && firstMetric.higherIsBetter === false ? "asc" : "desc";
+  store.set({ columns: { ...state.columns, [ns]: cols }, sort: { key: firstKey, dir } });
+}
+
+/**
  * The HEADER search's own "Filter the table to names matching…" fallback
  * (task 3a): the header box is visible on both Stats/Graphs, so choosing
  * this row first switches to the Stats tab (the leaderboard it's about to
@@ -651,6 +720,17 @@ function boot() {
           return;
         }
         closePopup();
+        // R5-B #3: a POPUP Search is a fresh filters-applied change → RESET pins
+        // (and their no-innings flags); a TOOLBAR Search (fromToolbar) commits
+        // toolbar-only tweaks, so pins PERSIST. Do this BEFORE the applied snapshot
+        // so the cleared pins are part of the committed baseline.
+        // R5-B #6: also auto-add a column for any filtered metric not yet visible
+        // and rank by it (popup Search only — a toolbar Search never edits filters).
+        if (!fromToolbar) {
+          if ((store.get().pinnedPlayers || []).length) store.set({ pinnedPlayers: [] });
+          noInningsPinIds = new Set();
+          autoAddFilteredColumns();
+        }
         // R3.2: Search is the moment ALL pending edits (popup filters AND the
         // toolbar controls — dates, Vs, preset, columns, sort, player search /
         // pins) BECOME applied. Commit the snapshot and refresh the pills +
@@ -791,6 +871,10 @@ function boot() {
             appliedState = { ...appliedState, columns: { ...appliedState.columns, [ns]: cols } };
           }
         },
+        // R5-B #3: the pin column's per-row toggle — pin/unpin instantly (float
+        // to top / return to ranked slot), the same direct-manipulation path the
+        // results-search pin uses.
+        onTogglePin: (id, name) => togglePin(id, name),
         // The empty-state prompt's "Open filters" button + the toolbar Filters
         // button open the Filters popup (the query runs from Search).
         onOpenFilters: () => openFiltersPopup(),

@@ -1295,10 +1295,30 @@ a { color: var(--color-accent); }
    this column's own size AND as the Player column's `left` offset below, so
    the two frozen columns always sit flush. Tight horizontal padding so a
    4-digit rank (up to the full 2,813-player baseline) still fits. */
+/* Pin control column (R5-B #3/#12): sticky at the far left, immediately LEFT of
+   the rank column, so the pin toggle stays frozen with rank + Player during
+   horizontal scroll. Narrow fixed width (--pin-col-w) — used both as this
+   column's own size AND folded into the rank/Player `left` offsets below so all
+   three frozen columns sit flush. */
+.data-table__th--pin,
+.data-table__td--pin {
+  position: sticky;
+  left: 0;
+  width: var(--pin-col-w, 2.5rem);
+  min-width: var(--pin-col-w, 2.5rem);
+  padding-left: var(--space-1);
+  padding-right: var(--space-1);
+  background: var(--color-bg-raised);
+  z-index: 1;
+  text-align: center;
+}
+
 .data-table__th--rank,
 .data-table__td--rank {
   position: sticky;
-  left: 0;
+  /* Offset by the pin column's width (R5-B #3) so rank sits immediately right of
+     the frozen pin column. */
+  left: var(--pin-col-w, 2.5rem);
   width: var(--rank-col-w, 3rem);
   min-width: var(--rank-col-w, 3rem);
   padding-left: var(--space-1);
@@ -1308,6 +1328,39 @@ a { color: var(--color-accent); }
   color: var(--color-muted);
   text-align: center;
   font-variant-numeric: tabular-nums;
+}
+
+/* Pin toggle button (R5-B #3/#12): a filled pushpin recoloured by state — faint
+   muted when unpinned (brightening on hover to signal it's clickable), solid
+   accent when pinned. The active pin is the visible marker that a floated /
+   out-of-filter player was ADDED, so it can never be mistaken for a filter
+   "leak". The header shows the same pin, faint and static, as a legend. */
+.pin-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: var(--space-1);
+  color: var(--color-muted);
+  opacity: 0.45;
+  border-radius: var(--radius-sm, 4px);
+}
+.pin-toggle svg,
+.pin-header-glyph svg {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+  display: block;
+}
+.pin-toggle:hover { opacity: 1; color: var(--color-fg); }
+.pin-toggle.is-pinned { opacity: 1; color: var(--color-accent); }
+.pin-toggle.is-pinned:hover { color: var(--color-accent-strong); }
+.pin-header-glyph {
+  display: inline-flex;
+  color: var(--color-muted);
+  opacity: 0.5;
 }
 
 /* Sticky Player column — DYNAMIC width (task 4, R3 Wave 5 polish, replacing
@@ -1340,9 +1393,10 @@ a { color: var(--color-accent); }
 .data-table__th--sticky,
 .data-table__td--sticky {
   position: sticky;
-  /* Offset by the rank column's width (task 1) so the frozen Player column
-     sits immediately right of the frozen rank column, both flush-left. */
-  left: var(--rank-col-w, 3rem);
+  /* Offset by the pin + rank columns' widths (R5-B #3 added the pin column left
+     of rank) so the frozen Player column sits immediately right of both, all
+     flush-left. */
+  left: calc(var(--pin-col-w, 2.5rem) + var(--rank-col-w, 3rem));
   background: var(--color-bg-raised);
   z-index: 1;
   width: var(--sticky-col-w, 10rem);
@@ -1448,10 +1502,11 @@ a { color: var(--color-accent); }
   border-bottom: 1px solid var(--color-line-strong);
 }
 
-/* The corner cells (rank + Player headers) are sticky both ways — pin them
+/* The corner cells (pin + rank + Player headers) are sticky both ways — pin them
    above the body's sticky first columns. */
 .data-table thead th.data-table__th--sticky,
-.data-table thead th.data-table__th--rank { z-index: 3; }
+.data-table thead th.data-table__th--rank,
+.data-table thead th.data-table__th--pin { z-index: 3; }
 
 .data-table__sort-btn {
   font: inherit;

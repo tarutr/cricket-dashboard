@@ -1090,12 +1090,61 @@ function compareRows(a, b, metric, dir) {
   return dir === "asc" ? va - vb : vb - va;
 }
 
+// ── Pin float (R5-B #2/#3/#11/#12) ───────────────────────────────────────────
+// A classic pushpin icon (Material "push_pin"), filled via currentColor so CSS
+// alone distinguishes pinned (accent) from unpinned (muted) — see .pin-toggle in
+// styles.css. Inline (no external asset) to satisfy the app's no-network-per-icon
+// convention.
+const PIN_GLYPH =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg>';
+
+/**
+ * Float pinned players to the TOP of the displayed rows (owner decision 50, #3;
+ * #2 folds in because a searched-in player IS a pin — main.js pinPlayer). `rows`
+ * is the BASE ordered array (sorted or order-preserved, NOT yet floated) — the
+ * float is a pure render-time transform so unpinning returns a player to their
+ * true ranked slot and reorderPreservingPrevious preserves the un-floated order.
+ *
+ * Pinned players present in `rows` keep their relative (base) order and are
+ * lifted above the non-pinned rows. A pinned player with NO row in `rows`
+ * (genuinely no innings in the CORE scope even after the pin-exemption query —
+ * #11's honest empty case) gets a synthetic `__noData` placeholder so they still
+ * appear at the top, rendering "—" in every metric cell (formatValue returns "—"
+ * for the absent values). Returns a NEW array; never mutates `rows`. With no pins
+ * it returns `rows` unchanged, so the un-pinned table (and every anchor) is
+ * byte-identical in what it paints.
+ */
+function floatPinsToTop(rows, state) {
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  if (pins.length === 0) return rows;
+  const pinIds = new Set(pins.map((p) => String(p.id)));
+  const present = new Set();
+  const pinned = [];
+  const rest = [];
+  for (const r of rows) {
+    if (pinIds.has(String(r.id))) {
+      pinned.push(r);
+      present.add(String(r.id));
+    } else {
+      rest.push(r);
+    }
+  }
+  // Synthetic no-data rows for pins with no row in the result set, in pin-add
+  // order. __noData is informational only — the "—" cells fall out of the values
+  // simply being absent; the null rank cell falls out of them not being in `rows`.
+  const synthetic = [];
+  for (const p of pins) {
+    if (!present.has(String(p.id))) synthetic.push({ id: p.id, name: p.name, __noData: true });
+  }
+  return [...pinned, ...synthetic, ...rest];
+}
+
 // ── Table controller ─────────────────────────────────────────────────────────
 
 export function mountTable(
   container,
   store,
-  { onPlayerClick, onOpenFilters, onClear, onSearch, onDateChange, getAppliedState, onColumnsApplied, onSkeletonReady } = {}
+  { onPlayerClick, onOpenFilters, onClear, onSearch, onDateChange, getAppliedState, onColumnsApplied, onSkeletonReady, onTogglePin } = {}
 ) {
   let lastRows = [];
   let loadToken = 0;
@@ -1318,8 +1367,10 @@ export function mountTable(
     if (showMoreBtnEl) {
       showMoreBtnEl.addEventListener("click", () => {
         // Reveal-all-at-once (task 3: "one click"), not another page. Pure
-        // re-render of the already-loaded rows — no requery.
-        visibleRowCount = lastRows.length;
+        // re-render of the already-loaded rows — no requery. MAX_SAFE_INTEGER
+        // (not lastRows.length) so floated synthetic no-data pin rows (R5-B #3,
+        // which make the DISPLAYED count exceed lastRows.length) are revealed too.
+        visibleRowCount = Number.MAX_SAFE_INTEGER;
         renderLoaded(lastRows, lastLoadedState ?? store.get(), lastBowlingTypes);
       });
     }
@@ -1734,7 +1785,12 @@ export function mountTable(
     }
     const pins = store.get().pinnedPlayers || [];
     const frozen = { ...lastLoadedState, pinnedPlayers: pins };
-    return load(frozen);
+    // R5-B #2/#3/#0: a pin add/remove must NOT reshuffle the non-pinned rows or
+    // flip the sort arrow — the pin only floats a row on top (or drops it back to
+    // its ranked slot). resort:false preserves the base order; preserveSortFlag
+    // keeps orderIsActiveSort as-is (a float doesn't make the order a sort, nor
+    // undo one). The float itself is applied at render time (floatPinsToTop).
+    return load(frozen, { resort: false, preserveSortFlag: true });
   }
 
   function clearDragIndicators() {
@@ -2080,9 +2136,18 @@ export function mountTable(
     // columns within `cols` (default far-right, in the restricted picker), so
     // there is no special-cased header/cell here any more.
 
-    // Rank column (task 1): a display-only countdown index, sticky at the very
-    // left (before Player). Its header is a plain "#" — rank is not a sortable
-    // column, it always reflects whatever the table is currently sorted by.
+    // Pin column (R5-B #3/#12): a control column IMMEDIATELY LEFT of "#". Each
+    // row's cell toggles that player's pin; pinned players float to the top and
+    // are marked with an active (accent) pin so an out-of-filter added player can
+    // never be mistaken for a filter "leak". Not sortable, not draggable, sticky
+    // at the far left (see .data-table__th--pin in styles.css). The header shows a
+    // faint static pin as a legend.
+    const pinTh = `<th class="data-table__th data-table__th--pin" scope="col" aria-label="Pin" title="Pin players to the top"><span class="pin-header-glyph" aria-hidden="true">${PIN_GLYPH}</span></th>`;
+
+    // Rank column (task 1): a display-only index sticky at the very left (after
+    // the pin column). Its header is a plain "#". R5-B #3: the rank now reflects a
+    // row's TRUE position in the base (un-floated) order, so a pinned player lifted
+    // to the top still shows their real leaderboard rank; a no-data pin shows "—".
     const rankTh = `<th class="data-table__th data-table__th--rank" scope="col" title="Rank in current sort">#</th>`;
 
     // Player header (task 6): now a sortable column — clicking sorts by name
@@ -2097,21 +2162,34 @@ export function mountTable(
 
     theadEl.innerHTML = `
       <tr>
+        ${pinTh}
         ${rankTh}
         ${playerTh}
         ${cols.map((m) => headerCellHTML(m, state)).join("")}
       </tr>`;
 
-    const pageRows = rows.slice(0, visibleRowCount);
+    // R5-B #3: float pinned players to the top for DISPLAY only; `rows` (lastRows)
+    // stays the base order. True leaderboard rank comes from the base order, so a
+    // pinned player lifted to the top keeps their real rank (a no-data pin has none).
+    const pinIds = new Set((state.pinnedPlayers || []).filter((p) => p && p.id).map((p) => String(p.id)));
+    const rankById = new Map();
+    rows.forEach((r, i) => rankById.set(String(r.id), i + 1));
+    const displayRows = floatPinsToTop(rows, state);
+    const pageRows = displayRows.slice(0, visibleRowCount);
     updateStickyColWidth(pageRows.map((r) => r.name ?? ""));
 
     tbodyEl.innerHTML = pageRows
-      .map((row, i) => {
-        // Rank (task 1): the row's position in the CURRENT sorted result set.
-        // `i` is the index within pageRows, which is always a prefix of the
-        // full sorted `rows`, so numbers run 1, 2, 3 … and continue unbroken
-        // across a "Show More" reveal (51, 52, …) — no query, pure display.
-        const rankTd = `<td class="data-table__td data-table__td--rank">${(i + 1).toLocaleString()}</td>`;
+      .map((row) => {
+        const isPinned = pinIds.has(String(row.id));
+        // Pin cell (R5-B #3/#12): toggles this player's pin; active/filled when pinned.
+        const pinLabel = isPinned ? "Unpin player" : "Pin player to top";
+        const pinTd = `<td class="data-table__td data-table__td--pin"><button type="button" class="pin-toggle${isPinned ? " is-pinned" : ""}" data-pin-id="${escAttr(row.id ?? "")}" data-pin-name="${escAttr(row.name ?? "")}" aria-pressed="${isPinned ? "true" : "false"}" title="${pinLabel}" aria-label="${pinLabel}">${PIN_GLYPH}</button></td>`;
+        // Rank (task 1; R5-B #3): the row's TRUE position in the base order — a
+        // floated pin keeps its real leaderboard rank; a synthetic no-data pin
+        // (absent from the base order) shows "—". Continues unbroken across a
+        // "Show More" reveal — no query, pure display.
+        const rk = rankById.get(String(row.id));
+        const rankTd = `<td class="data-table__td data-table__td--rank">${rk != null ? rk.toLocaleString() : "—"}</td>`;
         const cells = cols.map((m) => dataCellHTML(m, row)).join("");
         // Player names link to the player page (R2, decision 29). The full
         // name is now always the rendered text (task 4 replaced JS
@@ -2123,13 +2201,13 @@ export function mountTable(
         const nameCell = onPlayerClick
           ? `<button type="button" class="player-link" data-player-id="${escAttr(row.id ?? "")}" title="${escAttr(fullName)}">${escHtml(fullName)}</button>`
           : `<span title="${escAttr(fullName)}">${escHtml(fullName)}</span>`;
-        return `<tr>${rankTd}<td class="data-table__td data-table__td--sticky">${nameCell}</td>${cells}</tr>`;
+        return `<tr>${pinTd}${rankTd}<td class="data-table__td data-table__td--sticky">${nameCell}</td>${cells}</tr>`;
       })
       .join("");
 
     // Show More (task 3): reveals the rest in one click, not another page.
     if (showMoreWrapEl && showMoreBtnEl) {
-      const remaining = rows.length - pageRows.length;
+      const remaining = displayRows.length - pageRows.length;
       showMoreWrapEl.hidden = remaining <= 0;
       if (remaining > 0) {
         showMoreBtnEl.textContent = `Show More (${remaining.toLocaleString()} player${remaining === 1 ? "" : "s"})`;
@@ -2227,6 +2305,20 @@ export function mountTable(
       tbodyEl.querySelectorAll(".player-link").forEach((btn) => {
         btn.addEventListener("click", () => {
           onPlayerClick(btn.dataset.playerId, btn.textContent);
+        });
+      });
+    }
+
+    // Pin toggle (R5-B #3): clicking a row's pin cell pins/unpins that player —
+    // an INSTANT toggle both ways (main.js pins via the same pinPlayer path the
+    // results-search uses, unpins via unpinPlayer), so the row floats to the top
+    // or drops back to its ranked slot immediately. stopPropagation keeps the
+    // click off any surrounding row handler.
+    if (onTogglePin) {
+      tbodyEl.querySelectorAll(".pin-toggle").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          onTogglePin(btn.dataset.pinId, btn.dataset.pinName);
         });
       });
     }
