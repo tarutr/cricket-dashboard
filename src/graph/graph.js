@@ -36,7 +36,9 @@ import {
 } from "./charts.js";
 import { mountCard } from "./card.js";
 import { eligiblePhaseFamilies } from "./phaseFamilies.js";
-import { timeseriesSupported, buildTimeseriesQuery } from "./timeseries.js";
+// R5-D Line redesign: the year-only buildTimeseriesQuery is gone — the Line is
+// now one Y-metric × one X-dimension × up to 6 lines, driven by this engine.
+import { fetchLineData, lineDimsFor, lineMetricsFor } from "./timeseries.js";
 import { buildTimeseriesChart } from "./timeseriesChart.js";
 // Dumbbell is now a TIME-WINDOW chart (owner correction: it is NOT a
 // Pace-vs-Spin chart) — it draws the SAME data as Slope (one rate/percent
@@ -105,9 +107,9 @@ const CHART_RULES = {
     needs: "Pick a per-innings rate or average, then set Window A and Window B.",
   },
   byyear: {
-    tagline: "One metric tracked over time.",
-    purpose: "A line chart tracks one metric over the seasons.",
-    needs: "Pick a metric that recombines by year.",
+    tagline: "One metric spread across any dimension.",
+    purpose: "A line chart plots one metric across an X axis (time, phase, position, opposition, and more).",
+    needs: "Pick an X axis and a metric.",
   },
   dumbbell: {
     tagline: "One metric across two time windows, drawn as a gap.",
@@ -282,7 +284,7 @@ function wireDropdown(toggleEl, panelEl) {
 // The other `vsTableOnly` matchup stats (Matches / High Score) stay GRAPHABLE
 // (owner ruling 2026-07-18); the EXISTING per-chart filters then decide
 // applicability: radar keeps higherIsBetter≠null (Matches excluded), slope/
-// dumbbell keep rate/percent, line keeps timeseriesSupported. Aside from `best`,
+// dumbbell keep rate/percent, line keeps lineMetricSupported. Aside from `best`,
 // PLAIN namespaces (batting/bowling) return exactly what eligibleMetrics did.
 function graphMetrics(ns, formats) {
   return eligibleMetrics(ns, formats).filter((m) => m.kind !== "composition" && m.key !== "best");
@@ -551,6 +553,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   let slopeWindowA = null;
   let slopeWindowB = null;
   // Batch 4 wave 2 (the last two chart types).
+  // R5-D: the Line ("byyear") now has TWO graph-local selections mirroring the
+  // scatterXKey/scatterYKey pattern — lineXKey (the X DIMENSION) and
+  // byYearMetricKey (the Y metric). Both are required; neither auto-picks.
+  let lineXKey = null;
   let byYearMetricKey = null;
   let dumbbellMetricKey = null;
   // Dumbbell is a time-window chart (owner correction): {from,to} day-pairs,
@@ -727,6 +733,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         metricEverChosen = false;
         barMetricKey = scatterXKey = scatterYKey = null;
         slopeMetricKey = byYearMetricKey = dumbbellMetricKey = phaseFamilyId = null;
+        lineXKey = null;
         radarMetricKeys = [];
         autoSelectedFromFilters = false;
         syncChartTypeButtons();
@@ -1123,6 +1130,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       setNeedsInput(metricToggle("slope-metric"), !slopeMetricKey);
       syncWindowNeedsInput("slope");
     } else if (chartType === "byyear") {
+      setNeedsInput(metricToggle("line-xdim"), !lineXKey); // R5-D: X axis is required
       setNeedsInput(metricToggle("byyear-metric"), !byYearMetricKey);
     } else if (chartType === "dumbbell") {
       setNeedsInput(metricToggle("dumbbell-metric"), !dumbbellMetricKey);
@@ -1342,22 +1350,56 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       bindWindowSelect("slope-b-to", (v) => (slopeWindowB = { ...slopeWindowB, to: v }));
       syncWindowNeedsInput("slope"); // item 6: outline the empty date inputs on render
     } else if (chartType === "byyear") {
-      // Batch 4 wave 2, task 1: metrics whose sqlExpression recombines
-      // cleanly per (player, year) — timeseries.js's own whitelist (kind
-      // total/rate, innings-sourced); never re-derived here (§8.2).
-      const metrics = graphMetrics(discipline, formats).filter((m) => timeseriesSupported(m));
+      // R5-D Line redesign (decisions 51 + 53): TWO dropdowns — an X-DIMENSION
+      // (how the line is spread out) and a Y-METRIC (what is plotted). Both are
+      // required; neither auto-picks (item 4). The metric vocabulary depends on
+      // the X-dim (timeseries.js's lineMetricsFor): Phase is restricted to phase-
+      // decomposable metrics; Vs bowling type resolves matchup metrics; every
+      // other dim offers the effective namespace's Line-able metrics. Changing
+      // the X-dim re-renders this branch so the metric list re-narrows and an
+      // now-invalid metric drops (adoptChosenMetric). Numbers per bucket are the
+      // metric's own sqlExpression grouped per (player, X-bucket) — never here.
+      const dims = lineDimsFor(state);
+      if (lineXKey && !dims.some((d) => d.key === lineXKey)) lineXKey = null; // prune stale X
+      // Metric candidates follow the current X-dim; before an X is picked, offer
+      // the general Line-able set (lineMetricsFor's neutral "year" grain).
+      const metrics = lineMetricsFor(lineXKey || "year", state);
       byYearMetricKey = adoptChosenMetric(metrics); // item 4: no auto-pick
       els.metricControls.innerHTML = `
+        <span class="graph-control-label">X axis</span>
+        <div class="graph-metric-select" data-role="line-xdim"></div>
         <span class="graph-control-label">Metric</span>
         <div class="graph-metric-select" data-role="byyear-metric"></div>
       `;
+      const xHost = els.metricControls.querySelector('[data-role="line-xdim"]');
+      if (xHost) {
+        const xHandle = mountSearchSelect(xHost, {
+          options: dims.map((d) => ({ value: d.key, label: d.label })),
+          value: lineXKey,
+          placeholder: dims.length ? "Choose an X axis…" : "No X axis available for this scope",
+          filterPlaceholder: "Search dimensions…",
+          ariaLabel: "X axis dimension",
+          disabled: dims.length === 0,
+          allowEmptyLabel: dims.length ? "Choose an X axis…" : null,
+          onChange: (val) => {
+            noteManualChartEdit();
+            lineXKey = val || null;
+            // Re-render so the metric list re-narrows to the new X-dim, dropping
+            // an incompatible metric (e.g. Runs when switching to Phase).
+            renderMetricControls();
+            syncChartTypeButtons();
+            markDirty({ paramsChanged: true });
+          },
+        });
+        metricControlSelects.push(xHandle);
+      }
       mountMetricSelect("byyear-metric", metrics, byYearMetricKey, (val) => {
         noteManualChartEdit();
         byYearMetricKey = val || null;
         if (byYearMetricKey) markMetricChosen(byYearMetricKey);
         syncChartTypeButtons();
         markDirty({ paramsChanged: true });
-      }, { emptyLabel: "No year-by-year metric available for this scope" });
+      }, { emptyLabel: "No metric available for this X axis and scope" });
     } else if (chartType === "dumbbell") {
       // Time-window Dumbbell (owner correction — NOT a Pace/Spin chart): the
       // SAME controls as Slope — one rate/percent metric + a Window A/Window B
@@ -1838,8 +1880,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     if (typeKey === "slope" && eligibleForScope.filter((m) => m.kind === "rate" || m.kind === "percent").length === 0) {
       return { ok: false, reason: "No rate/percent metric available for this scope" };
     }
-    if (typeKey === "byyear" && eligibleForScope.filter((m) => timeseriesSupported(m)).length === 0) {
-      return { ok: false, reason: "No year-by-year metric available for this scope" };
+    if (typeKey === "byyear" && (lineDimsFor(state).length === 0 || lineMetricsFor("year", state).length === 0)) {
+      return { ok: false, reason: "No line metric available for this scope" };
     }
     if (typeKey === "dumbbell" && eligibleForScope.filter((m) => m.kind === "rate" || m.kind === "percent").length === 0) {
       return { ok: false, reason: "No rate/percent metric available for this scope" };
@@ -2411,7 +2453,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         : null;
     }
     if (chartType === "byyear") {
-      const metrics = graphMetrics(ns, state.formats).filter((m) => timeseriesSupported(m));
+      if (!lineXKey) return null; // R5-D: the Line needs an X axis AND a metric
+      const metrics = lineMetricsFor(lineXKey, state); // metric set follows the X-dim
       const metric = metrics.find((m) => m.key === byYearMetricKey); // item 4: no auto-pick
       return metric ? { type: "byyear", discipline, metric, playerCount, roster } : null;
     }
@@ -2702,17 +2745,19 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         return;
       }
 
-      // By year (Batch 4 wave 2, task 1): its own branch, same reasoning as
-      // Slope above — a dedicated query (timeseries.js's buildTimeseriesQuery,
-      // grouped by (player, year), never re-derived here per §8.2) instead of
-      // fetchSelectedPlayerMetrics's flat per-player grouping.
+      // Line (R5-D redesign): one Y-metric × one X-dimension × up to 6 lines.
+      // A dedicated engine (timeseries.js's fetchLineData) groups the metric's
+      // OWN sqlExpression per (player, X-bucket) — never re-derived here (§8.2).
       if (chartType === "byyear") {
-        // Wave B2: resolve the metric + build the query in the EFFECTIVE
-        // namespace (matchup_* under Vs) so a Vs Line trends the matchup metric
-        // over matchup_batting/matchup_bowling. Plain scope => ns === discipline
-        // => byte-identical to before. config.discipline stays plain (the card
-        // eyebrow), mirroring Slope and every other B1 chart type.
-        const metrics = eligibleMetrics(ns, state.formats).filter((m) => timeseriesSupported(m));
+        // The X-dim decides the metric namespace (Vs bowling type → matchup;
+        // everything else → the effective namespace, matchup_* under an active
+        // Vs bucket). config.discipline stays plain (the card eyebrow), mirroring
+        // every other chart type.
+        if (!lineXKey) {
+          showChartGuidance("Choose an X axis (how the line is spread out) and a metric to draw the line.");
+          return;
+        }
+        const metrics = lineMetricsFor(lineXKey, state);
         const metric = metrics.find((m) => m.key === byYearMetricKey); // item 4: no auto-pick
         if (!metric) {
           showChartGuidance(noMetricGuidance("byyear"));
@@ -2720,31 +2765,21 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         }
 
         const ids = players.map((p) => p.id);
-        const sql = buildTimeseriesQuery({ discipline: ns, metricKey: metric.key, playerIds: ids, filters: state });
-        const { rows } = await query(sql);
+        const lineData = await fetchLineData({ xDim: lineXKey, metricKey: metric.key, playerIds: ids, filters: state });
         if (token !== loadToken) return;
         hideStatus();
 
-        // The calendar-year span the x-axis should cover — the live scope's
-        // date window (state.dateFrom/dateTo are "YYYY-MM"), so the Line chart
-        // draws every year in range even for a roster of single-year players
-        // (was collapsing to just the years-with-data, cramming lone dots at
-        // the right edge — the "Line looks broken" bug).
-        const scopeYears = {
-          from: state.dateFrom ? Number(state.dateFrom.slice(0, 4)) : null,
-          to: state.dateTo ? Number(state.dateTo.slice(0, 4)) : null,
-        };
         const canvas = card.getCanvas();
-        const result = buildTimeseriesChart(canvas, chartRef, { metric, rows, players, scopeYears });
+        const result = buildTimeseriesChart(canvas, chartRef, { metric, lineData, players, formats: state.formats });
         const drawn = players.length - (result?.excluded?.length ?? 0);
         if (drawn === 0) {
-          // Nobody has any qualifying year in range — show an honest message
-          // in place of an empty (year-less) plot, never a blank card (§7).
+          // Nobody has any data in this slice — show an honest message in place
+          // of an empty plot, never a blank card (§7).
           if (chartRef.current) {
             chartRef.current.destroy();
             chartRef.current = null;
           }
-          card.showPlaceholder("None of the selected players have data in this date range. Pick players with innings in range, or widen the window.");
+          card.showPlaceholder("None of the selected players have data for this X axis and scope. Pick players with data in range, or widen the scope.");
           renderExclusions(result?.excluded ?? [], result?.note);
           const titleCfg = buildTitleOnlyConfig(0);
           if (titleCfg) card.regenerate(titleCfg, buildFooterScope(titleCfg));
@@ -3234,7 +3269,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       case "slope":
         return single(graphMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent"));
       case "byyear":
-        return single(graphMetrics(discipline, formats).filter((m) => timeseriesSupported(m)));
+        // R5-D: the chooser previews a single metric; enterWithChoiceImpl seeds
+        // the X axis to "year" (the old default) so it draws immediately. Offer
+        // the general Line-able set (the "year" grain's metric list).
+        return single(lineMetricsFor("year", state));
       case "dumbbell":
         // Time-window Dumbbell shares Slope's exact metric set (rate/percent).
         return single(graphMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent"));
@@ -3344,8 +3382,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     } else if (typeof metricKey === "string" && metricKey) {
       if (newType === "bar") barMetricKey = metricKey;
       else if (newType === "slope") slopeMetricKey = metricKey;
-      else if (newType === "byyear") byYearMetricKey = metricKey;
-      else if (newType === "dumbbell") dumbbellMetricKey = metricKey;
+      else if (newType === "byyear") {
+        byYearMetricKey = metricKey;
+        // R5-D: the chooser doesn't ask for an X axis, so seed the old default
+        // ("year") if none is set, so the confirm lands on a drawn line.
+        if (!lineXKey) lineXKey = "year";
+      } else if (newType === "dumbbell") dumbbellMetricKey = metricKey;
       markMetricChosen(metricKey); // item 4: chooser pick persists across type switches
     } else {
       // radar/phases/benchmark: no single metric to pick. The chooser is an
