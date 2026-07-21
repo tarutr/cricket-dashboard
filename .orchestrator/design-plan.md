@@ -584,3 +584,16 @@ Sonnet, commits e672ec7(#14) · 424b399(#16). Only state.js/drawerInnings.js/pla
 - Worker also caught+fixed a self-introduced module bug (backticks inside an HTML comment in a template
   literal) before reporting; app now boots clean (re-verified).
 STOPPED → consolidated gate: present C+F + #18 question + #19 eyeball + R5-D Line design check.
+
+## CONSOLIDATED GATE PASSED (2026-07-21, decision 53): owner APPROVED the R5-D Line design (two dropdowns,
+all 11 X-dims together, per-bucket Y via existing sqlExpressions grouped per (player,X-bucket), no floors),
+cap = 6 player lines. #18 coverage note PARKED to final review (none exists today). #19 fresh-load outline
+left as-built. C+F confirmed done.
+
+## R5-D (Line redesign) SPAWNED — data-engineer/Opus, xhigh, number-adjacent. Owns graph/timeseries.js +
+timeseriesChart.js + graph.js + charts.js + styles.css. Reuses metric sqlExpressions (GROUP BY player×X-bucket
+= the Rule-1 guarantee); deletes MIN_BALLS_PER_YEAR (last floor). X-dim→source mapping handed to the worker.
+Heavy checkpoint order (commit each): dropdowns+engine+Date-year/month → direct-column dims → Innings index →
+Match result → Phase (wide→long) → Vs bowling type (matchup source) → delete floor/old year-line. Worker exposes
+an importable engine fn for console verification. Orchestrator will independently DuckDB-verify EACH of the 11
+X-dims. AFTER R5-D verified + owner go → R5-E per-over pipeline (separate explicit go required).

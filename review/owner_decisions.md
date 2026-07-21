@@ -637,3 +637,13 @@ change requires a new owner decision recorded here. Dates are decision dates.
     styling) appears ONLY when the current row order is the direct result of an active sort on that column
     (a fresh/popup Search that ranks, or a column-header click). After an order-preserving toolbar commit, NO
     column shows an arrow. Folded into Wave R5-B (same files). Display-only; anchors unaffected.
+
+53. **R5-D Line design APPROVED at the pre-build gate (2026-07-21); line cap = 6.** Owner confirmed the
+    two-dropdown model (X axis + Metric), all 11 X-dimensions built together (Innings index / Date-month /
+    Date-year / Date-event / Phase / Batting position / Vs bowling type / Opposition / Venue / Innings-of-
+    match / Match result), per-bucket Y via the existing metric sqlExpression grouped per (player, X-bucket),
+    no floors, gaps for missing buckets. **Max 6 player lines** (changeable once seen live). Per-over remains
+    R5-E (needs the pipeline extension; owner will give a separate explicit go). **#18 coverage note: PARKED**
+    — owner will decide at the final hands-on review whether to build a brand-new note (none exists today;
+    the old "Matchup mode" note was already removed in R5-A). **#19** fresh-load chart-type red outline left
+    as-built (per spec); owner may revisit at final review.
