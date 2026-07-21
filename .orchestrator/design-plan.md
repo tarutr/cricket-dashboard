@@ -597,3 +597,30 @@ Heavy checkpoint order (commit each): dropdowns+engine+Date-year/month → direc
 Match result → Phase (wide→long) → Vs bowling type (matchup source) → delete floor/old year-line. Worker exposes
 an importable engine fn for console verification. Orchestrator will independently DuckDB-verify EACH of the 11
 X-dims. AFTER R5-D verified + owner go → R5-E per-over pipeline (separate explicit go required).
+
+## R5-D (Line redesign) COMPLETE + orchestrator-verified. data-engineer/Opus, commits 9bfb2b0 (engine+wiring)
+· 8f6b275 (verification). Only graph/timeseries.js + timeseriesChart.js + graph.js touched (charts.js/styles.css
+NOT needed — reused .graph-metric-select styling + fetchLineData path).
+- SACRED: table.js/filters.js/metrics.js = 0 diff; `grep MIN_BALLS_PER_YEAR src/` = empty. Table anchors on
+  screen: 2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34. 0 console errors on Stats + Graphs.
+- ENGINE = fetchLineData({xDim, metricKey, playerIds, filters}) in timeseries.js; per-bucket Y = metric's own
+  sqlExpression GROUPed per (player, X-bucket) (Rule-1 guarantee). 11 X-dims: innings, month, year, event,
+  phase, position, vs_bowling, opposition, venue, innings_of_match, result.
+- MY OWN independent DuckDB (called fetchLineData vs hand-written raw queries, SA Yadav 271f83cd) — ALL EXACT:
+  year [466/376/218/484 Σ1544]; position [3:551,4:967,5:26]; vs_bowling [Pace:913,Spin:454] (correctly excludes
+  (unmapped)=177 per decision 21); phase SR [PP 137.982 / Mid 150.505 / Death 192.708]; result [Won 1257 /
+  Lost 228 / Tie 20 / No result 39 — 59 winner-null split by result_type]; innings_of_match [0:948, 1:596]
+  (0-based innings_number, labelled Batting-first/Chasing); opposition Australia 259; innings-index [60 buckets,
+  60 non-null, Σ1544]; month [Σ1544]. event+venue = direct siblings of the exact opposition (+ worker-verified Σ1544).
+- ON SCREEN: Line draws through the real UI — "Runs — Line — 6 most-capped players", X=Date—year trajectory
+  (Buttler 213→462→480→168 etc.), 6-line cap, players with one bucket render as a single point + honest footnote,
+  NO fading/floors, two dropdowns (X axis + Metric), #19 red-outline covers the empty X/Metric.
+- WORKER FLAGS (surfaced to owner): (a) Phase X offers only metrics with REAL phase definitions (batting: Strike
+  Rate; bowling: Economy, Wickets) — phase-runs/balls would need NEW metric defs (Rule 1 forbids inventing);
+  owner can add them to metrics.js as a separate ask. (b) categorical ordering = chronological (opp/venue/event);
+  (c) tie/no-result bucketed honestly via result_type (super-over ties = Tie, not a win); (d) gaps use
+  spanGaps:true (trend spans interior gaps) — owner can flip to a literal break (1-line); (e) card.js chart TITLE
+  doesn't name the X-dim (out of scope; axis labels show it). (f) built as 2 commits not 7 (registry is one unit),
+  but every dim verified before commit.
+ROUND-5 BUILD WAVES A/B/C/D/F ALL COMPLETE + orchestrator-verified. Only R5-E (per-over) remains — needs a
+PIPELINE data change → STOP for owner's explicit go before any pipeline run.
