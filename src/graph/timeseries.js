@@ -41,8 +41,8 @@
 //
 // ── NO DATA-POLICING (decision 49) ───────────────────────────────────────────
 // Every point is plotted however thin the sample. There is NO per-bucket sample
-// floor — MIN_BALLS_PER_YEAR is gone. `sample` (balls faced/bowled per bucket)
-// is still emitted, but purely as informational tooltip text, never a gate.
+// floor — the old per-year ball floor is gone. `sample` (balls faced/bowled per
+// bucket) is still emitted, but purely as informational tooltip text, never a gate.
 
 import { getMetric } from "../metrics.js";
 import { buildScopeClauses } from "../filters.js";

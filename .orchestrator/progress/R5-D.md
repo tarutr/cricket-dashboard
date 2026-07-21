@@ -46,6 +46,17 @@ Label fn maps 0→"Batting first", 1→"Chasing". (Brief assumed 1/2 — correct
 - [x] engine (timeseries.js): fetchLineData + all 11 dim SQL builders (GROUP BY ALL, CTE joins, ROW_NUMBER, phase pivot, vs_bowling)
 - [x] renderer (timeseriesChart.js): new lineData shape, no floors, MIN_BALLS_PER_YEAR gone
 - [x] graph.js: two dropdowns (X axis + Metric), applicability gating, render path, eligibility, chooser, needs-input
-- [x] MIN_BALLS_PER_YEAR + old year-line code deleted
-- [ ] in-browser UI smoke test (draw a line, switch discipline, table anchors on screen)
-- [ ] commit milestones
+- [x] MIN_BALLS_PER_YEAR + old year-line code deleted (grep src/ = EMPTY)
+- [x] in-browser UI verified: table anchors on screen (2813 / Karanbir 2454 / SA Yadav 60·1544·29.13·150.34);
+      Line draws sequential (year 2023-26, phase PP/Mid/Death) + categorical (result Won/Lost/No-result) with
+      6 lines; RG Sharma single-point gap; uniform point colour (no fade); two dropdowns; bowling hides
+      position+vs_bowling; Vs hides innings+vs_bowling. Bowling Line (Bumrah wkts) + Vs Line (SY vs Spin 454) exact.
+- [x] committed 9bfb2b0 (engine) + comment-only follow-up
+
+## SACRED confirmed: git diff a589c25..HEAD -- table.js filters.js metrics.js = EMPTY (byte-identical).
+## charts.js + styles.css NOT touched (fetch goes through fetchLineData; X-axis dropdown reuses .graph-metric-select).
+
+## Exposed engine fn: fetchLineData({ xDim, metricKey, playerIds, filters }) in src/graph/timeseries.js.
+## Console verify example:
+##   import('/src/state.js').then(S=>{const st=S.createInitialState('2026-07');st.dateFrom='2023-07-01';st.dateTo='2026-07-02';st.discipline='batting';
+##   return import('/src/graph/timeseries.js').then(TS=>TS.fetchLineData({xDim:'year',metricKey:'runs',playerIds:['271f83cd'],filters:st}))}).then(d=>console.log(d.byPlayer))

@@ -6,8 +6,8 @@
 // one X-dimension × up to 6 player lines.
 //
 // NO DATA-POLICING (decision 49): every point is drawn at full strength — there
-// is NO thin-sample fading and NO minimum-ball floor (MIN_BALLS_PER_YEAR is
-// gone). The only "missing" state is a genuine GAP: a bucket a player has no
+// is NO thin-sample fading and NO minimum-ball floor (the old per-year ball
+// floor is gone). The only "missing" state is a genuine GAP: a bucket a player has no
 // data for carries no marker; the line spans across it as a trend (spanGaps),
 // exactly as the previous by-year line did.
 
