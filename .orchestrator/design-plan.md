@@ -661,3 +661,14 @@ discipline→bowling + close WITHOUT Apply → Stats popup discipline STILL batt
 verified #4 (avg-vs-style appears/disappears with Vs+Apply) + Apply reseeds roster 2,813→2,049 atomically +
 #6 (reset now structurally correct — discipline only commits at Apply). NEXT: #1 fine-Vs re-sort + #3 BBI sort
 key (+ confirm #6).
+
+## R6 BUG BUCKET COMPLETE (2026-07-22): #5/#10 (graph staging, 2faf3c3) + #3 (BBI sort, 5a324e7) + #6
+(confirmed fixed by staging) + #1 (CLOSED not-a-bug, decision 56, stale cache) + #4 (RENAMED matchup average
+→ "Batting/Bowling Average", 7603626, decision 57). All orchestrator-verified; sacred SQL byte-identical; anchors hold.
+## R6 #9 (chartability UX) SPAWNED — frontend-heavy/Opus. CHARTABLE/NOT-CHARTABLE badges per chart type in the
+roster dropdown + don't-draw-uninformative-charts (show a plain-English "why" message instead of all-dots).
+Owner approved the per-chart-type chartable rules (Line ≥2 pts; Bar/Benchmark metric value; Scatter both axes;
+Radar radar metrics; Grouped Bars phase data; Slope/Dumbbell both windows). Display/UX only.
+## R6 QUEUE after #9: #2 (drop batting-hand persistence, decision 54) · #7 (rename Phases→Grouped Bars) ·
+#8 (broaden Line Y-axis, flag phase-metric data limit) · #11 (popup Vs-opp show-more/less) · #12 (show-top-50).
+Then deploy (HELD until bugs+features clean).
