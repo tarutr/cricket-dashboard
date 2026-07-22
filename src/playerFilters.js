@@ -174,7 +174,6 @@ export function mountPlayerFilters(hostEl, { onApply }) {
           <section class="player-filters-drawer__section">
             <h4 class="player-filters-drawer__section-title">Against (opposition)</h4>
             <div data-role="pf-opposition"></div>
-            <p class="player-page__footnote" data-role="pf-opp-note" hidden>International cricket only for now.</p>
           </section>
         </div>
         <div class="filter-drawer__footer">
@@ -197,7 +196,6 @@ export function mountPlayerFilters(hostEl, { onApply }) {
     posPanel: hostEl.querySelector('[data-role="pf-pos-panel"]'),
     posList: hostEl.querySelector('[data-role="pf-pos-list"]'),
     opposition: hostEl.querySelector('[data-role="pf-opposition"]'),
-    oppNote: hostEl.querySelector('[data-role="pf-opp-note"]'),
     vs: hostEl.querySelector('[data-role="pf-vs"]'),
     clearBtn: hostEl.querySelector('[data-role="pf-clear"]'),
     applyBtn: hostEl.querySelector('[data-role="pf-apply"]'),
@@ -348,12 +346,10 @@ export function mountPlayerFilters(hostEl, { onApply }) {
     // R7 (owner: opposition "show everything"): the vs-opposition splits table
     // is no longer international-only, so the in-popup opposition-NARROWING
     // control is un-gated too — usable for all team types (its option list is
-    // the player's actual opponents in scope, club/franchise included). The old
-    // "international-only" note is always hidden now. (The control's own
-    // `disabled: false` at mount time already encodes the un-gating — no
-    // per-render toggle needed now that it's a searchSelect, not a native
-    // <select>.)
-    els.oppNote.hidden = true;
+    // the player's actual opponents in scope, club/franchise included). The
+    // control's own `disabled: false` at mount time already encodes the
+    // un-gating — no per-render toggle needed now that it's a searchSelect,
+    // not a native <select>.
   }
 
   els.closeBtn.addEventListener("click", close);

@@ -624,3 +624,23 @@ NOT needed — reused .graph-metric-select styling + fetchLineData path).
   but every dim verified before commit.
 ROUND-5 BUILD WAVES A/B/C/D/F ALL COMPLETE + orchestrator-verified. Only R5-E (per-over) remains — needs a
 PIPELINE data change → STOP for owner's explicit go before any pipeline run.
+
+## ===== ROUND 5 CLOSE-OUT (2026-07-22) =====
+- **Perf Tier 1 DONE** (commit 7b11d6e): data served via Cloudflare custom domain data.the-cordon.com +
+  immutable cache headers. Verified on localhost (2,813 from new domain, CORS OK for localhost + vercel).
+  Tier 2–4 + per-over documented in review/BACKLOG.md (owner parked per-over).
+- **Owner review checklist**: review/DESIGN_ROUND5_REVIEW_CHECKLIST.md.
+- **FRESH-EYES REVIEW (Opus, fresh context, f9abdcc..HEAD): VERDICT SHIP.** No blockers/should-fix.
+  Independently reproduced: buildQuery/advancedToHaving byte-identical; buildMatchupQuery/conditionToHaving
+  comment-only diffs; filters.js fully byte-identical (the #14 change is isolated to state.js oppositionFilterActive);
+  metrics.js only the 2 RPI defs + minSampleComponent removed (no surviving sqlExpression changed); all 5 anchors
+  exact; Line X-dims year/position/vs_bowling exact incl. rate-recombination (Spin SR 140.99); 11 X-dims present,
+  per-over absent, cap 6; 0 console errors both tabs. One NIT: dead hidden pf-opp-note node in playerFilters.js.
+- **NIT FIXED (owner-directed) + orchestrator re-verified**: removed the pf-opp-note <p> + its querySelector +
+  the els.oppNote.hidden assignment (3 coordinated spots; deleting only the node would null-deref). node --check OK;
+  player popup Filters drawer renders (opposition section present, note gone), 0 console errors. playerFilters.js only.
+- **MERGE STATE**: branch polish-b1-mechanical +199 vs origin/main; origin/main +3 (numpy CI fix + 2 auto
+  review-CSV commits) — branch touched neither file → CLEAN merge (dry-run: no conflicts). Deploy path: Vercel's
+  GitHub integration deploys origin/main (pipeline.yml is DATA-only, no deploy step). Branch never pushed to origin.
+- NEXT: push branch (backup) → fold origin/main's 3 commits → push main → Vercel deploys Round 4+5 live →
+  verify cricdb.vercel.app loads 2,813. GATED on owner's final go.
