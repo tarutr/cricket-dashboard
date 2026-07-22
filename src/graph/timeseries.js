@@ -66,18 +66,46 @@ const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Se
 
 // ── Phase decomposition (X = Phase) ──────────────────────────────────────────
 // The Phase dimension is a wide→long PIVOT, not a GROUP BY: cricket stores each
-// phase as its own column family, not as rows. So a phase-by-phase Line REUSES
-// the EXISTING phase metric DEFINITIONS from metrics.js (pp_/mid_/death_ for
-// T20, odi_* for 50-over) — never a hand-written SUM(pp_runs). A base metric is
-// "phase-decomposable" only if its phase-member metrics exist AND are eligible
-// for the current scope (phaseMetricAllowed gates T20 vs ODI, and plain bowling
-// carries only PP+Death while matchup_bowling carries PP+Mid+Death — eligibility
-// prunes both correctly, exactly as phaseFamilies.js does). Runs / Balls have NO
-// phase metric definition, so — per the brief's "a metric with no phase
-// decomposition → not offered" — they are NOT offered under X=Phase (inventing
-// SUM(pp_runs) would violate Rule 1). Members are format-mutually-exclusive
-// (phaseMetricAllowed), so filtering the flat candidate list by eligibility
-// yields exactly one family with no duplicate phase labels.
+// phase as its own column family (pp_/mid_/death_ for T20, odi_* for 50-over),
+// not as rows. A base metric is "phase-decomposable" when its phase value can be
+// formed for ≥2 phases in the current scope. Two mechanisms feed the pivot, and
+// BOTH keep Rule 1 intact by re-using the SPEC §4.1-baked innings/matchup view
+// columns only — never a fabricated number:
+//
+//   1) PHASE_MEMBERS — the ORIGINAL path: a base key maps to the EXISTING phase
+//      METRIC definitions in metrics.js (e.g. pp_strike_rate). Their
+//      sqlExpression is interpolated verbatim; the set that survives is whatever
+//      is eligible for the scope (phaseMetricAllowed gates T20 vs ODI). This path
+//      is byte-identical to before and owns Batting Strike Rate and Bowling
+//      Economy/Wickets. It inherits one asymmetry from the catalogue: PLAIN
+//      bowling never got a `mid_economy`/`mid_wickets` metric, so Economy/Wickets
+//      decompose to PP+Death ONLY there (matchup_bowling has the mid metric →
+//      PP+Mid+Death). That is FROZEN — surfacing the middle bucket would move an
+//      existing X=Phase series, which Rule 1 forbids without an owner decision.
+//
+//   2) PHASE_DERIVED — R6 broadening (approach B): base metrics whose per-phase
+//      COMPONENT columns already exist in the aggregated parquets but which never
+//      got a standalone phase METRIC — Batting Runs / Balls Faced; Bowling Runs
+//      Conceded / Balls / Strike Rate / Average. Rather than clutter the metric
+//      catalogue with ~18 new pickers (approach A), the base metric's OWN formula
+//      is applied to the phase-prefixed component columns (Powerplay Runs =
+//      SUM(pp_runs); Death Bowling Avg = SUM(death_runs_conceded) /
+//      NULLIF(SUM(death_wickets), 0)) — the SAME arithmetic metrics.js uses for
+//      the whole-innings value, just over the phase columns. Nothing is added to
+//      metrics.js, so the normal column/metric pickers are untouched. These use
+//      the FULL family the columns support (PP+Mid+Death for T20, all three odi_*
+//      for 50-over) so — consistent with decision 49's show-all-data rule — the
+//      middle overs are never hidden. A base is offered here only when its metric
+//      key exists in the effective namespace AND a phase family is available for
+//      the format (phaseFamilyForFormat mirrors phaseMetricAllowed's T20/ODI
+//      gate). NB the plain-bowling asymmetry above means Runs Conceded / Balls /
+//      Bowling SR / Bowling Average show PP+Mid+Death while the frozen Economy /
+//      Wickets show PP+Death — same axis, different phase counts (owner-flagged).
+//
+// Metrics with no phase components (Average [batting], Dot %, Boundary %, Fours,
+// Sixes, dismissal %s, High Score, Best, Matches, position) are in NEITHER map →
+// correctly never offered. Both paths yield members in chronological phase order
+// with no duplicate labels.
 const PHASE_MEMBERS = {
   strike_rate: [
     { key: "pp_strike_rate", phaseLabel: "Powerplay" },
@@ -106,17 +134,86 @@ const PHASE_MEMBERS = {
 };
 const PHASE_ORDER = { Powerplay: 0, Middle: 1, Death: 2 };
 
+// ── Derived phase families (approach B) ──────────────────────────────────────
+// The three phases each format offers, as {column prefix, label} in chronological
+// order. Which family (if any) applies is decided PURELY by format, mirroring
+// state.js's phaseMetricAllowed exactly (a single T20 / single 50-Over selection;
+// anything else → no phase metrics → no derived family either).
+const PHASE_FAMILY_T20 = [
+  { prefix: "pp", phaseLabel: "Powerplay" },
+  { prefix: "mid", phaseLabel: "Middle" },
+  { prefix: "death", phaseLabel: "Death" },
+];
+const PHASE_FAMILY_ODI = [
+  { prefix: "odi_pp", phaseLabel: "Powerplay" },
+  { prefix: "odi_mid", phaseLabel: "Middle" },
+  { prefix: "odi_death", phaseLabel: "Death" },
+];
+function phaseFamilyForFormat(formats) {
+  if (!Array.isArray(formats) || formats.length !== 1) return [];
+  if (formats[0] === "T20") return PHASE_FAMILY_T20;
+  if (formats[0] === "50 Over") return PHASE_FAMILY_ODI;
+  return [];
+}
+
+// Per-namespace: base metric key → (phase prefix) → SQL aggregate over the
+// phase-prefixed component columns. Each expression is the base metric's OWN
+// metrics.js formula with the whole-innings columns swapped for the phase columns
+// (e.g. batting `runs` = SUM(runs) → SUM(pp_runs); bowling `average` =
+// SUM(runs_conceded)/NULLIF(SUM(wickets),0) → the pp_/mid_/death_ triple). Keys
+// differ per namespace (plain batting's Balls Faced is `balls_faced`; the matchup
+// namespace calls it `balls`), so the map is keyed by namespace. Only base keys
+// with NO standalone phase metric appear here; Strike Rate / Economy / Wickets
+// stay on the PHASE_MEMBERS path and are deliberately absent.
+const PHASE_DERIVED = {
+  batting: {
+    runs: (p) => `SUM(${p}_runs)`,
+    balls_faced: (p) => `SUM(${p}_balls)`,
+  },
+  matchup_batting: {
+    runs: (p) => `SUM(${p}_runs)`,
+    balls: (p) => `SUM(${p}_balls)`,
+  },
+  bowling: {
+    runs_conceded: (p) => `SUM(${p}_runs_conceded)`,
+    balls: (p) => `SUM(${p}_balls)`,
+    strike_rate: (p) => `SUM(${p}_balls) * 1.0 / NULLIF(SUM(${p}_wickets), 0)`,
+    average: (p) => `SUM(${p}_runs_conceded) * 1.0 / NULLIF(SUM(${p}_wickets), 0)`,
+  },
+  matchup_bowling: {
+    runs_conceded: (p) => `SUM(${p}_runs_conceded)`,
+    balls: (p) => `SUM(${p}_balls)`,
+    strike_rate: (p) => `SUM(${p}_balls) * 1.0 / NULLIF(SUM(${p}_wickets), 0)`,
+    average: (p) => `SUM(${p}_runs_conceded) * 1.0 / NULLIF(SUM(${p}_wickets), 0)`,
+  },
+};
+
 /** The eligible phase members for a base metric key under the current scope, in
- * chronological phase order. Empty when the metric has no (or <2) usable phase
- * members — i.e. it is not phase-decomposable here. */
+ * chronological phase order. Each member is either `{ key, phaseLabel }` (an
+ * existing phase metric, resolved via getMetric in buildPhaseSql) or
+ * `{ expr, phaseLabel }` (a derived SQL aggregate). Empty when the metric has no
+ * (or <2) usable phase members — i.e. it is not phase-decomposable here. The
+ * PHASE_MEMBERS path is tried first and, when it yields a family, wins verbatim
+ * (so existing SR/Economy/Wickets values are byte-identical); only base keys it
+ * cannot serve here fall through to PHASE_DERIVED. */
 function phaseMembersFor(baseKey, ns, formats) {
   const candidates = PHASE_MEMBERS[baseKey];
-  if (!candidates) return [];
-  const eligible = new Set(eligibleMetrics(ns, formats).map((m) => m.key));
-  const members = candidates
-    .filter((c) => eligible.has(c.key))
-    .sort((a, b) => PHASE_ORDER[a.phaseLabel] - PHASE_ORDER[b.phaseLabel]);
-  return members.length >= 2 ? members : [];
+  if (candidates) {
+    const eligible = new Set(eligibleMetrics(ns, formats).map((m) => m.key));
+    const members = candidates
+      .filter((c) => eligible.has(c.key))
+      .sort((a, b) => PHASE_ORDER[a.phaseLabel] - PHASE_ORDER[b.phaseLabel]);
+    if (members.length >= 2) return members;
+  }
+  const derive = PHASE_DERIVED[ns] && PHASE_DERIVED[ns][baseKey];
+  if (derive) {
+    const members = phaseFamilyForFormat(formats).map((f) => ({
+      expr: derive(f.prefix),
+      phaseLabel: f.phaseLabel,
+    }));
+    if (members.length >= 2) return members;
+  }
+  return [];
 }
 
 // ── The X-dimension registry ─────────────────────────────────────────────────
@@ -446,9 +543,18 @@ function buildPhaseSql({ members, ns, state, playerIds }) {
   const { cols, whereClauses } = scopeFor(ns, state, playerIds);
   const selects = [`${cols.id} AS player_id`, `MAX(${cols.name}) AS player_name`];
   members.forEach((m, i) => {
-    const metric = getMetric(m.key, ns);
-    if (!metric) throw new Error(`buildPhaseSql: unknown phase member "${m.key}" in ${ns}`);
-    selects.push(`${metric.sqlExpression} AS ph_${i}`);
+    let expr;
+    if (m.expr != null) {
+      // Derived member (approach B): the base metric's formula over the phase
+      // component columns. Already namespace-correct — see PHASE_DERIVED.
+      expr = m.expr;
+    } else {
+      // Existing phase metric: interpolate its metrics.js sqlExpression verbatim.
+      const metric = getMetric(m.key, ns);
+      if (!metric) throw new Error(`buildPhaseSql: unknown phase member "${m.key}" in ${ns}`);
+      expr = metric.sqlExpression;
+    }
+    selects.push(`${expr} AS ph_${i}`);
   });
   return [
     `SELECT ${selects.join(",\n       ")}`,
