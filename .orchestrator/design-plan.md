@@ -701,3 +701,13 @@ Per decision 49 (show all data) Economy/Wickets should also show Mid, but that c
 → owner decision. Surface at the round review.
 ## ROUND 6 COMPLETE (all 12 items resolved). NEXT: fresh-eyes review of the R6 diff + owner's full-round review
 + the #8 asymmetry decision → then DEPLOY (Round 4+5+6 + perf, 199+ commits, to main/Vercel).
+
+## FRESH-EYES REVIEW of Round 6 (ec3179e..HEAD, Opus fresh context, read-only): VERDICT SHIP. No blockers/
+should-fix. Independently reproduced: buildQuery/buildMatchupQuery/conditionToHaving/advancedToHaving BYTE-
+IDENTICAL; filters.js 0-diff; metrics.js diff = ONLY the 2 average LABEL renames; #8 phase Runs [465,894,185]
+(=1,544) + Bumrah RC [362,129,274] via fetchLineData = hand DuckDB, div-by-zero→null; existing phase SR
+unchanged; #3 BBI sort correct (best__sort rank); #2 double-gated + buildScopeClauses untouched; #5/#10 buffer
+staging leak-safe (no in-place store mutation); #7 label; 2,813/2,454 anchors; 0 console errors both tabs.
+Agrees #8 plain-bowling asymmetry = cosmetic owner-decision, not a bug. NITS (non-blocking): benchmark
+chartable rule loose; chartability bounded to checked-roster∪≤50 rows (documented). ROUND 6 = SHIP.
+NEXT: owner's #8 decision + hands-on review + deploy go → merge Rounds 4+5+6+perf to main/Vercel.
