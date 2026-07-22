@@ -222,11 +222,12 @@ function dayInputAttrs() {
  * precedent as timeseries.js/dumbbell.js duplicating table.js internals they
  * can't import) rather than editing a file outside this task's scope. */
 /** Position an OPEN, portaled panel within the viewport, anchored under (or,
- * when there isn't room below, above) its toggle. Mirrors searchSelect.js's
- * positionPanel but is bidirectional so a dropdown low in the toolbox opens
- * UPWARD instead of running off the bottom of the window (owner R6b: "dropdowns
- * can't go below the window"). Height is clamped to the chosen side's free
- * space with internal scroll, so the panel is always fully on screen. */
+ * when it wouldn't fit below, above) its toggle. Mirrors searchSelect.js's
+ * positionPanel. Direction is decided by whether the panel's NATURAL height
+ * fits below: if not, it flips UP when it fits above — so a dropdown at the
+ * bottom of the toolbox opens upward into the card instead of hanging below the
+ * toolbar / off the bottom of the window (owner R6b/R6c). Height is clamped to
+ * the chosen side's free space with internal scroll, so it's always on screen. */
 function positionFixedPanel(toggleEl, panelEl) {
   const r = toggleEl.getBoundingClientRect();
   const margin = 8;
@@ -234,16 +235,21 @@ function positionFixedPanel(toggleEl, panelEl) {
   panelEl.style.position = "fixed";
   panelEl.style.zIndex = "1000";
   panelEl.style.minWidth = `${Math.round(r.width)}px`;
+  panelEl.style.maxHeight = ""; // clear any prior clamp so scrollHeight = natural height
   const width = panelEl.offsetWidth || Math.round(r.width);
+  const desired = panelEl.scrollHeight;
   let left = Math.min(r.left, window.innerWidth - width - margin);
   left = Math.max(margin, left);
   panelEl.style.left = `${Math.round(left)}px`;
   panelEl.style.right = "auto";
   const spaceBelow = window.innerHeight - r.bottom - gap - margin;
   const spaceAbove = r.top - gap - margin;
-  // Prefer opening below; flip above only when below is cramped AND above is
-  // roomier — so top-of-card dropdowns still drop down, bottom ones lift up.
-  if (spaceBelow >= 160 || spaceBelow >= spaceAbove) {
+  // Down if it fits below; else up if it fits above; else the roomier side.
+  let openDown;
+  if (spaceBelow >= desired) openDown = true;
+  else if (spaceAbove >= desired) openDown = false;
+  else openDown = spaceBelow >= spaceAbove;
+  if (openDown) {
     panelEl.style.top = `${Math.round(r.bottom + gap)}px`;
     panelEl.style.bottom = "auto";
     panelEl.style.maxHeight = `${Math.max(120, Math.round(spaceBelow))}px`;

@@ -168,18 +168,24 @@ export function mountSearchSelect(hostEl, {
     panelEl.style.position = "fixed";
     panelEl.style.zIndex = "1000"; // above the .filters-popup panel (z-index:100)
     panelEl.style.minWidth = `${Math.round(r.width)}px`;
+    panelEl.style.maxHeight = ""; // clear any prior clamp so scrollHeight = natural height
     const width = panelEl.offsetWidth || Math.round(r.width);
+    const desired = panelEl.scrollHeight;
     let left = Math.min(r.left, window.innerWidth - width - margin);
     left = Math.max(margin, left);
     panelEl.style.left = `${Math.round(left)}px`;
     panelEl.style.right = "auto";
-    // Bidirectional: open below by default, but flip ABOVE when there isn't room
-    // below and above is roomier, so a toggle low on the page never pushes its
-    // panel off the bottom of the window (owner R6b). Height is clamped to the
-    // chosen side's free space, with internal scroll.
+    // Direction by fit: open below when the panel's natural height fits below;
+    // else flip ABOVE when it fits above; else use the roomier side. So a toggle
+    // low on the page opens upward instead of running off the bottom of the
+    // window (owner R6b/R6c). Height is clamped to the chosen side, with scroll.
     const spaceBelow = window.innerHeight - r.bottom - gap - margin;
     const spaceAbove = r.top - gap - margin;
-    if (spaceBelow >= 160 || spaceBelow >= spaceAbove) {
+    let openDown;
+    if (spaceBelow >= desired) openDown = true;
+    else if (spaceAbove >= desired) openDown = false;
+    else openDown = spaceBelow >= spaceAbove;
+    if (openDown) {
       panelEl.style.top = `${Math.round(r.bottom + gap)}px`;
       panelEl.style.bottom = "auto";
       panelEl.style.maxHeight = `${Math.max(120, Math.round(spaceBelow))}px`;
@@ -513,18 +519,24 @@ export function mountSearchMultiSelect(hostEl, {
     panelEl.style.position = "fixed";
     panelEl.style.zIndex = "1000"; // above the .filters-popup panel (z-index:100)
     panelEl.style.minWidth = `${Math.round(r.width)}px`;
+    panelEl.style.maxHeight = ""; // clear any prior clamp so scrollHeight = natural height
     const width = panelEl.offsetWidth || Math.round(r.width);
+    const desired = panelEl.scrollHeight;
     let left = Math.min(r.left, window.innerWidth - width - margin);
     left = Math.max(margin, left);
     panelEl.style.left = `${Math.round(left)}px`;
     panelEl.style.right = "auto";
-    // Bidirectional: open below by default, but flip ABOVE when there isn't room
-    // below and above is roomier, so a toggle low on the page never pushes its
-    // panel off the bottom of the window (owner R6b). Height is clamped to the
-    // chosen side's free space, with internal scroll.
+    // Direction by fit: open below when the panel's natural height fits below;
+    // else flip ABOVE when it fits above; else use the roomier side. So a toggle
+    // low on the page opens upward instead of running off the bottom of the
+    // window (owner R6b/R6c). Height is clamped to the chosen side, with scroll.
     const spaceBelow = window.innerHeight - r.bottom - gap - margin;
     const spaceAbove = r.top - gap - margin;
-    if (spaceBelow >= 160 || spaceBelow >= spaceAbove) {
+    let openDown;
+    if (spaceBelow >= desired) openDown = true;
+    else if (spaceAbove >= desired) openDown = false;
+    else openDown = spaceBelow >= spaceAbove;
+    if (openDown) {
       panelEl.style.top = `${Math.round(r.bottom + gap)}px`;
       panelEl.style.bottom = "auto";
       panelEl.style.maxHeight = `${Math.max(120, Math.round(spaceBelow))}px`;

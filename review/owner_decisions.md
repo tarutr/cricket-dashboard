@@ -728,11 +728,15 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
     (b) **Dropdowns can no longer fall below the window.** The graph's metric / X-axis / chart-type / phase /
     anchor `searchSelect`s now mount with `portal: true`, and the roster dropdown's `wireDropdown` was upgraded
     to portal its open panel to `<body>` (position:fixed) too. `searchSelect.positionPanel` (both single- and
-    multi-select copies) and the new graph `positionFixedPanel` are now BIDIRECTIONAL: open below by default,
-    flip ABOVE when there isn't room below and above is roomier, height clamped to the chosen side with internal
-    scroll. So a dropdown low in the toolbox opens upward and stays fully on screen. Verified on localhost at
-    720px (opens down, within viewport) and 560px (roster flips up, top 138 / bottom 460, fully within),
-    metric+roster both contained, opening a dropdown causes zero page scroll.
+    multi-select copies) and the new graph `positionFixedPanel` choose direction BY FIT: measure the panel's
+    natural height, open below when it fits below, else flip ABOVE when it fits above, else use the roomier side
+    (height clamped to the chosen side with internal scroll). This matters because the roster dropdown sits at
+    the BOTTOM of the toolbox: a first attempt used an "open down if ≥160px below" threshold, which still
+    dropped it downward and let it hang below the toolbar (owner: "still flipping down and going below the
+    toolbar"). With the fit rule the ~310px roster panel no longer fits in the ~200px below the bottom-of-card
+    toggle, so it opens UPWARD into the card. Verified on localhost at 800px: roster toggle top 466/bottom 506,
+    panel opens upward to top 138/bottom 460 (fully within viewport, above the toggle), zero page scroll;
+    metric/chart-type near the top still open downward.
     (c) **Selected players pinned to the top** of the roster dropdown (checked first, stable by pool order) so
     the current selection is never scattered through the list — verified all 15 auto-selected sit at rows 0–14.
     Query builders byte-identical; roster pool still 2,813.
