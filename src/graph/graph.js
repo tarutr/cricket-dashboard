@@ -221,14 +221,72 @@ function dayInputAttrs() {
  * src/graph/*.js only, so the ~20-line helper is duplicated here (same
  * precedent as timeseries.js/dumbbell.js duplicating table.js internals they
  * can't import) rather than editing a file outside this task's scope. */
+/** Position an OPEN, portaled panel within the viewport, anchored under (or,
+ * when there isn't room below, above) its toggle. Mirrors searchSelect.js's
+ * positionPanel but is bidirectional so a dropdown low in the toolbox opens
+ * UPWARD instead of running off the bottom of the window (owner R6b: "dropdowns
+ * can't go below the window"). Height is clamped to the chosen side's free
+ * space with internal scroll, so the panel is always fully on screen. */
+function positionFixedPanel(toggleEl, panelEl) {
+  const r = toggleEl.getBoundingClientRect();
+  const margin = 8;
+  const gap = 6;
+  panelEl.style.position = "fixed";
+  panelEl.style.zIndex = "1000";
+  panelEl.style.minWidth = `${Math.round(r.width)}px`;
+  const width = panelEl.offsetWidth || Math.round(r.width);
+  let left = Math.min(r.left, window.innerWidth - width - margin);
+  left = Math.max(margin, left);
+  panelEl.style.left = `${Math.round(left)}px`;
+  panelEl.style.right = "auto";
+  const spaceBelow = window.innerHeight - r.bottom - gap - margin;
+  const spaceAbove = r.top - gap - margin;
+  // Prefer opening below; flip above only when below is cramped AND above is
+  // roomier — so top-of-card dropdowns still drop down, bottom ones lift up.
+  if (spaceBelow >= 160 || spaceBelow >= spaceAbove) {
+    panelEl.style.top = `${Math.round(r.bottom + gap)}px`;
+    panelEl.style.bottom = "auto";
+    panelEl.style.maxHeight = `${Math.max(120, Math.round(spaceBelow))}px`;
+  } else {
+    panelEl.style.top = "auto";
+    panelEl.style.bottom = `${Math.round(window.innerHeight - r.top + gap)}px`;
+    panelEl.style.maxHeight = `${Math.max(120, Math.round(spaceAbove))}px`;
+  }
+  panelEl.style.overflowY = "auto";
+}
+
 function wireDropdown(toggleEl, panelEl) {
+  // Portal the OPEN panel to <body> (position:fixed) so it escapes the toolbox
+  // card's stacking/overflow and can be placed anywhere in the viewport — then
+  // position it with positionFixedPanel so it never spills below the window.
+  const panelHome = { parent: panelEl.parentNode, next: panelEl.nextSibling };
+  let portaled = false;
+  const reposition = () => { if (portaled) positionFixedPanel(toggleEl, panelEl); };
   function close() {
     panelEl.hidden = true;
     toggleEl.setAttribute("aria-expanded", "false");
+    if (portaled) {
+      portaled = false;
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+      for (const p of ["position", "zIndex", "minWidth", "top", "left", "right", "bottom", "maxHeight", "overflowY"]) {
+        panelEl.style[p] = "";
+      }
+      if (panelHome.next && panelHome.next.parentNode === panelHome.parent) {
+        panelHome.parent.insertBefore(panelEl, panelHome.next);
+      } else {
+        panelHome.parent.appendChild(panelEl);
+      }
+    }
   }
   function open() {
     panelEl.hidden = false;
     toggleEl.setAttribute("aria-expanded", "true");
+    portaled = true;
+    document.body.appendChild(panelEl);
+    positionFixedPanel(toggleEl, panelEl);
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
   }
   function onToggleClick(e) {
     e.stopPropagation();
@@ -390,12 +448,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
             </div>
           </div>
 
-          <!-- R6b (owner): the Players group sits directly below Chart type so
-               the roster dropdown opens high on the page — its (absolutely
-               positioned) panel then stays within the viewport instead of
-               extending the document downward and forcing a whole-page scroll.
-               Order inside: mode toggle -> dropdown -> search (owner-specified).
-               Metric/date controls follow beneath. -->
+          <div class="graph-control-group" data-role="metric-controls"></div>
+
+          <!-- Order: Chart type -> Metric -> Players (mode toggle -> search ->
+               roster dropdown). The roster + metric/x-axis dropdown panels are
+               PORTALED to <body> and positioned within the viewport (flipping
+               upward when there's no room below) so they never fall off the
+               bottom of the window — see wireDropdown()/searchSelect's portal. -->
           <div class="graph-control-group">
             <div class="graph-control-group__head">
               <span class="graph-control-label">Players</span>
@@ -411,6 +470,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
                 <button type="button" class="segmented__btn" data-value="worst">Worst</button>
                 <button type="button" class="segmented__btn" data-value="manual">Manual</button>
               </div>
+            </div>
+            <div class="graph-player-search">
+              <input type="text" class="input" data-role="player-search" placeholder="Add a player…" aria-label="Search players to add" />
+              <div class="graph-player-search__results" data-role="player-search-results" hidden></div>
             </div>
             <!-- R5-C #13: the "N of M selected" roster dropdown and its reset
                  link are BOXED together (.graph-roster-box) so the link's target
@@ -429,14 +492,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
                 <button type="button" class="link-btn" data-role="reset-players">Reset to full player set</button>
               </div>
             </div>
-            <div class="graph-player-search">
-              <input type="text" class="input" data-role="player-search" placeholder="Add a player…" aria-label="Search players to add" />
-              <div class="graph-player-search__results" data-role="player-search-results" hidden></div>
-            </div>
             <p class="graph-cap-note" data-role="cap-note" hidden></p>
           </div>
-
-          <div class="graph-control-group" data-role="metric-controls"></div>
         </div>
 
         <!-- Owner item 7 (Wave 3): in-panel control edits are PENDING (they
@@ -1087,6 +1144,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       value: hasMetrics ? value : null,
       placeholder: hasMetrics ? placeholder : (emptyLabel || placeholder),
       filterPlaceholder: "Search metrics…",
+      portal: true,
       ariaLabel,
       disabled: !hasMetrics,
       // Native-<select> parity: a clear row back to "no metric picked" (item 4:
@@ -1321,6 +1379,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           value: phaseFamilyId,
           placeholder: families.length ? "Choose a metric family…" : "No phase families available for this scope",
           filterPlaceholder: "Search families…",
+          portal: true,
           ariaLabel: "Metric family",
           disabled: families.length === 0,
           allowEmptyLabel: families.length ? "Choose a metric family…" : null,
@@ -1407,6 +1466,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           value: lineXKey,
           placeholder: dims.length ? "Choose an X axis…" : "No X axis available for this scope",
           filterPlaceholder: "Search dimensions…",
+          portal: true,
           ariaLabel: "X axis dimension",
           disabled: dims.length === 0,
           allowEmptyLabel: dims.length ? "Choose an X axis…" : null,
@@ -1532,6 +1592,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           value: benchmarkAnchorId,
           placeholder: roster.length ? "Choose an anchor player…" : "Check a player below first",
           filterPlaceholder: "Search players…",
+          portal: true,
           ariaLabel: "Anchor player",
           disabled: roster.length === 0,
           onChange: (val) => {
@@ -1911,7 +1972,17 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // (seed rank) — rows render in that order. Map before filtering.
     const filter = rosterFilterText.trim().toLowerCase();
     const withIdx = candidates.map((p, i) => ({ p, i }));
-    const matched = filter ? withIdx.filter(({ p }) => p.name.toLowerCase().includes(filter)) : withIdx;
+    const matchedBase = filter ? withIdx.filter(({ p }) => p.name.toLowerCase().includes(filter)) : withIdx;
+    // Owner R6b#2: pin SELECTED players to the top of the dropdown (checked
+    // first), preserving pool order within each group — so the current
+    // selection is always visible at the top instead of scattered through the
+    // pool. Display-only reordering; selection state and plot order are
+    // unchanged. `a.i - b.i` keeps the sort stable by original pool position.
+    const matched = [...matchedBase].sort((a, b) => {
+      const ca = selection.isChecked(a.p.id) ? 0 : 1;
+      const cb = selection.isChecked(b.p.id) ? 0 : 1;
+      return ca - cb || a.i - b.i;
+    });
 
     if (matched.length === 0) {
       els.rosterList.innerHTML = `<p class="graph-player-search__empty">No players match &ldquo;${escHtml(rosterFilterText.trim())}&rdquo;.</p>`;
@@ -2245,6 +2316,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     value: chartType,
     placeholder: "Choose a chart type…",
     filterPlaceholder: "Search chart types…",
+    portal: true,
     ariaLabel: "Chart type",
     // Native-<select> parity: a "Choose a chart type…" row clears the pick back
     // to null → the honest empty rules-table state (decision 46f), same as

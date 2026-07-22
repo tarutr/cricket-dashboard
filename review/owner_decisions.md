@@ -720,3 +720,19 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
     forcing a whole-page scroll (owner's complaint). The panel keeps its own internal scroll + filter as before.
     Verified: builders byte-identical, roster pool still 2,813, both badge states render per spec, dropdown
     opens with zero page scroll (document height unchanged at viewport height).
+
+60. **Round-6c graph dropdown containment + selection pinning (owner 2026-07-22; DISPLAY-ONLY).** Follow-up to
+    decision 59 #4: reverting that reorder and fixing the underlying problem instead.
+    (a) **Left-card order reverted** to Chart type → Metric → Players (mode toggle → search → roster dropdown)
+    — the owner's original preference.
+    (b) **Dropdowns can no longer fall below the window.** The graph's metric / X-axis / chart-type / phase /
+    anchor `searchSelect`s now mount with `portal: true`, and the roster dropdown's `wireDropdown` was upgraded
+    to portal its open panel to `<body>` (position:fixed) too. `searchSelect.positionPanel` (both single- and
+    multi-select copies) and the new graph `positionFixedPanel` are now BIDIRECTIONAL: open below by default,
+    flip ABOVE when there isn't room below and above is roomier, height clamped to the chosen side with internal
+    scroll. So a dropdown low in the toolbox opens upward and stays fully on screen. Verified on localhost at
+    720px (opens down, within viewport) and 560px (roster flips up, top 138 / bottom 460, fully within),
+    metric+roster both contained, opening a dropdown causes zero page scroll.
+    (c) **Selected players pinned to the top** of the roster dropdown (checked first, stable by pool order) so
+    the current selection is never scattered through the list — verified all 15 auto-selected sit at rows 0–14.
+    Query builders byte-identical; roster pool still 2,813.

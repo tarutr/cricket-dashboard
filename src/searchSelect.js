@@ -164,17 +164,30 @@ export function mountSearchSelect(hostEl, {
   function positionPanel() {
     const r = toggleEl.getBoundingClientRect();
     const margin = 8;
+    const gap = 6;
     panelEl.style.position = "fixed";
     panelEl.style.zIndex = "1000"; // above the .filters-popup panel (z-index:100)
     panelEl.style.minWidth = `${Math.round(r.width)}px`;
-    panelEl.style.top = `${Math.round(r.bottom + 6)}px`;
     const width = panelEl.offsetWidth || Math.round(r.width);
     let left = Math.min(r.left, window.innerWidth - width - margin);
     left = Math.max(margin, left);
     panelEl.style.left = `${Math.round(left)}px`;
     panelEl.style.right = "auto";
-    const maxH = Math.max(140, Math.round(window.innerHeight - (r.bottom + 6) - margin));
-    panelEl.style.maxHeight = `${maxH}px`;
+    // Bidirectional: open below by default, but flip ABOVE when there isn't room
+    // below and above is roomier, so a toggle low on the page never pushes its
+    // panel off the bottom of the window (owner R6b). Height is clamped to the
+    // chosen side's free space, with internal scroll.
+    const spaceBelow = window.innerHeight - r.bottom - gap - margin;
+    const spaceAbove = r.top - gap - margin;
+    if (spaceBelow >= 160 || spaceBelow >= spaceAbove) {
+      panelEl.style.top = `${Math.round(r.bottom + gap)}px`;
+      panelEl.style.bottom = "auto";
+      panelEl.style.maxHeight = `${Math.max(120, Math.round(spaceBelow))}px`;
+    } else {
+      panelEl.style.top = "auto";
+      panelEl.style.bottom = `${Math.round(window.innerHeight - r.top + gap)}px`;
+      panelEl.style.maxHeight = `${Math.max(120, Math.round(spaceAbove))}px`;
+    }
     panelEl.style.overflowY = "auto";
   }
   const onPortalScroll = () => { if (portaled) positionPanel(); };
@@ -192,7 +205,7 @@ export function mountSearchSelect(hostEl, {
     portaled = false;
     window.removeEventListener("scroll", onPortalScroll, true);
     window.removeEventListener("resize", onPortalResize);
-    for (const p of ["position", "zIndex", "minWidth", "top", "left", "right", "maxHeight", "overflowY"]) {
+    for (const p of ["position", "zIndex", "minWidth", "top", "left", "right", "bottom", "maxHeight", "overflowY"]) {
       panelEl.style[p] = "";
     }
     if (panelHome.next && panelHome.next.parentNode === panelHome.parent) {
@@ -496,17 +509,30 @@ export function mountSearchMultiSelect(hostEl, {
   function positionPanel() {
     const r = toggleEl.getBoundingClientRect();
     const margin = 8;
+    const gap = 6;
     panelEl.style.position = "fixed";
     panelEl.style.zIndex = "1000"; // above the .filters-popup panel (z-index:100)
     panelEl.style.minWidth = `${Math.round(r.width)}px`;
-    panelEl.style.top = `${Math.round(r.bottom + 6)}px`;
     const width = panelEl.offsetWidth || Math.round(r.width);
     let left = Math.min(r.left, window.innerWidth - width - margin);
     left = Math.max(margin, left);
     panelEl.style.left = `${Math.round(left)}px`;
     panelEl.style.right = "auto";
-    const maxH = Math.max(140, Math.round(window.innerHeight - (r.bottom + 6) - margin));
-    panelEl.style.maxHeight = `${maxH}px`;
+    // Bidirectional: open below by default, but flip ABOVE when there isn't room
+    // below and above is roomier, so a toggle low on the page never pushes its
+    // panel off the bottom of the window (owner R6b). Height is clamped to the
+    // chosen side's free space, with internal scroll.
+    const spaceBelow = window.innerHeight - r.bottom - gap - margin;
+    const spaceAbove = r.top - gap - margin;
+    if (spaceBelow >= 160 || spaceBelow >= spaceAbove) {
+      panelEl.style.top = `${Math.round(r.bottom + gap)}px`;
+      panelEl.style.bottom = "auto";
+      panelEl.style.maxHeight = `${Math.max(120, Math.round(spaceBelow))}px`;
+    } else {
+      panelEl.style.top = "auto";
+      panelEl.style.bottom = `${Math.round(window.innerHeight - r.top + gap)}px`;
+      panelEl.style.maxHeight = `${Math.max(120, Math.round(spaceAbove))}px`;
+    }
     panelEl.style.overflowY = "auto";
   }
   const onPortalScroll = () => { if (portaled) positionPanel(); };
@@ -524,7 +550,7 @@ export function mountSearchMultiSelect(hostEl, {
     portaled = false;
     window.removeEventListener("scroll", onPortalScroll, true);
     window.removeEventListener("resize", onPortalResize);
-    for (const p of ["position", "zIndex", "minWidth", "top", "left", "right", "maxHeight", "overflowY"]) {
+    for (const p of ["position", "zIndex", "minWidth", "top", "left", "right", "bottom", "maxHeight", "overflowY"]) {
       panelEl.style[p] = "";
     }
     if (panelHome.next && panelHome.next.parentNode === panelHome.parent) {
