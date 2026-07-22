@@ -470,11 +470,14 @@ function togglePin(id, name) {
  * the table ranks by it, instead of an unrelated default. Resolves each condition's
  * metric in the CURRENT effective namespace (so a matchup condition adds a matchup
  * column) and appends any missing one to state.columns[ns]; it's removable via the
- * Columns picker afterward. When any column is added, the sort is set to the FIRST
- * auto-added metric so the ranking is meaningful.
+ * Columns picker afterward. The sort is set to the FIRST complete filtered metric so
+ * the ranking is meaningful — whether that metric was just added OR was already a
+ * visible column (R6 #3: Best Bowling ships in the default bowling columns, so keying
+ * the rank off the first *added* metric used to leave a Best-Bowling filter ranking by
+ * the unrelated default, raw Wickets, instead of the BBI figure).
  *
- * SCOPE FLAGS (see report): (a) with MULTIPLE conditions on different missing
- * metrics, all are added and the table ranks by the FIRST; (b) this runs on every
+ * SCOPE FLAGS (see report): (a) with MULTIPLE conditions on different metrics, any
+ * missing ones are added and the table ranks by the FIRST filtered metric; (b) this runs on every
  * popup Search regardless of the "Keep Selected Columns" toggle — Keep-Columns
  * governs the default-resync on a discipline/format change, a separate concern, so
  * it does not suppress showing a freshly-filtered column. Display/state only:
@@ -486,6 +489,17 @@ function autoAddFilteredColumns() {
   const ns = effectiveNamespace(state);
   const cols = [...(state.columns[ns] || [])];
   const added = [];
+  // R6 #3: the FIRST complete, rankable filtered metric — whether it was just
+  // added here OR was already a visible column. The table ranks by THIS on a
+  // popup Search. Keying the rank off the first *added* metric (the old
+  // behaviour) silently dropped the ranking whenever the filtered metric already
+  // shipped in the default columns — e.g. Best Bowling is in the default bowling
+  // preset, so a Best-Bowling filter added no column, set no sort, and left the
+  // table on its unrelated default (raw Wickets) instead of ranking by the BBI
+  // figure (best__sort = wickets desc, then runs asc). Tracking the first
+  // filtered metric regardless of prior visibility fixes that while keeping the
+  // "filter a metric → rank by it" intent consistent across every metric.
+  let firstFilteredKey = null;
   for (const g of state.advanced.groups || []) {
     for (const c of g.conds) {
       if (!isConditionComplete(c)) continue;
@@ -493,16 +507,21 @@ function autoAddFilteredColumns() {
       // Skip non-column placeholders (R. Pos. / composition never render as a
       // rankable data column) and metrics that don't exist in this namespace.
       if (!m || m.kind === "position" || m.kind === "composition") continue;
+      if (firstFilteredKey === null) firstFilteredKey = c.metricKey;
       if (cols.includes(c.metricKey) || added.includes(c.metricKey)) continue;
       cols.push(c.metricKey);
       added.push(c.metricKey);
     }
   }
-  if (added.length === 0) return;
-  const firstKey = added[0];
-  const firstMetric = getMetric(firstKey, ns);
+  // No complete, rankable condition → no-op (store untouched, anchors byte-identical).
+  if (firstFilteredKey === null) return;
+  const firstMetric = getMetric(firstFilteredKey, ns);
   const dir = firstMetric && firstMetric.higherIsBetter === false ? "asc" : "desc";
-  store.set({ columns: { ...state.columns, [ns]: cols }, sort: { key: firstKey, dir } });
+  const patch = { sort: { key: firstFilteredKey, dir } };
+  // Only touch columns when something was actually added — an already-visible
+  // filtered metric needs no column change, just the rank above.
+  if (added.length) patch.columns = { ...state.columns, [ns]: cols };
+  store.set(patch);
 }
 
 /**
