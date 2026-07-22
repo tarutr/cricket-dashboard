@@ -703,3 +703,20 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
     balls), and the 2,813 baseline + Karanbir 2,454 reproduce on screen. Side effect (intended, consistent):
     "Middle Overs Economy"/"Middle Overs Wickets" now also appear in the normal bowling column/condition
     pickers alongside the existing Powerplay/Death entries — completing the trio, matching "show all data".
+
+59. **Round-6b four display refinements (owner 2026-07-22; all DISPLAY-ONLY, no query/formula touched).**
+    (1) **Player popup "Vs opposition" table** (playerSections.js) — the collapsed cap snapped to the left
+    column's exact pixel height, slicing the last row mid-height. Now snaps to the bottom edge of the row the
+    boundary crosses, so the last visible row is always whole; a little TALLER than the left column is fine
+    (owner ruling). Verified on Kohli: cut lands cleanly between rows 19/20, no slice.
+    (2) **Graph roster rows** (graph.js) — removed the `#1/#2…` seed-rank chip that was cluttering each row.
+    (3) **Graph roster usability badge** (graph.js + styles.css) — renamed "CHARTABLE"/"NOT CHARTABLE" to a
+    single compact **`[usable]`**: green for usable; red for not-usable with a line-through on the WORD only
+    (the brackets stay intact — owner's exact spec). Smaller font, no uppercase, so it stops eating the
+    player-name column. Same underlying chartability probe (#9) — label/format only.
+    (4) **Graph left card order** (graph.js) — the Players group moved to directly below Chart type, reordered
+    inside to mode-toggle → dropdown → search. Because the roster panel is absolutely positioned, opening it
+    from a high position now keeps it within the viewport instead of extending the document downward and
+    forcing a whole-page scroll (owner's complaint). The panel keeps its own internal scroll + filter as before.
+    Verified: builders byte-identical, roster pool still 2,813, both badge states render per spec, dropdown
+    opens with zero page scroll (document height unchanged at viewport height).

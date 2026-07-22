@@ -2781,26 +2781,22 @@ a { color: var(--color-accent); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.graph-roster-item__meta {
-  flex: 0 0 auto;
-  font-size: var(--text-xs);
-  color: var(--color-muted);
-}
 .graph-roster-item__remove { flex: 0 0 auto; }
 .graph-roster-item.is-disabled .graph-roster-item__name { color: var(--color-muted); }
 
-/* R6 #9: CHARTABLE / NOT CHARTABLE badge — a small pill on the right of each
+/* R6 #9 (R6b refinement): usability badge — a small pill on the right of each
    roster row saying whether the player has the data the CURRENT chart type
-   needs (recomputed on chart-type / metric / X-axis / scope change). Green =
-   chartable, red = not, muted = still checking. */
+   needs (recomputed on chart-type / metric / X-axis / scope change). Reads
+   "[usable]" in both states: green = usable; red with the WORD struck through
+   (brackets intact) = not usable; muted "…" = still checking. Kept compact
+   (small font, no uppercase) so it doesn't eat into the player-name column. */
 .graph-roster-item__badge {
   flex: 0 0 auto;
-  font-size: var(--text-xs);
+  font-size: 0.66rem;
   font-weight: 600;
   line-height: 1.4;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 0 var(--space-2);
+  letter-spacing: normal;
+  padding: 0 var(--space-1);
   border-radius: var(--radius-pill);
   border: 1px solid transparent;
   white-space: nowrap;
@@ -2815,11 +2811,14 @@ a { color: var(--color-accent); }
   background: var(--color-bad-bg);
   border-color: #e6c3ba;
 }
+/* Strike ONLY the word, never the brackets (owner R6b). */
+.graph-roster-item__badge.is-not-chartable .graph-roster-item__badge-word {
+  text-decoration: line-through;
+}
 .graph-roster-item__badge.is-checking {
   color: var(--color-muted);
   background: var(--color-panel);
   border-color: var(--color-line);
-  letter-spacing: normal;
 }
 
 .graph-player-actions { display: flex; gap: var(--space-3); }

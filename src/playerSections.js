@@ -286,8 +286,22 @@ function wireOppositionToggles(root) {
         toggleBtn.hidden = true;
         return;
       }
+      // R6b (owner): don't clip a row mid-height. Snap the collapsed cap to the
+      // bottom edge of the row the left-column height crosses, so the last
+      // visible row is always whole — a little TALLER than the left column is
+      // fine (owner ruling). Falls back to the raw cap if rows can't be measured.
+      const scrollTop = scrollEl.getBoundingClientRect().top;
+      let collapsedHeight = capHeight;
+      const bodyRows = scrollEl.querySelectorAll("tbody tr");
+      for (const r of bodyRows) {
+        const rowBottom = r.getBoundingClientRect().bottom - scrollTop;
+        if (rowBottom >= capHeight) {
+          collapsedHeight = Math.ceil(rowBottom) + 1; // +1 guards sub-pixel clipping
+          break;
+        }
+      }
       toggleBtn.hidden = false;
-      scrollEl.style.maxHeight = expanded ? "none" : `${capHeight}px`;
+      scrollEl.style.maxHeight = expanded ? "none" : `${collapsedHeight}px`;
       toggleBtn.textContent = expanded ? "Show less" : "Show more";
     }
     toggleBtn.addEventListener("click", () => {

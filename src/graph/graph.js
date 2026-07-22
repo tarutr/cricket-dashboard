@@ -390,8 +390,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
             </div>
           </div>
 
-          <div class="graph-control-group" data-role="metric-controls"></div>
-
+          <!-- R6b (owner): the Players group sits directly below Chart type so
+               the roster dropdown opens high on the page — its (absolutely
+               positioned) panel then stays within the viewport instead of
+               extending the document downward and forcing a whole-page scroll.
+               Order inside: mode toggle -> dropdown -> search (owner-specified).
+               Metric/date controls follow beneath. -->
           <div class="graph-control-group">
             <div class="graph-control-group__head">
               <span class="graph-control-label">Players</span>
@@ -407,10 +411,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
                 <button type="button" class="segmented__btn" data-value="worst">Worst</button>
                 <button type="button" class="segmented__btn" data-value="manual">Manual</button>
               </div>
-            </div>
-            <div class="graph-player-search">
-              <input type="text" class="input" data-role="player-search" placeholder="Add a player…" aria-label="Search players to add" />
-              <div class="graph-player-search__results" data-role="player-search-results" hidden></div>
             </div>
             <!-- R5-C #13: the "N of M selected" roster dropdown and its reset
                  link are BOXED together (.graph-roster-box) so the link's target
@@ -429,8 +429,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
                 <button type="button" class="link-btn" data-role="reset-players">Reset to full player set</button>
               </div>
             </div>
+            <div class="graph-player-search">
+              <input type="text" class="input" data-role="player-search" placeholder="Add a player…" aria-label="Search players to add" />
+              <div class="graph-player-search__results" data-role="player-search-results" hidden></div>
+            </div>
             <p class="graph-cap-note" data-role="cap-note" hidden></p>
           </div>
+
+          <div class="graph-control-group" data-role="metric-controls"></div>
         </div>
 
         <!-- Owner item 7 (Wave 3): in-panel control edits are PENDING (they
@@ -1846,7 +1852,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       if (sig === badgeCache.key && badgeCache.map.has(id)) {
         const ok = badgeCache.map.get(id);
         span.className = `graph-roster-item__badge ${ok ? "is-chartable" : "is-not-chartable"}`;
-        span.textContent = ok ? "Chartable" : "Not chartable";
+        // Both states read "[usable]"; the not-usable one strikes ONLY the word
+        // (the brackets stay intact — owner's Round-6b refinement). The word is
+        // wrapped so text-decoration lands on it alone, never the brackets.
+        span.innerHTML = `[<span class="graph-roster-item__badge-word">usable</span>]`;
         span.title = ok ? "Has the data this chart needs in the current view" : "Missing the data this chart needs in the current view";
       } else {
         span.className = "graph-roster-item__badge is-checking";
@@ -1898,9 +1907,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       return;
     }
 
-    // Filter by name (case-insensitive) but keep each candidate's REAL pool
-    // position — the "#N" meta doubles as its seed rank, so it must reflect the
-    // untouched pool order, not the filtered index. Map before filtering.
+    // Filter by name (case-insensitive), preserving each candidate's pool order
+    // (seed rank) — rows render in that order. Map before filtering.
     const filter = rosterFilterText.trim().toLowerCase();
     const withIdx = candidates.map((p, i) => ({ p, i }));
     const matched = filter ? withIdx.filter(({ p }) => p.name.toLowerCase().includes(filter)) : withIdx;
@@ -1920,7 +1928,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
     els.rosterList.innerHTML =
       shown
-        .map(({ p, i }) => {
+        .map(({ p }) => {
           const checked = selection.isChecked(p.id);
           const atCap = !checked && checkedCount >= cap;
           const title = atCap
@@ -1932,7 +1940,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
               <input type="checkbox" data-role="roster-check" data-id="${escAttr(p.id)}" ${checked ? "checked" : ""} ${atCap ? "disabled" : ""} title="${escAttr(title)}" />
               <span class="graph-roster-item__name">${escHtml(p.name)}</span>
               <span class="graph-roster-item__badge" data-role="roster-badge" hidden></span>
-              <span class="graph-roster-item__meta">#${i + 1}</span>
               <button type="button" class="icon-btn graph-roster-item__remove" data-role="remove-candidate" data-id="${escAttr(p.id)}" title="Remove from list">&times;</button>
             </div>`;
         })
