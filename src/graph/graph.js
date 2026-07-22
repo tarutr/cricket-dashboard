@@ -10,7 +10,7 @@
 // buildScopeClauses (via charts.js/players.js), table.js's buildQuery (via
 // players.js, for seeding).
 
-import { eligibleMetrics, pruneIneligibleState, effectiveNamespace } from "../state.js";
+import { eligibleMetrics, pruneIneligibleState, effectiveNamespace, createStore } from "../state.js";
 import { getMetric, hasMetricData, metricDisplayLabel } from "../metrics.js";
 import { escHtml, escAttr } from "../html.js";
 import { getManifest, query } from "../db.js";
@@ -308,12 +308,14 @@ let currentInstance = null;
 
 export function mountGraph(container, statsStore, { hasStatsResults = () => false, onClearFilters = () => {} } = {}) {
   // ── Shared Stats filter store (R7 Wave 2, item 16) ───────────────────────
-  // The Graph Builder now SHARES the Stats filter state, bidirectionally. It
-  // reads AND writes the SAME store main.js owns — no graph-local clone, no
-  // re-seed/re-inherit dance. A filter edited in the graph's own Filters popup
-  // lands on the Stats side, and a filter set on the Stats side is already in
-  // effect here: it's a shortcut to edit the same filters without leaving the
-  // tab, NOT a separate scope.
+  // The Graph Builder now SHARES the Stats filter state. Its OWN logic (seeding,
+  // rendering, the card footer) reads AND writes the SAME store main.js owns — no
+  // graph-local clone. A filter set on the Stats side is already in effect here.
+  // R6 decision 55 (#5/#10): the graph's own Filters POPUP is no longer live-
+  // shared — it is fully STAGED behind "Apply to graph" via a private buffer
+  // store (see the Graph Filters popup section below), so an edit made inside
+  // that popup reaches the Stats side ONLY when the user presses "Apply to
+  // graph". Everything OUTSIDE the popup still shares this store directly.
   //
   // Wave B (matchup-aware Graph): the read wrapper NO LONGER nulls matchupVs —
   // the graph now honours the shared "Vs" bucket end-to-end (its drawer offers
@@ -2034,16 +2036,18 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     els.exportStatus.textContent = result.ok ? "Copied to clipboard" : `Copy failed: ${result.error?.message ?? "unknown error"}`;
   });
 
-  // ── Graph Filters popup (R7 Wave 2, items 16 + 2) ───────────────────────────
+  // ── Graph Filters popup (R7 Wave 2 items 16 + 2; R6 decision 55 staging) ─────
   // The graph gets its OWN Filters popup, REUSING the Stats popup's section
-  // factories (mountFilters / mountFilterDrawer) bound to the SHARED `store`
-  // above — no fork of their internals. The shell is created and appended to
-  // <body> by THIS module (index.html / main.js are untouched — document.body
-  // append is the established popover pattern, e.g. filters.js's
-  // wirePortalDropdown). Item 16: changing a filter here writes to the SHARED
-  // store, so the edit is reflected on the Stats side too (and vice-versa); the
-  // trigger button ("Apply to graph") re-seeds + re-renders the current chart
-  // via onScopeChanged().
+  // factories (mountFilters / mountFilterDrawer) — no fork of their internals.
+  // The shell is created and appended to <body> by THIS module (index.html /
+  // main.js are untouched — document.body append is the established popover
+  // pattern, e.g. filters.js's wirePortalDropdown). R6 decision 55 (#5/#10): the
+  // factories are bound to a private BUFFER store (below), NOT the shared one, so
+  // every edit inside this popup is STAGED — nothing touches the shared Stats
+  // scope until "Apply to graph" copies the buffer's scope fields across and
+  // re-seeds + re-renders the chart via onScopeChanged(). The popup live-refreshes
+  // its own controls off the buffer while open (a Batting↔Bowling / Vs flip
+  // immediately reshapes the drawer), and close-without-Apply discards the buffer.
   const DEFAULT_SORT_KEY = { batting: "runs", bowling: "wickets" };
   const gpopEl = document.createElement("div");
   gpopEl.className = "filters-popup";
@@ -2103,23 +2107,37 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     });
   });
 
-  // The two shared section factories, bound to the SHARED store (item 16).
-  // Their control changes write to `store` (the shared filter state)
-  // immediately — so the Stats pills/badge track them live — but nothing in the
-  // GRAPH re-queries until "Apply to graph" runs onScopeChanged() below.
-  // onChange here is a no-op (the graph has no pills/subtitle inside the popup —
-  // the card's own footer, via store.describeScope(), is refreshed on
-  // apply/render).
+  // ── Staged buffer store (R6 decision 55, #5/#10) ────────────────────────────
+  // Part 2 (owner chose "fully staged"): the WHOLE graph Filters popup is staged
+  // behind "Apply to graph". Editing discipline / gender / formats / team-type /
+  // Vs / conditions / team / opposition / event / venue / positions inside THIS
+  // popup must NOT touch the shared Stats store (and so must never silently move
+  // the Stats scope) until the user presses "Apply to graph". To get that WITHOUT
+  // forking filters.js / drawer.js (which Stats relies on), the popup's shared
+  // section factories are bound to a private BUFFER store — a full copy of the
+  // shared state, re-seeded from the shared store every time the popup OPENS.
+  // Every edit lands on the buffer; the chart and the left panel keep reading the
+  // COMMITTED shared store; "Apply to graph" copies the buffer's scope fields
+  // back into the shared store atomically, then reseeds/redraws via
+  // onScopeChanged(). Close-without-Apply discards the buffer (the next open
+  // re-seeds it from the shared store).
+  const bufferStore = createStore({ ...statsStore.get() });
+
+  // The two shared section factories, bound to the BUFFER store (never the shared
+  // one — that is what makes the popup staged). onChange is a no-op: the graph
+  // has no pills/subtitle inside the popup, and the card's own footer (via
+  // store.describeScope()) is refreshed on apply/render. The popup still re-renders
+  // its OWN controls as the buffer changes — see the buffer subscription below.
   const graphFilterController = mountFilters(
     gfpop.filterBar,
-    store,
+    bufferStore,
     () => {},
     () => {},
     () => {}
   );
   const graphDrawerController = mountFilterDrawer(
     { advancedHost: gfpop.advancedHost },
-    store,
+    bufferStore,
     { onChange: () => {} }
   );
   {
@@ -2129,7 +2147,30 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     graphFilterController.setDateBounds(gMin, gMax);
   }
 
+  // Part 1 (live-refresh): while the popup is OPEN, any buffer change rebuilds the
+  // drawer's own controls into the buffer's current pending scope. The drawer's
+  // renderNumeric()/sync() key off effectiveNamespace(state), so a discipline or
+  // Vs flip immediately reshapes the metric list, the "+ Add condition" list and
+  // any shown condition — no stale cross-discipline condition can linger (#5).
+  // The filter bar's selects self-sync via their own change handlers, exactly as
+  // on the Stats side, so (mirroring main.js's store.subscribe -> drawer.sync())
+  // only the drawer is re-synced here. Skipped while the popup is closed — which
+  // also makes the wholesale re-seed on open (done while still hidden) a no-op
+  // for this subscription.
+  bufferStore.subscribe(() => {
+    if (gpopEl.hidden) return;
+    graphDrawerController.sync();
+  });
+
   function openGraphPopup() {
+    // Re-seed the buffer from the CURRENTLY committed shared scope, so the popup
+    // always opens showing the live Stats scope and any edits from a previous
+    // close-without-Apply are discarded. The snapshot carries advancedByDiscipline,
+    // so createStore.set() treats it as a wholesale replace (managesArchive) and
+    // does NOT run the per-discipline condition swap. Seed while still hidden so
+    // the buffer subscription's live-refresh is a no-op for this seed — the
+    // explicit render()/onShow() below draw the fresh controls.
+    bufferStore.set({ ...statsStore.get() });
     gpopEl.hidden = false;
     graphFilterController.render();
     graphDrawerController.onShow();
@@ -2150,6 +2191,36 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       return;
     }
     if (!graphDrawerController.validate()) return;
+    // Part 2 (decision 55): COMMIT the staged buffer to the shared store now, in
+    // ONE atomic set(). Every scope field the popup can edit is copied across;
+    // the shared store was untouched by the edits until this moment (so toggling
+    // anything in this popup never silently moved the Stats scope). The patch
+    // INCLUDES advancedByDiscipline, so createStore.set() treats it as a wholesale
+    // replace (managesArchive) and does NOT re-run the per-discipline swap — the
+    // buffer already holds the coherent advanced/advancedByDiscipline pair. Fields
+    // the popup never edits (view, sort, minInnings, pinnedPlayers, columns,
+    // search, keepColumns) stay on the shared store untouched; the sort-key
+    // fallback + pruneIneligibleState below then reconcile columns/sort to the
+    // newly committed discipline/formats, exactly as the Stats-side Search does.
+    const buf = bufferStore.get();
+    store.set({
+      gender: buf.gender,
+      discipline: buf.discipline,
+      formats: buf.formats,
+      teamType: buf.teamType,
+      dateFrom: buf.dateFrom,
+      dateTo: buf.dateTo,
+      teams: buf.teams,
+      opposition: buf.opposition,
+      event: buf.event,
+      venue: buf.venue,
+      positions: buf.positions,
+      regularPositions: buf.regularPositions,
+      profile: buf.profile,
+      matchupVs: buf.matchupVs,
+      advanced: buf.advanced,
+      advancedByDiscipline: buf.advancedByDiscipline,
+    });
     // Keep the SHARED store coherent after scope edits, exactly as the Stats
     // side does: drop columns/conditions the new scope orphaned, and fall back
     // the sort key when it no longer resolves in the (possibly switched)
