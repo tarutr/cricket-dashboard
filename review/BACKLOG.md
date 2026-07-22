@@ -57,3 +57,26 @@ Remaining, in bang-for-buck order:
 ## Older standing deferrals
 - **Team-name normalization** (Team + Opposition alias map) — the FIRST post-round data to-do (decision 51).
 - ~375 px mobile one-screen fit; export-while-dirty.
+
+## R6 #8 outcome + the per-over / fine-slice DATA-LAYER PROJECT (owner-approved direction 2026-07-22)
+**Done now (no data change):** Line X=Phase broadened to the base metrics whose per-phase components already
+live in the parquets — batting Runs/Balls/SR; bowling Runs-conceded/Balls/Wickets/Economy/Bowling-SR/Average.
+
+**Line Y — permanently NOT plottable** (for the record): High Score, Best Bowling (single peak figures),
+Matches (a scope count, wrong source), R.Pos/Batting position (filters, not values). Everything else
+(total/rate/percent) already IS available as Y for the normal X-axes.
+
+**The project to schedule (rolls the rest of phase INTO the per-over extension — one data-layer job):**
+- STRATEGY (owner endorsed): from the ball-by-ball `deliveries` source, emit the raw **components** per slice
+  — runs, balls, dots, fours, sixes, wickets, dismissals — **per phase AND per over**, NOT pre-computed
+  per-metric values. The app then derives EVERY rate/percent/total metric per bucket via the existing
+  sqlExpression pattern (SR=runs÷balls, dot%=dots÷balls, average=runs÷dismissals…). One compact component set
+  unlocks all slice-able metrics for both phase and per-over.
+- Unlocks (currently blocked by missing per-slice columns): by-PHASE **Dot% / Boundary% / Fours / Sixes /
+  Batting Average / dismissal-types** (need pp_dots/pp_fours/pp_sixes/pp_dismissals on the innings parquet —
+  ~a few columns, small size bump, loads with everything); and **per-over** (over 1→20) for all those metrics.
+- LOAD STRATEGY (ties to the Tier-1..4 speed work): phase components → add the few columns to the EXISTING
+  innings parquet. Per-over → a SEPARATE parquet (~8× the innings file) **loaded lazily, only when the per-over
+  X-axis is actually picked** (never in the normal load), sorted by player so DuckDB-WASM range-reads fetch
+  just the charted players. Test-first / gated / additive pipeline pattern (decision-36 style); publishes to
+  R2 via CI → needs owner's explicit go for the pipeline run (as with per-over generally).
