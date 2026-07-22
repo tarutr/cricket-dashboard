@@ -1224,6 +1224,7 @@ export function mountTable(
   let tbodyEl = null;
   let showMoreWrapEl = null;
   let showMoreBtnEl = null;
+  let showTop50BtnEl = null;
   // R3.2 single-row toolbar: stable control nodes (built once in
   // ensureSkeleton, wired once, kept in step by syncToolbar() rather than an
   // innerHTML rebuild — the "everything waits for Search" model needs the
@@ -1339,6 +1340,7 @@ export function mountTable(
           <p class="table-body-hint" data-role="table-body-hint" hidden>Set your filters, then press Search.</p>
           <div class="table-show-more" data-role="table-show-more" hidden>
             <button type="button" class="btn btn--ghost" data-role="show-more-btn"></button>
+            <button type="button" class="btn btn--ghost" data-role="show-top50-btn" hidden>Show top 50</button>
           </div>
         </div>
       </div>
@@ -1352,6 +1354,7 @@ export function mountTable(
     tbodyEl = container.querySelector(".data-table tbody");
     showMoreWrapEl = container.querySelector('[data-role="table-show-more"]');
     showMoreBtnEl = container.querySelector('[data-role="show-more-btn"]');
+    showTop50BtnEl = container.querySelector('[data-role="show-top50-btn"]');
     bodyHintEl = container.querySelector('[data-role="table-body-hint"]');
     dateFromEl = container.querySelector('[data-role="toolbar-date-from"]');
     dateToEl = container.querySelector('[data-role="toolbar-date-to"]');
@@ -1371,6 +1374,18 @@ export function mountTable(
         // (not lastRows.length) so floated synthetic no-data pin rows (R5-B #3,
         // which make the DISPLAYED count exceed lastRows.length) are revealed too.
         visibleRowCount = Number.MAX_SAFE_INTEGER;
+        renderLoaded(lastRows, lastLoadedState ?? store.get(), lastBowlingTypes);
+      });
+    }
+
+    // "Show top 50" (Round-6 item #12): the paired collapse for the button
+    // above — appears once the table has actually been expanded past the
+    // initial cap (renderLoaded's own hidden/visible logic below), and takes
+    // it right back to PAGE_SIZE. Same "pure re-render of already-loaded
+    // rows, no requery" shape as Show More.
+    if (showTop50BtnEl) {
+      showTop50BtnEl.addEventListener("click", () => {
+        visibleRowCount = PAGE_SIZE;
         renderLoaded(lastRows, lastLoadedState ?? store.get(), lastBowlingTypes);
       });
     }
@@ -1490,6 +1505,7 @@ export function mountTable(
     tbodyEl = null;
     showMoreWrapEl = null;
     showMoreBtnEl = null;
+    showTop50BtnEl = null;
     bodyHintEl = null;
     dateFromEl = null;
     dateToEl = null;
@@ -2206,11 +2222,23 @@ export function mountTable(
       .join("");
 
     // Show More (task 3): reveals the rest in one click, not another page.
+    // Show top 50 (Round-6 item #12): the paired collapse, visible only once
+    // the table has actually been expanded past PAGE_SIZE (visibleRowCount >
+    // PAGE_SIZE — set by the Show More click above, and reset to PAGE_SIZE by
+    // every fresh load()/re-sort per this file's own PAGE_SIZE comment), so
+    // it never appears on a table that was never expanded in the first place.
+    // The two buttons are mutually exclusive; the wrap itself only hides when
+    // NEITHER applies (table fits within PAGE_SIZE outright).
     if (showMoreWrapEl && showMoreBtnEl) {
       const remaining = displayRows.length - pageRows.length;
-      showMoreWrapEl.hidden = remaining <= 0;
+      const isExpanded = visibleRowCount > PAGE_SIZE;
+      showMoreWrapEl.hidden = remaining <= 0 && !isExpanded;
+      showMoreBtnEl.hidden = remaining <= 0;
       if (remaining > 0) {
         showMoreBtnEl.textContent = `Show More (${remaining.toLocaleString()} player${remaining === 1 ? "" : "s"})`;
+      }
+      if (showTop50BtnEl) {
+        showTop50BtnEl.hidden = !(remaining <= 0 && isExpanded);
       }
     }
 
