@@ -672,3 +672,19 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
     never silently change the Stats scope) until "Apply to graph" commits them atomically + reseeds. graph.js-
     focused; query builders byte-identical (display/state only). #6 (reset wrong set) likely same family — check
     under this fix. Keeps the Apply-to-graph gate; removes the surprising Graphs→Stats scope side effect.
+
+56. **Round-6 #1 (fine-Vs re-sort) — CLOSED, not a code bug (owner accepted 2026-07-22).** The preserve-vs-
+    resort decision is `load(null,{resort:!fromToolbar})` (main.js:775) — it keys ONLY on toolbar-vs-popup
+    Search, NEVER on the Vs dimension (the only group/type branch is the SQL bucket column, table.js:301). So
+    a toolbar fine-Vs cannot re-sort differently from coarse. Verified across 4 fresh-loaded scenarios (all
+    preserve, arrow clears). The re-sort the owner saw was a stale hard-cached older module in the browser
+    (ES-module caching gotcha) — owner: "if the code literally can't have it be different, it can't be." No fix.
+
+57. **Round-6 #4 (the "Average (vs style)" metric) — RENAMED, not removed (owner 2026-07-22).** "Average (vs
+    style)" / "Average (vs hand)" are NOT a separate/redundant filter — they are the SAME `key:"average"` metric
+    in the matchup namespace (metrics.js:924/1315), i.e. the ordinary Average shown WHEN a Vs bucket is active
+    (auto-scoped). A separate internal def exists only because Vs data lives in a different pre-bucketed table
+    needing its own sqlExpression. Removing it would strip the average from Vs mode. Owner's intent ("I just
+    pick Vs + Average, I don't need a specific vs-average") is already how it works; the only defect was the
+    confusing label → RENAMED to plain "Batting Average"/"Bowling Average" (label-only; sqlExpression/key/kind
+    byte-identical; anchors unaffected). The Vs context is conveyed by the Vs pill/scope line.

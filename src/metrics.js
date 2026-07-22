@@ -922,7 +922,7 @@ const MATCHUP_BATTING_METRICS = [
   },
   {
     key: "average",
-    label: "Average (vs style)",
+    label: "Batting Average",
     shortLabel: "Avg",
     discipline: "matchup_batting",
     source: "matchup",
@@ -1313,7 +1313,7 @@ const MATCHUP_BOWLING_METRICS = [
   },
   {
     key: "average",
-    label: "Average (vs hand)",
+    label: "Bowling Average",
     shortLabel: "Avg",
     discipline: "matchup_bowling",
     source: "matchup",
