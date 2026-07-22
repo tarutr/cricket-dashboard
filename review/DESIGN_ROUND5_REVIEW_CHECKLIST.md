@@ -6,30 +6,30 @@ number-adjacent change independently. Suggested scope to load: **Men / T20 / Int
 02/07/2026** (the baseline: 2,813 players, Karanbir Singh 2,454, SA Yadav 60·1,544·29.13·150.34).
 
 ## Stats table & toolbar
-- [ ] **No note text under the toolbar** (the old "Matchup mode / N of M conditions" line is gone). *(#1)*
+- [x] **No note text under the toolbar** (the old "Matchup mode / N of M conditions" line is gone). *(#1)*
 - [ ] Switch **Vs → Spin** and press Search: the rows **keep their positions**, only the numbers change
       (they don't reshuffle). *(#4)*
-- [ ] After that, **click the RUNS column header**: now it re-ranks — and the little sort arrow (▼) appears.
+- [x] After that, **click the RUNS column header**: now it re-ranks — and the little sort arrow (▼) appears.
       Confirm the arrow shows **only** on a column that's actually sorting. *(#4 + your arrow ruling, decision 52)*
-- [ ] **Pin column** (left of the "#"): click a player's pin — they float to the top with a solid-red pin,
+- [x] **Pin column** (left of the "#"): click a player's pin — they float to the top with a solid-red pin,
       keeping their real rank number; click again to send them back. *(#3/#12)*
-- [ ] Pin someone, then change Vs/preset (toolbar) → pin **stays**; open Filters and press its Search →
+- [x] Pin someone, then change Vs/preset (toolbar) → pin **stays**; open Filters and press its Search →
       pins **reset**. *(#3)*
-- [ ] Type a player in the results search and pick them → they **float to the top** like a pin. *(#2)*
-- [ ] A pinned player with no data in the current view shows **"–"** across their cells. *(#3/#11)*
+- [x] Type a player in the results search and pick them → they **float to the top** like a pin. *(#2)*
+- [x] A pinned player with no data in the current view shows **"–"** across their cells. *(#3/#11)*
 
 ## Filters popup
-- [ ] Open Filters, add a condition / change a team / change a date → **nothing** on the table or pills
+- [x] Open Filters, add a condition / change a team / change a date → **nothing** on the table or pills
       changes until you press the popup's **Search**. *(#9)*
-- [ ] "**+ Add condition**" list: "**Matchup (Vs)**" is the first item under *Advanced metrics* (just above
+- [x] "**+ Add condition**" list: "**Matchup (Vs)**" is the first item under *Advanced metrics* (just above
       "Dot Ball %"); "**Batting position**" is its own entry, and picking Vs=Spin no longer sprouts a second
       position dropdown. *(#5/#8)*
 - [ ] Number conditions are **per discipline**: add a batting condition, switch to Bowling → it's gone; switch
       back → it's there. Your player filters (role/hand/style/teams) survive the switch. *(#7)*
-- [ ] "**Keep Selected Columns**" is greyed on a blank table and after a discipline switch. *(#10)*
+- [x] "**Keep Selected Columns**" is greyed on a blank table and after a discipline switch. *(#10)*
 - [ ] Filter on a metric (e.g. Best Bowling ≥3 for ≤20) and Search → that column **auto-appears** and the
       table ranks by it. *(#6)*
-- [ ] **Domestic opposition** now works: Team Type → Domestic, add "Against opposition" (no longer greyed),
+- [x] **Domestic opposition** now works: Team Type → Domestic, add "Against opposition" (no longer greyed),
       pick a club → results narrow. *(#14)*
 
 ## Graphs

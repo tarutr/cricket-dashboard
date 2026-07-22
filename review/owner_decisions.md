@@ -647,3 +647,28 @@ change requires a new owner decision recorded here. Dates are decision dates.
     — owner will decide at the final hands-on review whether to build a brand-new note (none exists today;
     the old "Matchup mode" note was already removed in R5-A). **#19** fresh-load chart-type red outline left
     as-built (per spec); owner may revisit at final review.
+
+## 2026-07-22 — Round 6 review batch (owner localhost review of Round 5) — 12 items
+Owner reviewed R5 on localhost + gave 12 notes (full triage in the orchestrator's turn). Priority ORDER
+confirmed by owner: (1) root-cause #5/#10 graph discipline/filter mixing, (2) bugs #1/#3/#6, (3) UX/
+chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clean.
+
+54. **Batting-hand persistence REMOVED (owner 2026-07-22, reverses decision 50's "identity filters persist").**
+    "batting hand" must NOT appear as a filter in the BOWLING discipline, and must NOT persist across the
+    batting↔bowling toggle — owner: a player's batting hand and bowling arm differ, so persisting it into
+    bowling "is more confusing than useful." (Other identity filters — role, teams — not mentioned; scope this
+    change to batting hand only unless owner extends. Bowling style stays a batting filter per decision — the
+    intentional "how leg-spinners bat" #17, untouched.) Round-6 item #2.
+
+55. **Graph Filters popup FULLY STAGED behind "Apply to graph" (owner 2026-07-22, Round-6 #5/#10 fix).**
+    Root cause (read-only investigation): the graph mounts the SAME shared filter components as Stats but wires
+    them with no-op callbacks + no store-subscribe, so popup edits don't re-render (graph.js:2113-2124 vs
+    main.js:288-296/604-660/783-797); AND the discipline/gender/Vs selects write to the SHARED store instantly
+    (filters.js:740-744), ahead of the graph's Apply gate — so the chart's namespace changes before the roster/
+    metric reseed (→ batting metric fetched against bowling data, #10; toggle looks dead, #5). "Average (vs
+    style)" (#4) is NOT a plain leak — it correctly shows only in Vs; the same no-refresh let it linger.
+    RULING: (Part 1) wire the graph popup to live-refresh like Stats; (Part 2, owner chose option b) make the
+    WHOLE graph Filters popup staged — discipline/gender/Vs/format edits do NOT touch the shared store (and so
+    never silently change the Stats scope) until "Apply to graph" commits them atomically + reseeds. graph.js-
+    focused; query builders byte-identical (display/state only). #6 (reset wrong set) likely same family — check
+    under this fix. Keeps the Apply-to-graph gate; removes the surprising Graphs→Stats scope side effect.
