@@ -2191,7 +2191,21 @@ def _upload_one(client, out_dir, fname):
         try:
             client.upload_file(
                 p, R2_BUCKET, key,
-                ExtraArgs={"ContentType": CONTENT_TYPES[fname]},
+                ExtraArgs={
+                    "ContentType": CONTENT_TYPES[fname],
+                    # CDN edge caching (perf). Data files are versioned by a
+                    # `?v=<hash>` query param in the browser URL (see src/config.js /
+                    # manifest), so a changed file is fetched under a NEW url — the
+                    # object itself is safe to cache "forever, immutable" at the edge.
+                    # manifest.json is the version POINTER (browser fetches it
+                    # cache-busted, no-store); it must NEVER be edge-cached or clients
+                    # would keep loading an old catalogue — always revalidate.
+                    "CacheControl": (
+                        "no-cache, max-age=0, must-revalidate"
+                        if fname == "manifest.json"
+                        else "public, max-age=31536000, immutable"
+                    ),
+                },
             )
             suffix = f" (attempt {attempt}/{UPLOAD_MAX_ATTEMPTS})" if attempt > 1 else ""
             log(f"  uploaded {key}{suffix}")

@@ -62,8 +62,16 @@ CORS-enabled so the browser can issue HTTPS range requests against the Parquet f
 
 One-time setup in the Cloudflare dashboard:
 
-1. **Public access**: R2 → `cricket-db` → Settings → Public Development URL → Enable.
-   Note the resulting `https://pub-<hash>.r2.dev` URL — the frontend config needs it.
+1. **Custom domain (public access + CDN caching)**: R2 → `cricket-db` → Settings →
+   Custom Domains → Connect `data.the-cordon.com`. Serving the bucket through a
+   Cloudflare custom domain (rather than the raw `pub-<hash>.r2.dev` dev URL, which
+   is uncached and rate-limited) gives edge caching. `DATA_BASE_URL` in
+   `src/config.js` points at `https://data.the-cordon.com/explorer/`. The bucket
+   stays public-read (no secrets — public cricket data only). Cache lifetime is set
+   by the pipeline: `export_parquet.py` uploads data files with
+   `Cache-Control: public, max-age=31536000, immutable` (safe — files are versioned
+   by the manifest's `?v=<hash>`), and `manifest.json` with `no-cache` so the
+   version pointer is always revalidated.
 2. **CORS policy**: R2 → `cricket-db` → Settings → CORS policy → Edit, paste:
 
 ```json
@@ -82,7 +90,7 @@ One-time setup in the Cloudflare dashboard:
 ]
 ```
 
-Verify with: `curl -s -I -H "Origin: https://cricdb.vercel.app" https://pub-<hash>.r2.dev/explorer/manifest.json`
+Verify with: `curl -s -I -H "Origin: https://cricdb.vercel.app" https://data.the-cordon.com/explorer/manifest.json`
 — the response must include `access-control-allow-origin`.
 
 ## Local development
