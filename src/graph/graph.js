@@ -582,6 +582,22 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   let benchmarkMetricKeys = null;
   let benchmarkPoolCache = null; // { key, rows } | null
 
+  // R6 #9 — CHARTABILITY BADGES (Part A). A per-signature cache mapping a
+  // player id -> boolean "does this player have the data the CURRENT chart type
+  // needs?". Recomputed whenever the chart type / metric / X-axis / windows /
+  // scope change (the signature captures all of those — chartabilitySignature).
+  // It is derived from the SAME read-only fetch helpers the chart itself uses
+  // (charts.js's fetchSelectedPlayerMetrics / fetchWindowMetric, timeseries.js's
+  // fetchLineData) — never a new/duplicated aggregation, so Rule 1 is untouched.
+  // Computed only for the players that matter (the CHECKED roster + the
+  // currently-rendered dropdown rows — bounded to ~50+cap, never the whole
+  // pool), async and non-blocking: rows show a neutral "…" until their probe
+  // resolves. See ensureChartability() / paintBadges().
+  let badgeCache = { key: null, map: new Map() };
+  let badgeToken = 0;
+  let badgeDebounce = null;
+  let lastRenderedRosterIds = [];
+
   let seeded = false; // has the selection ever been seeded for the current discipline+scope?
   let lastSeedKey = null;
   let loadToken = 0;
@@ -1609,6 +1625,232 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   // of point 13); only what's RENDERED here is.
   const ROSTER_RENDER_CAP = 50;
 
+  // ── R6 #9: chartability (roster badges, Part A) ─────────────────────────────
+
+  /** A stable signature of everything a chartability verdict depends on for the
+   * CURRENT chart type: the scope (scopeSeedKey) plus the type's own required
+   * metric(s) / X-dim / windows. Returns null when the chart isn't configured
+   * enough to have a verdict yet (no type, no metric picked, incomplete windows)
+   * — badges hide in that state rather than claim anything. A change to any part
+   * invalidates the cache (ensureChartability) and repaints the badges. */
+  function chartabilitySignature(state) {
+    const scope = scopeSeedKey(state);
+    switch (chartType) {
+      case "bar":
+        return barMetricKey ? JSON.stringify(["bar", scope, barMetricKey]) : null;
+      case "scatter":
+        return scatterXKey && scatterYKey ? JSON.stringify(["scatter", scope, scatterXKey, scatterYKey]) : null;
+      case "phases":
+        return phaseFamilyId ? JSON.stringify(["phases", scope, phaseFamilyId]) : null;
+      case "radar":
+        return radarMetricKeys.length >= RADAR_MIN_METRICS
+          ? JSON.stringify(["radar", scope, radarMetricKeys.slice().sort()])
+          : null;
+      case "slope": {
+        const ready = slopeMetricKey && slopeWindowA?.from && slopeWindowA?.to && slopeWindowB?.from && slopeWindowB?.to;
+        return ready ? JSON.stringify(["slope", scope, slopeMetricKey, slopeWindowA, slopeWindowB]) : null;
+      }
+      case "dumbbell": {
+        const ready = dumbbellMetricKey && dumbbellWindowA?.from && dumbbellWindowA?.to && dumbbellWindowB?.from && dumbbellWindowB?.to;
+        return ready ? JSON.stringify(["dumbbell", scope, dumbbellMetricKey, dumbbellWindowA, dumbbellWindowB]) : null;
+      }
+      case "byyear":
+        return lineXKey && byYearMetricKey ? JSON.stringify(["byyear", scope, lineXKey, byYearMetricKey]) : null;
+      case "benchmark": {
+        const keys = benchmarkMetricKeys || [];
+        return keys.length >= 4 ? JSON.stringify(["benchmark", scope, keys.slice().sort()]) : null;
+      }
+      default:
+        return null;
+    }
+  }
+
+  /** How many non-null buckets a player has for a Line metric (its own value on
+   * the chosen X-axis) — the SAME "real point" test the Line renderer uses
+   * (hasMetricData over each bucket cell). >=2 means a line can be drawn.
+   * Read-only: reads the values fetchLineData already returned; computes nothing. */
+  function countRealBuckets(metric, buckets, rec) {
+    let n = 0;
+    for (const b of buckets) {
+      const cell = rec.values[b.key];
+      if (cell && hasMetricData(metric, cell.value)) n++;
+    }
+    return n;
+  }
+
+  /** Compute chartability for a bounded set of player ids under the CURRENT
+   * chart type + scope, using the app's existing read-only fetch helpers (never
+   * a new query shape). Returns Map<id, boolean>. The per-type rule matches the
+   * chart's own draw rule exactly:
+   *   • bar / benchmark — has a real value for the metric(s)
+   *   • scatter — real value on BOTH axes
+   *   • radar — real value for EVERY selected axis (renderer excludes otherwise)
+   *   • phases — real value for at least one family member
+   *   • slope / dumbbell — real value in BOTH date windows
+   *   • line — 2+ non-null buckets on the chosen X-axis (a lone dot is not a line) */
+  async function computeChartabilityFor(ids, state) {
+    const out = new Map();
+    if (!ids.length) return out;
+    const ns = effectiveNamespace(state);
+
+    if (chartType === "bar") {
+      const metric = getMetric(barMetricKey, ns);
+      if (!metric) return out;
+      const rowsById = await fetchSelectedPlayerMetrics(state, ids, [metric.key]);
+      for (const id of ids) {
+        const row = rowsById.get(id);
+        out.set(id, !!(row && hasMetricData(metric, row[metric.key])));
+      }
+      return out;
+    }
+    if (chartType === "scatter") {
+      const mx = getMetric(scatterXKey, ns);
+      const my = getMetric(scatterYKey, ns);
+      if (!mx || !my) return out;
+      const rowsById = await fetchSelectedPlayerMetrics(state, ids, [mx.key, my.key]);
+      for (const id of ids) {
+        const row = rowsById.get(id);
+        out.set(id, !!(row && hasMetricData(mx, row[mx.key]) && hasMetricData(my, row[my.key])));
+      }
+      return out;
+    }
+    if (chartType === "phases") {
+      const family = eligiblePhaseFamilies(ns, state.formats).find((f) => f.id === phaseFamilyId);
+      if (!family) return out;
+      const metrics = family.members.map((mm) => getMetric(mm.key, ns)).filter(Boolean);
+      const rowsById = await fetchSelectedPlayerMetrics(state, ids, metrics.map((m) => m.key));
+      for (const id of ids) {
+        const row = rowsById.get(id);
+        out.set(id, !!(row && metrics.some((m) => hasMetricData(m, row[m.key]))));
+      }
+      return out;
+    }
+    if (chartType === "radar") {
+      const eligible = radarEligibleMetrics(ns, state.formats);
+      const metrics = radarMetricKeys.map((k) => getMetric(k, ns)).filter((m) => m && eligible.some((e) => e.key === m.key));
+      if (metrics.length < RADAR_MIN_METRICS) return out;
+      const rowsById = await fetchSelectedPlayerMetrics(state, ids, metrics.map((m) => m.key));
+      for (const id of ids) {
+        const row = rowsById.get(id);
+        out.set(id, !!(row && metrics.every((m) => hasMetricData(m, row[m.key]))));
+      }
+      return out;
+    }
+    if (chartType === "benchmark") {
+      const eligible = benchmarkEligibleMetrics(ns, state.formats);
+      const metrics = eligible.filter((m) => (benchmarkMetricKeys || []).includes(m.key));
+      if (metrics.length < 4) return out;
+      const rowsById = await fetchSelectedPlayerMetrics(state, ids, metrics.map((m) => m.key));
+      for (const id of ids) {
+        const row = rowsById.get(id);
+        // A player can serve as a benchmark subject if they have at least one of
+        // the compared metrics (rows with no data would show only em-dashes).
+        out.set(id, !!(row && metrics.some((m) => hasMetricData(m, row[m.key]))));
+      }
+      return out;
+    }
+    if (chartType === "slope" || chartType === "dumbbell") {
+      const metricKey = chartType === "slope" ? slopeMetricKey : dumbbellMetricKey;
+      const wA = chartType === "slope" ? slopeWindowA : dumbbellWindowA;
+      const wB = chartType === "slope" ? slopeWindowB : dumbbellWindowB;
+      const metric = graphMetrics(ns, state.formats)
+        .filter((m) => m.kind === "rate" || m.kind === "percent")
+        .find((m) => m.key === metricKey);
+      if (!metric || !wA?.from || !wA?.to || !wB?.from || !wB?.to) return out;
+      const [rowsA, rowsB] = await Promise.all([
+        fetchWindowMetric(state, wA, ids, metric),
+        fetchWindowMetric(state, wB, ids, metric),
+      ]);
+      for (const id of ids) {
+        const rA = rowsA.get(id);
+        const rB = rowsB.get(id);
+        out.set(id, !!(rA && rB && hasMetricData(metric, rA[metric.key]) && hasMetricData(metric, rB[metric.key])));
+      }
+      return out;
+    }
+    if (chartType === "byyear") {
+      const metric = lineMetricsFor(lineXKey, state).find((m) => m.key === byYearMetricKey);
+      if (!metric) return out;
+      const lineData = await fetchLineData({ xDim: lineXKey, metricKey: metric.key, playerIds: ids, filters: state });
+      for (const id of ids) {
+        const rec = lineData.byPlayer[id];
+        out.set(id, !!(rec && countRealBuckets(metric, lineData.buckets, rec) >= 2));
+      }
+      return out;
+    }
+    return out;
+  }
+
+  /** Debounced entry point — coalesces the many param/roster changes that can
+   * fire in a burst into one chartability pass. */
+  function scheduleBadgeRefresh() {
+    clearTimeout(badgeDebounce);
+    badgeDebounce = setTimeout(ensureChartability, 90);
+  }
+
+  /** Resolve chartability for any not-yet-known players among the ones that
+   * matter right now (checked roster + rendered dropdown rows), then repaint
+   * the badges. Signature-guarded and token-guarded so a stale in-flight probe
+   * (params changed mid-fetch) is dropped. Badges are a non-critical cue: a
+   * failed probe just leaves the neutral "…" state. */
+  async function ensureChartability() {
+    const state = store.get();
+    const sig = chartabilitySignature(state);
+    if (sig !== badgeCache.key) {
+      badgeCache = { key: sig, map: new Map() };
+      paintBadges();
+    }
+    if (sig === null) return;
+    const wanted = new Set(lastRenderedRosterIds);
+    for (const p of selection.get()) wanted.add(p.id);
+    const missing = [...wanted].filter((id) => id != null && !badgeCache.map.has(id));
+    if (!missing.length) return;
+    const token = ++badgeToken;
+    let result;
+    try {
+      result = await computeChartabilityFor(missing, state);
+    } catch {
+      return; // leave neutral — badges never block or break the UI
+    }
+    // Superseded by a newer probe, or the scope/params moved under us → drop.
+    if (token !== badgeToken || badgeCache.key !== sig || chartabilitySignature(store.get()) !== sig) return;
+    for (const [id, v] of result) badgeCache.map.set(id, v);
+    paintBadges();
+  }
+
+  /** Paint the CHARTABLE / NOT CHARTABLE / neutral badge on every rendered
+   * roster row IN PLACE (no list re-render, so it never disturbs scroll/focus
+   * or rebinds row controls). Reads the LIVE signature so a stale cache from a
+   * just-changed param shows the neutral "checking" state rather than a wrong
+   * colour. */
+  function paintBadges() {
+    if (!els.rosterList) return;
+    const sig = chartabilitySignature(store.get());
+    els.rosterList.querySelectorAll(".graph-roster-item").forEach((row) => {
+      const span = row.querySelector('[data-role="roster-badge"]');
+      if (!span) return;
+      const id = row.dataset.id;
+      if (sig === null) {
+        span.hidden = true;
+        span.className = "graph-roster-item__badge";
+        span.textContent = "";
+        span.removeAttribute("title");
+        return;
+      }
+      span.hidden = false;
+      if (sig === badgeCache.key && badgeCache.map.has(id)) {
+        const ok = badgeCache.map.get(id);
+        span.className = `graph-roster-item__badge ${ok ? "is-chartable" : "is-not-chartable"}`;
+        span.textContent = ok ? "Chartable" : "Not chartable";
+        span.title = ok ? "Has the data this chart needs in the current view" : "Missing the data this chart needs in the current view";
+      } else {
+        span.className = "graph-roster-item__badge is-checking";
+        span.textContent = "…";
+        span.title = "Checking data…";
+      }
+    });
+  }
+
   function renderPlayerList() {
     const checkedCount = selection.checkedCount();
     const candidates = selection.getFull();
@@ -1647,6 +1889,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
     if (total === 0) {
       els.rosterList.innerHTML = `<p class="graph-player-search__empty">No players yet — search above or use Filters.</p>`;
+      lastRenderedRosterIds = [];
       return;
     }
 
@@ -1659,11 +1902,16 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
     if (matched.length === 0) {
       els.rosterList.innerHTML = `<p class="graph-player-search__empty">No players match &ldquo;${escHtml(rosterFilterText.trim())}&rdquo;.</p>`;
+      lastRenderedRosterIds = [];
       return;
     }
 
     const shown = matched.slice(0, ROSTER_RENDER_CAP);
     const hiddenCount = matched.length - shown.length;
+    // R6 #9: remember which rows are on screen so the async chartability pass
+    // (ensureChartability) knows exactly which players to probe — bounded to
+    // these ~50 rows plus the checked roster, never the whole pool.
+    lastRenderedRosterIds = shown.map(({ p }) => p.id);
 
     els.rosterList.innerHTML =
       shown
@@ -1678,6 +1926,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           return `<div class="dropdown__item graph-roster-item${atCap ? " is-disabled" : ""}" data-id="${escAttr(p.id)}">
               <input type="checkbox" data-role="roster-check" data-id="${escAttr(p.id)}" ${checked ? "checked" : ""} ${atCap ? "disabled" : ""} title="${escAttr(title)}" />
               <span class="graph-roster-item__name">${escHtml(p.name)}</span>
+              <span class="graph-roster-item__badge" data-role="roster-badge" hidden></span>
               <span class="graph-roster-item__meta">#${i + 1}</span>
               <button type="button" class="icon-btn graph-roster-item__remove" data-role="remove-candidate" data-id="${escAttr(p.id)}" title="Remove from list">&times;</button>
             </div>`;
@@ -1715,6 +1964,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         if (selection.getMode() !== "manual") deriveChecked(selection.getMode());
       });
     });
+
+    // R6 #9: paint any badges we already know from cache, then kick the async
+    // pass to resolve the rest for the just-rendered rows. Cheap + debounced +
+    // signature-guarded, so keystroke filtering and roster ticks don't re-query
+    // players already resolved for the current chart configuration.
+    paintBadges();
+    scheduleBadgeRefresh();
   }
 
   wireDropdown(els.rosterToggle, els.rosterPanel);
@@ -2840,22 +3096,31 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         if (token !== loadToken) return;
         hideStatus();
 
-        const canvas = card.getCanvas();
-        const result = buildTimeseriesChart(canvas, chartRef, { metric, lineData, players, formats: state.formats });
-        const drawn = players.length - (result?.excluded?.length ?? 0);
-        if (drawn === 0) {
-          // Nobody has any data in this slice — show an honest message in place
-          // of an empty plot, never a blank card (§7).
+        // Part B (R6 #9): a line needs 2+ points, so a player must have 2+
+        // non-null buckets on this X-axis to actually contribute a line. If NO
+        // selected player clears that bar, don't draw a field of lone dots —
+        // show the honest "can't draw a line" message instead. (When at least
+        // one player qualifies we draw as before; a 1-bucket player still shows
+        // as a single point with the renderer's existing footnote.)
+        const lineableCount = players.filter((p) => {
+          const rec = lineData.byPlayer[p.id];
+          return rec && countRealBuckets(metric, lineData.buckets, rec) >= 2;
+        }).length;
+        if (lineableCount === 0) {
           if (chartRef.current) {
             chartRef.current.destroy();
             chartRef.current = null;
           }
-          card.showPlaceholder("None of the selected players have data for this X axis and scope. Pick players with data in range, or widen the scope.");
-          renderExclusions(result?.excluded ?? [], result?.note);
+          card.showPlaceholder("No selected player has enough data points to draw a line in this view. Try a wider date range, a different X-axis, or different players.");
+          renderExclusions([]);
           const titleCfg = buildTitleOnlyConfig(0);
           if (titleCfg) card.regenerate(titleCfg, buildFooterScope(titleCfg));
           return;
         }
+
+        const canvas = card.getCanvas();
+        const result = buildTimeseriesChart(canvas, chartRef, { metric, lineData, players, formats: state.formats });
+        const drawn = players.length - (result?.excluded?.length ?? 0);
         renderExclusions(result?.excluded ?? [], result?.note);
 
         const config = {
@@ -3079,9 +3344,24 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
         const canvas = card.getCanvas();
         const result = buildRadarSmallMultiples(canvas, chartRef, { metrics, players, poolRows, formats: state.formats });
-        renderExclusions(result?.excluded ?? [], result?.note);
 
         const excludedCount = result?.excluded?.length ?? 0;
+        // Part B (R6 #9): every selected player missing one of the chosen axes
+        // → no mini-radar to draw. Show the honest message rather than an empty
+        // grid.
+        if (excludedCount >= players.length) {
+          if (chartRef.current) {
+            chartRef.current.destroy();
+            chartRef.current = null;
+          }
+          card.showPlaceholder("None of the selected players have data for every chosen metric in the current view. Drop a metric, widen the date range, or pick different players.");
+          renderExclusions([]);
+          const titleCfg = buildTitleOnlyConfig(0);
+          if (titleCfg) card.regenerate(titleCfg, buildFooterScope(titleCfg));
+          return;
+        }
+        renderExclusions(result?.excluded ?? [], result?.note);
+
         const config = {
           type: "radar",
           discipline,
@@ -3143,12 +3423,31 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         result = buildPhasesChart(canvas, chartRef, { family: config.family, metrics: config.metrics, rowsById, players, formats: state.formats });
       }
 
+      const excludedCount = result?.excluded?.length ?? 0;
+
+      // Part B (R6 #9): if EVERY selected player was excluded (none has a real
+      // value for the metric / either axis / any family member), there is
+      // nothing to rank or plot — show the honest message in place of an empty
+      // axis box (never a chart with no marks). Draw whenever at least one
+      // player is chartable (the existing per-player exclusion handling below
+      // covers the rest).
+      if (excludedCount >= players.length) {
+        if (chartRef.current) {
+          chartRef.current.destroy();
+          chartRef.current = null;
+        }
+        card.showPlaceholder("None of the selected players have data for this chart in the current view. Try a different metric, widen the date range, or pick different players.");
+        renderExclusions([]);
+        const titleCfg = buildTitleOnlyConfig(0);
+        if (titleCfg) card.regenerate(titleCfg, buildFooterScope(titleCfg));
+        return;
+      }
+
       renderExclusions(result?.excluded ?? [], result?.note);
 
       // Exclusions (no data for the metric/family) mean the drawn set is no
       // longer exactly the seeded "top N by X" — drop to honest "N players"
       // phrasing and count only what's actually drawn (§8.4).
-      const excludedCount = result?.excluded?.length ?? 0;
       if (excludedCount > 0) {
         config.playerCount = Math.max(0, config.playerCount - excludedCount);
         config.roster = { ...config.roster, dirty: true };
@@ -3211,6 +3510,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     if (paramsChanged) pendingRegenerate = true;
     chartDirty = true;
     updateUpdateBtn();
+    // R6 #9: markDirty is the one signal every in-panel edit sends (chart type,
+    // metric, X-axis, windows, roster) — so refreshing the roster badges here
+    // keeps them in step with whatever the controls now say, even when the edit
+    // didn't otherwise re-render the roster list. Debounced + signature-guarded,
+    // so an unchanged configuration is a no-op.
+    scheduleBadgeRefresh();
   }
   /** Draw now and clear the pending gate — the shared tail of every LIVE draw
    * trigger (seed / scope apply / chooser confirm / the Update-chart button).
@@ -3221,6 +3526,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     chartDirty = false;
     updateUpdateBtn();
     scheduleRender({ paramsChanged });
+    // R6 #9: seed / scope-apply / chooser-confirm all route through here (not
+    // markDirty) — refresh badges on these too so a scope change updates them.
+    scheduleBadgeRefresh();
   }
 
   // ── Public API ───────────────────────────────────────────────────────────
