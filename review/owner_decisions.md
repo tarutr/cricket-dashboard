@@ -688,3 +688,18 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
     pick Vs + Average, I don't need a specific vs-average") is already how it works; the only defect was the
     confusing label → RENAMED to plain "Batting Average"/"Bowling Average" (label-only; sqlExpression/key/kind
     byte-identical; anchors unaffected). The Vs context is conveyed by the Vs pill/scope line.
+
+58. **Round-6 #8 (plain-bowling X=Phase asymmetry) — RESOLVED by adding the Middle bucket (owner 2026-07-22,
+    "Add middle bucket to #8"; option (a) of the checklist).** On the plain BOWLING Line X=Phase view, Economy
+    and Wickets previously drew only Powerplay + Death because the middle-overs metric variants were never
+    catalogued in the plain bowling namespace (only in matchup_bowling). Added 4 metric defs to the plain
+    bowling namespace in metrics.js: `mid_economy` ("Middle Overs Economy", `SUM(mid_runs_conceded)*6.0/
+    NULLIF(SUM(mid_balls),0)`, isPhaseMetric t20), `mid_wickets` ("Middle Overs Wickets", `SUM(mid_wickets)`,
+    additive), plus the ODI pair `odi_mid_economy`/`odi_mid_wickets`. These MIRROR the existing pp_/death_
+    siblings exactly (same isPhaseMetric/discipline/kind), so `phaseMembersFor` (timeseries.js — PHASE_MEMBERS
+    already listed them) now returns the full Powerplay→Middle→Death trio. Pure ADDITIVE catalogue change: diff
+    is 46 insertions / 0 deletions, no query builder touched; verified byte-identical builders, all 12 phase
+    members eligible (T20+ODI), Middle a real figure (independent DuckDB: a bowler's mid econ 5.64 over 133
+    balls), and the 2,813 baseline + Karanbir 2,454 reproduce on screen. Side effect (intended, consistent):
+    "Middle Overs Economy"/"Middle Overs Wickets" now also appear in the normal bowling column/condition
+    pickers alongside the existing Powerplay/Death entries — completing the trio, matching "show all data".
