@@ -644,3 +644,20 @@ PIPELINE data change → STOP for owner's explicit go before any pipeline run.
   GitHub integration deploys origin/main (pipeline.yml is DATA-only, no deploy step). Branch never pushed to origin.
 - NEXT: push branch (backup) → fold origin/main's 3 commits → push main → Vercel deploys Round 4+5 live →
   verify cricdb.vercel.app loads 2,813. GATED on owner's final go.
+
+## ===== ROUND 6 (owner 2026-07-22, 12-item R5-review batch) — DEPLOY HELD until bugs clean =====
+Decisions 54 (batting-hand persistence removed) + 55 (graph popup fully staged) logged. Priority order (owner):
+#5/#10 → #1/#3/#6 → #9 chartability UX → #7/#8/#11/#12 features.
+
+## R6 #5/#10/#4 (graph Filters popup fully staged) COMPLETE + orchestrator-verified. frontend-heavy/Opus,
+commit 2faf3c3 (graph.js ONLY; table.js/filters.js/metrics.js/main.js/drawer.js/state.js = 0 diff → Rule 1 safe).
+Root cause: graph popup wired with no-op callbacks + no store-subscribe (didn't live-refresh) AND scope selects
+wrote to the shared store instantly ahead of the Apply gate (→ batting metric fetched on bowling data). Fix:
+graph popup gets a buffer store; edits stay in the popup + live-refresh it; "Apply to graph" commits atomically.
+MY independent in-browser verification (fresh reload): #5 flip discipline in graph popup → add-condition list
+live-rebuilds to bowling metrics (Wickets/Economy/Bowling SR), scoped to the graph popup; #10 flip graph-popup
+discipline→bowling + close WITHOUT Apply → Stats popup discipline STILL batting + Stats table still batting
+(2,813/Karanbir) = no leak (staged); anchors 2,813/Karanbir 2,454 on screen; 0 console errors. Worker also
+verified #4 (avg-vs-style appears/disappears with Vs+Apply) + Apply reseeds roster 2,813→2,049 atomically +
+#6 (reset now structurally correct — discipline only commits at Apply). NEXT: #1 fine-Vs re-sort + #3 BBI sort
+key (+ confirm #6).
