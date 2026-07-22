@@ -672,3 +672,16 @@ Radar radar metrics; Grouped Bars phase data; Slope/Dumbbell both windows). Disp
 ## R6 QUEUE after #9: #2 (drop batting-hand persistence, decision 54) · #7 (rename Phases→Grouped Bars) ·
 #8 (broaden Line Y-axis, flag phase-metric data limit) · #11 (popup Vs-opp show-more/less) · #12 (show-top-50).
 Then deploy (HELD until bugs+features clean).
+
+## R6 #9 (chartability UX) COMPLETE + orchestrator-verified. frontend-heavy/Opus, commit 56cd14c (graph.js +
+styles.css ONLY; table.js/filters.js/metrics.js/graph data-layer = 0 diff → chartability derived from existing
+read-only fetches, Rule 1 safe). MY in-browser verification: Part A — roster dropdown shows red "NOT CHARTABLE"
+pills per player (single-year Line scope, all 1-bucket → correctly not chartable); worker independently DuckDB-
+confirmed Karanbir/Virandeep NOT CHARTABLE for stumped% (0 stumped), Kohli 1-bucket vs Buttler 4-bucket for Line.
+Part B — Line + single-year (Jan–Dec 2024) shows "No selected player has enough data points to draw a line…"
+message instead of a dot-field (the owner's headline case), title "0 most-capped players". Anchors hold; 0 console
+errors. Worker flags: chartability computed for checked-roster ∪ ≤50 rendered rows (not full pool — perf); Benchmark
+chartable rule = "has ≥1 selected benchmark metric" (ambiguous, flagged). ROUND-6 BUG BUCKET + #9 ALL COMPLETE.
+## R6 REMAINING FEATURES: #2 (drop batting-hand persistence, decision 54) · #7 (rename Phases→Grouped Bars) ·
+#8 (broaden Line Y-axis — needs owner decision on which phase/peak metrics; has a real data limit) · #11 (popup
+Vs-opp show-more/less) · #12 (show-top-50 button). Then DEPLOY.
