@@ -685,3 +685,19 @@ chartable rule = "has ≥1 selected benchmark metric" (ambiguous, flagged). ROUN
 ## R6 REMAINING FEATURES: #2 (drop batting-hand persistence, decision 54) · #7 (rename Phases→Grouped Bars) ·
 #8 (broaden Line Y-axis — needs owner decision on which phase/peak metrics; has a real data limit) · #11 (popup
 Vs-opp show-more/less) · #12 (show-top-50 button). Then DEPLOY.
+
+## R6 FEATURES COMPLETE + orchestrator-verified (2026-07-22). Commits: 7146614(#2) f490b41(#7) d15a16f(#11)
+ddc79e5(#12) 253d4cf(#8). Across be0a001..HEAD: buildQuery/buildMatchupQuery/conditionToHaving BYTE-IDENTICAL;
+filters.js + metrics.js 0 diff → Rule 1 safe by construction (all display/state/derive-only). MY verification:
+anchors 2,813/Karanbir 2,454 on screen; #8 phase Runs via fetchLineData = [465,894,185] = my own DuckDB
+SUM(pp/mid/death_runs), sums to 1,544; existing phase SR unchanged [137.982/150.505/192.708]; #2 "Batting hand"
+present in batting add-condition, ABSENT in bowling (bowling keeps Team/Opp/Bowling-style/Role); #7 chart list
+reads "Grouped Bars"; #12 expanded→"Show top 50" collapses to 51 rows (exactly one button per state); #11
+per W2 (Ali Dawood bowling clip 133px + toggle). 0 console errors.
+## R6 OPEN OWNER DECISION (from #8): plain-bowling X=Phase asymmetry — the NEW metrics (Runs-conceded/Balls/
+Bowling-SR/Average) show PP+Mid+Death, but the FROZEN Economy/Wickets show PP+Death only (metrics.js never
+catalogued mid_economy/mid_wickets for the PLAIN bowling namespace; matchup_bowling has all 3). Mid data exists.
+Per decision 49 (show all data) Economy/Wickets should also show Mid, but that changes an existing X=Phase series
+→ owner decision. Surface at the round review.
+## ROUND 6 COMPLETE (all 12 items resolved). NEXT: fresh-eyes review of the R6 diff + owner's full-round review
++ the #8 asymmetry decision → then DEPLOY (Round 4+5+6 + perf, 199+ commits, to main/Vercel).
