@@ -375,7 +375,9 @@ export function createInitialState(maxMonth) {
     // graph's metricConditionKeys), while `advancedByDiscipline` archives the
     // other discipline's. createStore.set() swaps them on any discipline change
     // (see swapAdvancedForDiscipline). Identity filters (profile/teams) are NOT
-    // here, so they persist across the toggle as the owner ruled (#15/decision 50).
+    // here, so they persist across the toggle as the owner ruled (#15/decision 50)
+    // — except "batting hand", which swapAdvancedForDiscipline clears on every
+    // discipline change (decision 54, Round 6 #2).
     advanced: emptyAdvancedBlock(),
     advancedByDiscipline: { batting: emptyAdvancedBlock(), bowling: emptyAdvancedBlock() },
   };
@@ -608,14 +610,24 @@ function formatsLabel(formats) {
  * metricConditionKeys) works untouched — a bowling condition simply isn't in
  * `state.advanced` while batting is active, so it can never leak into the batting
  * query, and switching back restores it. Identity filters (profile/teams) live
- * elsewhere in state, so they persist across the toggle (owner ruling).
+ * elsewhere in state, so they persist across the toggle (owner ruling) — WITH
+ * ONE CARVE-OUT (decision 54, Round 6 #2): "batting hand" does NOT persist. A
+ * player's batting hand isn't their bowling arm, so the owner ruled persisting
+ * it into bowling "is more confusing than useful." Every other identity filter
+ * (role, bowling style, teams) is untouched and still persists.
  */
 function swapAdvancedForDiscipline(prev, next) {
   if (!prev || prev.discipline === next.discipline) return next;
   const archive = { ...(next.advancedByDiscipline || {}) };
   archive[prev.discipline] = prev.advanced || emptyAdvancedBlock();
   const restored = archive[next.discipline] || emptyAdvancedBlock();
-  return { ...next, advanced: restored, advancedByDiscipline: archive };
+  // decision 54: clear ONLY profile.battingHand on a discipline change (either
+  // direction) — no other profile field is touched. buildScopeClauses/
+  // profileSemiJoinSql are untouched; this just means battingHand is never SET
+  // while the bowling discipline is active, so it can't leak into a bowling query.
+  const profile =
+    next.profile && next.profile.battingHand ? { ...next.profile, battingHand: null } : next.profile;
+  return { ...next, advanced: restored, advancedByDiscipline: archive, profile };
 }
 
 export function createStore(initial) {

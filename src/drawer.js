@@ -406,7 +406,13 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
   function hasValue(key, s) {
     switch (key) {
       case "role": return Boolean(s.profile.roleGroup);
-      case "hand": return Boolean(s.profile.battingHand);
+      // Batting hand is a batting-only concept (decision 54): a player's
+      // batting hand isn't their bowling arm, so the row (and the value) never
+      // shows while the bowling discipline is active. Mirrors rpos's own
+      // discipline gate just below. The store already clears profile.battingHand
+      // on every discipline change (state.js swapAdvancedForDiscipline), so this
+      // is belt-and-suspenders against a stale value ever resurfacing here.
+      case "hand": return s.discipline === "batting" && Boolean(s.profile.battingHand);
       case "bowling": return Boolean(s.profile.bowlingType);
       case "vs": return matchupVsActive(s); // present iff a Vs bucket applies to the current discipline
       // R5-A #8: R. Pos. (regularPositions) and the striker position (positions)
@@ -508,6 +514,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     const singletonOpt = (key) => {
       const t = SINGLETON_TYPES.find((x) => x.key === key);
       if (!t || (t.menOnly && women)) return "";
+      // "Batting hand" is a batting-only condition (decision 54): a player's
+      // batting hand isn't their bowling arm, so it's never offered while the
+      // bowling discipline is active — same discipline-gating idea as R. Pos.
+      // (basicOpts below), just applied here since "hand" comes off the plain
+      // PLAYER_ADD_ORDER list rather than its own injected slot.
+      if (key === "hand" && s.discipline !== "batting") return "";
       return `<option value="c:${t.key}"${present.includes(t.key) ? " disabled" : ""}>${escHtml(
         ADD_CONDITION_LABEL_OVERRIDES[t.key] || t.label
       )}</option>`;
