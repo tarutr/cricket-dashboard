@@ -54,6 +54,12 @@ Remaining, in bang-for-buck order:
 - **Line polish** — X=Phase offers only metrics with a real phase definition (Strike Rate / Economy / Wickets);
   gaps span the line (`spanGaps:true`) vs a literal break; the chart title names the metric but not the X-axis.
 
+## Tiny cleanups (whenever the file is next touched)
+- `src/playerFilters.js` — dead hidden node `pf-opp-note` ("International cricket only for now.", line ~177)
+  left over from #14; permanently hidden. To remove cleanly, delete the `<p>` (177), its `querySelector`
+  (line ~200), and the `els.oppNote.hidden = true` assignment (line ~356) together — deleting only the node
+  would null-deref. Harmless/invisible as-is (fresh-eyes review 2026-07-22 nit).
+
 ## Older standing deferrals
 - **Team-name normalization** (Team + Opposition alias map) — the FIRST post-round data to-do (decision 51).
 - ~375 px mobile one-screen fit; export-while-dirty.
