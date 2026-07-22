@@ -5,34 +5,34 @@ The 12 items from your Round-5 hands-on review. All built + orchestrator-verifie
 Suggested scope to load: **Men / T20 / International, 01/07/2023 → 02/07/2026** (baseline 2,813 / Karanbir 2,454).
 
 ## Bugs (now fixed)
-- [ ] **#5 / #10 — Graphs filter popup.** Open Graphs → Filters, flip Batting/Bowling → the popup's controls
+- [x] **#5 / #10 — Graphs filter popup.** Open Graphs → Filters, flip Batting/Bowling → the popup's controls
       rebuild **live**; nothing changes the chart (or your Stats scope) until **"Apply to graph"**. No more
       batting-metric-on-bowling-data breakage.
-- [ ] **#3 — Best Bowling filter** now ranks the table by the **BBI figure** (wickets desc, then runs asc:
+- [x] **#3 — Best Bowling filter** now ranks the table by the **BBI figure** (wickets desc, then runs asc:
       5-25 > 4-20 > 4-25), not raw wickets.
-- [ ] **#6 — "Reset to full player set"** returns the correct set for the committed discipline.
-- [ ] **#1 — fine Vs re-sort:** closed — the code can't make coarse/fine differ; what you saw was a stale
+- [x] **#6 — "Reset to full player set"** returns the correct set for the committed discipline.
+- [x] **#1 — fine Vs re-sort:** closed — the code can't make coarse/fine differ; what you saw was a stale
       browser cache. (If you ever see it again, hard-refresh `Cmd+Shift+R`.)
-- [ ] **#4 — "Average (vs style)"** is renamed to plain **"Batting Average" / "Bowling Average"** (it was
+- [x] **#4 — "Average (vs style)"** is renamed to plain **"Batting Average" / "Bowling Average"** (it was
       always just the Vs-mode average, labelled confusingly).
 
 ## Chartability (#9)
-- [ ] In Graphs, each player row in the roster dropdown shows a green **CHARTABLE** / red **NOT CHARTABLE**
+- [x] In Graphs, each player row in the roster dropdown shows a green **CHARTABLE** / red **NOT CHARTABLE**
       pill for the current chart type.
-- [ ] A Line in a scope where no one has 2+ points shows a plain-English **"can't draw a line / try a wider
+- [x] A Line in a scope where no one has 2+ points shows a plain-English **"can't draw a line / try a wider
       range"** message instead of a field of stray dots.
 
 ## Features
-- [ ] **#2 — "Batting hand"** no longer appears as a filter in **Bowling**, and no longer carries across the
+- [x] **#2 — "Batting hand"** no longer appears as a filter in **Bowling**, and no longer carries across the
       Batting↔Bowling toggle. (Bowling style stays a batting filter — that's the intentional "how leg-spinners bat".)
-- [ ] **#7 — chart type "Phases" renamed to "Grouped Bars"** (behaviour unchanged for now; the "any metric"
+- [x] **#7 — chart type "Phases" renamed to "Grouped Bars"** (behaviour unchanged for now; the "any metric"
       rebuild is a later item).
-- [ ] **#8 — Line X=Phase** now also offers **Runs / Balls** (batting) and **Runs Conceded / Balls / Bowling SR
+- [x] **#8 — Line X=Phase** now also offers **Runs / Balls** (batting) and **Runs Conceded / Balls / Bowling SR
       / Bowling Average** (bowling), on top of the existing Strike Rate / Economy / Wickets. **← see the one
       decision below.**
-- [ ] **#11 — player popup:** the Vs-opposition table is capped to the left column's height with **Show
+- [x] **#11 — player popup:** the Vs-opposition table is capped to the left column's height with **Show
       more / Show less**.
-- [ ] **#12 — Stats table:** after "Show more (X players)", a **"Show top 50"** button collapses back to the top 50.
+- [x] **#12 — Stats table:** after "Show more (X players)", a **"Show top 50"** button collapses back to the top 50.
 
 ## One decision for you (from #8)
 On the **plain bowling** X=Phase view, the *new* metrics show **Powerplay + Middle + Death**, but the older
