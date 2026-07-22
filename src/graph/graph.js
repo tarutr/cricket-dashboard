@@ -59,7 +59,12 @@ const CHART_TYPES = [
   { key: "bar", label: "Bar" },
   { key: "scatter", label: "Scatter" },
   { key: "radar", label: "Radar" },
-  { key: "phases", label: "Phases" },
+  // Display label only (Round 6 item #7): the owner will broaden this chart
+  // type to any metrics later; for now it's just a rename. Internal key
+  // ("phases") is unchanged — every reader keys off `t.key`/`chartType`, so
+  // renaming the label here is the ONE edit that propagates to the dropdown,
+  // the "What each chart is for" table row, and every other CHART_TYPES reader.
+  { key: "phases", label: "Grouped Bars" },
   { key: "slope", label: "Slope" },
   // Batch 4 wave 2 (the last two chart types).
   { key: "byyear", label: "Line" },
@@ -98,7 +103,7 @@ const CHART_RULES = {
   },
   phases: {
     tagline: "Powerplay, middle and death splits of a metric.",
-    purpose: "A phases chart breaks a metric family into powerplay, middle and death.",
+    purpose: "A grouped bars chart breaks a metric family into powerplay, middle and death.",
     needs: "Pick a metric family.",
   },
   slope: {
@@ -3663,7 +3668,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       case "radar":
         return { kind: "none", note: "Radar compares several metrics at once — pick them in the Graph Builder." };
       case "phases":
-        return { kind: "none", note: "Phases compares a whole metric family at once — no single metric to pick." };
+        return { kind: "none", note: "Grouped Bars compares a whole metric family at once — no single metric to pick." };
       case "benchmark":
         return { kind: "none", note: "Benchmark compares several metrics against the field at once — no single metric to pick." };
       default:
