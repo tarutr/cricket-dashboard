@@ -51,4 +51,24 @@ Verified (bowling, Best Bowling "≥3 wickets for ≤30 runs", popup Search):
   → EXACT match to the app's top-6. App top row = true BBI leader.
 - Anchor after fix: 2,813 / Karanbir 2,454 / 54.53 / 175.29; 0 console errors.
 
-## Bug #6 — graph "Reset to full player set" — (verifying next)
+## Bug #6 — graph "Reset to full player set" — CONFIRMED FIXED (no code change)
+Verified in-browser (Graphs tab, committed Stats scope = batting 2,813).
+- Independent DuckDB (same scope): batting DISTINCT batter_id = 2810 (=2813 by id+name pairs, the
+  name-variant quirk = the graph pool); bowling DISTINCT bowler_id = 2049. So batting pool ≠ bowling pool.
+- Test A (discipline-staging crux): opened the graph Filters popup, switched discipline to BOWLING, closed
+  WITHOUT "Apply to graph", pressed "Reset to full player set" → pool stayed the BATTING committed set
+  (2810 of 2813, Top Names), NOT the bowling set (2049). The staged discipline did not leak; reset uses the
+  COMMITTED discipline. This is the "wrong set" family, resolved structurally by the graph-staging fix.
+- Test B (plain roster dirty): switched roster mode to Manual + unchecked players (→ 2809 of 2813) → reset
+  → restored full set (2810 of 2813) and reset mode to Top Names.
+- 0 console errors throughout.
+VERDICT: confirmed fixed. Reset re-seeds via seedSelection({force:true}) → seedFromFilteredSet(store),
+which reads the shared *committed* scope; the graph popup's staged (un-applied) discipline/scope edits never
+touch that store until "Apply to graph" (decision 55 / commit 2faf3c3), so the reset is correct.
+
+## Final verification sweep
+- node --check src/main.js: OK.
+- git diff: ONLY src/main.js changed (+ this progress note). table.js / filters.js / metrics.js: 0 diff →
+  buildQuery / buildMatchupQuery / buildScopeClauses / all sqlExpression+sortExpression byte-identical.
+- Anchor on screen after fix: 2,813 players / Karanbir 2,454 / 54.53 avg / 175.29 SR (batting baseline).
+- Bug #3 independently DuckDB-confirmed (per-innings BBI leader = app top row).
