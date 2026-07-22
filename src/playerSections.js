@@ -225,8 +225,90 @@ export function oppositionSectionHTML(discipline, rows) {
   const headers = discipline === "batting" ? ["Team", "Inns", "Runs", "Avg", "SR"] : ["Team", "Inns", "Wkts", "Avg", "Econ"];
   const metrics = keys.map((k) => getMetric(k, discipline));
   const body = (rows || []).map((r) => [escHtml(r.team), ...metrics.map((m) => escHtml(formatValue(m, r[m.key])))]);
-  return miniTableHTML(headers, body);
+  const tableHTML = miniTableHTML(headers, body);
+  // Round-6 item #11: what the table COMPUTES is unchanged (still every
+  // opponent, uncapped) — only how many rows are VISIBLE by default changes.
+  // No rows -> miniTableHTML's own "No rows in this scope" note, no toggle
+  // scaffolding needed (nothing to collapse). Real wiring (matching the
+  // left column's rendered height + the Show more/less click) is DOM work
+  // that belongs in JS, not this pure-string builder — see the
+  // MutationObserver installed below (wireOppositionToggles), which finds
+  // this markup wherever battingGridHTML/bowlingGridHTML land in the live
+  // popup DOM and wires it there instead.
+  if (body.length === 0) return tableHTML;
+  return `<div class="vs-opposition">
+    <div class="vs-opposition__scroll" data-role="vs-opposition-scroll">${tableHTML}</div>
+    <button type="button" class="link-btn vs-opposition__toggle" data-role="vs-opposition-toggle" hidden>Show more</button>
+  </div>`;
 }
+
+/**
+ * Round-6 item #11: collapse the "Vs opposition" table to the height of the
+ * left-hand column next to it (per player / per batting-vs-bowling toggle —
+ * both battingGridHTML and bowlingGridHTML lay their two-col grid out as
+ * `.player-page__two-col > .player-page__col` pairs, left column first), with
+ * a Show more/Show less toggle for the rest. Only how many rows are VISIBLE
+ * changes — the table's own computed rows (`rows` passed into
+ * oppositionSectionHTML above) are untouched.
+ *
+ * This module's other exports are pure string builders (see file header) —
+ * playerPage.js owns all DOM wiring elsewhere, but this task's owned files
+ * are playerSections.js/playerFilters.js/playerData.js + styles.css only, so
+ * rather than reach into playerPage.js's render call site, this installs a
+ * single MutationObserver on `#player-popup-host` (a static element already
+ * in index.html — present before any module script runs) that finds and
+ * wires this section's markup wherever it appears: initial popup open,
+ * discipline toggle, Filters-popup Apply, retry. Each toggle button is
+ * marked `data-wired` once processed, so re-firing on unrelated mutations
+ * inside the popup (e.g. the "find another player" search box) is a cheap
+ * no-op — a genuinely NEW render replaces the DOM nodes wholesale (fresh
+ * `innerHTML`), so the new button always arrives unmarked and gets rewired.
+ */
+function wireOppositionToggles(root) {
+  root.querySelectorAll('[data-role="vs-opposition-toggle"]').forEach((toggleBtn) => {
+    if (toggleBtn.dataset.wired === "true") return;
+    const wrap = toggleBtn.closest(".vs-opposition");
+    const scrollEl = wrap && wrap.querySelector('[data-role="vs-opposition-scroll"]');
+    const grid = toggleBtn.closest(".player-page__two-col");
+    const rightCol = toggleBtn.closest(".player-page__col");
+    const leftCol = grid && grid.querySelector(":scope > .player-page__col");
+    if (!scrollEl || !grid || !leftCol || leftCol === rightCol) return;
+    toggleBtn.dataset.wired = "true";
+
+    let expanded = false;
+    function apply() {
+      scrollEl.style.maxHeight = "none"; // measure the full natural height first
+      const fullHeight = scrollEl.scrollHeight;
+      const capHeight = Math.ceil(leftCol.getBoundingClientRect().height);
+      if (fullHeight <= capHeight + 2) {
+        // Already fits within (or matches) the left column — nothing to
+        // collapse, so don't show a toggle that would do nothing useful.
+        toggleBtn.hidden = true;
+        return;
+      }
+      toggleBtn.hidden = false;
+      scrollEl.style.maxHeight = expanded ? "none" : `${capHeight}px`;
+      toggleBtn.textContent = expanded ? "Show less" : "Show more";
+    }
+    toggleBtn.addEventListener("click", () => {
+      expanded = !expanded;
+      apply();
+    });
+    apply();
+  });
+}
+
+// Installed once, at module load — see wireOppositionToggles' doc comment for
+// why this lives here (a MutationObserver) instead of a call from
+// playerPage.js's render site. `#player-popup-host` is a static empty <div>
+// in index.html (present before any module script executes), so this never
+// races the DOM being ready.
+(function installOppositionToggleObserver() {
+  const host = typeof document !== "undefined" && document.getElementById("player-popup-host");
+  if (!host) return; // defensive only — should always exist per index.html
+  const observer = new MutationObserver(() => wireOppositionToggles(host));
+  observer.observe(host, { childList: true, subtree: true });
+})();
 
 /** A mini-table with its own small label above it, for grouping two tables under one section. */
 export function subTableHTML(title, headers, bodyRows) {

@@ -4066,6 +4066,14 @@ a { color: var(--color-accent); }
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-5);
+  /* Round-6 item #11: grid's default `align-items: stretch` would make both
+     columns report the SAME (row-stretched) height, defeating the "Vs
+     opposition" show-more toggle's height match against the left column's
+     own natural content height. `start` lets each column size to its actual
+     content — invisible before this fix too (neither column paints a
+     background/border that depended on the stretch; flex-column children
+     already pack to the top on their own). */
+  align-items: start;
 }
 
 /* Column rebalance (owner decision 46): each grid item is now a STACK of
@@ -4159,6 +4167,26 @@ a { color: var(--color-accent); }
   .mini-table { font-size: var(--text-xs); }
   .mini-table th:first-child,
   .mini-table td:first-child { white-space: normal; }
+}
+
+/* "Vs opposition" show more/less (Round-6 item #11): the scroll region is
+   collapsed by JS (src/playerSections.js's wireOppositionToggles) to the
+   height of the left-hand column next to it; this only supplies the clip +
+   a soft transition + the toggle's spacing/alignment underneath. */
+.vs-opposition {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.vs-opposition__scroll {
+  overflow: hidden;
+  transition: max-height 0.15s ease;
+}
+
+.vs-opposition__toggle {
+  align-self: flex-start;
 }
 
 /* Dismissal / wicket-type fingerprint bars */
