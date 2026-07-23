@@ -24,11 +24,27 @@ Branch: polish-b1-mechanical. Additive-only. Owner: data-engineer (Opus).
   dismissals == dismissals (exact); batting phase dismissals <= dismissed (+ residual log).
 - py_compile OK.
 
-## Next
-- Write pipeline/dev_test_phase_components.py (byte-identical HEAD-vs-branch EXCEPT +
-  independent new-column recompute + invariants/residual print).
-- Full build to /tmp/export_b3 (no --upload); confirm all gates + SPOT_CHECKS pass.
-- Report residual (=0), sizes, anchors.
+## COMPLETE — all verification green
+- Local DB lacked player_profiles (raw Cricsheet). Copied DB to scratchpad/cricket_b3.duckdb,
+  built profiles offline via pipeline/build_profiles.py (7,220 rows, male mapped 72.4%).
+  User's data/cricket.duckdb left PRISTINE.
+- Full export to /tmp/export_b3: ALL gates PASS (incl. 20 new #3 gates) + 7 SPOT_CHECKS PASS.
+  INFO line: batting phase-dismissal shortfall T20/IT20=0, ODI/ODM=0.
+- dev_test_phase_components.py: 38 passed / 0 failed. Byte-identical EXCEPT both ways = 0 on all
+  4 files; row counts unchanged; independent recompute (6 groups) all match; invariants all hold.
+- RESIDUAL = 0 exactly: T20/IT20 174,641 dismissed == 174,641 phase; ODI/ODM 73,835 == 73,835.
+  Root cause verified: every wickets row (incl 2 timed out, 106 retired out, 33 obstructing)
+  HAS a matching delivery in this data, and 0 dismissals fall out-of-phase.
+- Size delta: bat +29.0%, bowl +30.9%, matchup_batting +32.7% (10.7->14.2MB),
+  matchup_bowling +28.5% (12.96->16.65MB). Flag for #12 load-speed.
+- Anchors: Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34 / SA Yadav vs Spin 38·454·140.99 /
+  Bumrah vs RHB pos1-2 27·177·9 all EXACT. Batting baseline = 2810 on local DB (both baseline
+  AND branch give 2810 from same copy -> NOT my change; R2 snapshot = 2,813, local Jul-4 snapshot drift).
+
+## Handoff to Wave 2 (UI wiring) — exact new column names
+- batting/matchup_batting (+24 each): {p}_dots, {p}_fours, {p}_sixes, {p}_dismissals
+- bowling/matchup_bowling (+18 each): {p}_dots, {p}_fours_conceded, {p}_sixes_conceded
+- prefixes p in: pp, mid, death, odi_pp, odi_mid, odi_death. odi_* NULL for the Hundred.
 
 ## Gotchas
 - q() helper returns only fetchone()[0] — scalar queries only.
