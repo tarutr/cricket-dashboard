@@ -51,3 +51,15 @@ Branch: polish-b1-mechanical. Additive-only. Owner: data-engineer (Opus).
 - t20-family phase cols (pp/mid/death) are computed for ALL formats (over 0-19),
   so for ODI/Test Σ(phase) < overall — the <= gate is for all rows, == only for T20/IT20.
 - odi_* cols populated for T20 matches too (over-based); only NULL for the Hundred.
+
+## Wave 2 (UI wiring) + orchestrator review — 2026-07-23
+- src/graph/timeseries.js PHASE_DERIVED: added dot_pct/boundary_pct/fours/sixes/average (batting +
+  matchup_batting) and dot_pct/boundary_pct_conceded/fours_conceded/sixes_conceded (bowling +
+  matchup_bowling). node --check OK. commit e17561c.
+- Pre-deploy validation: ran the exact derived expressions against /tmp/export_b3 — sane per-phase
+  values in all 4 namespaces; Σ phase fours == whole fours_hit; plain-vs-matchup average differ exactly
+  as designed (all-kinds vs credited-only dismissals).
+- Orchestrator independently reproduced: phase sums EXACT across all 4 files; SA Yadav pp counters vs
+  raw deliveries match; odi_* NULL iff Hundred; SA Yadav vs Spin 38/454/SR140.99; dismissal residual 0.
+- Read + approved: full additive diff, dis_phase CTE, all 4 builders' column SQL, 20 gate assertions.
+- NOT merged, NOT pushed. Awaiting owner go → STAGED deploy (pipeline first, then UI).

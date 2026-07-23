@@ -121,8 +121,16 @@ next run. Nothing publishes while we work on the branch.
 
 ## Status
 - [x] Owner go + scope A/B/C decided (2026-07-23)
-- [ ] Wave 1: dev test written & green (byte-identical + independent new-column + invariants)
-- [ ] Wave 1: 84 columns added (4 builders) + gates + residuals reported
-- [ ] Wave 2: UI PHASE_DERIVED wiring + node --check + local derived-SQL check
-- [ ] Integrated review (fresh Opus) + anchors reproduced
-- [ ] Report → owner go to merge/deploy (merge == deploy within 6h)
+- [x] Wave 1: dev test green (38/0: byte-identical EXCEPT=0 all 4 files + independent recompute + invariants)
+- [x] Wave 1: 84 columns added (4 builders) + 20 gates. Dismissal residual = **ZERO**. commits a71eccc, e4e8f8e
+- [x] Wave 2: UI PHASE_DERIVED wiring (commit e17561c) + node --check OK + local derived-SQL check (sane per-phase values, Σphase_fours==whole)
+- [x] Integrated review: orchestrator read full diff (additive-only comma no-ops; dis_phase CTE; all 4 builders' column SQL; 20 gate assertions) + independent multi-shape numeric verification across all 4 parquets + anchors reproduced (SA Yadav vs Spin 38/454/SR140.99; batting anchors guaranteed by byte-identical EXCEPT)
+- [ ] Owner go to deploy → STAGED merge (pipeline commits first → CI run → verify columns on R2 → then UI commit e17561c)
+- [ ] Docs: SPEC §4.1 note + reference/db_reference.md column list + BACKLOG #3 status (small, do with/after go)
+
+## Deploy sequence (IMPORTANT — avoids up-to-6h broken-chart window)
+Wave 2 (UI) references columns not yet on R2. Merge in TWO stages:
+1. `git checkout main && git merge e4e8f8e` (brings plan + pipeline + dev test; NO UI). Push. Trigger
+   pipeline via workflow_dispatch (or wait for cron). Verify new columns present on R2 parquet.
+2. `git merge polish-b1-mechanical` (brings UI commit e17561c). Push → Vercel deploys; columns now exist.
+Parquet size note for owner (#12 load-speed): matchup files +~30% (mbat 10.7→14.2 MB, mbowl 13.0→16.7 MB).
