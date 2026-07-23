@@ -439,6 +439,111 @@ const BATTING_METRICS = [
     isPhaseMetric: "odi", zeroIsData: false,
     kind: "rate",
   },
+  // ── Score composition / rotation (Wave 1) ────────────────────────────────
+  // How a batter's runs and balls break down: boundary vs rotated runs, and how
+  // often boundaries come. All read composition columns the batting_innings view
+  // now carries (non_boundary_runs, ones/twos/threes, team_inns_balls) plus the
+  // existing runs/balls_faced/fours_hit/sixes_hit. Running Strike Rate is the
+  // strike rate on NON-boundary balls (source `non_boundary_sr`): non-boundary
+  // runs over balls faced minus boundary balls (fours_hit + sixes_hit apply the
+  // is_not_boundary rule, so they ARE the boundary balls).
+  {
+    key: "running_sr",
+    label: "Running Strike Rate",
+    shortLabel: "Run SR",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression:
+      "SUM(non_boundary_runs) * 100.0 / NULLIF(SUM(balls_faced) - SUM(fours_hit) - SUM(sixes_hit), 0)",
+    higherIsBetter: true, format: "dec2",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "rate",
+  },
+  {
+    key: "boundary_runs_pct",
+    label: "% Runs from Boundaries",
+    shortLabel: "Bdry Run%",
+    discipline: "batting",
+    source: "innings",
+    // Share of RUNS (not balls) that came in boundary 4s/6s. Higher is treated
+    // as better (Wave 1 brief), matching the existing Boundary % convention.
+    sqlExpression: "(4 * SUM(fours_hit) + 6 * SUM(sixes_hit)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: true, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_1s_pct",
+    label: "% Runs in 1s",
+    shortLabel: "1s Run%",
+    discipline: "batting",
+    source: "innings",
+    // Share of runs scored in singles. Descriptive style split -> neutral.
+    sqlExpression: "(1 * SUM(ones)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_2s_pct",
+    label: "% Runs in 2s",
+    shortLabel: "2s Run%",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "(2 * SUM(twos)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_3s_pct",
+    label: "% Runs in 3s",
+    shortLabel: "3s Run%",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "(3 * SUM(threes)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "balls_per_four",
+    label: "Balls per Four",
+    shortLabel: "BP4",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(balls_faced) * 1.0 / NULLIF(SUM(fours_hit), 0)",
+    higherIsBetter: false, // fewer balls between fours is better
+    format: "dec1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "rate",
+  },
+  {
+    key: "balls_per_six",
+    label: "Balls per Six",
+    shortLabel: "BP6",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(balls_faced) * 1.0 / NULLIF(SUM(sixes_hit), 0)",
+    higherIsBetter: false, // fewer balls between sixes is better
+    format: "dec1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "rate",
+  },
+  {
+    key: "balls_faced_share",
+    label: "Balls-Faced Share",
+    shortLabel: "BF Share",
+    discipline: "batting",
+    source: "innings",
+    // Share of the batting side's balls this player faced (team_inns_balls is the
+    // whole side's faced balls per innings). Plain batting only — the matchup
+    // grain has no team-innings denominator.
+    sqlExpression: "SUM(balls_faced) * 100.0 / NULLIF(SUM(team_inns_balls), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
   // R. Pos. column (owner decision 46, R3 Wave 5 polish): the player's
   // statistical MODE of batting_position — ties broken to the LOWEST position
   // — over the CORE scope (gender/format/date/team_type) ONLY, matching the
@@ -1318,6 +1423,93 @@ const MATCHUP_BATTING_METRICS = [
     sqlExpression: "SUM(odi_death_runs) * 100.0 / NULLIF(SUM(odi_death_balls), 0)",
     higherIsBetter: true, format: "dec2",
     isPhaseMetric: "odi", zeroIsData: false,
+    kind: "rate",
+  },
+  // ── Score composition / rotation vs this bucket (Wave 1) ──────────────────
+  // Same family as the plain batting namespace's composition metrics, computed
+  // at the matchup grain over the matchup_batting view's OWN columns (it now
+  // carries non_boundary_runs / ones / twos / threes / fours_hit / sixes_hit /
+  // balls_faced / runs at matchup grain). Balls-Faced Share is intentionally
+  // absent here (plain batting only — no team-innings denominator at this grain).
+  // NOTE: the composition columns land via the Wave 1 pipeline extension and are
+  // not yet on R2 — defined here so the restricted picker/vocabulary is ready
+  // when they arrive (same posture as the phase/dis_* matchup metrics above).
+  {
+    key: "running_sr",
+    label: "Running Strike Rate",
+    shortLabel: "Run SR",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression:
+      "SUM(non_boundary_runs) * 100.0 / NULLIF(SUM(balls_faced) - SUM(fours_hit) - SUM(sixes_hit), 0)",
+    higherIsBetter: true, format: "dec2",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "rate",
+  },
+  {
+    key: "boundary_runs_pct",
+    label: "% Runs from Boundaries",
+    shortLabel: "Bdry Run%",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "(4 * SUM(fours_hit) + 6 * SUM(sixes_hit)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: true, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_1s_pct",
+    label: "% Runs in 1s",
+    shortLabel: "1s Run%",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "(1 * SUM(ones)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_2s_pct",
+    label: "% Runs in 2s",
+    shortLabel: "2s Run%",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "(2 * SUM(twos)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_3s_pct",
+    label: "% Runs in 3s",
+    shortLabel: "3s Run%",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "(3 * SUM(threes)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "balls_per_four",
+    label: "Balls per Four",
+    shortLabel: "BP4",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "SUM(balls_faced) * 1.0 / NULLIF(SUM(fours_hit), 0)",
+    higherIsBetter: false, format: "dec1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "rate",
+  },
+  {
+    key: "balls_per_six",
+    label: "Balls per Six",
+    shortLabel: "BP6",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "SUM(balls_faced) * 1.0 / NULLIF(SUM(sixes_hit), 0)",
+    higherIsBetter: false, format: "dec1",
+    isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
   },
   // ── Composition columns (Coverage-breakdown wave) ─────────────────────────
