@@ -37,7 +37,27 @@ literally share one function (decision 2 — can never diverge). Risk: an extra 
 best/worst for bar/scatter (usability probe + rank fetch over the smaller usable subset). Accepted
 per brief perf note (parquet scan dominates, not id-list length; user-initiated, < 1.5s target).
 
-### Pending
-- Boot on localhost:8000, 0 console errors, anchors (2,813 / Karanbir 2,454).
-- Per-chart-type manual verification incl. Line X=Phase bowling case.
-- Independent DuckDB check of the picked set on a Line X=Phase chart.
+## Checkpoint 2 — verification COMPLETE (localhost:8000, browser pane)
+
+- Boot: ZERO console errors, stayed clean through all interaction.
+- Anchors on Stats (Men/T20/International, 2023-07-01→2026-07-02): 2,813 players, top row
+  Karanbir Singh 2,454 — reproduced exactly.
+- Line X=Phase, BATTING, Strike Rate:
+  - Top Names picked Buttler/Maxwell/Miller/Warner/Shakib/Kohli — all badged [usable]. RG Sharma
+    (a top-6-by-caps name, picked when ungated) was DROPPED and replaced by Warner. Independent
+    DuckDB (raw pp_/mid_/death_balls sums, NOT the app SR aggregation): all 6 have balls in all 3
+    phases; RG Sharma has death_balls=0 → correctly excluded.
+  - Worst picked obscure low-run players (Manning/Dalyan/Ahmad/Ramautar/Hermann/Coulibaly) — all
+    [usable]; independent DuckDB confirms all 3 phase buckets present (not empty/no-data rows).
+- Line X=Phase, BOWLING, Bowling Strike Rate: Top Names picked Adil Rashid/Holder/Southee/
+  S Curran/Russell/Maxwell — independent DuckDB confirms wickets>0 AND balls>0 in pp+mid+death.
+- Grouped Bars, BOWLING, Phase economy (PP·death) — the `.some`→`.every` tightening:
+  - Top Names (8) and Best (8) all [usable]; independent DuckDB: every pick has balls>0 in BOTH pp
+    and death.
+  - COUNTER-EXAMPLE proving the tightening + unification: SA Mohandas (pp_balls=276, death_balls=0)
+    is now badged NOT usable (strikethrough) — under the old ≥1 rule he was usable. Badge = the same
+    predicate the shortcut uses, so he can never be auto-picked here.
+- All three shortcuts (Top Names / Best / Worst) exercised; badge and auto-pick always agreed.
+
+VERDICT: PASS. Anchors intact (no query-builder/metric change). Selection now gated to usable
+players via the unified predicate; re-derives on config change and initial auto-select.
