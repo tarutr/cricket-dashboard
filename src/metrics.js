@@ -544,6 +544,62 @@ const BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
   },
+  // ── Team-relative (vs own side) batting (Wave 2) ──────────────────────────
+  // Net Relative = the PURE SUM of the batter's per-innings differential
+  // (his rate that innings MINUS his whole side's rate that innings), stored
+  // per row as team_rel_* in batting_innings and simply added up here (owner's
+  // "pure addition" design). kind:"total" (a SUM, not a query-time ratio);
+  // NOT `additive` — a differential can be negative and summing several
+  // players' values is not a meaningful combined total, so it stays out of the
+  // donut (share-of-total) chart. zeroIsData:true — a net of exactly 0 is a
+  // real value (matched his side), not "no data". higherIsBetter follows the
+  // cricket sense of "positive = the batter beat his side": SR / Running SR
+  // higher is better; Dot% and Balls-per-Boundary higher is WORSE (more dots /
+  // more balls between boundaries than the side).
+  {
+    key: "net_rel_sr",
+    label: "Net Rel. SR (vs team)",
+    shortLabel: "Net Rel SR",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(team_rel_sr)",
+    higherIsBetter: true, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
+  {
+    key: "net_rel_dot_pct",
+    label: "Net Rel. Dot%",
+    shortLabel: "Net Rel Dot%",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(team_rel_dot_pct)",
+    higherIsBetter: false, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
+  {
+    key: "net_rel_bpb",
+    label: "Net Rel. BpB",
+    shortLabel: "Net Rel BpB",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(team_rel_bpb)",
+    higherIsBetter: false, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
+  {
+    key: "net_rel_running_sr",
+    label: "Net Rel. Running SR",
+    shortLabel: "Net Rel RunSR",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(team_rel_nbsr)",
+    higherIsBetter: true, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
   // R. Pos. column (owner decision 46, R3 Wave 5 polish): the player's
   // statistical MODE of batting_position — ties broken to the LOWEST position
   // — over the CORE scope (gender/format/date/team_type) ONLY, matching the
@@ -1064,6 +1120,60 @@ const BOWLING_METRICS = [
     additive: true,
     kind: "total",
   },
+  // ── Team-relative (vs own side) bowling (Wave 2) ──────────────────────────
+  // Net Relative = the PURE SUM of the bowler's per-innings differential (his
+  // rate that innings MINUS the whole side's rate that innings), stored per row
+  // as team_rel_* in bowling_innings. kind:"total" (a SUM); NOT `additive`
+  // (differential, can be negative -> out of the donut). zeroIsData:true (0 is
+  // a real "matched the side" value). higherIsBetter follows "beating your side
+  // = better bowling": Economy / Per-Ball Econ / Strike Rate (balls per wicket)
+  // are LOWER-is-better, so a NEGATIVE differential is good -> higherIsBetter
+  // false; Dot% is HIGHER-is-better for a bowler, so a positive differential is
+  // good -> higherIsBetter true.
+  {
+    key: "net_rel_economy",
+    label: "Net Rel. Economy",
+    shortLabel: "Net Rel Econ",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(team_rel_econ)",
+    higherIsBetter: false, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
+  {
+    key: "net_rel_pbe",
+    label: "Net Rel. Per-Ball Econ",
+    shortLabel: "Net Rel PBE",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(team_rel_pbe)",
+    higherIsBetter: false, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
+  {
+    key: "net_rel_dot_pct",
+    label: "Net Rel. Dot%",
+    shortLabel: "Net Rel Dot%",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(team_rel_dot_pct)",
+    higherIsBetter: true, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
+  {
+    key: "net_rel_sr",
+    label: "Net Rel. SR",
+    shortLabel: "Net Rel SR",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(team_rel_sr)",
+    higherIsBetter: false, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
 ];
 
 // ── Matchups (D4 R3) ─────────────────────────────────────────────────────────
@@ -1511,6 +1621,54 @@ const MATCHUP_BATTING_METRICS = [
     higherIsBetter: false, format: "dec1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "rate",
+  },
+  // ── Team-relative (vs own side) batting at matchup grain (Wave 2) ─────────
+  // Same family/flags as the plain-batting Net Rel metrics, computed over the
+  // matchup_batting view's team_rel_* columns (batter-vs-type MINUS side-vs-type
+  // per innings). "Did he handle this bowling type better than his side did."
+  {
+    key: "net_rel_sr",
+    label: "Net Rel. SR (vs team)",
+    shortLabel: "Net Rel SR",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "SUM(team_rel_sr)",
+    higherIsBetter: true, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
+  {
+    key: "net_rel_dot_pct",
+    label: "Net Rel. Dot%",
+    shortLabel: "Net Rel Dot%",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "SUM(team_rel_dot_pct)",
+    higherIsBetter: false, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
+  {
+    key: "net_rel_bpb",
+    label: "Net Rel. BpB",
+    shortLabel: "Net Rel BpB",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "SUM(team_rel_bpb)",
+    higherIsBetter: false, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
+  {
+    key: "net_rel_running_sr",
+    label: "Net Rel. Running SR",
+    shortLabel: "Net Rel RunSR",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "SUM(team_rel_nbsr)",
+    higherIsBetter: true, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
   },
   // ── Composition columns (Coverage-breakdown wave) ─────────────────────────
   // Each = (that bowling_group's UNFILTERED balls faced) ÷ (the player's TOTAL
@@ -1993,6 +2151,57 @@ const MATCHUP_BOWLING_METRICS = [
     higherIsBetter: true, format: "int",
     isPhaseMetric: "odi", zeroIsData: true,
     additive: true,
+    kind: "total",
+  },
+  // ── Team-relative (vs own side) bowling at matchup grain (Wave 2) ─────────
+  // Same family/flags as the plain-bowling Net Rel metrics, computed over the
+  // matchup_bowling view's team_rel_* columns (bowler-vs-(hand,position) MINUS
+  // whole-side-vs-(hand,position) per innings). NOTE: unlike bowling_innings,
+  // the matchup team_rel_econ uses DECIMAL overs (balls/6) for both sides —
+  // cricket-overs is meaningless per (hand, position) bucket (see the export's
+  // team_hp_agg note). Economy / PBE / SR lower-is-better; Dot% higher-is-better.
+  {
+    key: "net_rel_economy",
+    label: "Net Rel. Economy",
+    shortLabel: "Net Rel Econ",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "SUM(team_rel_econ)",
+    higherIsBetter: false, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
+  {
+    key: "net_rel_pbe",
+    label: "Net Rel. Per-Ball Econ",
+    shortLabel: "Net Rel PBE",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "SUM(team_rel_pbe)",
+    higherIsBetter: false, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
+  {
+    key: "net_rel_dot_pct",
+    label: "Net Rel. Dot%",
+    shortLabel: "Net Rel Dot%",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "SUM(team_rel_dot_pct)",
+    higherIsBetter: true, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
+    kind: "total",
+  },
+  {
+    key: "net_rel_sr",
+    label: "Net Rel. SR",
+    shortLabel: "Net Rel SR",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "SUM(team_rel_sr)",
+    higherIsBetter: false, format: "dec2",
+    isPhaseMetric: null, zeroIsData: true,
     kind: "total",
   },
   // ── Composition columns (Coverage-breakdown wave) ─────────────────────────
