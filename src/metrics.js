@@ -49,7 +49,12 @@
 //   sortExpression — numeric aggregate to rank by when sqlExpression is a display
 //                    string (only `best`/BBI); omitted otherwise.
 //   higherIsBetter — true | false | null (null = neutral counting stat).
-//   format         — "int" | "dec1" | "dec2" | "pct1" | "str".
+//   format         — "int" | "dec1" | "dec2" | "pct1" | "str" | "overs".
+//                    "overs" is DISPLAY-ONLY cricket O.B notation for a
+//                    SUM(balls) total: the stored/sorted value is the raw legal
+//                    ball count (an int), rendered as floor(balls/6).(balls%6)
+//                    — e.g. 120 → "20.0", 125 → "20.5". Never do arithmetic on
+//                    the O.B string; sort/aggregate use the raw ball count.
 //   isPhaseMetric  — null | "t20" | "odi".
 //   zeroIsData     — true for raw totals; false for rates/ratios/averages.
 //   additive       — true iff summing several players' values yields a
@@ -256,6 +261,60 @@ const BATTING_METRICS = [
     discipline: "batting",
     source: "innings",
     sqlExpression: "SUM(sixes_hit)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  // Milestone / innings-outcome counts (Wave 0). Each is a plain per-innings
+  // CASE tally over columns the batting view already carries (runs, dismissed),
+  // mirroring the fours/sixes counting-total shape exactly. Statsguru
+  // convention: a "fifty" is 50–99 (hundreds counted separately, never
+  // double-counted). A duck is out for 0 (dismissed = 1), which includes the
+  // diamond duck. Not Outs counts innings the batter finished undismissed.
+  {
+    key: "fifties",
+    label: "Fifties",
+    shortLabel: "50s",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(CASE WHEN runs BETWEEN 50 AND 99 THEN 1 ELSE 0 END)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  {
+    key: "hundreds",
+    label: "Hundreds",
+    shortLabel: "100s",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(CASE WHEN runs >= 100 THEN 1 ELSE 0 END)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  {
+    key: "ducks",
+    label: "Ducks",
+    shortLabel: "Ducks",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(CASE WHEN runs = 0 AND dismissed = 1 THEN 1 ELSE 0 END)",
+    higherIsBetter: false, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  {
+    key: "not_outs",
+    label: "Not Outs",
+    shortLabel: "NO",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(CASE WHEN dismissed = 0 THEN 1 ELSE 0 END)",
     higherIsBetter: true, format: "int",
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
@@ -513,6 +572,22 @@ const BOWLING_METRICS = [
     kind: "total",
   },
   {
+    // Overs bowled (Wave 0). Same SUM(balls) total as "Balls Bowled", displayed
+    // in cricket O.B notation (format "overs" — see formatValue/labelForValue):
+    // the stored + sorted value is the raw legal ball count, so sorting by Overs
+    // sorts by balls (monotonic). DISPLAY ONLY — never a divisor/factor.
+    key: "overs",
+    label: "Overs",
+    shortLabel: "Overs",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(balls)",
+    higherIsBetter: null, format: "overs",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  {
     key: "runs_conceded",
     label: "Runs Conceded",
     shortLabel: "Runs",
@@ -598,6 +673,36 @@ const BOWLING_METRICS = [
     discipline: "bowling",
     source: "innings",
     sqlExpression: "SUM(maidens)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  // Wicket-haul milestone counts (Wave 0): innings in which the bowler took
+  // exactly 4 (four-fer) vs 5-or-more (five-fer) BOWLER-CREDITED wickets — the
+  // per-innings `wickets` column the view already carries (bowled/lbw/caught/
+  // c&b/stumped/hit-wicket only, per SPEC §4.1). Exactly-4 and 5+ are disjoint,
+  // so a 5-for is NOT also counted as a 4-for. Counting-total shape, mirroring
+  // maidens.
+  {
+    key: "four_wicket_hauls",
+    label: "Four-Wicket Hauls",
+    shortLabel: "4W",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(CASE WHEN wickets = 4 THEN 1 ELSE 0 END)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  {
+    key: "five_wicket_hauls",
+    label: "Five-Wicket Hauls",
+    shortLabel: "5W",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(CASE WHEN wickets >= 5 THEN 1 ELSE 0 END)",
     higherIsBetter: true, format: "int",
     isPhaseMetric: null, zeroIsData: true,
     additive: true,

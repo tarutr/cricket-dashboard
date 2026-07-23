@@ -152,6 +152,13 @@ export function labelForValue(metric, value) {
       return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     case "pct1":
       return `${n.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+    case "overs": {
+      // Cricket O.B notation for a legal-ball total — DISPLAY ONLY. Matches
+      // table.js's formatValue: floor(balls/6) overs, remainder 0–5 after the
+      // dot. e.g. 120 → "20.0". Charts still PLOT the raw ball count (metricValue).
+      const balls = Math.round(n);
+      return `${Math.floor(balls / 6).toLocaleString()}.${balls % 6}`;
+    }
     default:
       return String(value);
   }
