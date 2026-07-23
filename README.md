@@ -134,8 +134,9 @@ in `review/owner_decisions.md`.
 Data refreshes automatically every 6 hours (03:47/09:47/15:47/21:47 UTC) via the "Data pipeline" GitHub
 Action. To refresh manually: GitHub → Actions → "Data pipeline" → Run workflow.
 See "Data pipeline" above for the full download → ingest → export chain, the
-Parquet export's own validation gates, and the `DB_UPLOAD_ENABLED` latch that
-currently keeps DB writes disabled. Requires repo secrets `R2_ACCESS_KEY_ID`,
+Parquet export's own validation gates, and the `DB_UPLOAD_ENABLED` latch (now set
+to `true` — this repo owns `cricket.duckdb` on R2 and writes it back each run; see
+the latch section above). Requires repo secrets `R2_ACCESS_KEY_ID`,
 `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT_URL`.
 
 ## Deployment (Vercel)

@@ -77,11 +77,10 @@ const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Se
 //      sqlExpression is interpolated verbatim; the set that survives is whatever
 //      is eligible for the scope (phaseMetricAllowed gates T20 vs ODI). This path
 //      is byte-identical to before and owns Batting Strike Rate and Bowling
-//      Economy/Wickets. It inherits one asymmetry from the catalogue: PLAIN
-//      bowling never got a `mid_economy`/`mid_wickets` metric, so Economy/Wickets
-//      decompose to PP+Death ONLY there (matchup_bowling has the mid metric →
-//      PP+Mid+Death). That is FROZEN — surfacing the middle bucket would move an
-//      existing X=Phase series, which Rule 1 forbids without an owner decision.
+//      Economy/Wickets. Plain bowling Economy/Wickets now decompose to the full
+//      PP+Mid+Death trio: the `mid_economy`/`mid_wickets` catalogue metrics were
+//      added to the plain bowling namespace (owner decision 58, 2026-07-22), so
+//      the earlier PP+Death-only asymmetry with matchup_bowling is resolved.
 //
 //   2) PHASE_DERIVED — R6 broadening (approach B): base metrics whose per-phase
 //      COMPONENT columns already exist in the aggregated parquets but which never

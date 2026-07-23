@@ -30,8 +30,7 @@ clipboard) for publishing/social. Functional requirements:
 | Emphasis | the leader's bar; the anchor/highlighted player | instantly distinguishable from Default |
 | Improved | slope lines that got better; benchmark "anchor leads" is Default | universally reads "good" |
 | Declined / Beaten | slope lines that got worse; benchmark rows where the anchor is beaten | universally reads "bad"; pairs with Improved |
-| Muted / Faded | thin-sample marks, secondary text, disabled states | reads "true but weak", not "error" |
-| Series ramp | ≥10 mutually distinguishable colors for multi-player charts (scatter, donut, by-year, phases) | order matters (assigned by roster order); adjacent pairs must stay distinct in a 12px legend swatch |
+| Series ramp | ≥10 mutually distinguishable colors for multi-player charts (scatter, donut, line, grouped bars) | order matters (assigned by roster order); adjacent pairs must stay distinct in a 12px legend swatch |
 | Rules/grid | axes, gridlines, connectors | recede behind marks |
 - The improved/declined pair is **direction-aware by meaning, not by number**: a
   bowler's economy going DOWN renders as Improved. Assets must never hard-couple
@@ -70,25 +69,31 @@ clipboard) for publishing/social. Functional requirements:
 ## 3 · Shared systems (all charts)
 
 ### 3.1 Chart-type picker
-Nine types, each with a one-line **caption** (exact copy in §4). One tile carries a
-**"Recommended"** tag (computed best fit for the current state). Types that don't
-fit the current state render disabled with a reason available on hover (e.g.
+**Eight types** in the graph picker (Bar, Scatter, Radar, Grouped Bars, Slope, Line,
+Dumbbell, Benchmark), each with a one-line **caption** (exact copy in §4). One tile
+carries a **"Recommended"** tag (computed best fit for the current state). Types that
+don't fit the current state render disabled with a reason available on hover (e.g.
 "Batting view only for now.", "No bowling-style data for women's cricket yet",
 needs-more-players). Design needs: enabled / disabled-with-reason / recommended /
-active states for a 9-item picker that also works at ~375px.
+active states for an 8-item picker that also works at ~375px.
+**Donut** (§4.2) is **not currently a graph-picker option** — it was removed from the
+picker (owner decision, polish phase; `src/graph/charts.js`) but its code is RETAINED
+because it powers the **player-popup donut**, and it may return to the picker later. It
+is documented in §4.2 for that reason.
 
 ### 3.2 Roster control
 - Two-list model: a **pool** of candidates (never truncated) and a **checked**
   subset (what's plotted). UI: a dropdown button labelled `N of M selected` opening
-  checkbox rows — each row: checkbox, player name, pool rank (`#1`…), and a remove
-  control (removes from pool entirely).
+  checkbox rows — each row: checkbox, player name, a usability badge `[usable]` or
+  `[usable]` (struck-through in red), and a remove control (removes from pool entirely).
+  The badge indicates whether the player has the data the current chart type needs.
 - At a chart's player cap, unchecked rows disable with tooltip
   *"Max N for this chart type — untick one first."* Players are NEVER silently
   dropped; switching to a bigger chart type restores them.
 - When pool > cap: a three-way **Manual | Best | Worst** control (Best/Worst
   auto-pick top/bottom N by the chart's ranking metric; any manual tick flips the
   mode to Manual).
-- Plus: a player-search add box, and "Reset to filtered set".
+- Plus: a player-search add box, and "Reset to full player set".
 
 ### 3.3 Honest-title grammar (hard copy rule — SPEC §8.4)
 Titles may only claim what is actually drawn:
@@ -105,8 +110,6 @@ Titles may only claim what is actually drawn:
   ("11 of 12 selected players have innings in both windows.").
 - **Coverage lines** wherever bowling-style data appears:
   `Style data covers 913 of 1,027 balls faced (88.9%).`
-- **Faded marks** = real but thin sample (by-year points under 30 balls; footnote
-  "Faded points: under 30 balls that year."). Faded ≠ hidden, ever.
 - **Cap note**: `This chart type caps this chart at N players — M not shown here —
   they'll come back when you switch to a larger chart type.`
 - **Em-dash `—`** = no data. Rates are never rendered as 0 when there's no sample.
@@ -124,7 +127,8 @@ full-width; the roster dropdown must fit `min(20rem, 100vw − 2rem)`.
 
 ---
 
-## 4 · The nine chart types (function, controls, annotations, variability)
+## 4 · The chart types (function, controls, annotations, variability)
+*Eight are in the graph picker; Donut (§4.2) is retained for the player-popup donut and is not currently a picker option — see §3.1.*
 
 ### 4.1 BAR — caption: "Rank players on one stat"
 - Players 2–15 · 1 metric (any kind: total/rate/percent).
@@ -158,7 +162,7 @@ full-width; the roster dropdown must fit `min(20rem, 100vw − 2rem)`.
   explicitly banned (owner ruling). Single mark color (minis are separated by
   space, not hue) — brand kit may revisit but separation must stay legible.
 
-### 4.5 PHASES — caption: "One stat across match phases, side by side"
+### 4.5 GROUPED BARS — caption: "One stat across match phases, side by side"
 - Players 2–8 · one metric FAMILY of 2–3 members: batting "Phase strike rate
   (T20: PP · middle · death)" / "Innings build-up SR (balls 1–10 · 11–20 · 21+)";
   bowling "Phase economy (T20: PP · death)" — honestly two-phase.
@@ -175,12 +179,15 @@ full-width; the roster dropdown must fit `min(20rem, 100vw − 2rem)`.
   only when ≤8 players are drawn.
 - Both windows appear in title, subtitle and footer. Dropped players are named.
 
-### 4.7 BY YEAR — caption: "One stat, year by year"
-- Players 1–6 · 1 metric (total/rate/percent).
-- Line chart by calendar year, series ramp per player. **Missing year = a gap in
-  the line** (never a fake zero). Years under a 30-ball sample render in the
-  Faded slot (e.g. hollow point) + footnote. Tooltips carry the sample size.
-- ⏳ Planned: monthly granularity, rolling averages.
+### 4.7 LINE — caption: "One stat across any dimension"
+- Players 1–6 · 1 metric (total/rate/percent) · **one X-axis dimension picker**.
+- Line chart: X-axis chosen via dropdown (innings, month, year, event, phase,
+  batting position, vs bowling type, opposition, venue, innings-of-match, result).
+  Series ramp per player; the X-dimension label appears on the axis (not in the
+  title). **Missing buckets are connected via `spanGaps: true`** (a continuous
+  trend line showing the real trajectory). Tooltips carry the sample size and
+  metric value per bucket.
+- ⏳ Planned: additional X-dimensions (rolling averages, custom windows).
 
 ### 4.8 DUMBBELL — caption: "One stat, two bowling types — the gap is the story"
 - Players 2–12 · 1 matchup rate/percent metric · **Side A / Side B** selects
@@ -209,9 +216,7 @@ full-width; the roster dropdown must fit `min(20rem, 100vw − 2rem)`.
   pool rank (`#1`, `#4`).
 - A vertical **anchor = 100% reference line** with a label.
 - Lower-is-better metrics are direction-normalised so ≤100% always means "anchor
-  leads". Rate/percent rankings exclude sub-floor players (floors declared in the
-  subtitle + footer: "rates/percents: min 30 balls, min 3 dismissals"); the anchor
-  itself never disappears — it renders in the Muted slot instead.
+  leads". All players are ranked; the anchor itself is never hidden.
 - DOM-rendered rows (not a canvas) — the most "editorial layout"-like chart;
   a strong brand-expression opportunity.
 - ⏳ Pending owner rulings: wrap the "(off scale)" caption at 375px; possibly
@@ -224,12 +229,12 @@ full-width; the roster dropdown must fit `min(20rem, 100vw − 2rem)`.
 | Type | Players min–max | Metrics | Special |
 |---|---|---|---|
 | Bar | 2–15 | 1, any kind | Bars/Dots variant |
-| Donut | 2–20 | 1, totals only | always 3–8 slices (top7+Other) |
+| Donut *(popup only; not in the graph picker)* | 2–20 | 1, totals only | always 3–8 slices (top7+Other) |
 | Scatter | 5–60 | 2, any | quadrant medians |
 | Radar | 1–6 | curated group of 3 | small multiples, no overlays |
-| Phases | 2–8 | family of 2–3 | format-gated |
+| Grouped Bars | 2–8 | family of 2–3 | format-gated |
 | Slope | 2–12 | 1, rate/percent | two explicit date windows |
-| By year | 1–6 | 1, total/rate/percent | gap ≠ zero; 30-ball fade |
+| Line | 1–6 | 1, total/rate/percent | 11 X-dimensions; missing buckets spanned |
 | Dumbbell | 2–12 | 1, matchup rate/percent | batting+men only; shape-coded sides |
 | Benchmark | anchor + whole filtered pool | 4–12, kind-grouped | anchor = 100% line |
 

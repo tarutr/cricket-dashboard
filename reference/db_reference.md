@@ -1,6 +1,15 @@
 # Cricket Database — Reference Document
 ### Version: May 28, 2026 (v6) | Phases 1–5 Complete | Phase 6 (ESPN Integration) In Progress
 
+> **Scope note (cricdb):** this documents the UPSTREAM source database (`cricket.duckdb`)
+> from the owner's separate `Cricket_DB` project — its 17 source tables, ingestion rules,
+> and calculation law (which cricdb's `export_parquet.py` reads and SPEC §4.1 mirrors). It is
+> **authoritative for calculation rules**. The "Phase 6 — ESPN Integration" and "Phase 7 —
+> Streamlit frontend" sections below are the `Cricket_DB` project's own roadmap and are **NOT
+> part of cricdb** (this dashboard is the static DuckDB-WASM browser app, not a Streamlit app).
+> The two "future to-dos" here — `team_registry` normalisation and `common_name` search — are
+> the roots of cricdb's parked team-name and first-name-search items.
+
 ---
 
 ## ⚠️ CRITICAL WORKING RULES — ABSOLUTE. NEVER BREAK THESE.

@@ -1,82 +1,85 @@
-# cricdb — deferred backlog (owner-parked; NOT built)
+# cricdb — deferred backlog (owner-prioritised; NOT built)
 
-Living list of work consciously deferred. Contract/anchors: see `CLAUDE.md`. Decisions: `review/owner_decisions.md`.
+Contract: see `CLAUDE.md` (numbers-sacred rule, Rule 1); anchor baselines in `SPEC.md`. Decisions log: `review/owner_decisions.md`.
 
-## Load speed — Tier 1 DONE (on branch); Tier 2–4 TO DO
-**Context (measured 2026-07-22):** a cold load pulls **~37 MB** of parquet from R2; the two matchup files
-(`matchup_batting` ~10 MB, `matchup_bowling` ~12 MB) are ~23 MB of that. Files are served from the raw
-`pub-*.r2.dev` dev URL, which Cloudflare does not edge-cache.
+---
 
-**Tier 1 — DONE (commit 7b11d6e, on `polish-b1-mechanical`):** serve data via a Cloudflare **custom domain**
-`data.the-cordon.com` (CDN edge caching) + `Cache-Control: immutable` on the versioned data files and
-`no-cache` on the `manifest.json` pointer (set in `export_parquet.py` upload; full effect on the next
-pipeline publish). Verified: app loads the 2,813 baseline from the new domain on localhost; CORS OK for both
-localhost and `cricdb.vercel.app`; batting file ~517 ms vs ~2,550 ms before.
+## Standing anchor scope
+Men / T20 International, **2023-07-01 → 2026-07-02**:
+- **Batting baseline:** 2,813 players; Karanbir Singh (top row) **2,454 runs**
+- **SA Yadav anchor:** 60 innings / 1,544 runs / 29.13 avg / 150.34 SR
+- **Bumrah vs RHB (pos 1–2):** 27 innings / 177 balls / 9 wickets
+- **SA Yadav vs Spin:** 38 innings / 454 runs / SR 140.99 (coverage 913 of 1,027 balls)
 
-Remaining, in bang-for-buck order:
+---
 
-- **Tier 2 — shrink the bytes (pipeline-only; `export_parquet.py`). NUMBER-SAFE only: compression / row-order
-  / column-pruning — NEVER touch aggregation.**
-  - **ZSTD compression** on the parquet writes (~20–40 % smaller, free).
-  - **Sort rows to match the default query** (gender → format → team_type → date) so DuckDB-WASM's HTTP
-    range reads fetch a small slice for the default view instead of scanning the whole file — the biggest win,
-    especially for the 23 MB matchup pair.
-  - **Column pruning** — drop any exported columns the browser never reads (needs a read audit).
-  - VERIFY: anchors must stay EXACT (compression/sort/prune must not move any value); independent DuckDB per file.
-  - *Orchestrator can build + measure this locally against `data/cricket.duckdb` without publishing.*
+## 1. Auto-add vs Keep-Columns — **DONE** (no change needed)
+[data] / [app] · Already implemented as additive; user-controlled via "Keep Selected Columns" checkbox.
 
-- **Tier 3 — smarter loading (app-side, moderate):**
-  - Background-warm the batting file while the user is picking filters, so the first Search feels instant
-    (no query runs early — respects the no-auto-search rule).
-  - Persist downloaded parquets in the browser's on-disk store (IndexedDB/OPFS), re-fetching only files whose
-    hash changed → near-instant repeat visits even without the CDN.
+## 2. Docs sync — **IN PROGRESS** (this session)
+[docs] · `reference/CHART_SYSTEM.md` (chart system overhaul), `review/BACKLOG.md` (this list), owner_decisions log.
 
-- **Tier 4 — restructure the data (bigger surgery; only if 1–3 aren't enough):**
-  - Split parquets by gender/format so the default view loads a small file and the rest lazy-loads.
-  - A tiny precomputed "default leaderboard" file — **NOTE:** precomputing changes *where numbers come from*,
-    which collides with the numbers-sacred rule → last resort, heavy anchor verification.
+## 3. Phase-component columns — **pending owner priority**
+[data] · Add `pp_dots`, `pp_fours`, `pp_sixes`, `pp_dismissals` (+ mid/death/odi variants) to the pipeline
+so by-phase Dot% / Boundary% / Fours / Sixes / Batting Average / dismissal-types become chartable. Owner to
+confirm priority vs per-over.
 
-## Per-over — Round 5 wave R5-E (owner: "put per-over on the backburner", 2026-07-22)
-- Add per-over aggregates in `export_parquet.py` (source `deliveries` has `over_number`; 11.3 M ball rows),
-  then expose **per-over** as a Line X-axis (over 1→20, Y aggregated per over).
-- **SIZE CONCERN:** a full per-over parquet is ~**8× batting** (3.4 M rows) / ~**6× bowling** (1.9 M rows) and
-  feeds only the one Line axis → must be built **lean** (only Line-needed fields, sorted by player) and loaded
-  **only when the per-over axis is picked**, never in the standard load. Owner leaned "measure the real size
-  before committing."
-- Publish path: the CI pipeline republishes parquets to R2 (cron, from `main`); per-over is visible only after
-  that. Test-first/gated/additive pattern (like the decision-36 phase/matchup extension).
+## 4. Column-group dropdown metrics — **pending build spec**
+[app] · Define which metrics belong to Core/Boundaries/Dismissals/Phases/Progression presets, made
+format-sensitive AND multi-format-sensitive (T20/50-Over/Red Ball mix handling). Needs a detailed spec
+before build.
 
-## Other Round-5 items parked for the final review
-- **#18 personal-data coverage note** — no such note exists today; owner to decide at final review whether to
-  build a NEW one (needs wording + a live per-scope figure). Decision 53.
-- **#19 fresh-load red outline** on the graph chart-type box — built per spec; owner may prefer holding it
-  until the first "Update chart". One-line change.
-- **Line polish** — X=Phase offers only metrics with a real phase definition (Strike Rate / Economy / Wickets);
-  gaps span the line (`spanGaps:true`) vs a literal break; the chart title names the metric but not the X-axis.
+## 5. First-name player search — **pending owner build**
+[data] · Curated common-name map. **Owner note:** owner has a player registry built in a separate project
+and will add those files to the folder to fold in.
 
-## Older standing deferrals
-- **Team-name normalization** (Team + Opposition alias map) — the FIRST post-round data to-do (decision 51).
-- ~375 px mobile one-screen fit; export-while-dirty.
+## 6. Team-name normalization — **pending owner build**
+[data] · Canonical alias map (RCB Bangalore/Bengaluru, India/India Men, St/Saint Lucia). **Owner note:**
+owner will build this in an outside project ("team registry") and add it in, like the player registry.
 
-## R6 #8 outcome + the per-over / fine-slice DATA-LAYER PROJECT (owner-approved direction 2026-07-22)
-**Done now (no data change):** Line X=Phase broadened to the base metrics whose per-phase components already
-live in the parquets — batting Runs/Balls/SR; bowling Runs-conceded/Balls/Wickets/Economy/Bowling-SR/Average.
+## 7. Per-over data layer — **pending owner decision**
+[data] · Lazy-loaded per-over parquet + a per-over Line X-axis (over 1→20). Absorbs the old R5-E.
+Add per-over aggregates in `export_parquet.py` (source `deliveries` has `over_number`; 11.3 M ball rows),
+expose **per-over** as a Line X-dimension (Y aggregated per over). **SIZE CONCERN:** a full per-over parquet
+is ~**8× batting** (3.4 M rows) / ~**6× bowling** (1.9 M rows) and feeds only the one Line axis → must be
+built **lean** (only Line-needed fields, sorted by player) and loaded **only when the per-over axis is
+picked**. Owner rule: "measure the real size before committing." Test-first/gated/additive pattern (like
+decision 36's phase/matchup extension); publishes to R2 via CI → needs owner's explicit go for the
+pipeline run.
 
-**Line Y — permanently NOT plottable** (for the record): High Score, Best Bowling (single peak figures),
-Matches (a scope count, wrong source), R.Pos/Batting position (filters, not values). Everything else
-(total/rate/percent) already IS available as Y for the normal X-axes.
+## 8. Graphs on mobile — **pending spec**
+[app] · Determine how each chart type behaves at phone widths (375px). Dense-label charts drop value
+labels; sidebar controls stack full-width. Needs per-chart-type sizing rules.
 
-**The project to schedule (rolls the rest of phase INTO the per-over extension — one data-layer job):**
-- STRATEGY (owner endorsed): from the ball-by-ball `deliveries` source, emit the raw **components** per slice
-  — runs, balls, dots, fours, sixes, wickets, dismissals — **per phase AND per over**, NOT pre-computed
-  per-metric values. The app then derives EVERY rate/percent/total metric per bucket via the existing
-  sqlExpression pattern (SR=runs÷balls, dot%=dots÷balls, average=runs÷dismissals…). One compact component set
-  unlocks all slice-able metrics for both phase and per-over.
-- Unlocks (currently blocked by missing per-slice columns): by-PHASE **Dot% / Boundary% / Fours / Sixes /
-  Batting Average / dismissal-types** (need pp_dots/pp_fours/pp_sixes/pp_dismissals on the innings parquet —
-  ~a few columns, small size bump, loads with everything); and **per-over** (over 1→20) for all those metrics.
-- LOAD STRATEGY (ties to the Tier-1..4 speed work): phase components → add the few columns to the EXISTING
-  innings parquet. Per-over → a SEPARATE parquet (~8× the innings file) **loaded lazily, only when the per-over
-  X-axis is actually picked** (never in the normal load), sorted by player so DuckDB-WASM range-reads fetch
-  just the charted players. Test-first / gated / additive pipeline pattern (decision-36 style); publishes to
-  R2 via CI → needs owner's explicit go for the pipeline run (as with per-over generally).
+## 9. ~375px mobile one-screen fit — **pending CSS audit**
+[app] · Final CSS tightening to fit the left-column + chart on one viewport at 375px width. Known residual:
+outer horizontal scroll not yet eliminated (owner deferred Wave 1).
+
+## 10. Full design re-do with incoming brand kit — **comes LAST**
+[design] · Aesthetic layer only; all functional rules already shipped. Once the brand kit arrives (colors,
+typefaces, spacing), apply to the entire UI + export card per §1 (CHART_SYSTEM.md). Lowest priority.
+
+## 11. Load-speed Tiers 2–4 — **pending discussion**
+[data] [app] · **Tier 1 DONE** (Cloudflare custom domain + immutable caching). Remaining (in bang-for-buck order):
+- **Tier 2 — shrink the bytes** (pipeline-only; `export_parquet.py`): ZSTD compression (~20–40% smaller);
+  sort rows to match default query (biggest win for 23 MB matchup pair); column pruning (audit which columns
+  browser never reads). Verify anchors stay EXACT via independent DuckDB per file.
+- **Tier 3 — smarter loading** (app-side, moderate): background-warm batting file while filtering; persist
+  parquets in IndexedDB/OPFS with hash-based re-fetch.
+- **Tier 4 — restructure data** (bigger surgery; only if 1–3 insufficient): split parquets by gender/format;
+  precomputed "default leaderboard" (CAVEAT: changes *where numbers come from* → collides with numbers-sacred
+  rule → last resort, needs heavy verification).
+
+**Owner note:** needs a discussion of how the system works to decide tweaks vs a complete overhaul.
+
+## 12. File-split — **pending discussion**
+[app] · Split the 5 oversized files (graph.js ~3,960 lines, table.js ~2,750, metrics.js ~1,820,
+charts.js ~1,120, styles.css ~4,570) per FILE_SPLIT_PLAN.md. Staged split, no rush. **Owner note:** needs a
+discussion of how the system works to decide tweaks vs a complete overhaul.
+
+---
+
+## Deleted (do not include)
+- #18 personal-data coverage note — owned by design/final review, not backlog
+- #19 fresh-load red outline — built per R5-C spec, currently live
+- Line "literal break" option — owner ruled spans (`spanGaps:true`) the standard
