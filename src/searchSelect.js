@@ -227,11 +227,23 @@ export function mountSearchSelect(hostEl, {
       filterEl.removeAttribute("aria-activedescendant");
       return;
     }
+    // Opt-in group headers: when options carry a `group` string, a small
+    // non-interactive header row is emitted whenever the group changes (e.g.
+    // "Pace" / "Spin" in the player-popup Vs picker). Options with no `group`
+    // render flat exactly as before, so every other searchSelect is unaffected.
+    // Headers are NOT options — `filtered`/`data-idx`/arrow-key nav are untouched.
+    let prevGroup = null;
     listEl.innerHTML = filtered
       .map((o, i) => {
         const selected = o.value === currentValue;
         const active = i === activeIndex;
+        let header = "";
+        if (o.group && o.group !== prevGroup) {
+          header = `<div class="search-select__group" role="presentation">${escHtml(o.group)}</div>`;
+        }
+        prevGroup = o.group;
         return (
+          header +
           `<div id="${uid}-opt-${i}" class="search-select__option${active ? " is-active" : ""}${selected ? " is-selected" : ""}${o.disabled ? " is-disabled" : ""}${o.__empty ? " search-select__option--empty" : ""}"` +
           ` role="option" aria-selected="${selected}" data-idx="${i}">${rowInnerHTML(o)}</div>`
         );

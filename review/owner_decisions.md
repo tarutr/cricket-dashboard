@@ -740,3 +740,25 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
     (c) **Selected players pinned to the top** of the roster dropdown (checked first, stable by pool order) so
     the current selection is never scattered through the list — verified all 15 auto-selected sit at rows 0–14.
     Query builders byte-identical; roster pool still 2,813.
+
+61. **Round-6d five small fixes (owner 2026-07-23; all DISPLAY-ONLY, no query/formula touched).**
+    (1) **Player pin PILL removed** (pills.js) — the pin CHIP above the table is gone; the pin COLUMN is the
+    single place to see/manage pins (click to pin/unpin, pinned rows float to top; a searched-in player IS a
+    pin, so they float in automatically — confirmed). Pin FUNCTIONALITY untouched (state.pinnedPlayers, float,
+    and the "(no innings)" TOAST in main.js all remain); only the chip and its per-pin "(no innings)" label go.
+    (2) **Player-popup "Vs" picker regrouped** (searchSelect.js + styles.css + playerFilters.js) — added opt-in
+    group-header support to the shared searchSelect (options carrying a `group` render a quiet section divider;
+    flat/unchanged when absent, so every other picker is unaffected), then grouped the Vs options under **Pace**
+    (All pace + fast types) and **Spin** (All spin + spin types), restoring the clustering the old <optgroup>
+    gave. Coarse catch-alls relabelled "All pace"/"All spin"; values unchanged → results identical.
+    (3) **Popup opposition table** (playerSections.js) — when the two-col layout is STACKED (narrow/mobile), cap
+    the opposition table to **5 rows** with Show more/less; when SIDE-BY-SIDE, keep the R6b height-match. A
+    self-removing window-resize listener recomputes on width change (fixes the "doesn't re-fit on resize" flag).
+    Verified: desktop 20/24 rows height-matched; 500px → exactly 5 rows.
+    (4) **Auto-add filtered columns** — NO CHANGE NEEDED: main.js autoAddFilteredColumns already adds ALL
+    filtered metric columns and sorts by the first (owner's requested behaviour was already the code's behaviour;
+    the old flag was only "ranks by first", which is what the owner wants).
+    (5) **Export while dirty** (graph.js) — Export PNG / Copy PNG now disable whenever the chart is dirty
+    (pending control edits not yet drawn) and re-enable after "Update chart", so you can't export a chart that
+    no longer matches the controls. Verified: draw→enabled, change metric→disabled, Update→enabled.
+    All verified on localhost, 0 console errors, 2,813 baseline reproduced; query builders byte-identical.

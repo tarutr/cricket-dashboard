@@ -3593,6 +3593,18 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     btn.disabled = !chartDirty;
     btn.classList.toggle("is-dirty", chartDirty);
     btn.textContent = chartDirty ? "Update chart •" : "Update chart";
+    // Owner 2026-07-23: don't let the user export a chart that no longer matches
+    // the pending controls. While dirty, disable Export/Copy PNG; pressing
+    // "Update chart" clears dirty (renderAndClearDirty) and re-enables them.
+    const exportTitle = chartDirty ? "Press “Update chart” first — the drawn chart is behind your latest changes" : "";
+    if (els.exportBtn) {
+      els.exportBtn.disabled = chartDirty;
+      els.exportBtn.title = exportTitle;
+    }
+    if (els.copyPngBtn) {
+      els.copyPngBtn.disabled = chartDirty;
+      els.copyPngBtn.title = exportTitle;
+    }
   }
   /** An in-panel edit: control UI already updated live by the caller; here we
    * only record that the DRAWN chart is now behind, without drawing. */

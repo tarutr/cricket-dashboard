@@ -275,30 +275,46 @@ function wireOppositionToggles(root) {
     if (!scrollEl || !grid || !leftCol || leftCol === rightCol) return;
     toggleBtn.dataset.wired = "true";
 
+    const MAX_STACKED_ROWS = 5;
     let expanded = false;
     function apply() {
       scrollEl.style.maxHeight = "none"; // measure the full natural height first
       const fullHeight = scrollEl.scrollHeight;
-      const capHeight = Math.ceil(leftCol.getBoundingClientRect().height);
-      if (fullHeight <= capHeight + 2) {
-        // Already fits within (or matches) the left column — nothing to
-        // collapse, so don't show a toggle that would do nothing useful.
-        toggleBtn.hidden = true;
-        return;
-      }
-      // R6b (owner): don't clip a row mid-height. Snap the collapsed cap to the
-      // bottom edge of the row the left-column height crosses, so the last
-      // visible row is always whole — a little TALLER than the left column is
-      // fine (owner ruling). Falls back to the raw cap if rows can't be measured.
       const scrollTop = scrollEl.getBoundingClientRect().top;
-      let collapsedHeight = capHeight;
       const bodyRows = scrollEl.querySelectorAll("tbody tr");
-      for (const r of bodyRows) {
-        const rowBottom = r.getBoundingClientRect().bottom - scrollTop;
-        if (rowBottom >= capHeight) {
-          collapsedHeight = Math.ceil(rowBottom) + 1; // +1 guards sub-pixel clipping
-          break;
+      const lc = leftCol.getBoundingClientRect();
+      const rc = rightCol.getBoundingClientRect();
+      // Side-by-side when the opposition (right) column actually sits to the
+      // RIGHT of the left column; otherwise the two-col grid has collapsed to a
+      // single stacked column (narrow / mobile widths).
+      const sideBySide = rc.left >= lc.right - 4;
+      let collapsedHeight;
+      if (sideBySide) {
+        // R6b (owner): match the left column's height, snapped to a whole row so
+        // the last visible row is never clipped mid-height (a little TALLER than
+        // the left column is fine — owner ruling).
+        const capHeight = Math.ceil(lc.height);
+        if (fullHeight <= capHeight + 2) {
+          toggleBtn.hidden = true; // fits already — no toggle needed
+          return;
         }
+        collapsedHeight = capHeight;
+        for (const r of bodyRows) {
+          const rowBottom = r.getBoundingClientRect().bottom - scrollTop;
+          if (rowBottom >= capHeight) {
+            collapsedHeight = Math.ceil(rowBottom) + 1; // +1 guards sub-pixel clipping
+            break;
+          }
+        }
+      } else {
+        // Stacked layout (owner 2026-07-23): there's no left column beside it to
+        // match, so cap to the first 5 opposition rows with Show more/less.
+        if (bodyRows.length <= MAX_STACKED_ROWS) {
+          toggleBtn.hidden = true;
+          return;
+        }
+        const fifthBottom = bodyRows[MAX_STACKED_ROWS - 1].getBoundingClientRect().bottom - scrollTop;
+        collapsedHeight = Math.ceil(fifthBottom) + 1;
       }
       toggleBtn.hidden = false;
       scrollEl.style.maxHeight = expanded ? "none" : `${collapsedHeight}px`;
@@ -308,6 +324,17 @@ function wireOppositionToggles(root) {
       expanded = !expanded;
       apply();
     });
+    // Recompute on window resize (side-by-side ⇄ stacked flips with width, and
+    // the 5-row cap height must re-measure). Self-removes once this popup's
+    // toggle leaves the DOM, so repeated popup opens never leak listeners.
+    const onResize = () => {
+      if (!toggleBtn.isConnected) {
+        window.removeEventListener("resize", onResize);
+        return;
+      }
+      apply();
+    };
+    window.addEventListener("resize", onResize);
     apply();
   });
 }

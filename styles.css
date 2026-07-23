@@ -2552,6 +2552,18 @@ a { color: var(--color-accent); }
    choice, not a real option. */
 .search-select__option--empty { color: var(--color-muted); font-style: italic; }
 .search-select__opt-label { min-width: 0; }
+/* Opt-in group header inside the option list (e.g. Pace / Spin in the player-
+   popup Vs picker). A quiet, non-interactive section divider — not an option. */
+.search-select__group {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  margin-top: var(--space-1);
+}
+.search-select__group:first-child { margin-top: 0; }
 /* The "(unavailable)" chart-type cue (and any future hint suffix) — muted and
    set slightly smaller so it reads as an annotation, not part of the name. */
 .search-select__hint {

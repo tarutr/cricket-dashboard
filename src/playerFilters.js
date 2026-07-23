@@ -407,14 +407,24 @@ export function mountPlayerFilters(hostEl, { onApply }) {
       try {
         const vsTypes = await fetchVsTypeOptions(playerId, pageState);
         if (ctx.playerId !== playerId || els.drawer.hidden) return;
-        // Same option ORDER as before (Pace, Spin, then the specific types) —
-        // the old <optgroup> visual clustering doesn't carry over to the flat
-        // searchSelect list (a cosmetic loss inherent to the shared
-        // component; flagged in the wave report, not built around here).
+        // Owner 2026-07-23: restore the Pace/Spin clustering the old <optgroup>
+        // gave, now that searchSelect supports opt-in group headers. Each option
+        // carries a `group` ("Pace"/"Spin"); the coarse catch-all reads "All
+        // pace"/"All spin" under its header, then the specific types this player
+        // faced. (Mirrors playerSections' FINE_BOWLING_GROUP — a closed vocab.)
+        const VS_GROUP = {
+          Fast: "Pace", "Fast-medium": "Pace", "Medium-fast": "Pace", Medium: "Pace", "Slow-medium": "Pace",
+          "Off-spin": "Spin", "Leg-spin": "Spin", "Slow left-arm orthodox": "Spin", "Left-arm wrist-spin": "Spin",
+        };
+        const paceTypes = vsTypes.filter((t) => VS_GROUP[t] === "Pace");
+        const spinTypes = vsTypes.filter((t) => VS_GROUP[t] === "Spin");
+        const otherTypes = vsTypes.filter((t) => !VS_GROUP[t]); // safety: anything unrecognised stays ungrouped
         const vsOptions = [
-          { value: "Pace", label: "Pace" },
-          { value: "Spin", label: "Spin" },
-          ...vsTypes.map((t) => ({ value: t, label: t })),
+          { value: "Pace", label: "All pace", group: "Pace" },
+          ...paceTypes.map((t) => ({ value: t, label: t, group: "Pace" })),
+          { value: "Spin", label: "All spin", group: "Spin" },
+          ...spinTypes.map((t) => ({ value: t, label: t, group: "Spin" })),
+          ...otherTypes.map((t) => ({ value: t, label: t })),
         ];
         vsSelect.setOptions(vsOptions);
         vsSelect.setValue(pending.vs);

@@ -275,44 +275,15 @@ export function mountPills(
       });
     });
 
-    // Pinned players (task 3b; R3 Wave 6 owner-decided leftover: pushed LAST
-    // so they always render to the right of every filter pill above — a pin
-    // ADDS a player to the result set rather than narrowing it, so it reads
-    // differently and sits differently). `pinned: true` gets the distinct
-    // accent-tint styling (.pill--pinned in styles.css) so it's visually
-    // distinguishable from the neutral filter pills too, not just positioned
-    // after them. Wave 4b (decision 47a): pins now apply in matchup ("Vs")
-    // mode as well as plain mode (buildMatchupQuery exempts them through the
-    // same shared helper as buildQuery), so the pill is LIVE in both — no
-    // longer greyed/inert in Vs.
-    // No-data pin feedback (4d/A6): a pinned player absent from the last
-    // loaded result set (zero innings in the searched scope, core scope
-    // included) gets an honest "(no innings)" suffix on their own pill — the
-    // player is real, they're just not there, same spirit as the omnisearch
-    // "Filter the table" toast above but per-pin and pill-attached rather
-    // than toast-only. main.js also fires the toast once per Search/pin-add;
-    // this pill annotation is the persistent half of that feedback.
-    // R5-A #9: pin pills read the LIVE store (not the applied snapshot `s`) — a
-    // pin ADDED via the results search must show instantly, and a pin ×/+ soft-
-    // delete must stage (it's removed from live, so it drops out of `active` and
-    // the staged descriptor renders its red-outline undo).
-    const noInningsIds = getNoInningsIds();
-    for (const p of live.pinnedPlayers || []) {
-      const noInnings = noInningsIds.has(String(p.id));
-      pills.push({
-        key: `pin:${p.id}`,
-        label: noInnings ? `+ ${p.name} (no innings)` : `+ ${p.name}`,
-        pinned: true,
-        noInnings,
-        title: noInnings ? `${p.name} has no innings in this scope` : undefined,
-        remove: () =>
-          store.set({ pinnedPlayers: (store.get().pinnedPlayers || []).filter((x) => x.id !== p.id) }),
-        restore: () => {
-          const cur = store.get().pinnedPlayers || [];
-          if (!cur.some((x) => x.id === p.id)) store.set({ pinnedPlayers: [...cur, p] });
-        },
-      });
-    }
+    // Pinned players get NO pill (owner 2026-07-23): the pin COLUMN in the table
+    // is the single place to see and manage pins (click to pin/unpin, pinned
+    // rows float to the top; a searched-in player IS a pin, so they float in
+    // automatically). The redundant pin chip is gone. Pin FUNCTIONALITY is
+    // untouched — state.pinnedPlayers, the float, and the "(no innings)" toast
+    // (main.js reportPinCoverage) all remain; only the chip is removed.
+    // `live` and `getNoInningsIds` are still accepted for signature stability.
+    void live;
+    void getNoInningsIds;
 
     // R5-A #9: merge ACTIVE pills (derived above) with STAGED (soft-deleted) ones.
     // STAGED wins over active: a FILTER pill derives from the APPLIED snapshot, so
