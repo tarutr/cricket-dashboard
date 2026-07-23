@@ -457,6 +457,30 @@ def sql_batting():
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {FACED_BATTER} THEN 1 ELSE 0 END) AS odi_mid_balls,
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' THEN d.runs_batter ELSE 0 END) AS odi_death_runs,
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {FACED_BATTER} THEN 1 ELSE 0 END) AS odi_death_balls,
+            -- Phase-component columns (backlog #3, ADDITIVE): dots/fours/sixes per
+            -- phase, mirroring the overall dots/fours_hit/sixes_hit expressions
+            -- above exactly, gated by the same t20_phase_expr()/ODI_PHASE_OVER.
+            -- T20-family (pp/mid/death):
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS pp_dots,
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS pp_fours,
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS pp_sixes,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS mid_dots,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS mid_fours,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS mid_sixes,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS death_dots,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS death_fours,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS death_sixes,
+            -- ODI-family (odi_pp/odi_mid/odi_death); NULLed for the Hundred in the
+            -- final SELECT (ODI_PHASE_OVER already returns NULL there, so these are 0):
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS odi_pp_dots,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS odi_pp_fours,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS odi_pp_sixes,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS odi_mid_dots,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS odi_mid_fours,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS odi_mid_sixes,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS odi_death_dots,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS odi_death_fours,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS odi_death_sixes,
             MAX(CASE WHEN d.balls_per_over = 5 THEN 1 ELSE 0 END) AS is_hundred
         FROM d
         WHERE d.batter_id IS NOT NULL
@@ -475,6 +499,33 @@ def sql_batting():
                ) AS dismissal_kind
         FROM kept_wickets
         GROUP BY match_id, innings_number, player_out_id
+    ),
+    -- Phase-bucketed batter dismissals (backlog #3, ADDITIVE). Mirrors `dis`'s
+    -- ALL-KINDS rule (kind NOT IN the non-dismissal set) but joins each
+    -- qualifying wickets row to its delivery in `d` to recover the phase
+    -- (over_number / balls_per_over / legal_ordinal), which `dis` cannot see
+    -- (it never touches deliveries). `dis` is left byte-identical. A wickets row
+    -- with no matching kept delivery would be dropped by this inner join; that
+    -- residual is measured (0 in the current data -- every dismissal kind incl.
+    -- timed out / retired out / obstructing the field lands on a delivery here;
+    -- see pipeline/dev_test_phase_components.py). Grain: one row per
+    -- (match,inn,player_out). A batter has at most one real dismissal per innings
+    -- (verified: 0 multi-dismissal innings), so the per-phase counts sum to the
+    -- `dismissed` flag exactly for T20/IT20 (t20 family) and ODI/ODM (odi family).
+    dis_phase AS (
+        SELECT kw.match_id, kw.innings_number, kw.player_out_id AS pid,
+               SUM(CASE WHEN ({t20_phase_expr()}) = 'pp'    THEN 1 ELSE 0 END) AS pp_dismissals,
+               SUM(CASE WHEN ({t20_phase_expr()}) = 'mid'   THEN 1 ELSE 0 END) AS mid_dismissals,
+               SUM(CASE WHEN ({t20_phase_expr()}) = 'death' THEN 1 ELSE 0 END) AS death_dismissals,
+               SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    THEN 1 ELSE 0 END) AS odi_pp_dismissals,
+               SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   THEN 1 ELSE 0 END) AS odi_mid_dismissals,
+               SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' THEN 1 ELSE 0 END) AS odi_death_dismissals
+        FROM kept_wickets kw
+        JOIN d
+          ON kw.match_id = d.match_id AND kw.innings_number = d.innings_number
+         AND kw.over_number = d.over_number AND kw.ball_index = d.ball_index
+        WHERE kw.kind NOT IN ({_NON_DIS_IN})
+        GROUP BY kw.match_id, kw.innings_number, kw.player_out_id
     ),
     -- Innings-progression buckets (family E). A within-innings FACED-ball
     -- counter per (match,inn,batter): count only faced balls (wides IS NULL;
@@ -550,7 +601,35 @@ def sql_batting():
         COALESCE(pg.fb11_20_runs, 0)  AS fb11_20_runs,
         COALESCE(pg.fb11_20_balls, 0) AS fb11_20_balls,
         COALESCE(pg.fb21p_runs, 0)    AS fb21p_runs,
-        COALESCE(pg.fb21p_balls, 0)   AS fb21p_balls
+        COALESCE(pg.fb21p_balls, 0)   AS fb21p_balls,
+        -- Phase-component columns (backlog #3, ADDITIVE). dots/fours/sixes mirror
+        -- the overall dots/fours_hit/sixes_hit; dismissals mirror the overall
+        -- `dismissed` (all kinds), phase-bucketed via dis_phase.
+        COALESCE(ba.pp_dots, 0)         AS pp_dots,
+        COALESCE(ba.pp_fours, 0)        AS pp_fours,
+        COALESCE(ba.pp_sixes, 0)        AS pp_sixes,
+        COALESCE(dp.pp_dismissals, 0)   AS pp_dismissals,
+        COALESCE(ba.mid_dots, 0)        AS mid_dots,
+        COALESCE(ba.mid_fours, 0)       AS mid_fours,
+        COALESCE(ba.mid_sixes, 0)       AS mid_sixes,
+        COALESCE(dp.mid_dismissals, 0)  AS mid_dismissals,
+        COALESCE(ba.death_dots, 0)      AS death_dots,
+        COALESCE(ba.death_fours, 0)     AS death_fours,
+        COALESCE(ba.death_sixes, 0)     AS death_sixes,
+        COALESCE(dp.death_dismissals, 0) AS death_dismissals,
+        -- ODI-family: NULL for the Hundred (same convention as odi_*_runs above).
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_pp_dots, 0)         END AS odi_pp_dots,
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_pp_fours, 0)        END AS odi_pp_fours,
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_pp_sixes, 0)        END AS odi_pp_sixes,
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(dp.odi_pp_dismissals, 0)   END AS odi_pp_dismissals,
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_mid_dots, 0)        END AS odi_mid_dots,
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_mid_fours, 0)       END AS odi_mid_fours,
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_mid_sixes, 0)       END AS odi_mid_sixes,
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(dp.odi_mid_dismissals, 0)  END AS odi_mid_dismissals,
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_death_dots, 0)      END AS odi_death_dots,
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_death_fours, 0)     END AS odi_death_fours,
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_death_sixes, 0)     END AS odi_death_sixes,
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(dp.odi_death_dismissals, 0) END AS odi_death_dismissals
     FROM crease_dedup cd
     JOIN kept_innings ki
       ON cd.match_id = ki.match_id AND cd.innings_number = ki.innings_number
@@ -561,6 +640,8 @@ def sql_batting():
       ON cd.match_id = pos.match_id AND cd.innings_number = pos.innings_number AND cd.batter_id = pos.pid
     LEFT JOIN dis
       ON cd.match_id = dis.match_id AND cd.innings_number = dis.innings_number AND cd.batter_id = dis.pid
+    LEFT JOIN dis_phase dp
+      ON cd.match_id = dp.match_id AND cd.innings_number = dp.innings_number AND cd.batter_id = dp.pid
     LEFT JOIN prog_agg pg
       ON cd.match_id = pg.match_id AND cd.innings_number = pg.innings_number AND cd.batter_id = pg.batter_id
     ORDER BY match_date, cd.match_id, cd.innings_number, cd.batter_id
@@ -679,7 +760,28 @@ def sql_bowling():
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS odi_mid_balls,
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   THEN {BOWLER_RUNS} ELSE 0 END) AS odi_mid_runs_conceded,
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS odi_death_balls,
-            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' THEN {BOWLER_RUNS} ELSE 0 END) AS odi_death_runs_conceded
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' THEN {BOWLER_RUNS} ELSE 0 END) AS odi_death_runs_conceded,
+            -- Phase-component columns (backlog #3, ADDITIVE): dots/fours_conceded/
+            -- sixes_conceded per phase, mirroring the overall dots/fours_conceded/
+            -- sixes_conceded above, gated by the same t20_phase_expr()/ODI_PHASE_OVER.
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS pp_dots,
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS pp_fours_conceded,
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS pp_sixes_conceded,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS mid_dots,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS mid_fours_conceded,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS mid_sixes_conceded,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS death_dots,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS death_fours_conceded,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS death_sixes_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS odi_pp_dots,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS odi_pp_fours_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS odi_pp_sixes_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS odi_mid_dots,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS odi_mid_fours_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS odi_mid_sixes_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS odi_death_dots,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS odi_death_fours_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS odi_death_sixes_conceded
         FROM d
         WHERE d.bowler_id IS NOT NULL
         GROUP BY match_id, innings_number, bowler_id
@@ -731,7 +833,28 @@ def sql_bowling():
         CASE WHEN b.is_hundred=1 THEN NULL ELSE COALESCE(w.odi_mid_wickets,0)   END AS odi_mid_wickets,
         CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_death_balls          END AS odi_death_balls,
         CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_death_runs_conceded  END AS odi_death_runs_conceded,
-        CASE WHEN b.is_hundred=1 THEN NULL ELSE COALESCE(w.odi_death_wickets,0) END AS odi_death_wickets
+        CASE WHEN b.is_hundred=1 THEN NULL ELSE COALESCE(w.odi_death_wickets,0) END AS odi_death_wickets,
+        -- Phase-component columns (backlog #3, ADDITIVE). dots/fours_conceded/
+        -- sixes_conceded per phase, mirroring the overall counterparts.
+        b.pp_dots,
+        b.pp_fours_conceded,
+        b.pp_sixes_conceded,
+        b.mid_dots,
+        b.mid_fours_conceded,
+        b.mid_sixes_conceded,
+        b.death_dots,
+        b.death_fours_conceded,
+        b.death_sixes_conceded,
+        -- ODI-family: NULL for the Hundred (same convention as odi_*_balls above).
+        CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_pp_dots               END AS odi_pp_dots,
+        CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_pp_fours_conceded     END AS odi_pp_fours_conceded,
+        CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_pp_sixes_conceded     END AS odi_pp_sixes_conceded,
+        CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_mid_dots              END AS odi_mid_dots,
+        CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_mid_fours_conceded    END AS odi_mid_fours_conceded,
+        CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_mid_sixes_conceded    END AS odi_mid_sixes_conceded,
+        CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_death_dots            END AS odi_death_dots,
+        CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_death_fours_conceded  END AS odi_death_fours_conceded,
+        CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_death_sixes_conceded  END AS odi_death_sixes_conceded
     FROM bowl_agg b
     LEFT JOIN wkt_agg w
       ON b.match_id = w.match_id AND b.innings_number = w.innings_number AND b.bowler_id = w.bowler_id
@@ -947,7 +1070,37 @@ def sql_matchup_batting():
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   THEN d.runs_batter ELSE 0 END) AS odi_mid_runs,
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {FACED_BATTER} THEN 1 ELSE 0 END) AS odi_mid_balls,
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' THEN d.runs_batter ELSE 0 END) AS odi_death_runs,
-            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {FACED_BATTER} THEN 1 ELSE 0 END) AS odi_death_balls
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {FACED_BATTER} THEN 1 ELSE 0 END) AS odi_death_balls,
+            -- Phase-component columns (backlog #3, ADDITIVE). dots/fours/sixes
+            -- mirror plain matchup dots/fours_hit/sixes_hit; dismissals mirror THIS
+            -- builder's `dismissals` = SUM(COALESCE(cwkt.wkts,0)) (bowler-CREDITED
+            -- kinds only, striker, delivery-tied -- decision 23), phase-gated on d.
+            -- Because every credited wicket is on a delivery, the phase split is
+            -- clean: phase dismissals sum to `dismissals` exactly (T20/ODI families).
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS pp_dots,
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS pp_fours,
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS pp_sixes,
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    THEN COALESCE(cwkt.wkts, 0) ELSE 0 END) AS pp_dismissals,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS mid_dots,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS mid_fours,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS mid_sixes,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   THEN COALESCE(cwkt.wkts, 0) ELSE 0 END) AS mid_dismissals,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS death_dots,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS death_fours,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS death_sixes,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' THEN COALESCE(cwkt.wkts, 0) ELSE 0 END) AS death_dismissals,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS odi_pp_dots,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS odi_pp_fours,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS odi_pp_sixes,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    THEN COALESCE(cwkt.wkts, 0) ELSE 0 END) AS odi_pp_dismissals,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS odi_mid_dots,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS odi_mid_fours,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS odi_mid_sixes,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   THEN COALESCE(cwkt.wkts, 0) ELSE 0 END) AS odi_mid_dismissals,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS odi_death_dots,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS odi_death_fours,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS odi_death_sixes,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' THEN COALESCE(cwkt.wkts, 0) ELSE 0 END) AS odi_death_dismissals
         FROM d
         LEFT JOIN player_profiles pp ON d.bowler_id = pp.player_id
         LEFT JOIN cwkt
@@ -977,6 +1130,22 @@ def sql_matchup_batting():
         CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_mid_balls  END AS odi_mid_balls,
         CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_runs END AS odi_death_runs,
         CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_balls END AS odi_death_balls,
+        -- Phase-component columns (backlog #3, ADDITIVE).
+        mb.pp_dots, mb.pp_fours, mb.pp_sixes, mb.pp_dismissals,
+        mb.mid_dots, mb.mid_fours, mb.mid_sixes, mb.mid_dismissals,
+        mb.death_dots, mb.death_fours, mb.death_sixes, mb.death_dismissals,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_pp_dots        END AS odi_pp_dots,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_pp_fours       END AS odi_pp_fours,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_pp_sixes       END AS odi_pp_sixes,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_pp_dismissals  END AS odi_pp_dismissals,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_mid_dots       END AS odi_mid_dots,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_mid_fours      END AS odi_mid_fours,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_mid_sixes      END AS odi_mid_sixes,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_mid_dismissals END AS odi_mid_dismissals,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_dots       END AS odi_death_dots,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_fours      END AS odi_death_fours,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_sixes      END AS odi_death_sixes,
+        CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_dismissals END AS odi_death_dismissals,
         pos.batting_position AS batting_position
     FROM mb
     LEFT JOIN dis_kind dk
@@ -1118,7 +1287,27 @@ def sql_matchup_bowling():
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS odi_mid_balls,
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   THEN {BOWLER_RUNS} ELSE 0 END) AS odi_mid_runs_conceded,
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS odi_death_balls,
-            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' THEN {BOWLER_RUNS} ELSE 0 END) AS odi_death_runs_conceded
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' THEN {BOWLER_RUNS} ELSE 0 END) AS odi_death_runs_conceded,
+            -- Phase-component columns (backlog #3, ADDITIVE): dots/fours_conceded/
+            -- sixes_conceded per phase, mirroring the overall counterparts.
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS pp_dots,
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS pp_fours_conceded,
+            SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS pp_sixes_conceded,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS mid_dots,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS mid_fours_conceded,
+            SUM(CASE WHEN {t20_phase_expr()} = 'mid'   AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS mid_sixes_conceded,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS death_dots,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS death_fours_conceded,
+            SUM(CASE WHEN {t20_phase_expr()} = 'death' AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS death_sixes_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS odi_pp_dots,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS odi_pp_fours_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'pp'    AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS odi_pp_sixes_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS odi_mid_dots,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS odi_mid_fours_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'mid'   AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS odi_mid_sixes_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS odi_death_dots,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS odi_death_fours_conceded,
+            SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS odi_death_sixes_conceded
         FROM d
         LEFT JOIN player_profiles pp ON d.batter_id = pp.player_id
         LEFT JOIN positions pos
@@ -1156,7 +1345,21 @@ def sql_matchup_bowling():
         CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE COALESCE(wk.odi_mid_wickets,0) END AS odi_mid_wickets,
         CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_death_balls END AS odi_death_balls,
         CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_death_runs_conceded END AS odi_death_runs_conceded,
-        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE COALESCE(wk.odi_death_wickets,0) END AS odi_death_wickets
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE COALESCE(wk.odi_death_wickets,0) END AS odi_death_wickets,
+        -- Phase-component columns (backlog #3, ADDITIVE). dots/fours_conceded/
+        -- sixes_conceded per phase, mirroring the overall counterparts.
+        mbowl.pp_dots, mbowl.pp_fours_conceded, mbowl.pp_sixes_conceded,
+        mbowl.mid_dots, mbowl.mid_fours_conceded, mbowl.mid_sixes_conceded,
+        mbowl.death_dots, mbowl.death_fours_conceded, mbowl.death_sixes_conceded,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_pp_dots            END AS odi_pp_dots,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_pp_fours_conceded  END AS odi_pp_fours_conceded,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_pp_sixes_conceded  END AS odi_pp_sixes_conceded,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_mid_dots           END AS odi_mid_dots,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_mid_fours_conceded END AS odi_mid_fours_conceded,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_mid_sixes_conceded END AS odi_mid_sixes_conceded,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_death_dots            END AS odi_death_dots,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_death_fours_conceded  END AS odi_death_fours_conceded,
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_death_sixes_conceded  END AS odi_death_sixes_conceded
     FROM mbowl
     LEFT JOIN wkt_agg wk
       ON mbowl.match_id = wk.match_id AND mbowl.innings_number = wk.innings_number
@@ -1991,6 +2194,137 @@ def run_gates(con, out_dir):
     )
     gate(bad_type == 0, "matchup_batting.bowling_type within decision-13 taxonomy",
          f"{bad_type} rows outside {BOWLING_TYPE_VOCAB}")
+
+    # =========================================================================
+    # Backlog #3 — phase-component column gates (ADDITIVE, 2026-07-23). Consistency
+    # checks so a bad build refuses to upload. None of these change any export SQL.
+    #  (i)   dots/fours/sixes per phase: pp+mid+death <= overall for ALL rows
+    #        (the t20-family phase columns only span overs 0-19, so non-T20
+    #        formats legitimately carry more in the overall column); and == overall
+    #        for T20/IT20 rows (every ball is in a t20 phase -- already guaranteed
+    #        by the sibling phase-balls gate -- so this also catches UNDER-counting).
+    #  (ii)  the new ODI-family components are NULL exactly for the Hundred
+    #        (balls_per_over = 5), matching the existing odi_* convention.
+    #  (iii) matchup_batting phase dismissals reconcile EXACTLY to `dismissals`
+    #        (bowler-credited wickets are all delivery-tied -> clean phase split).
+    #  (iv)  batting_innings all-kinds phase dismissals are <= the `dismissed` flag
+    #        (a wickets row with no matching kept delivery, or a delivery out of
+    #        phase, would be dropped -- residual measured 0 in the dev test and
+    #        REPORTED, never silently patched; the owner decides on any residual).
+    # =========================================================================
+    bat_triples = [
+        ("pp_dots", "mid_dots", "death_dots", "dots"),
+        ("pp_fours", "mid_fours", "death_fours", "fours_hit"),
+        ("pp_sixes", "mid_sixes", "death_sixes", "sixes_hit"),
+    ]
+    bowl_triples = [
+        ("pp_dots", "mid_dots", "death_dots", "dots"),
+        ("pp_fours_conceded", "mid_fours_conceded", "death_fours_conceded", "fours_conceded"),
+        ("pp_sixes_conceded", "mid_sixes_conceded", "death_sixes_conceded", "sixes_conceded"),
+    ]
+
+    def _phase_component_gates(p, fname, triples):
+        le = " OR ".join(f"({pp} + {mid} + {de} > {ov})" for pp, mid, de, ov in triples)
+        bad_le = q(f"SELECT COUNT(*) FROM read_parquet('{p}') WHERE {le}")
+        gate(bad_le == 0,
+             f"{fname} phase dots/fours/sixes <= overall (all rows)",
+             f"{bad_le} rows where a phase-sum exceeds its overall")
+        eq = " OR ".join(f"({pp} + {mid} + {de} != {ov})" for pp, mid, de, ov in triples)
+        bad_eq = q(
+            f"SELECT COUNT(*) FROM read_parquet('{p}') "
+            f"WHERE match_type IN ('T20','IT20') AND ({eq})"
+        )
+        gate(bad_eq == 0,
+             f"{fname} T20/IT20 phase dots/fours/sixes == overall (per row)",
+             f"{bad_eq} mismatched rows")
+
+    _phase_component_gates(bat_p, "batting_innings", bat_triples)
+    _phase_component_gates(bowl_p, "bowling_innings", bowl_triples)
+    _phase_component_gates(mbat_p, "matchup_batting", bat_triples)
+    _phase_component_gates(mbowl_p, "matchup_bowling", bowl_triples)
+
+    bat_odi_new = [
+        "odi_pp_dots", "odi_pp_fours", "odi_pp_sixes", "odi_pp_dismissals",
+        "odi_mid_dots", "odi_mid_fours", "odi_mid_sixes", "odi_mid_dismissals",
+        "odi_death_dots", "odi_death_fours", "odi_death_sixes", "odi_death_dismissals",
+    ]
+    bowl_odi_new = [
+        "odi_pp_dots", "odi_pp_fours_conceded", "odi_pp_sixes_conceded",
+        "odi_mid_dots", "odi_mid_fours_conceded", "odi_mid_sixes_conceded",
+        "odi_death_dots", "odi_death_fours_conceded", "odi_death_sixes_conceded",
+    ]
+
+    def _odi_null_iff_hundred(p, fname, cols):
+        any_notnull = " OR ".join(f"{c} IS NOT NULL" for c in cols)
+        bad_h = q(
+            f"SELECT COUNT(*) FROM read_parquet('{p}') "
+            f"WHERE match_id IN ({hundred_ids_sql}) AND ({any_notnull})"
+        )
+        gate(bad_h == 0, f"{fname} new odi_* components all NULL for the Hundred",
+             f"{bad_h} bad rows")
+        any_null = " OR ".join(f"{c} IS NULL" for c in cols)
+        bad_nh = q(
+            f"SELECT COUNT(*) FROM read_parquet('{p}') "
+            f"WHERE match_id NOT IN ({hundred_ids_sql}) AND ({any_null})"
+        )
+        gate(bad_nh == 0, f"{fname} new odi_* components all NOT NULL off the Hundred",
+             f"{bad_nh} bad rows")
+
+    _odi_null_iff_hundred(bat_p, "batting_innings", bat_odi_new)
+    _odi_null_iff_hundred(bowl_p, "bowling_innings", bowl_odi_new)
+    _odi_null_iff_hundred(mbat_p, "matchup_batting", bat_odi_new)
+    _odi_null_iff_hundred(mbowl_p, "matchup_bowling", bowl_odi_new)
+
+    # (iii) matchup_batting phase dismissals == dismissals (exact, per row).
+    mbat_dis_t20 = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{mbat_p}')
+            WHERE match_type IN ('T20','IT20')
+              AND pp_dismissals + mid_dismissals + death_dismissals != dismissals"""
+    )
+    gate(mbat_dis_t20 == 0,
+         "matchup_batting T20/IT20 phase dismissals == dismissals (per row)",
+         f"{mbat_dis_t20} mismatched rows")
+    mbat_dis_odi = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{mbat_p}')
+            WHERE match_type IN ('ODI','ODM')
+              AND odi_pp_dismissals + odi_mid_dismissals + odi_death_dismissals != dismissals"""
+    )
+    gate(mbat_dis_odi == 0,
+         "matchup_batting ODI/ODM phase dismissals == dismissals (per row)",
+         f"{mbat_dis_odi} mismatched rows")
+
+    # (iv) batting_innings all-kinds phase dismissals <= dismissed flag (per row).
+    bat_dis_t20 = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{bat_p}')
+            WHERE match_type IN ('T20','IT20')
+              AND pp_dismissals + mid_dismissals + death_dismissals > dismissed"""
+    )
+    gate(bat_dis_t20 == 0,
+         "batting_innings T20/IT20 phase dismissals <= dismissed (per row)",
+         f"{bat_dis_t20} rows exceed the dismissed flag")
+    bat_dis_odi = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{bat_p}')
+            WHERE match_type IN ('ODI','ODM')
+              AND odi_pp_dismissals + odi_mid_dismissals + odi_death_dismissals > dismissed"""
+    )
+    gate(bat_dis_odi == 0,
+         "batting_innings ODI/ODM phase dismissals <= dismissed (per row)",
+         f"{bat_dis_odi} rows exceed the dismissed flag")
+
+    # Residual visibility: the batting all-kinds phase-dismissal shortfall vs the
+    # dismissed flag, printed (not a hard failure -- see (iv)). 0 in current data.
+    bat_dis_resid_t20 = q(
+        f"""SELECT COALESCE(SUM(dismissed
+                - (pp_dismissals + mid_dismissals + death_dismissals)),0)
+            FROM read_parquet('{bat_p}') WHERE match_type IN ('T20','IT20')"""
+    )
+    bat_dis_resid_odi = q(
+        f"""SELECT COALESCE(SUM(dismissed
+                - (odi_pp_dismissals + odi_mid_dismissals + odi_death_dismissals)),0)
+            FROM read_parquet('{bat_p}') WHERE match_type IN ('ODI','ODM')"""
+    )
+    log(f"  INFO  batting phase-dismissal shortfall vs dismissed flag: "
+        f"T20/IT20={bat_dis_resid_t20}, ODI/ODM={bat_dis_resid_odi}")
 
     log("All structural / cross-check gates passed.")
 
