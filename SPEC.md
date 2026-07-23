@@ -112,18 +112,28 @@ error. (Implemented in `src/db.js`.)
 - Bowler-credited wickets: join the `wickets` table; count only kinds in
   {bowled, lbw, caught, caught and bowled, stumped, hit wicket}.
 - Batter dismissals (for average): count wickets rows where `player_out_id` = batter,
-  any kind except {retired hurt, retired not out} (ask owner to confirm the exact
-  not-out treatment of `retired out` before finalizing).
+  any kind except {retired hurt, retired not out}. **`retired out` DOES count as a
+  dismissal** (owner-confirmed 2026-07-23; this matches the code's `NON_DISMISSAL_KINDS`
+  = only {retired hurt, retired not out}).
+- Maiden over (bowling): a complete over — 6 legal deliveries within one `over_number`
+  — where `SUM(runs_batter + COALESCE(wides,0) + COALESCE(noballs,0)) = 0`.
+- Division-by-zero: any ratio with a zero denominator (average with 0 dismissals;
+  strike rate / economy / dot% with 0 balls; etc.) is **NULL** — never Infinity, never
+  0 — and NULL sorts last regardless of direction. Implemented as `… / NULLIF(denom, 0)`.
 - Super overs (`innings.super_over = TRUE`) are excluded from ALL stats.
 - Date filtering uses `matches.match_date_1`, never season columns.
 - Boundary detection: a hit boundary is `runs_batter IN (4,6) AND is_not_boundary IS NOT TRUE`.
 - Afghanistan does not exist in the data; no special handling needed beyond honest empty results.
 - Player names are "initials + surname" (e.g. "RG Sharma"); search must match on substring,
   case-insensitive.
-- T20 phases: powerplay overs 1–6 (over_number 0–5), middle 7–15 (6–14), death 16–20 (15–19).
-  Phase columns are only meaningful for T20/IT20; they are still *stored* for other formats
-  using the same over ranges but the UI must not surface phase metrics unless the format
-  filter is exactly T20, IT20, or both.
+- Phases are per-format, with SEPARATE stored column families:
+  - **T20 / IT20** (`pp_` / `mid_` / `death_`): powerplay overs 1–6 (over_number 0–5),
+    middle 7–15 (6–14), death 16–20 (15–19).
+  - **50-over — ODI / ODM** (`odi_pp_` / `odi_mid_` / `odi_death_`): powerplay overs
+    1–10 (over_number 0–9), middle 11–40 (10–39), death 41–50 (40–49).
+  The UI surfaces a phase family only when the format filter is exactly that family's
+  bucket (a single T20 bucket → T20 phases; a single 50-over bucket → ODI phases);
+  outside a single phase-defining bucket, phase metrics are not offered.
 
 ### 4.2 Parquet schemas (written by `export_parquet.py`)
 

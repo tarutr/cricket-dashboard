@@ -762,3 +762,23 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
     (pending control edits not yet drawn) and re-enable after "Update chart", so you can't export a chart that
     no longer matches the controls. Verified: draw→enabled, change metric→disabled, Update→enabled.
     All verified on localhost, 0 console errors, 2,813 baseline reproduced; query builders byte-identical.
+
+62. **SPEC §4.1 calc-law brought up to date + `retired out` ruling + Donut popup-only + new backlog item
+    (owner 2026-07-23).** During the docs sync the SPEC agent flagged that §4.1 (preserved verbatim) was
+    incomplete vs the code. Owner authorized updating it (a DOC edit describing existing behaviour — no number
+    moves; each addition verified against `export_parquet.py`):
+    - **`retired out` IS a dismissal** (for batting average). Confirmed by the owner AND matches the code
+      (`NON_DISMISSAL_KINDS = ("retired hurt","retired not out")` only). Removed the old "ask owner to confirm"
+      note.
+    - Added **ODI/50-over phase ranges** to §4.1 (over_number 0–9 / 10–39 / 40–49 = overs 1–10 / 11–40 /
+      41–50), as a SEPARATE `odi_` column family from T20 (0–5 / 6–14 / 15–19); corrected the old "stored using
+      the same over ranges, T20-only surfacing" claim (the code stores distinct odi_ columns and the UI
+      surfaces the ODI family for a single 50-over bucket).
+    - Added the **maiden-over** definition and the **division-by-zero → NULL** rule to §4.1 (both already in the
+      code; §4.1 just hadn't stated them).
+    - **Donut** is confirmed **player-popup only** — deliberately not a Graph Builder type; its renderer is
+      retained for the popup. Not returning to the builder for now.
+    - **New backlog item at priority 10** — "Player pop-up — full determination": which graphs go in the
+      popup + how they're shown + review of the stat blocks, which will be LINKED to the Stats column-group
+      dropdown (Core/Boundaries/Dismissals/Phases/Progression) BY FORMAT. Depends on backlog #4. Full design
+      re-do shifts to #11, load-speed to #12, file-split to #13.
