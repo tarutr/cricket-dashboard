@@ -168,22 +168,46 @@ const PHASE_DERIVED = {
   batting: {
     runs: (p) => `SUM(${p}_runs)`,
     balls_faced: (p) => `SUM(${p}_balls)`,
+    // Backlog #3 phase-component columns ({p}_dots/fours/sixes/dismissals).
+    dot_pct: (p) => `SUM(${p}_dots) * 100.0 / NULLIF(SUM(${p}_balls), 0)`,
+    boundary_pct: (p) => `(SUM(${p}_fours) + SUM(${p}_sixes)) * 100.0 / NULLIF(SUM(${p}_balls), 0)`,
+    fours: (p) => `SUM(${p}_fours)`,
+    sixes: (p) => `SUM(${p}_sixes)`,
+    average: (p) => `SUM(${p}_runs) * 1.0 / NULLIF(SUM(${p}_dismissals), 0)`,
   },
   matchup_batting: {
     runs: (p) => `SUM(${p}_runs)`,
     balls: (p) => `SUM(${p}_balls)`,
+    // Backlog #3. matchup {p}_dismissals mirrors this table's credited-only
+    // `dismissals` (decision 23), matching the base `average` denominator.
+    dot_pct: (p) => `SUM(${p}_dots) * 100.0 / NULLIF(SUM(${p}_balls), 0)`,
+    boundary_pct: (p) => `(SUM(${p}_fours) + SUM(${p}_sixes)) * 100.0 / NULLIF(SUM(${p}_balls), 0)`,
+    fours: (p) => `SUM(${p}_fours)`,
+    sixes: (p) => `SUM(${p}_sixes)`,
+    average: (p) => `SUM(${p}_runs) * 1.0 / NULLIF(SUM(${p}_dismissals), 0)`,
   },
   bowling: {
     runs_conceded: (p) => `SUM(${p}_runs_conceded)`,
     balls: (p) => `SUM(${p}_balls)`,
     strike_rate: (p) => `SUM(${p}_balls) * 1.0 / NULLIF(SUM(${p}_wickets), 0)`,
     average: (p) => `SUM(${p}_runs_conceded) * 1.0 / NULLIF(SUM(${p}_wickets), 0)`,
+    // Backlog #3 ({p}_dots/fours_conceded/sixes_conceded). Bowling uses the
+    // `_conceded` suffix + the `boundary_pct_conceded` key (batting differs).
+    dot_pct: (p) => `SUM(${p}_dots) * 100.0 / NULLIF(SUM(${p}_balls), 0)`,
+    boundary_pct_conceded: (p) => `(SUM(${p}_fours_conceded) + SUM(${p}_sixes_conceded)) * 100.0 / NULLIF(SUM(${p}_balls), 0)`,
+    fours_conceded: (p) => `SUM(${p}_fours_conceded)`,
+    sixes_conceded: (p) => `SUM(${p}_sixes_conceded)`,
   },
   matchup_bowling: {
     runs_conceded: (p) => `SUM(${p}_runs_conceded)`,
     balls: (p) => `SUM(${p}_balls)`,
     strike_rate: (p) => `SUM(${p}_balls) * 1.0 / NULLIF(SUM(${p}_wickets), 0)`,
     average: (p) => `SUM(${p}_runs_conceded) * 1.0 / NULLIF(SUM(${p}_wickets), 0)`,
+    // Backlog #3 ({p}_dots/fours_conceded/sixes_conceded).
+    dot_pct: (p) => `SUM(${p}_dots) * 100.0 / NULLIF(SUM(${p}_balls), 0)`,
+    boundary_pct_conceded: (p) => `(SUM(${p}_fours_conceded) + SUM(${p}_sixes_conceded)) * 100.0 / NULLIF(SUM(${p}_balls), 0)`,
+    fours_conceded: (p) => `SUM(${p}_fours_conceded)`,
+    sixes_conceded: (p) => `SUM(${p}_sixes_conceded)`,
   },
 };
 
