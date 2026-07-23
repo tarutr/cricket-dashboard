@@ -19,10 +19,13 @@ Men / T20 International, **2023-07-01 → 2026-07-02**:
 ## 2. Docs sync — **IN PROGRESS** (this session)
 [docs] · `reference/CHART_SYSTEM.md` (chart system overhaul), `review/BACKLOG.md` (this list), owner_decisions log.
 
-## 3. Phase-component columns — **pending owner priority**
-[data] · Add `pp_dots`, `pp_fours`, `pp_sixes`, `pp_dismissals` (+ mid/death/odi variants) to the pipeline
-so by-phase Dot% / Boundary% / Fours / Sixes / Batting Average / dismissal-types become chartable. Owner to
-confirm priority vs per-over.
+## 3. Phase-component columns — **DONE + DEPLOYED** (2026-07-23, decision 63)
+[data] · Added `{phase}_dots/_fours/_sixes/_dismissals` (batting + matchup_batting) and `{phase}_dots/
+_fours_conceded/_sixes_conceded` (bowling + matchup_bowling), phases = pp/mid/death + odi trio — 84 new
+columns across all 4 parquets. Wired `PHASE_DERIVED` so by-phase Dot% / Boundary% / Fours / Sixes /
+(batting) Average are chartable on the **Line X=Phase** view. Additive (anchors byte-identical); dismissal
+residual = ZERO. Live on R2 + cricdb.vercel.app. Scope was batting+bowling, incl. matchup, total dismissals
+per phase (owner). Size note: matchup pair grew ~30% (feeds load-speed #12).
 
 ## 4. Column-group dropdown metrics — **pending build spec**
 [app] · Define which metrics belong to Core/Boundaries/Dismissals/Phases/Progression presets, made

@@ -782,3 +782,49 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       popup + how they're shown + review of the stat blocks, which will be LINKED to the Stats column-group
       dropdown (Core/Boundaries/Dismissals/Phases/Progression) BY FORMAT. Depends on backlog #4. Full design
       re-do shifts to #11, load-speed to #12, file-split to #13.
+
+63. **Backlog #3 — phase-component columns SHIPPED (owner 2026-07-23; scope: batting + bowling, incl. matchup,
+    total dismissals per phase).** Added **84 new phase-component columns** across all four parquets — batting/
+    matchup_batting get `{phase}_dots/_fours/_sixes/_dismissals`; bowling/matchup_bowling get `{phase}_dots/
+    _fours_conceded/_sixes_conceded` (phase wickets already existed); phases = pp/mid/death + the odi_ trio,
+    odi_* NULL for the Hundred. Purely ADDITIVE to `export_parquet.py` (existing columns byte-identical, proven
+    by building from HEAD and the branch and DuckDB `EXCEPT`ing both ways = 0 rows on all 4 files). UI: five
+    `PHASE_DERIVED` entries per namespace in `src/graph/timeseries.js` (dot_pct/boundary_pct/fours/sixes/
+    average — bowling uses the `_conceded` suffix + `boundary_pct_conceded` key), so Dot%/Boundary%/Fours/
+    Sixes/(batting)Average become chartable BY PHASE on the **Line X=Phase** view — NO query-builder change.
+    - **Dismissal residual = ZERO**: every real dismissal (incl. the rare kinds — 2 timed out, 106 retired out,
+      33 obstructing, 8 handled, 1 hit-twice) places into a phase; Σ(pp+mid+death dismissals) = Σ dismissed
+      exactly for T20/IT20 (and odi within 50-over). matchup_batting phase dismissals mirror its credited-only
+      `dismissals` (decision 23), exact per row.
+    - **Anchors intact**: 2,813 / Karanbir 2,454 / SA Yadav 60·1,544·29.13·150.34 / SA Yadav vs Spin 38·454·
+      SR140.99 — all reproduced; independent source recompute of the new counters matched. 20 new pipeline gates
+      guard every future run.
+    - **Deploy = STAGED** to avoid a broken-chart window (the pipeline auto-runs on a cron, so merge == deploy
+      within ~6h): pushed the pipeline commit to main FIRST → owner ran the pipeline (GitHub Actions) → columns
+      confirmed live on R2 (DESCRIBE over https, all 4 files) → THEN pushed the UI commit. Verified live on
+      cricdb.vercel.app. Grouped Bars stays its own curated 2-family chart (not auto-extended); the new metrics
+      surface on Line X=Phase.
+    - **Size note (for load-speed #12)**: the two matchup parquets grew ~30% (matchup_batting 10.7→14.2 MB,
+      matchup_bowling 13.0→16.7 MB); batting +29%, bowling +31%. Owner accepted when choosing "include matchup".
+
+64. **Graph player-selection shortcuts gated to USABLE players (owner 2026-07-23; owner-found bug).** Top Names /
+    Best / Worst previously auto-selected without checking whether a player had the data the chart needs — Top
+    Names picked biggest names regardless; Best/Worst on multi-point/multi-metric charts fell back to raw seed
+    order, so "Worst" surfaced no-data players. Fix (in `src/graph/graph.js` ONLY — builders/metrics/timeseries
+    byte-untouched, so no number moves): all three non-manual shortcuts now auto-select ONLY players with the
+    COMPLETE data the current chart needs, ranking WITHIN the usable set; fewer usable than the cap → all usable,
+    zero → empty.
+    - **ONE predicate** (`computeChartabilityFor`) drives BOTH the roster `[usable]` badge AND the shortcut gate,
+      so they can never disagree (owner decision 2 — UNIFY).
+    - **"Complete data, smart per X-axis"** (owner decision 1): fixed bucket sets require ALL buckets/members —
+      Line X=**Phase** = all phases (tightened from ≥2), Grouped Bars = all phase members (tightened from ≥1),
+      radar = every axis, scatter/slope/dumbbell = both axes/windows; open-ended Line X (year/innings/event/
+      month) keeps ≥2 points ("all" is meaningless there); bar = has the metric; benchmark left as-is
+      (single-subject). This tightening **supersedes decision 59 #3's lenient badge thresholds** (owner-authorized).
+    - Re-derives on every config change (X-dim / metric / axes / windows / family), and the INITIAL auto-select
+      is gated too (not just later edits); async token-guarded so a superseded derive can't overwrite a newer one.
+    - **Verified**: bowling Line X=Phase Top Names picks 6 all-phase bowlers (Holder/Russell/Maxwell/Shakib/
+      Moeen/Mahmudullah); independent DuckDB confirmed each has pp+mid+death balls > 0; anchors intact; 0 console
+      errors. Deployed as a single UI push (no pipeline needed).
+    - **Known nuance (left as-is, owner-ruled titles)**: when usable < cap, the card title can read "N most-capped
+      players" where N is the usable count — i.e. the N most-capped *usable* players. Flagged, not reworded.
