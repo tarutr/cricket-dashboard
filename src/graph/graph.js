@@ -811,8 +811,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * graph", or an inherited Stats scope). Idempotent and safe: it only acts
    * when there ARE metric conditions and the user hasn't manually taken over,
    * and only reverts when the conditions are gone AND the last config was auto.
-   * Never overrides a hand-built chart. */
-  function maybeAutoSelectFromFilters() {
+   * Never overrides a hand-built chart.
+   *
+   * Async because a fresh auto-pick must re-derive the roster THROUGH the
+   * usability gate (the pool was seeded before this chart type/metric existed,
+   * so its checked set was picked ungated) — callers await this before drawing
+   * so the FIRST auto-selection is usability-gated too, not just later edits. */
+  async function maybeAutoSelectFromFilters() {
     const state = store.get();
     const keys = metricConditionKeys(state).filter((k) => getMetric(k, effectiveNamespace(state)));
     if (keys.length === 0) {
@@ -844,6 +849,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     syncBarStyleVisibility();
     renderMetricControls();
     renderPlayerList();
+    // The seed's checked set was derived before this chart type + metric were
+    // chosen (chartabilitySignature was null then, so the usability gate was
+    // skipped). Now that the auto-built chart is configured, re-derive so the
+    // initial auto-selection is gated to usable players — for non-manual modes
+    // only; a manual roster is the user's own and is left alone.
+    await reselectForConfigChange();
   }
 
   /** R5 Wave 1b (item 1) — the empty-state infographic RULES TABLE, shown in
@@ -1030,9 +1041,43 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       return;
     }
 
+    // USABILITY GATE (decisions 1 + 2). Every non-manual shortcut auto-selects
+    // ONLY players that have the COMPLETE data THIS chart needs — using the
+    // SAME predicate the roster "[usable]" badges use (computeChartabilityFor),
+    // so badge and auto-pick can never disagree. The ranked list below is built
+    // over `usablePool` (the usable subset), never the whole pool, so a
+    // no-data player is never picked just to fill the cap; fewer usable than
+    // the cap => all usable are picked (never padded), zero usable => empty.
+    //
+    // Skipped in two cases, both of which fall back to the whole pool:
+    //   • chartabilitySignature === null — the chart isn't configured enough to
+    //     judge usability yet (no type, no metric, incomplete windows); we
+    //     can't know, so keep the current (ungated) behaviour.
+    //   • benchmark — owner-ruled single-subject chart, not a multi-player
+    //     shortcut concern (brief: leave as-is).
+    //
+    // ONE batched read over the whole pool (never a per-player fan-out), and
+    // guarded by the SAME rankDeriveToken as the ranking fetches: a superseded
+    // derive returns without touching the roster, and a fetch failure falls
+    // back to the whole pool rather than emptying it.
+    let usablePool = pool;
+    const gateUsability = chartType !== "benchmark" && chartabilitySignature(state) !== null;
+    if (gateUsability) {
+      let usableMap = null;
+      try {
+        usableMap = await computeChartabilityFor(pool.map((p) => p.id), state);
+      } catch {
+        usableMap = null;
+      }
+      if (token !== rankDeriveToken) return; // superseded by a later derive call
+      if (usableMap) usablePool = pool.filter((p) => usableMap.get(p.id) === true);
+    }
+
     // DEFAULT auto-select: biggest names by whole-DB career games. Metric
     // provenance does not apply here — the title says "N most-capped players"
-    // via currentCareerGamesRank(), so clear any stale rank-metric.
+    // via currentCareerGamesRank(), so clear any stale rank-metric. Ranks the
+    // USABLE subset (not the whole pool), so the biggest names picked always
+    // have the data this chart needs.
     if (newMode === "topnames") {
       let gamesById = null;
       try {
@@ -1043,14 +1088,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       if (token !== rankDeriveToken) return; // superseded by a later derive call
       let ranked;
       if (gamesById) {
-        ranked = pool.slice().sort((a, b) => {
+        ranked = usablePool.slice().sort((a, b) => {
           const ga = gamesById.get(a.id) ?? 0;
           const gb = gamesById.get(b.id) ?? 0;
           if (ga !== gb) return gb - ga; // most-capped first
           return String(a.id).localeCompare(String(b.id)); // deterministic tiebreak
         });
       } else {
-        ranked = pool.slice();
+        ranked = usablePool.slice();
       }
       if (token !== rankDeriveToken) return;
       selection.setChecked(ranked.slice(0, cap).map((p) => p.id), { dirty: false });
@@ -1059,14 +1104,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       return;
     }
 
-    // "best"/"worst": rank the filtered set by the chart's active metric.
+    // "best"/"worst": rank the USABLE subset by the chart's active metric.
     let metric = rankMetricForActiveType(state);
     let ranked;
     let rankedByMetric = false;
     if (metric) {
       let rowsById = null;
       try {
-        rowsById = await fetchSelectedPlayerMetrics(state, pool.map((p) => p.id), [metric.key]);
+        rowsById = await fetchSelectedPlayerMetrics(state, usablePool.map((p) => p.id), [metric.key]);
       } catch {
         // A failed ranking fetch shouldn't empty the roster or crash the
         // picker — fall back to seed order for this one derivation, exactly
@@ -1076,7 +1121,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       }
       if (token !== rankDeriveToken) return; // superseded by a later derive call
       if (rowsById) {
-        const withData = pool.filter((p) => {
+        // usablePool already excludes no-data players for this chart type; the
+        // hasMetricData filter here is the same rank-time rule and, for the
+        // metric ranked on (bar's metric / scatter's Y), simply reconfirms it.
+        const withData = usablePool.filter((p) => {
           const row = rowsById.get(p.id);
           return row && hasMetricData(metric, row[metric.key]);
         });
@@ -1096,7 +1144,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     }
     if (!rankedByMetric) {
       metric = null; // seed-order fallback — no per-type metric actually ranked this
-      ranked = newMode === "worst" ? pool.slice().reverse() : pool.slice();
+      ranked = newMode === "worst" ? usablePool.slice().reverse() : usablePool.slice();
     }
     if (token !== rankDeriveToken) return;
     selection.setChecked(ranked.slice(0, cap).map((p) => p.id), { dirty: false });
@@ -1106,18 +1154,36 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     lastRankMetricDiscipline = metric ? effectiveNamespace(state) : null;
   }
 
-  /** Wired to the bar/scatter-Y metric selects — the ones that feed
-   * rankMetricForActiveType. R6b (owner correction): Best/Worst rank by the
-   * chart's active metric again, so when that metric changes the Best/Worst
-   * checked set must re-derive ("switching to Best/Worst re-derives on metric
-   * change too"). A no-op beyond the render for "manual" (user picks are left
-   * alone) and "topnames" (the DEFAULT ranks by career games, which is
-   * metric-independent — the displayed metric only changes the chart's own
-   * sort/axis, not WHICH players are selected). */
-  function onRankMetricChanged() {
+  /** Re-derive the auto-selected roster after a change that can alter WHICH
+   * players are usable for the current chart, then return the derive promise so
+   * a caller that must draw AFTER the new selection lands (the initial
+   * auto-select) can await it. A no-op for "manual" (the user's literal picks
+   * are always left alone).
+   *
+   * Backlog "usability" fix: this used to re-derive only "best"/"worst" (they
+   * rank by the chart's active metric, so a metric change re-ranked them). Now
+   * that EVERY non-manual mode — "topnames" included — auto-selects only usable
+   * players (deriveChecked's usability gate), a change to the metric / axes /
+   * X-dim / date windows / phase family changes the USABLE set, so every
+   * non-manual mode must re-derive on such a change, not just the metric-ranked
+   * two. */
+  function reselectForConfigChange() {
     const mode = selection.getMode();
-    if (mode === "best" || mode === "worst") deriveChecked(mode);
+    if (mode !== "manual") return deriveChecked(mode);
+    return Promise.resolve();
+  }
+
+  /** The one call every usability-affecting config edit (metric / axis / X-dim /
+   * date window / phase family) makes: re-derive the auto-selected roster
+   * (reselectForConfigChange) AND mark the drawn chart behind (markDirty). For
+   * non-manual modes the re-derive itself re-renders + re-marks dirty via
+   * selection.onChange; the markDirty here also covers the "manual" case (no
+   * re-derive) and lights the Update button immediately. Returns the derive
+   * promise for callers that must await the new selection before drawing. */
+  function onChartConfigChanged() {
+    const p = reselectForConfigChange();
     markDirty({ paramsChanged: true });
+    return p;
   }
 
   // ── Metric controls (rebuilt per chart type) ──────────────────────────────
@@ -1286,14 +1352,15 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         barMetricKey = val || null;
         if (barMetricKey) markMetricChosen(barMetricKey);
         syncChartTypeButtons();
-        onRankMetricChanged();
+        onChartConfigChanged();
       });
     } else if (chartType === "scatter") {
       const metrics = graphMetrics(discipline, formats);
       // item 4: no auto-pick. The Y axis carries the shared chosen metric; X is
       // scatter-local. Both start on the "Choose a metric…" placeholder until
-      // explicitly picked. (R6: the checked set is auto-selected by whole-DB
-      // career games, not by this metric — onRankMetricChanged only re-renders.)
+      // explicitly picked. (An axis change re-derives the auto-selected roster
+      // via onChartConfigChanged — scatter usability needs a real value on BOTH
+      // axes, so the usable set moves with either axis.)
       scatterYKey = adoptChosenMetric(metrics) || (scatterYKey && metrics.some((m) => m.key === scatterYKey) ? scatterYKey : null);
       scatterXKey = scatterXKey && metrics.some((m) => m.key === scatterXKey) ? scatterXKey : null;
       els.metricControls.innerHTML = `
@@ -1318,7 +1385,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         if (scatterXKey) metricEverChosen = true;
         if (scatterYHandle) scatterYHandle.setOptions(scatterOptionsExcluding(scatterXKey));
         syncChartTypeButtons();
-        markDirty({ paramsChanged: true });
+        // Scatter usability needs BOTH axes, so an X change re-derives the
+        // roster too (it used to re-derive on the Y axis only).
+        onChartConfigChanged();
       }, { ariaLabel: "X axis metric" });
       scatterYHandle = mountMetricSelect("scatter-y", metrics.filter((m) => m.key !== scatterXKey), scatterYKey, (val) => {
         noteManualChartEdit();
@@ -1326,7 +1395,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         if (scatterYKey) markMetricChosen(scatterYKey);
         if (scatterXHandle) scatterXHandle.setOptions(scatterOptionsExcluding(scatterYKey));
         syncChartTypeButtons();
-        onRankMetricChanged();
+        onChartConfigChanged();
       }, { ariaLabel: "Y axis metric" });
     } else if (chartType === "radar") {
       // R4 Wave 1b (item 3): INDIVIDUAL radar-valid metrics (no fixed groups),
@@ -1365,7 +1434,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
             radarMetricKeys = eligible.map((m) => m.key).filter((mk) => vals.includes(mk));
             if (radarMetricKeys.length) metricEverChosen = true;
             syncChartTypeButtons();
-            markDirty({ paramsChanged: true });
+            // Radar usability needs a real value on EVERY selected axis, so a
+            // change to the axis set changes the usable set — re-derive.
+            onChartConfigChanged();
           },
         });
         metricControlSelects.push(handle);
@@ -1394,7 +1465,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
             phaseFamilyId = val || null;
             if (phaseFamilyId) metricEverChosen = true;
             syncChartTypeButtons();
-            markDirty({ paramsChanged: true });
+            // Grouped-bars usability needs all phase members, so a family change
+            // changes the usable set — re-derive.
+            onChartConfigChanged();
           },
         });
         metricControlSelects.push(handle);
@@ -1426,7 +1499,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         slopeMetricKey = val || null;
         if (slopeMetricKey) markMetricChosen(slopeMetricKey);
         syncChartTypeButtons();
-        markDirty({ paramsChanged: true });
+        onChartConfigChanged();
       }, { emptyLabel: "No rate/percent metrics available for this scope" });
       const bindWindowSelect = (role, setter) => {
         const el = els.metricControls.querySelector(`[data-role="${role}"]`);
@@ -1434,7 +1507,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           el.addEventListener("change", (e) => {
             setter(e.target.value);
             syncWindowNeedsInput("slope"); // item 6: clear the outline as inputs fill
-            markDirty({ paramsChanged: true });
+            // Slope usability needs a real value in BOTH windows, so a window
+            // edit changes the usable set — re-derive (a no-op while either
+            // window is still incomplete: chartabilitySignature stays null).
+            onChartConfigChanged();
           });
         }
       };
@@ -1483,7 +1559,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
             // an incompatible metric (e.g. Runs when switching to Phase).
             renderMetricControls();
             syncChartTypeButtons();
-            markDirty({ paramsChanged: true });
+            // The X-dim decides the Line usability rule (Phase => all buckets;
+            // sequence dims => >=2 points), so an X change can change the usable
+            // set — re-derive. (Skipped internally until a metric is re-picked:
+            // chartabilitySignature is null without both X and metric.)
+            onChartConfigChanged();
           },
         });
         metricControlSelects.push(xHandle);
@@ -1493,7 +1573,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         byYearMetricKey = val || null;
         if (byYearMetricKey) markMetricChosen(byYearMetricKey);
         syncChartTypeButtons();
-        markDirty({ paramsChanged: true });
+        onChartConfigChanged();
       }, { emptyLabel: "No metric available for this X axis and scope" });
     } else if (chartType === "dumbbell") {
       // Time-window Dumbbell (owner correction — NOT a Pace/Spin chart): the
@@ -1527,7 +1607,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         dumbbellMetricKey = val || null;
         if (dumbbellMetricKey) markMetricChosen(dumbbellMetricKey);
         syncChartTypeButtons();
-        markDirty({ paramsChanged: true });
+        onChartConfigChanged();
       }, { emptyLabel: "No rate/percent metric available for this scope" });
       const bindWindowSelect = (role, setter) => {
         const el = els.metricControls.querySelector(`[data-role="${role}"]`);
@@ -1535,7 +1615,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
           el.addEventListener("change", (e) => {
             setter(e.target.value);
             syncWindowNeedsInput("dumbbell"); // item 6: clear the outline as inputs fill
-            markDirty({ paramsChanged: true });
+            // Dumbbell usability needs a real value in BOTH windows — re-derive
+            // (a no-op while either window is still incomplete).
+            onChartConfigChanged();
           });
         }
       };
@@ -1756,16 +1838,24 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     return n;
   }
 
-  /** Compute chartability for a bounded set of player ids under the CURRENT
-   * chart type + scope, using the app's existing read-only fetch helpers (never
-   * a new query shape). Returns Map<id, boolean>. The per-type rule matches the
-   * chart's own draw rule exactly:
-   *   • bar / benchmark — has a real value for the metric(s)
+  /** Compute chartability ("has the COMPLETE data this chart needs") for a
+   * bounded set of player ids under the CURRENT chart type + scope, using the
+   * app's existing read-only fetch helpers (never a new query shape). Returns
+   * Map<id, boolean>. This is the ONE usability predicate (decision 2): it
+   * drives BOTH the roster "[usable]" badges AND deriveChecked's shortcut
+   * selection gate, so the badge and who-gets-auto-picked can never diverge.
+   * Per-type rule (decision 1 — complete data, smart per X-axis):
+   *   • bar — has a real value for the metric
+   *   • benchmark — has a real value for at least one compared metric (owner-ruled
+   *     single-subject chart; left lenient, not a multi-player shortcut concern)
    *   • scatter — real value on BOTH axes
    *   • radar — real value for EVERY selected axis (renderer excludes otherwise)
-   *   • phases — real value for at least one family member
+   *   • phases (grouped bars) — real value in ALL phase members (a missing bar
+   *     leaves an incomplete group)
    *   • slope / dumbbell — real value in BOTH date windows
-   *   • line — 2+ non-null buckets on the chosen X-axis (a lone dot is not a line) */
+   *   • line — X-dim-aware: X = Phase ⇒ real value in ALL phase buckets; every
+   *     open-ended X (year / innings / event / month) ⇒ 2+ non-null points
+   *     (a lone dot is not a line) */
   async function computeChartabilityFor(ids, state) {
     const out = new Map();
     if (!ids.length) return out;
@@ -1799,7 +1889,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const rowsById = await fetchSelectedPlayerMetrics(state, ids, metrics.map((m) => m.key));
       for (const id of ids) {
         const row = rowsById.get(id);
-        out.set(id, !!(row && metrics.some((m) => hasMetricData(m, row[m.key]))));
+        // Decision 1 (TIGHTEN from >=1): a usable grouped-bars subject has a
+        // real value in ALL phase members — a bar missing for one phase leaves
+        // an incomplete group, so it no longer counts as usable.
+        out.set(id, !!(row && metrics.every((m) => hasMetricData(m, row[m.key]))));
       }
       return out;
     }
@@ -1850,9 +1943,21 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const metric = lineMetricsFor(lineXKey, state).find((m) => m.key === byYearMetricKey);
       if (!metric) return out;
       const lineData = await fetchLineData({ xDim: lineXKey, metricKey: metric.key, playerIds: ids, filters: state });
+      // Decision 1 — X-dim-aware Line rule:
+      //   • X = Phase (a fixed, small bucket set: powerplay/middle/death) —
+      //     TIGHTEN from >=2 to ALL buckets: a usable subject has a real value
+      //     in every phase bucket this metric decomposes into.
+      //   • Open-ended X (year / innings / event / month / …) — keep the
+      //     drawable rule (>=2 non-null points); "all buckets" is meaningless
+      //     there since no player appears in every year.
+      const total = lineData.buckets.length;
+      const need = lineXKey === "phase" ? total : 2;
       for (const id of ids) {
         const rec = lineData.byPlayer[id];
-        out.set(id, !!(rec && countRealBuckets(metric, lineData.buckets, rec) >= 2));
+        const real = rec ? countRealBuckets(metric, lineData.buckets, rec) : 0;
+        // total >= 2 guards the always-draw-a-line floor (a lone dot is not a
+        // line); for phase, need === total so this is "every bucket present".
+        out.set(id, !!(rec && total >= 2 && real >= need));
       }
       return out;
     }
@@ -3663,7 +3768,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // After the pool is seeded, auto-select a chart type + metric(s) from any
     // applied metric conditions (or revert if they've been cleared). Runs
     // post-seed so the archetype's #players tie-breaks read the real pool.
-    maybeAutoSelectFromFilters();
+    // Awaited so the usability-gated re-derive lands BEFORE the draw.
+    await maybeAutoSelectFromFilters();
     // Initial seed / entry: draw as before and start with a clean (non-dirty)
     // gate — the Update-chart gate applies only to SUBSEQUENT in-panel edits.
     renderAndClearDirty({ paramsChanged: true });
@@ -3920,9 +4026,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // no-ops both if Stats has never been searched (still no query — the
     // empty-state stays honest) and if the filtered set's identity key hasn't
     // actually changed.
-    seedSelection().then(() => {
+    seedSelection().then(async () => {
       // Item 1: filter-driven auto-select/revert, post-seed (same as onShow).
-      maybeAutoSelectFromFilters();
+      // Awaited so the usability-gated re-derive lands BEFORE the draw.
+      await maybeAutoSelectFromFilters();
       // A scope apply from the graph's own Filters popup ("Apply to graph")
       // keeps its OWN apply button (owner item 7): it draws with the current
       // (pending) in-panel values and counts as an update — so clear the gate.
