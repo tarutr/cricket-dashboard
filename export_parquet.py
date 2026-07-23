@@ -443,6 +443,24 @@ def sql_batting():
             SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS dots,
             SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS fours_hit,
             SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS sixes_hit,
+            -- Batting composition / rotation counts (Wave 1, ADDITIVE). Faithful
+            -- to reference/ingest.py build_batters (faced ball = wides IS NULL;
+            -- no-balls count as faced). ones/twos/threes/fives are faced balls
+            -- scored for exactly 1/2/3/5. nb_fours/nb_sixes are RAN fours/sixes
+            -- (runs_batter 4/6 AND is_not_boundary IS TRUE) -- the complement of
+            -- the boundary fours_hit/sixes_hit (is_not_boundary IS NOT TRUE), so
+            -- fours_hit + nb_fours = all 4-run balls, likewise for sixes.
+            -- non_boundary_runs = runs off the bat NOT from boundary 4s/6s, i.e.
+            -- SUM(runs_batter) - 4*fours_hit - 6*sixes_hit (source `nbr`).
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 1 THEN 1 ELSE 0 END) AS ones,
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 2 THEN 1 ELSE 0 END) AS twos,
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 3 THEN 1 ELSE 0 END) AS threes,
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 5 THEN 1 ELSE 0 END) AS fives,
+            SUM(CASE WHEN d.runs_batter = 4 AND d.is_not_boundary IS TRUE THEN 1 ELSE 0 END) AS nb_fours,
+            SUM(CASE WHEN d.runs_batter = 6 AND d.is_not_boundary IS TRUE THEN 1 ELSE 0 END) AS nb_sixes,
+            SUM(d.runs_batter)
+                - 4 * SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END)
+                - 6 * SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS non_boundary_runs,
             -- T20-family phase components (batter legality = faced)
             SUM(CASE WHEN {t20_phase_expr()} = 'pp'    THEN d.runs_batter ELSE 0 END) AS pp_runs,
             SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {FACED_BATTER} THEN 1 ELSE 0 END) AS pp_balls,
@@ -555,6 +573,16 @@ def sql_batting():
             SUM(CASE WHEN wides IS NULL AND faced_num >= 21             THEN 1 ELSE 0 END)           AS fb21p_balls
         FROM faced_seq
         GROUP BY match_id, innings_number, batter_id
+    ),
+    -- Whole batting side's faced balls per innings (all batters; wides IS NULL,
+    -- no-balls count as faced) -- source `team_stats(...)['balls']` (= `tib`),
+    -- the denominator for balls-faced share. One row per (match, innings);
+    -- joined onto every crease row (incl. 0-ball diamond ducks) below.
+    team_inns AS (
+        SELECT match_id, innings_number,
+               SUM(CASE WHEN {FACED_BATTER} THEN 1 ELSE 0 END) AS team_inns_balls
+        FROM d
+        GROUP BY match_id, innings_number
     )
     SELECT
         cd.match_id,
@@ -629,7 +657,18 @@ def sql_batting():
         CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_death_dots, 0)      END AS odi_death_dots,
         CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_death_fours, 0)     END AS odi_death_fours,
         CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_death_sixes, 0)     END AS odi_death_sixes,
-        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(dp.odi_death_dismissals, 0) END AS odi_death_dismissals
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(dp.odi_death_dismissals, 0) END AS odi_death_dismissals,
+        -- Batting composition / rotation columns (Wave 1, ADDITIVE). See bat_agg
+        -- for the faithful definitions; 0-ball crease rows (ba NULL) default to 0.
+        COALESCE(ba.ones, 0)              AS ones,
+        COALESCE(ba.twos, 0)              AS twos,
+        COALESCE(ba.threes, 0)            AS threes,
+        COALESCE(ba.fives, 0)             AS fives,
+        COALESCE(ba.nb_fours, 0)          AS nb_fours,
+        COALESCE(ba.nb_sixes, 0)          AS nb_sixes,
+        COALESCE(ba.non_boundary_runs, 0) AS non_boundary_runs,
+        -- Balls-faced-share denominator: whole side's faced balls this innings.
+        COALESCE(ti.team_inns_balls, 0)   AS team_inns_balls
     FROM crease_dedup cd
     JOIN kept_innings ki
       ON cd.match_id = ki.match_id AND cd.innings_number = ki.innings_number
@@ -644,6 +683,8 @@ def sql_batting():
       ON cd.match_id = dp.match_id AND cd.innings_number = dp.innings_number AND cd.batter_id = dp.pid
     LEFT JOIN prog_agg pg
       ON cd.match_id = pg.match_id AND cd.innings_number = pg.innings_number AND cd.batter_id = pg.batter_id
+    LEFT JOIN team_inns ti
+      ON cd.match_id = ti.match_id AND cd.innings_number = ti.innings_number
     ORDER BY match_date, cd.match_id, cd.innings_number, cd.batter_id
     """
 
@@ -1057,6 +1098,19 @@ def sql_matchup_batting():
             SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS dots,
             SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS fours_hit,
             SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS sixes_hit,
+            -- Batting composition / rotation counts (Wave 1, ADDITIVE), at the
+            -- matchup grain (per bowling_type). Identical definitions to
+            -- sql_batting()'s bat_agg -- see that comment. Summed over all
+            -- bowling_types they reconcile to batting_innings per (match,inn,batter).
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 1 THEN 1 ELSE 0 END) AS ones,
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 2 THEN 1 ELSE 0 END) AS twos,
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 3 THEN 1 ELSE 0 END) AS threes,
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 5 THEN 1 ELSE 0 END) AS fives,
+            SUM(CASE WHEN d.runs_batter = 4 AND d.is_not_boundary IS TRUE THEN 1 ELSE 0 END) AS nb_fours,
+            SUM(CASE WHEN d.runs_batter = 6 AND d.is_not_boundary IS TRUE THEN 1 ELSE 0 END) AS nb_sixes,
+            SUM(d.runs_batter)
+                - 4 * SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END)
+                - 6 * SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS non_boundary_runs,
             SUM(COALESCE(cwkt.wkts, 0)) AS dismissals,
             MAX(CASE WHEN d.balls_per_over = 5 THEN 1 ELSE 0 END) AS is_hundred,
             SUM(CASE WHEN {t20_phase_expr()} = 'pp'    THEN d.runs_batter ELSE 0 END) AS pp_runs,
@@ -1146,7 +1200,9 @@ def sql_matchup_batting():
         CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_fours      END AS odi_death_fours,
         CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_sixes      END AS odi_death_sixes,
         CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_dismissals END AS odi_death_dismissals,
-        pos.batting_position AS batting_position
+        pos.batting_position AS batting_position,
+        -- Batting composition / rotation columns (Wave 1, ADDITIVE), matchup grain.
+        mb.ones, mb.twos, mb.threes, mb.fives, mb.nb_fours, mb.nb_sixes, mb.non_boundary_runs
     FROM mb
     LEFT JOIN dis_kind dk
       ON mb.match_id = dk.match_id AND mb.innings_number = dk.innings_number
