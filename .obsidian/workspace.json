@@ -1,0 +1,191 @@
+{
+  "main": {
+    "id": "5034a91d2776bfc0",
+    "type": "split",
+    "children": [
+      {
+        "id": "0615f18d7d4895a5",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "72aebbc11e4cdec3",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "review/DESIGN_ROUND6_REVIEW_CHECKLIST.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "DESIGN_ROUND6_REVIEW_CHECKLIST"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "677595186edbedf9",
+    "type": "split",
+    "children": [
+      {
+        "id": "abae62a3b97d0e4e",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "3b61beacb0070ab7",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "9c9d942beac06c48",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "4361c2d08c725bc4",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "6f9b3cc454dc80eb",
+    "type": "split",
+    "children": [
+      {
+        "id": "a6e03d361fb009ec",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "6cfbf1322d0722c7",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "review/DESIGN_ROUND5_REVIEW_CHECKLIST.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for DESIGN_ROUND5_REVIEW_CHECKLIST"
+            }
+          },
+          {
+            "id": "234698ad5f0019ad",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "review/DESIGN_ROUND5_REVIEW_CHECKLIST.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from DESIGN_ROUND5_REVIEW_CHECKLIST"
+            }
+          },
+          {
+            "id": "b24e031095b96a90",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "1c5a0d657a0bd217",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "0407171d504d1dca",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "review/DESIGN_ROUND5_REVIEW_CHECKLIST.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of DESIGN_ROUND5_REVIEW_CHECKLIST"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "72aebbc11e4cdec3",
+  "lastOpenFiles": [
+    "review/DESIGN_ROUND6_REVIEW_CHECKLIST.md",
+    "review/DESIGN_ROUND5_REVIEW_CHECKLIST.md"
+  ]
+}

@@ -906,7 +906,7 @@ def sql_bowling():
     -- spell-wicket components diverged from cricdb's own innings `wickets` /
     -- `wkt_by_ball` (which are all-credited, illegality-agnostic) on ~158
     -- innings. Counting on ALL spell deliveries makes them agree exactly:
-    -- for spell_count=1, open_spell_wkts == wickets (0 mismatches). This now
+    -- for spell_count=1, best_spell_wkts == wickets (0 mismatches). This now
     -- DIVERGES from the SOURCE `bowling_spells.wickets` (which is legal-only —
     -- buggy) by ~539; that divergence is correct and intended (owner's Wave-2
     -- ruling: match cricdb's own wickets, not the source's legal-only spell count).
@@ -919,21 +919,20 @@ def sql_bowling():
          AND kw.over_number = sd.over_number AND kw.ball_index = sd.ball_index
         GROUP BY sd.match_id, sd.innings_number, sd.bowler_id, sd.spell_number
     ),
-    -- Per-spell balls / runs conceded / dots. balls = legal deliveries; runs =
-    -- runs_batter+wides+noballs over ALL deliveries in the spell (source `src`);
-    -- dots = legal ball with 0 off the bat (source `sdots` over `sl`).
+    -- Per-spell balls / runs conceded. balls = legal deliveries; runs =
+    -- runs_batter+wides+noballs over ALL deliveries in the spell (source `src`).
+    -- (Per-spell dots dropped with the deleted opening/closing-spell columns.)
     spell_agg AS (
         SELECT match_id, innings_number, bowler_id, spell_number,
                SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) AS s_balls,
-               SUM(runs_batter + COALESCE(noballs,0) + COALESCE(wides,0)) AS s_runs,
-               SUM(CASE WHEN wides IS NULL AND noballs IS NULL AND runs_batter = 0 THEN 1 ELSE 0 END) AS s_dots
+               SUM(runs_batter + COALESCE(noballs,0) + COALESCE(wides,0)) AS s_runs
         FROM spell_deliveries
         GROUP BY match_id, innings_number, bowler_id, spell_number
     ),
-    -- One row per spell with all four components + the innings' spell count.
+    -- One row per spell with balls / runs / wkts + the innings' spell count.
     spell_full AS (
         SELECT sa.match_id, sa.innings_number, sa.bowler_id, sa.spell_number,
-               sa.s_balls, sa.s_runs, sa.s_dots,
+               sa.s_balls, sa.s_runs,
                COALESCE(sw.s_wkts, 0) AS s_wkts,
                MAX(sa.spell_number) OVER (
                    PARTITION BY sa.match_id, sa.innings_number, sa.bowler_id) AS n_spells
@@ -942,24 +941,16 @@ def sql_bowling():
           ON sa.match_id = sw.match_id AND sa.innings_number = sw.innings_number
          AND sa.bowler_id = sw.bowler_id AND sa.spell_number = sw.spell_number
     ),
-    -- Collapse spells to one row per (match,inn,bowler): open = spell 1, close =
-    -- the LAST spell (spell_number = n_spells), longest = max legal balls in any
-    -- spell, best = the innings' best single spell (most wickets, ties -> fewest
-    -- runs). The best-spell pick uses the SAME peak rank the Best-Bowling metric
-    -- uses: wkts*1000 - runs (more wickets always wins; fewer runs breaks ties;
-    -- runs < 1000 always in a spell). If spell_count = 1, open == close == the
-    -- whole innings' single spell.
+    -- Collapse spells to one row per (match,inn,bowler): spell_count = number of
+    -- spells, longest = max legal balls in any spell, best = the innings' best
+    -- single spell (most wickets, ties -> fewest runs). The best-spell pick uses
+    -- the SAME peak rank the Best-Bowling metric uses: wkts*1000 - runs (more
+    -- wickets always wins; fewer runs breaks ties; runs < 1000 always in a spell).
+    -- (Opening/closing-spell columns were deleted per owner ruling: spells are
+    -- match-report-level, not leaderboard, and opening/closing was dropped.)
     spell_innings AS (
         SELECT match_id, innings_number, bowler_id,
                MAX(n_spells) AS spell_count,
-               MAX(CASE WHEN spell_number = 1 THEN s_balls END) AS open_spell_balls,
-               MAX(CASE WHEN spell_number = 1 THEN s_runs  END) AS open_spell_runs,
-               MAX(CASE WHEN spell_number = 1 THEN s_wkts  END) AS open_spell_wkts,
-               MAX(CASE WHEN spell_number = 1 THEN s_dots  END) AS open_spell_dots,
-               MAX(CASE WHEN spell_number = n_spells THEN s_balls END) AS close_spell_balls,
-               MAX(CASE WHEN spell_number = n_spells THEN s_runs  END) AS close_spell_runs,
-               MAX(CASE WHEN spell_number = n_spells THEN s_wkts  END) AS close_spell_wkts,
-               MAX(CASE WHEN spell_number = n_spells THEN s_dots  END) AS close_spell_dots,
                MAX(s_balls) AS longest_spell_balls,
                arg_max(s_wkts, s_wkts * 1000 - s_runs) AS best_spell_wkts,
                arg_max(s_runs, s_wkts * 1000 - s_runs) AS best_spell_runs
@@ -1125,21 +1116,15 @@ def sql_bowling():
             - (tb.t_balls / NULLIF(tw.t_wkts, 0))
             AS FLOAT
         ) AS team_rel_sr,
-        -- Bowling-spell aggregate columns (Wave 4, ADDITIVE; INT). Every bowler
+        -- Bowling-spell aggregate columns (match-report only; INT). Every bowler
         -- in bowl_agg bowled >= 1 delivery -> >= 1 over -> >= 1 spell, so the
         -- LEFT JOIN always matches and these are never NULL; COALESCE guards the
-        -- type only. open_ = spell 1, close_ = the last spell, longest = max
-        -- legal balls in any spell, best_ = the innings' best single spell
-        -- (most wickets, ties -> fewest runs). See the spell_* CTEs above.
+        -- type only. spell_count = number of spells, longest = max legal balls in
+        -- any spell, best_ = the innings' best single spell (most wickets, ties ->
+        -- fewest runs). Stored for the future match report; NO leaderboard metric
+        -- references them (opening/closing-spell columns deleted per owner ruling).
+        -- See the spell_* CTEs above.
         COALESCE(sp.spell_count, 0)         AS spell_count,
-        COALESCE(sp.open_spell_balls, 0)    AS open_spell_balls,
-        COALESCE(sp.open_spell_runs, 0)     AS open_spell_runs,
-        COALESCE(sp.open_spell_wkts, 0)     AS open_spell_wkts,
-        COALESCE(sp.open_spell_dots, 0)     AS open_spell_dots,
-        COALESCE(sp.close_spell_balls, 0)   AS close_spell_balls,
-        COALESCE(sp.close_spell_runs, 0)    AS close_spell_runs,
-        COALESCE(sp.close_spell_wkts, 0)    AS close_spell_wkts,
-        COALESCE(sp.close_spell_dots, 0)    AS close_spell_dots,
         COALESCE(sp.longest_spell_balls, 0) AS longest_spell_balls,
         COALESCE(sp.best_spell_wkts, 0)     AS best_spell_wkts,
         COALESCE(sp.best_spell_runs, 0)     AS best_spell_runs
@@ -2606,16 +2591,17 @@ def run_gates(con, out_dir):
     gate(fld_kinds == 0, "fielding_events: kind in {caught,c&b,stumped,run out}", f"{fld_kinds} rows")
 
     # --- PART B spell-wicket consistency: for spell_count=1 the single spell
-    # spans all the bowler's deliveries, so open_spell_wkts (spell 1's wickets)
-    # must equal the innings `wickets` total exactly (0 mismatches). This is the
-    # Wave-4 fix — spell wickets now count ALL spell deliveries (not legal-only),
-    # matching cricdb's own wickets / wkt_by_ball.
+    # spans all the bowler's deliveries, so best_spell_wkts (that lone spell's
+    # wickets) must equal the innings `wickets` total exactly (0 mismatches). This
+    # is the Wave-4 fix — spell wickets now count ALL spell deliveries (not
+    # legal-only), matching cricdb's own wickets / wkt_by_ball. (Formerly checked
+    # via open_spell_wkts, deleted with the opening/closing-spell columns.)
     spell1_mismatch = q(
         f"SELECT COUNT(*) FROM read_parquet('{bowl_p}') "
-        f"WHERE spell_count = 1 AND open_spell_wkts <> wickets"
+        f"WHERE spell_count = 1 AND best_spell_wkts <> wickets"
     )
     gate(spell1_mismatch == 0,
-         "spell fix: spell_count=1 => open_spell_wkts == wickets",
+         "spell fix: spell_count=1 => best_spell_wkts == wickets",
          f"{spell1_mismatch} mismatched innings")
 
     # Gate 2 (XI sanity): count (match, team) groups where a team has != 11 rows
