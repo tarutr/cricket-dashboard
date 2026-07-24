@@ -47,7 +47,7 @@ import {
   TOSS_DECISION_OPTIONS,
   INNINGS_ORDER_OPTIONS,
 } from "./state.js";
-import { searchTeams, searchEvents, searchVenues } from "./playerData.js";
+import { searchTeams, searchEvents, searchVenues, searchEventSeasons } from "./playerData.js";
 import { query } from "./db.js";
 import { mountSearchMultiSelect } from "./searchSelect.js";
 import { escHtml, escAttr } from "./html.js";
@@ -822,22 +822,257 @@ export function mountTeam(container, store, onChange) {
   });
 }
 
-/** "Event" — gender + team-type-scoped competition/series picker (state.event). */
-export function mountEvent(container, store, onChange) {
-  return mountScopedMultiSelect(container, store, onChange, {
-    get: (s) => s.event || [],
-    set: (st, arr) => st.set({ event: arr }),
-    loader: (gender, teamType) => {
-      const s = store.get(); // A9: scope the Event list to the full Search Conditions
-      return searchEvents("", gender, teamType, s.formats, s.dateFrom, s.dateTo);
-    },
-    emptyLabel: "Any event",
-    singular: "event",
-    plural: "events",
-    ariaLabel: "Event",
-    searchPlaceholder: "Search events…",
-    showGames: true,
+// ── Event → Season nested picker (Wave 6 pt2, owner-approved design §B) ──────
+// mountEvent gains a nested season sub-picker rendered directly BELOW the event
+// multi-select. Each SELECTED event gets its own group: an "All seasons" box
+// plus one box per in-scope season (season_year_start DESC). "All" checked ⟺ no
+// narrowing (state.eventSeasons carries no key for that event) — so an event on
+// All filters exactly as it did before this picker existed (backward-compatible;
+// the query is byte-identical, see filters.js). Unchecking a season auto-unchecks
+// All and narrows to the remaining seasons.
+//
+// Min-one guards mirror the format dropdown (filters.js syncFormatDropdown): the
+// "All" box is disabled WHILE checked (so it can't be turned off into an empty
+// selection — you narrow by unchecking a SEASON instead), and the sole remaining
+// checked season is disabled. An event with ≤1 in-scope season collapses to "All
+// seasons" only (no per-season boxes, no narrowing) — the design's edge case.
+//
+// Season OPTIONS come from searchEventSeasons, scoped to the SAME full Search
+// Conditions as the event list (gender/format/date/team-type), cached, and
+// reloaded when that scope OR the selected-event set changes. NB: a change to
+// gender/format/team-type/date CLEARS state.event (owner decision 2026-07-18, in
+// filters.js) and — with it — state.eventSeasons, so in practice the season list
+// is re-derived by RE-PICKING the event under the new window. See the report's
+// CONCERNS for the interaction with that standing decision.
+function mountEventSeasons(container, store, onChange) {
+  let optionsByEvent = {}; // { [event_name]: [{ event, season, syr, games }] } for loadedKey
+  let loadedKey = null;
+  let loadToken = 0;
+  let loading = false;
+
+  const scopeKey = () => {
+    const s = store.get();
+    return `${s.gender}|${s.teamType}|${(s.formats || []).join(",")}|${s.dateFrom || ""}|${s.dateTo || ""}`;
+  };
+  // Cache key: the full scope PLUS the (sorted) selected-event set — a change to
+  // either reloads the per-event season lists.
+  const dataKey = () => `${scopeKey()}||${[...(store.get().event || [])].sort().join("~")}`;
+
+  const inScopeSeasons = (eventName) => (optionsByEvent[eventName] || []).map((r) => r.season);
+  const getES = () => store.get().eventSeasons || {};
+
+  /** Write the season narrowing for one event. A null/empty list — OR a list
+   * covering EVERY in-scope season — collapses to "All" (removes the key → no
+   * narrowing → byte-identical query), so re-checking the last season snaps back
+   * to All rather than emitting a redundant `season IN (all)`. */
+  function setEventSeasons(eventName, seasons) {
+    const es = { ...getES() };
+    const all = inScopeSeasons(eventName);
+    const isFull =
+      seasons && all.length > 0 && seasons.length >= all.length && all.every((sn) => seasons.includes(sn));
+    if (!seasons || seasons.length === 0 || isFull) delete es[eventName];
+    else es[eventName] = seasons;
+    store.set({ eventSeasons: es });
+  }
+
+  async function ensureLoaded() {
+    const events = store.get().event || [];
+    const key = dataKey();
+    if (events.length === 0) {
+      optionsByEvent = {};
+      loadedKey = key;
+      return;
+    }
+    if (loadedKey === key || loading) return;
+    loading = true;
+    const token = ++loadToken;
+    const s = store.get();
+    let rows;
+    try {
+      rows = await searchEventSeasons(events, s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo);
+    } catch (e) {
+      loading = false;
+      return; // leave options empty; a later sync retries (e.g. pre-column data)
+    }
+    if (token !== loadToken) return;
+    loading = false;
+    const grouped = {};
+    for (const r of rows) (grouped[r.event] = grouped[r.event] || []).push(r);
+    optionsByEvent = grouped;
+    loadedKey = key;
+    render();
+  }
+
+  function groupHTML(eventName) {
+    const all = inScopeSeasons(eventName);
+    const cur = getES()[eventName];
+    const isNarrowed = Array.isArray(cur) && cur.length > 0;
+    const nameHTML = `<div class="event-seasons__name">${escHtml(eventName)}</div>`;
+    // Edge case: an event with no season data or a single in-scope season →
+    // "All seasons" only (no per-season boxes; nothing to narrow to).
+    if (all.length <= 1) {
+      return `<div class="event-seasons__group" data-event="${escAttr(eventName)}">
+        ${nameHTML}
+        <div class="event-seasons__boxes">
+          <label class="dropdown__item is-disabled">
+            <input type="checkbox" data-all checked disabled />
+            <span>All seasons</span>
+          </label>
+        </div>
+      </div>`;
+    }
+    const sel = new Set(isNarrowed ? cur : all); // All → every season box shown checked
+    const allChecked = !isNarrowed;
+    const soleSeason = isNarrowed && cur.length === 1 ? cur[0] : null;
+    const seasonBoxes = all
+      .map((sn) => {
+        const checked = sel.has(sn);
+        const disabled = sn === soleSeason; // min-one: can't uncheck the last remaining season
+        return `<label class="dropdown__item${disabled ? " is-disabled" : ""}">
+          <input type="checkbox" data-season="${escAttr(sn)}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""} />
+          <span>${escHtml(sn)}</span>
+        </label>`;
+      })
+      .join("");
+    return `<div class="event-seasons__group" data-event="${escAttr(eventName)}">
+      ${nameHTML}
+      <div class="event-seasons__boxes">
+        <label class="dropdown__item${allChecked ? " is-disabled" : ""}">
+          <input type="checkbox" data-all ${allChecked ? "checked disabled" : ""} />
+          <span>All seasons</span>
+        </label>
+        ${seasonBoxes}
+      </div>
+    </div>`;
+  }
+
+  function render() {
+    const events = store.get().event || [];
+    if (events.length === 0) {
+      container.hidden = true;
+      container.innerHTML = "";
+      return;
+    }
+    container.hidden = false;
+    // Options for the current scope+selection not loaded yet → a light note;
+    // ensureLoaded() (kicked from sync) re-renders when it lands.
+    if (loadedKey !== dataKey()) {
+      container.innerHTML = `<p class="event-seasons__loading profile-note">Loading seasons…</p>`;
+      return;
+    }
+    container.innerHTML =
+      `<div class="event-seasons__head">Seasons</div>` + events.map(groupHTML).join("");
+  }
+
+  // ONE delegated change handler for every checkbox in every group (the groups
+  // are rebuilt via innerHTML, so a per-input listener would need re-attaching —
+  // delegation on the stable container avoids that).
+  container.addEventListener("change", (e) => {
+    const input = e.target;
+    if (!(input instanceof HTMLInputElement)) return;
+    const groupEl = input.closest("[data-event]");
+    if (!groupEl) return;
+    const eventName = groupEl.getAttribute("data-event");
+    const all = inScopeSeasons(eventName);
+    if (input.hasAttribute("data-all")) {
+      // "All" is disabled while checked, so this only fires when turning it back
+      // ON → clear the narrowing (select every season).
+      if (input.checked) setEventSeasons(eventName, null);
+    } else if (input.hasAttribute("data-season")) {
+      const sn = input.getAttribute("data-season");
+      const curES = getES()[eventName];
+      // When on "All", the effective starting set is EVERY in-scope season.
+      const base = Array.isArray(curES) && curES.length > 0 ? curES.slice() : all.slice();
+      let next;
+      if (input.checked) {
+        next = base.includes(sn) ? base : [...base, sn];
+      } else {
+        if (base.length <= 1) {
+          input.checked = true; // min-one guard (defensive; the sole box is disabled)
+          return;
+        }
+        next = base.filter((x) => x !== sn);
+      }
+      // Keep the season order stable (in-scope order = season_year_start desc).
+      next = all.filter((x) => next.includes(x));
+      setEventSeasons(eventName, next);
+    } else {
+      return;
+    }
+    onChange();
   });
+
+  function sync() {
+    // (Re)load when the scope OR selection changed since the last load; render
+    // now with whatever is cached (render shows a loading note while stale).
+    if (loadedKey !== dataKey()) ensureLoaded();
+    render();
+  }
+
+  sync();
+  return { sync };
+}
+
+/** "Event" — gender + team-type-scoped competition/series picker (state.event),
+ * extended (Wave 6 pt2) with a nested season sub-picker below it. */
+export function mountEvent(container, store, onChange) {
+  container.innerHTML = `
+    <div class="filter-group filter-group--event" data-role="event-wrap">
+      <div data-role="event-ms"></div>
+      <div class="event-seasons" data-role="event-seasons" hidden></div>
+    </div>`;
+  const msHost = container.querySelector('[data-role="event-ms"]');
+  const seasonsHost = container.querySelector('[data-role="event-seasons"]');
+
+  const seasons = mountEventSeasons(seasonsHost, store, onChange);
+
+  /** Drop eventSeasons narrowing for events no longer selected — so a
+   * de-selected + re-selected event returns on "All" and the state keeps no
+   * orphan keys. Only writes when something changed (no store-churn loop). */
+  function pruneOrphans() {
+    const selected = new Set(store.get().event || []);
+    const es = store.get().eventSeasons || {};
+    let changed = false;
+    const next = {};
+    for (const k of Object.keys(es)) {
+      if (selected.has(k)) next[k] = es[k];
+      else changed = true;
+    }
+    if (changed) store.set({ eventSeasons: next });
+  }
+
+  const msController = mountScopedMultiSelect(
+    msHost,
+    store,
+    () => {
+      // The event selection just changed (config.set already wrote state.event):
+      // drop orphan season narrowing, refresh the season groups, then propagate.
+      pruneOrphans();
+      seasons.sync();
+      onChange();
+    },
+    {
+      get: (s) => s.event || [],
+      set: (st, arr) => st.set({ event: arr }),
+      loader: (gender, teamType) => {
+        const s = store.get(); // A9: scope the Event list to the full Search Conditions
+        return searchEvents("", gender, teamType, s.formats, s.dateFrom, s.dateTo);
+      },
+      emptyLabel: "Any event",
+      singular: "event",
+      plural: "events",
+      ariaLabel: "Event",
+      searchPlaceholder: "Search events…",
+      showGames: true,
+    }
+  );
+
+  return {
+    sync() {
+      msController.sync();
+      seasons.sync();
+    },
+  };
 }
 
 /** "Venue" — gender + team-type-scoped ground picker (state.venue). */

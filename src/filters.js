@@ -20,6 +20,7 @@ import {
   positionsFilterActive,
   regularPositionsFilterActive,
   eventFilterActive,
+  anyEventSeasonNarrowing,
   venueFilterActive,
   escSql as esc,
 } from "./state.js";
@@ -185,11 +186,36 @@ export function buildScopeClauses(
   // by default (state.event / state.venue start as [] — see state.js), so this
   // is a no-op addition until a picker UI (1B-2) sets either array.
   if (eventFilterActive(state)) {
-    clauses.push(
-      `match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND event_name IN (${state.event
-        .map((e) => `'${esc(e)}'`)
-        .join(", ")}))`
-    );
+    const g = esc(state.gender);
+    if (!anyEventSeasonNarrowing(state)) {
+      // No chosen event is narrowed to specific seasons (every event on "All
+      // seasons") → emit the EXACT pre-Wave-6-pt2 clause, byte-for-byte. This is
+      // the backward-compatible path: picking an event with All checked filters
+      // exactly as before the season sub-picker existed (anchors + the
+      // All-checked case are guaranteed identical).
+      clauses.push(
+        `match_id IN (SELECT match_id FROM matches WHERE gender = '${g}' AND event_name IN (${state.event
+          .map((e) => `'${esc(e)}'`)
+          .join(", ")}))`
+      );
+    } else {
+      // At least one chosen event is narrowed to specific seasons (Event → Season
+      // picker, Wave 6 pt2). Emit a per-event OR of terms: a narrowed event
+      // contributes `(event_name = X AND season IN (…))`; a non-narrowed event
+      // stays `event_name = X` (all its seasons). `season` lives on `matches`
+      // (part 1 additive column), the same table this semi-join already targets,
+      // so no extra join is needed. Orphan eventSeasons keys (for events not in
+      // state.event) are never read here — only state.event is iterated.
+      const es = state.eventSeasons || {};
+      const terms = state.event.map((e) => {
+        const seasons = Array.isArray(es[e]) ? es[e] : [];
+        if (seasons.length > 0) {
+          return `(event_name = '${esc(e)}' AND season IN (${seasons.map((sn) => `'${esc(sn)}'`).join(", ")}))`;
+        }
+        return `event_name = '${esc(e)}'`;
+      });
+      clauses.push(`match_id IN (SELECT match_id FROM matches WHERE gender = '${g}' AND (${terms.join(" OR ")}))`);
+    }
   }
   if (venueFilterActive(state)) {
     clauses.push(
@@ -696,7 +722,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
       // selection must not silently survive into a scope where it no longer
       // occurs. Profile filters are format-independent, so (like team-type)
       // they are intentionally kept.
-      store.set({ formats: [...set], teams: [], event: [], venue: [], opposition: [] });
+      store.set({ formats: [...set], teams: [], event: [], venue: [], opposition: [], eventSeasons: {} });
       syncFormatDropdown();
       if (onFormatsChanged) onFormatsChanged();
       onChange();
@@ -737,7 +763,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
       // buildScopeClauses' opposition gate), so clear those selections — a
       // selected IPL event must not silently survive a switch to International.
       // Profile filters are team-type-independent, so they're intentionally kept.
-      store.set({ teamType, teams: [], event: [], venue: [], opposition: [] });
+      store.set({ teamType, teams: [], event: [], venue: [], opposition: [], eventSeasons: {} });
       syncTeamTypeDropdown();
       onChange();
     });
@@ -804,7 +830,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
     if (from > to) from = to;
     // A preset changes the date window → same scope-change vocab clear as a
     // manual date edit (see the From/To handlers, owner decision 2026-07-18).
-    store.set({ dateFrom: from, dateTo: to, teams: [], event: [], venue: [], opposition: [] });
+    store.set({ dateFrom: from, dateTo: to, teams: [], event: [], venue: [], opposition: [], eventSeasons: {} });
     syncDateInputs();
     validateDate();
     onChange();
@@ -824,6 +850,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
       event: [],
       venue: [],
       opposition: [],
+      eventSeasons: {}, // Wave 6 pt2: drop any season narrowing with the cleared event picks
     });
     render();
     onChange();
@@ -844,13 +871,13 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
     // Team/Event/Venue/opposition vocab picks on a window change, exactly as
     // gender/team-type/format do, so the full-scope (A9) option lists and any
     // selection stay consistent. Profile filters are date-independent, kept.
-    store.set({ dateFrom: els.dateFrom.value || null, teams: [], event: [], venue: [], opposition: [] });
+    store.set({ dateFrom: els.dateFrom.value || null, teams: [], event: [], venue: [], opposition: [], eventSeasons: {} });
     els.datePresets.value = ""; // a manual edit no longer matches any preset — reset the label
     validateDate();
     onChange();
   });
   els.dateTo.addEventListener("change", () => {
-    store.set({ dateTo: els.dateTo.value || null, teams: [], event: [], venue: [], opposition: [] }); // scope-change vocab clear (see dateFrom)
+    store.set({ dateTo: els.dateTo.value || null, teams: [], event: [], venue: [], opposition: [], eventSeasons: {} }); // scope-change vocab clear (see dateFrom)
     els.datePresets.value = ""; // a manual edit no longer matches any preset — reset the label
     validateDate();
     onChange();

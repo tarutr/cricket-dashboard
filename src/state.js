@@ -222,6 +222,34 @@ export function eventFilterActive(state) {
   return Array.isArray(state.event) && state.event.length > 0;
 }
 
+// ── Event → Season nested narrowing (Wave 6 pt2, owner-approved design §B) ────
+// `state.eventSeasons` maps a chosen event_name → the list of specific seasons
+// kept for it (a PROPER-SUBSET narrowing). Absence of a key (or an empty array)
+// means "All seasons" for that event — NO narrowing — so with every event on
+// All the object is `{}` and the emitted SQL is byte-identical to the pre-pt2
+// event-only filter (backward-compatible; anchors safe). The season strings are
+// the raw `matches.season` values (e.g. "2024", "2023/24"); the query side lives
+// in filters.js buildScopeClauses (per-event OR of event_name[/season IN …]) and
+// the picker in drawerInnings.js mountEvent. A key for an event NOT in
+// state.event is inert — the query builder only reads keys for the events
+// actually selected — but the UI + pill prune such orphans for honesty.
+
+/** The specific seasons chosen for `eventName` (a narrowing), or [] when the
+ * event is on "All seasons" (no narrowing). */
+export function seasonsForEvent(state, eventName) {
+  const arr = (state.eventSeasons || {})[eventName];
+  return Array.isArray(arr) ? arr : [];
+}
+
+/** True if ANY currently-selected event is narrowed to specific seasons. When
+ * false, the event clause is byte-identical to the pre-Wave-6-pt2 event-only
+ * filter — this is the single gate filters.js uses to stay backward-compatible. */
+export function anyEventSeasonNarrowing(state) {
+  if (!eventFilterActive(state)) return false;
+  const es = state.eventSeasons || {};
+  return state.event.some((e) => Array.isArray(es[e]) && es[e].length > 0);
+}
+
 /** True if the Venue filter (state.venue) is currently narrowing the match set. */
 export function venueFilterActive(state) {
   return Array.isArray(state.venue) && state.venue.length > 0;
@@ -458,6 +486,11 @@ export function createInitialState(maxMonth) {
                // eventFilterActive() and filters.js buildScopeClauses' gender-scoped matches join.
     venue: [], // venue values (Batch 1B, task 1B-1); [] = no predicate. See venueFilterActive() and
                // filters.js buildScopeClauses' gender-scoped matches join.
+    eventSeasons: {}, // Event → Season narrowing (Wave 6 pt2): { [event_name]: string[] } of the
+               // specific seasons kept per chosen event. {} = every event on "All seasons" = no
+               // narrowing = query byte-identical to the event-only filter. See seasonsForEvent()/
+               // anyEventSeasonNarrowing() above and filters.js buildScopeClauses. Reset alongside
+               // state.event on any scope change (gender/format/team-type/date) in filters.js.
     fielding: { positions: [], kinds: [], phases: [] },
                // Fielding SLICE conditions (fielding rebuild): refine WHAT the
                // Catches/Stumpings/Run-outs/Dismissals-Effected metrics count, by

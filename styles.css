@@ -819,6 +819,37 @@ a { color: var(--color-accent); }
 .cond-row__value .profile-role { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .cond-row__value .profile-role .select { flex: 0 1 auto; min-width: 0; width: auto; }
 
+/* ── Event → Season nested picker (Wave 6 pt2) ──────────────────────────────
+   The event row stacks the multi-select and, below it, one season group per
+   selected event. Reuses .dropdown__item for the checkboxes (incl. the shared
+   .is-disabled min-one look), so only the layout scaffolding is new here. */
+.filter-group--event { display: flex; flex-direction: column; gap: var(--space-2); align-items: stretch; }
+.event-seasons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-panel);
+}
+.event-seasons__head {
+  font-size: var(--text-sm2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  font-weight: 600;
+}
+.event-seasons__group { display: flex; flex-direction: column; gap: var(--space-1); }
+.event-seasons__group + .event-seasons__group {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+.event-seasons__name { font-size: 0.9rem; font-weight: 600; }
+.event-seasons__boxes { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
+.event-seasons__boxes .dropdown__item { padding: var(--space-1) var(--space-2); }
+.event-seasons__loading { margin: 0; }
+
 .cond-row__remove { flex-shrink: 0; }
 
 .cond-row__and { color: var(--color-muted); font-size: var(--text-md); }

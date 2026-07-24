@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsOrderFilterActive, stageFilterActive, methodFilterActive, RESULT_OPTIONS, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS, INNINGS_ORDER_OPTIONS } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsOrderFilterActive, stageFilterActive, methodFilterActive, RESULT_OPTIONS, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS, INNINGS_ORDER_OPTIONS } from "./state.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
@@ -218,13 +218,33 @@ export function mountPills(
     // so the honest scope reads plainly. Both are gender-scoped match filters.
     if (eventFilterActive(s)) {
       for (const e of s.event) {
+        // Wave 6 pt2: reflect any season narrowing in the pill label ("Event:
+        // IPL (2024, 2025)"); an event on "All seasons" reads plainly ("Event:
+        // IPL"). Up to three seasons list out; beyond that a count keeps it short.
+        const seasons = seasonsForEvent(s, e);
+        const capturedSeasons = [...seasons];
+        let label = `Event: ${e}`;
+        if (seasons.length > 0) {
+          label += seasons.length <= 3 ? ` (${seasons.join(", ")})` : ` (${seasons.length} seasons)`;
+        }
         pills.push({
           key: `event:${e}`,
-          label: `Event: ${e}`,
-          remove: () => store.set({ event: store.get().event.filter((x) => x !== e) }),
+          label,
+          // Removing the event also drops its season narrowing (an orphan key
+          // would be inert, but the state stays clean + honest).
+          remove: () => {
+            const es = { ...(store.get().eventSeasons || {}) };
+            delete es[e];
+            store.set({ event: store.get().event.filter((x) => x !== e), eventSeasons: es });
+          },
           restore: () => {
             const cur = store.get().event || [];
-            if (!cur.includes(e)) store.set({ event: [...cur, e] });
+            const patch = {};
+            if (!cur.includes(e)) patch.event = [...cur, e];
+            if (capturedSeasons.length > 0) {
+              patch.eventSeasons = { ...(store.get().eventSeasons || {}), [e]: capturedSeasons };
+            }
+            if (Object.keys(patch).length) store.set(patch);
           },
         });
       }

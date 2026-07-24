@@ -522,7 +522,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
       case "strikerpos": store.set({ positions: [] }); break;
       case "team": store.set({ teams: [] }); break;
       case "opposition": store.set({ opposition: [] }); break;
-      case "event": store.set({ event: [] }); break;
+      case "event": store.set({ event: [], eventSeasons: {} }); break; // Wave 6 pt2: drop season narrowing too
       case "venue": store.set({ venue: [] }); break;
       case "fld_pos": store.set({ fielding: { ...(store.get().fielding || {}), positions: [] } }); break;
       case "fld_kind": store.set({ fielding: { ...(store.get().fielding || {}), kinds: [] } }); break;

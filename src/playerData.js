@@ -376,6 +376,32 @@ export async function searchEvents(term, gender, teamType = "both", formats = nu
   return rows;
 }
 
+/**
+ * Distinct seasons per event for the Event → Season nested picker (Wave 6 pt2).
+ * One row per (event_name, season) that has at least one match INSIDE the current
+ * scope, scoped by the SAME matchOptionScope (gender/format/date/team_type) as
+ * searchEvents — so the seasons offered are exactly those with matches in the
+ * active date window (this is what makes the season list "scoped to the active
+ * date range"). Ordered most-recent-first by season_year_start (part-1 additive
+ * column). `eventNames` is the currently-selected events; an empty list is a
+ * no-op ([]). This is an OPTIONS lookup only — it never feeds a leaderboard
+ * aggregate, so numbers are untouched (mirrors searchEvents/searchVenues).
+ */
+export async function searchEventSeasons(eventNames, gender, teamType = "both", formats = null, dateFrom = null, dateTo = null) {
+  if (!Array.isArray(eventNames) || eventNames.length === 0) return [];
+  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo);
+  const inList = eventNames.map((e) => `'${esc(e)}'`).join(", ");
+  const sql = [
+    `SELECT event_name AS event, season, ANY_VALUE(season_year_start) AS syr, COUNT(*) AS games`,
+    `FROM matches`,
+    `WHERE ${scope} AND event_name IN (${inList}) AND season IS NOT NULL`,
+    `GROUP BY event_name, season`,
+    `ORDER BY syr DESC, season DESC`,
+  ].join("\n");
+  const { rows } = await query(sql);
+  return rows;
+}
+
 /** Distinct venue values in `matches` for the current scope. games = match
  * count. `formats`/`dateFrom`/`dateTo` are the A9 additions (optional/additive
  * — see matchOptionScope). */
