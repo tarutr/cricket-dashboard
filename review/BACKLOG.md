@@ -88,6 +88,16 @@ typefaces, spacing), apply to the entire UI + export card per §1 (CHART_SYSTEM.
 charts.js ~1,120, styles.css ~4,570) per FILE_SPLIT_PLAN.md. Staged split, no rush. **Owner note:** needs a
 discussion of how the system works to decide tweaks vs a complete overhaul.
 
+## 14. Team/opposition categories + Afghanistan demarcation — **owner-requested (owner 2026-07-24; priority ~#5, do AFTER the current full-build data program)**
+[app] · Two parts:
+- **Category groupings in Team/Opposition dropdowns EVERYWHERE** (Stats drawer, matchup Vs picker, graph
+  filters, player-popup filters): add selectable categories alongside individual teams —
+  **Big Three** (India, Australia, England), **Test Nations**, **Associate Nations**.
+- **Afghanistan demarcation footer:** the data excludes ALL games involving Afghanistan (Cricsheet gap,
+  SPEC §4.1). Show a clear note stating this, on the **same row as the "Data as of [date]" footer** but
+  **right-aligned** (right side of the page).
+Relates to #6 (team-name normalization — canonical team names would underpin the category membership lists).
+
 ---
 
 ## Deleted (do not include)
