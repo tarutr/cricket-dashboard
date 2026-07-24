@@ -84,6 +84,14 @@ EXPORT_FILES = {
     "bowling_innings.parquet": ["match_id", "innings_number", "bowler_id"],
     "player_matches.parquet": ["match_id", "player_id"],
     "player_profiles.parquet": ["player_id"],
+    # FIELDING REBUILD (Wave-3 redo at finer grain): ONE row per (wicket,
+    # credited fielder) — re-derived STANDALONE from raw wicket_fielders/wickets/
+    # deliveries. The synthetic fielder_index=0 c&b (bowler-catch) rows carry no
+    # wicket_fielders row (0 of 9,920 verified), so this 6-col key is unique.
+    "fielding_events.parquet": [
+        "match_id", "innings_number", "over_number", "ball_index",
+        "wicket_index", "fielder_index",
+    ],
     # D4 matchup files (men-only in practice; unmapped opponents bucketed as
     # '(unmapped)' so the browser can compute an honest N-of-M denominator).
     "matchup_batting.parquet": ["match_id", "innings_number", "batter_id", "bowling_type"],
@@ -99,6 +107,7 @@ CONTENT_TYPES = {
     "bowling_innings.parquet": "application/vnd.apache.parquet",
     "player_matches.parquet": "application/vnd.apache.parquet",
     "player_profiles.parquet": "application/vnd.apache.parquet",
+    "fielding_events.parquet": "application/vnd.apache.parquet",
     "matchup_batting.parquet": "application/vnd.apache.parquet",
     "matchup_bowling.parquet": "application/vnd.apache.parquet",
     "manifest.json": "application/json",
@@ -889,9 +898,18 @@ def sql_bowling():
          AND d.bowler_id = som.bowler_id AND d.over_number = som.over_number
         WHERE d.bowler_id IS NOT NULL
     ),
-    -- Per-spell bowler-credited wickets: kept_wickets is already filtered to the
-    -- credited kinds; counted on LEGAL deliveries ONLY, mirroring the source's
-    -- `swk` which iterates `sl` (legal balls) not `sd`.
+    -- Per-spell bowler-credited wickets (Wave-4 CONSISTENCY FIX): count credited
+    -- kinds on ALL of the bowler's spell deliveries — legal AND illegal — NOT
+    -- legal-only. The old legal-only filter (`sd.wides IS NULL AND sd.noballs IS
+    -- NULL`, mirroring the source's `swk` over `sl`) dropped credited wickets
+    -- that fall on an illegal delivery (e.g. a stumping off a wide), so the
+    -- spell-wicket components diverged from cricdb's own innings `wickets` /
+    -- `wkt_by_ball` (which are all-credited, illegality-agnostic) on ~158
+    -- innings. Counting on ALL spell deliveries makes them agree exactly:
+    -- for spell_count=1, open_spell_wkts == wickets (0 mismatches). This now
+    -- DIVERGES from the SOURCE `bowling_spells.wickets` (which is legal-only —
+    -- buggy) by ~539; that divergence is correct and intended (owner's Wave-2
+    -- ruling: match cricdb's own wickets, not the source's legal-only spell count).
     spell_wkts AS (
         SELECT sd.match_id, sd.innings_number, sd.bowler_id, sd.spell_number,
                COUNT(*) AS s_wkts
@@ -899,7 +917,6 @@ def sql_bowling():
         JOIN spell_deliveries sd
           ON kw.match_id = sd.match_id AND kw.innings_number = sd.innings_number
          AND kw.over_number = sd.over_number AND kw.ball_index = sd.ball_index
-        WHERE sd.wides IS NULL AND sd.noballs IS NULL
         GROUP BY sd.match_id, sd.innings_number, sd.bowler_id, sd.spell_number
     ),
     -- Per-spell balls / runs conceded / dots. balls = legal deliveries; runs =
@@ -1882,84 +1899,14 @@ def sql_player_matches():
                COALESCE(team_bat, team_any) AS team
         FROM extra
     ),
-    -- Fielding events, per (match, player), NON-super-over only (Wave 3).
-    -- Re-derived STANDALONE from the raw wickets/wicket_fielders/deliveries
-    -- tables — the source DB has no per-player fielding aggregate.
-    --   CATCH   = a 'caught' dismissal credited to each listed NON-substitute
-    --             fielder (wicket_fielders joined to wickets on the 5-part
-    --             ball+wicket key), PLUS a 'caught and bowled' credited to the
-    --             BOWLER of that delivery. Owner ruling: c&b IS the bowler's
-    --             fielding catch. c&b wickets carry NO wicket_fielders row in
-    --             this data (verified: 0 of 9,920), so the bowler is taken from
-    --             `deliveries` on the ball key. 'caught' and 'caught and bowled'
-    --             are disjoint kinds, so no catch is double-counted.
-    --   STUMPING= a 'stumped' dismissal credited to the listed non-substitute
-    --             (keeper) fielder.
-    --   RUN-OUT = a 'run out' credited to ALL listed non-substitute fielders
-    --             (a run-out may list several — a relay throw).
-    -- Substitute fielders (wicket_fielders.substitute IS TRUE) are EXCLUDED from
-    -- all three (owner ruling); substitute IS NOT TRUE keeps NULL/FALSE rows.
-    fielding_events AS (
-        SELECT w.match_id, wf.fielder_id AS player_id,
-               1 AS catches, 0 AS stumpings, 0 AS run_outs
-        FROM wickets w
-        JOIN kept_innings ki
-          ON w.match_id = ki.match_id AND w.innings_number = ki.innings_number
-        JOIN wicket_fielders wf
-          ON wf.match_id = w.match_id AND wf.innings_number = w.innings_number
-         AND wf.over_number = w.over_number AND wf.ball_index = w.ball_index
-         AND wf.wicket_index = w.wicket_index
-        WHERE w.kind = 'caught'
-          AND wf.substitute IS NOT TRUE AND wf.fielder_id IS NOT NULL
-
-        UNION ALL
-        SELECT w.match_id, dv.bowler_id AS player_id,
-               1 AS catches, 0 AS stumpings, 0 AS run_outs
-        FROM wickets w
-        JOIN kept_innings ki
-          ON w.match_id = ki.match_id AND w.innings_number = ki.innings_number
-        JOIN deliveries dv
-          ON dv.match_id = w.match_id AND dv.innings_number = w.innings_number
-         AND dv.over_number = w.over_number AND dv.ball_index = w.ball_index
-        WHERE w.kind = 'caught and bowled' AND dv.bowler_id IS NOT NULL
-
-        UNION ALL
-        SELECT w.match_id, wf.fielder_id AS player_id,
-               0 AS catches, 1 AS stumpings, 0 AS run_outs
-        FROM wickets w
-        JOIN kept_innings ki
-          ON w.match_id = ki.match_id AND w.innings_number = ki.innings_number
-        JOIN wicket_fielders wf
-          ON wf.match_id = w.match_id AND wf.innings_number = w.innings_number
-         AND wf.over_number = w.over_number AND wf.ball_index = w.ball_index
-         AND wf.wicket_index = w.wicket_index
-        WHERE w.kind = 'stumped'
-          AND wf.substitute IS NOT TRUE AND wf.fielder_id IS NOT NULL
-
-        UNION ALL
-        SELECT w.match_id, wf.fielder_id AS player_id,
-               0 AS catches, 0 AS stumpings, 1 AS run_outs
-        FROM wickets w
-        JOIN kept_innings ki
-          ON w.match_id = ki.match_id AND w.innings_number = ki.innings_number
-        JOIN wicket_fielders wf
-          ON wf.match_id = w.match_id AND wf.innings_number = w.innings_number
-         AND wf.over_number = w.over_number AND wf.ball_index = w.ball_index
-         AND wf.wicket_index = w.wicket_index
-        WHERE w.kind = 'run out'
-          AND wf.substitute IS NOT TRUE AND wf.fielder_id IS NOT NULL
-    ),
-    fielding_agg AS (
-        SELECT match_id, player_id,
-               SUM(catches)   AS catches,
-               SUM(stumpings) AS stumpings,
-               SUM(run_outs)  AS run_outs
-        FROM fielding_events
-        GROUP BY match_id, player_id
-    ),
     -- Player of the Match: a per-MATCH award (not innings-scoped, so no
     -- super-over concern). DISTINCT collapses the 9 known files with duplicate
     -- player_of_match entries (reference/db_reference.md).
+    --
+    -- FIELDING REBUILD: the coarse per-(match,player) catches/stumpings/run_outs
+    -- that Wave 3 put here have been REMOVED — fielding now lives at event grain
+    -- in fielding_events.parquet (sql_fielding_events). player_of_match STAYS
+    -- here: it is genuinely per-match, not a fielding event.
     pom AS (
         SELECT DISTINCT match_id, player_id
         FROM match_player_of_match
@@ -1976,22 +1923,175 @@ def sql_player_matches():
         mc.match_date,
         mc.year,
         mc.month,
-        -- Fielding / Impact (Wave 3). LEFT JOINs are keyed on (match, player)
-        -- and each right side is one row per (match, player) — fielding_agg by
-        -- GROUP BY, pom by DISTINCT — so neither multiplies `combined`; the PK
-        -- (match_id, player_id) is preserved. COALESCE makes the fielding counts
-        -- 0 (not NULL) for players who effected none in the match.
-        COALESCE(fa.catches, 0)   AS catches,
-        COALESCE(fa.stumpings, 0) AS stumpings,
-        COALESCE(fa.run_outs, 0)  AS run_outs,
+        -- Impact: Player-of-the-Match award (0/1). The LEFT JOIN is keyed on
+        -- (match, player) and pom is one row per (match, player) (DISTINCT), so
+        -- it never multiplies `combined`; the PK (match_id, player_id) is preserved.
         CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END AS player_of_match
     FROM combined c
     JOIN m_ctx mc ON c.match_id = mc.match_id
-    LEFT JOIN fielding_agg fa
-      ON fa.match_id = c.match_id AND fa.player_id = c.player_id
     LEFT JOIN pom
       ON pom.match_id = c.match_id AND pom.player_id = c.player_id
     ORDER BY mc.match_date, c.match_id, c.player_id
+    """
+
+
+def sql_fielding_events():
+    """
+    FIELDING REBUILD — ONE ROW PER (wicket, credited fielder).
+
+    Re-derived STANDALONE from raw `wicket_fielders` ⋈ `wickets` ⋈ `deliveries`
+    (+ `matches`, `player_profiles`, and the SAME batting-position logic
+    sql_batting uses). Super-over innings are excluded EVERYWHERE (kept_innings).
+
+    This supersedes Wave-3's coarse per-(match,player) catches/stumpings/run_outs
+    on player_matches: EVERY dimension is carried so fielding is sliceable by
+    anything (opposition, venue, event, dismissed-batter position/hand/role,
+    bowler style, phase, dismissal kind, ...).
+
+    CREDIT RULES (owner-ruled, unchanged from Wave 3):
+      * 'caught'            -> EACH listed fielder (one row per wicket_fielders row)
+      * 'caught and bowled' -> the delivery's BOWLER (c&b carries NO
+                               wicket_fielders row here — verified 0 of 9,920 —
+                               so the bowler is read off `deliveries`; synthetic
+                               fielder_index = 0, substitute = FALSE)
+      * 'run out'           -> ALL listed fielders (a relay throw lists several)
+      * 'stumped'           -> the listed keeper
+
+    SUBSTITUTES: substitute-fielder rows ARE carried (with substitute = TRUE) —
+    NOT dropped. Metrics exclude them by default; the data stays available.
+
+    Credited fielders with a NULL fielder_id (431 caught / 4 stumped / 13 run-out
+    wicket_fielders rows) are DROPPED — an unidentifiable fielder cannot be
+    attributed to any player and would only pollute a NULL group; this matches
+    Wave 3's `fielder_id IS NOT NULL` and keeps the grand-total reconciliation
+    exact (SUM over non-substitute rows == Wave-3 player_matches totals).
+    """
+    cte = build_delivery_cte(hundred_only=None)
+    # Single resolved phase per format: ODI/ODM -> ODI over-ranges; T20/IT20 and
+    # the Hundred (balls_per_over=5) -> T20 family (t20_phase_expr, Hundred-aware);
+    # Test/MDM (no phase concept) -> NULL. The Hundred branch is FIRST so a
+    # balls_per_over=5 match can never fall through to the ODI branch.
+    phase_expr = f"""
+        CASE
+            WHEN d.balls_per_over = 5              THEN ({t20_phase_expr()})
+            WHEN d.match_type IN ('ODI','ODM')     THEN ({ODI_PHASE_OVER})
+            WHEN d.match_type IN ('T20','IT20')    THEN ({t20_phase_expr()})
+            ELSE NULL
+        END"""
+    return f"""
+    WITH {cte},
+    -- All wickets in kept innings (every kind) — the batting-position logic below
+    -- needs the full set so it reproduces sql_batting's positions EXACTLY.
+    kw_all AS (
+        SELECT w.*
+        FROM wickets w
+        JOIN kept_innings ki
+          ON w.match_id = ki.match_id AND w.innings_number = ki.innings_number
+    ),
+    -- Batting position, byte-identical to sql_batting: rank of first crease
+    -- appearance (striker role_rank 0, non-striker 1, wicket-only 2+wicket_index),
+    -- ordered by first (over, ball, role_rank).
+    appearances AS (
+        SELECT match_id, innings_number, batter_id AS pid,
+               over_number, ball_index, 0 AS role_rank
+        FROM d
+        UNION ALL
+        SELECT match_id, innings_number, non_striker_id AS pid,
+               over_number, ball_index, 1 AS role_rank
+        FROM d
+        UNION ALL
+        SELECT match_id, innings_number, player_out_id AS pid,
+               over_number, ball_index, 2 + wicket_index AS role_rank
+        FROM kw_all
+    ),
+    first_app AS (
+        SELECT match_id, innings_number, pid,
+               MIN(ROW(over_number, ball_index, role_rank)) AS first_key
+        FROM appearances
+        GROUP BY match_id, innings_number, pid
+    ),
+    positions AS (
+        SELECT match_id, innings_number, pid,
+               ROW_NUMBER() OVER (
+                   PARTITION BY match_id, innings_number
+                   ORDER BY first_key
+               ) AS batting_position
+        FROM first_app
+    ),
+    -- One row per (wicket, credited fielder). caught/stumped/run out come from
+    -- wicket_fielders (fielder_id NOT NULL); caught and bowled from the delivery
+    -- bowler with a synthetic fielder_index = 0.
+    credited AS (
+        SELECT w.match_id, w.innings_number, w.over_number, w.ball_index,
+               w.wicket_index, wf.fielder_index,
+               wf.fielder_id, wf.fielder_name,
+               w.kind, w.player_out_id AS out_batter_id, w.player_out AS out_batter_name,
+               (wf.substitute IS TRUE) AS substitute
+        FROM kw_all w
+        JOIN wicket_fielders wf
+          ON wf.match_id = w.match_id AND wf.innings_number = w.innings_number
+         AND wf.over_number = w.over_number AND wf.ball_index = w.ball_index
+         AND wf.wicket_index = w.wicket_index
+        WHERE w.kind IN ('caught', 'stumped', 'run out')
+          AND wf.fielder_id IS NOT NULL
+
+        UNION ALL
+        SELECT w.match_id, w.innings_number, w.over_number, w.ball_index,
+               w.wicket_index, 0 AS fielder_index,
+               dv.bowler_id AS fielder_id, dv.bowler AS fielder_name,
+               w.kind, w.player_out_id AS out_batter_id, w.player_out AS out_batter_name,
+               FALSE AS substitute
+        FROM kw_all w
+        JOIN deliveries dv
+          ON dv.match_id = w.match_id AND dv.innings_number = w.innings_number
+         AND dv.over_number = w.over_number AND dv.ball_index = w.ball_index
+        WHERE w.kind = 'caught and bowled' AND dv.bowler_id IS NOT NULL
+    )
+    SELECT
+        c.match_id,
+        c.innings_number,
+        c.over_number,
+        c.ball_index,
+        c.wicket_index,
+        c.fielder_index,
+        c.fielder_id,
+        c.fielder_name,
+        d.match_type,
+        d.gender,
+        d.team_type,
+        d.match_date,
+        d.year,
+        d.month,
+        mm.venue,
+        mm.city,
+        mm.event_name,
+        -- fielding_team = the bowling side of the innings (the OTHER team);
+        -- opposition = the batting side being dismissed (the innings' batting_team).
+        CASE WHEN d.team_1 = d.batting_team THEN d.team_2 ELSE d.team_1 END AS fielding_team,
+        d.batting_team AS opposition,
+        c.kind,
+        c.out_batter_id,
+        c.out_batter_name,
+        pos.batting_position AS out_batting_position,
+        bp.batting_style AS out_hand,
+        bp.playing_role  AS out_role,
+        d.bowler_id,
+        d.bowler AS bowler_name,
+        wp.bowling_style AS bowler_style,
+        {phase_expr} AS phase,
+        c.substitute
+    FROM credited c
+    JOIN d
+      ON d.match_id = c.match_id AND d.innings_number = c.innings_number
+     AND d.over_number = c.over_number AND d.ball_index = c.ball_index
+    JOIN matches mm ON mm.match_id = c.match_id
+    LEFT JOIN positions pos
+      ON pos.match_id = c.match_id AND pos.innings_number = c.innings_number
+     AND pos.pid = c.out_batter_id
+    LEFT JOIN player_profiles bp ON bp.player_id = c.out_batter_id
+    LEFT JOIN player_profiles wp ON wp.player_id = d.bowler_id
+    ORDER BY d.match_date, c.match_id, c.innings_number, c.over_number,
+             c.ball_index, c.wicket_index, c.fielder_index
     """
 
 
@@ -2415,14 +2515,15 @@ def run_gates(con, out_dir):
     gate(bowl_missing == 0, "player_matches covers all bowling (match,bowler)",
          f"{bowl_missing} bowling (match,bowler) pairs missing from player_matches")
 
-    # --- Wave 3 fielding/impact ORACLE: the catches/stumpings/run_outs/
-    # player_of_match columns are re-derived STANDALONE from raw wickets/
-    # wicket_fielders/deliveries (the source DB has no fielding aggregate), so
-    # there is no precomputed column to diff against. Instead, independently
-    # recompute the grand totals (non-super-over) here and assert the exported
-    # player_matches SUMs match EXACTLY. An exact grand-total match proves both
-    # that the derivation is correct AND that no credit was orphaned (a credited
-    # player_id absent from `combined` would drop the credit and shrink the sum).
+    # --- FIELDING REBUILD ORACLE: catches/stumpings/run_outs are re-derived
+    # STANDALONE from raw wickets/wicket_fielders/deliveries into fielding_events
+    # (event grain); player_of_match stays on player_matches. There is no
+    # precomputed column to diff against, so independently recompute the grand
+    # totals (non-super-over) here and assert the exported SUMs match EXACTLY —
+    # fielding_events (SUBSTITUTES EXCLUDED, by kind) for catches/stumpings/
+    # run_outs, player_matches for player_of_match. An exact grand-total match
+    # proves the derivation is correct AND that no credit was orphaned.
+    fld_p = paths["fielding_events.parquet"]
     ki = "(SELECT match_id, innings_number FROM innings WHERE super_over IS NOT TRUE)"
     ref_catches = q(
         f"""SELECT
@@ -2462,18 +2563,60 @@ def run_gates(con, out_dir):
         "SELECT COUNT(*) FROM (SELECT DISTINCT match_id, player_id "
         "FROM match_player_of_match WHERE player_id IS NOT NULL)"
     )
-    pq_c = q(f"SELECT COALESCE(SUM(catches),0) FROM read_parquet('{pm_p}')")
-    pq_s = q(f"SELECT COALESCE(SUM(stumpings),0) FROM read_parquet('{pm_p}')")
-    pq_r = q(f"SELECT COALESCE(SUM(run_outs),0) FROM read_parquet('{pm_p}')")
+    # catches/stumpings/run_outs from fielding_events, substitutes EXCLUDED, by
+    # kind (caught+c&b = catches). fielder_id NULL rows are never emitted, so the
+    # non-substitute SUM here must equal the raw recompute above exactly.
+    pq_c = q(
+        f"SELECT COUNT(*) FROM read_parquet('{fld_p}') "
+        f"WHERE substitute IS NOT TRUE AND kind IN ('caught','caught and bowled')"
+    )
+    pq_s = q(
+        f"SELECT COUNT(*) FROM read_parquet('{fld_p}') "
+        f"WHERE substitute IS NOT TRUE AND kind = 'stumped'"
+    )
+    pq_r = q(
+        f"SELECT COUNT(*) FROM read_parquet('{fld_p}') "
+        f"WHERE substitute IS NOT TRUE AND kind = 'run out'"
+    )
     pq_p = q(f"SELECT COALESCE(SUM(player_of_match),0) FROM read_parquet('{pm_p}')")
-    gate(pq_c == ref_catches, "fielding oracle: catches total",
+    gate(pq_c == ref_catches, "fielding oracle: catches total (fielding_events, excl subs)",
          f"parquet {pq_c} != raw recompute {ref_catches}")
-    gate(pq_s == ref_stump, "fielding oracle: stumpings total",
+    gate(pq_s == ref_stump, "fielding oracle: stumpings total (fielding_events, excl subs)",
          f"parquet {pq_s} != raw recompute {ref_stump}")
-    gate(pq_r == ref_runout, "fielding oracle: run_outs total",
+    gate(pq_r == ref_runout, "fielding oracle: run_outs total (fielding_events, excl subs)",
          f"parquet {pq_r} != raw recompute {ref_runout}")
-    gate(pq_p == ref_pom, "fielding oracle: player_of_match total",
+    gate(pq_p == ref_pom, "fielding oracle: player_of_match total (player_matches)",
          f"parquet {pq_p} != raw recompute {ref_pom}")
+
+    # fielding_events: every emitted fielder_id is non-null (unattributable
+    # credits dropped by design) and no super-over event leaks in.
+    fld_null_fid = q(f"SELECT COUNT(*) FROM read_parquet('{fld_p}') WHERE fielder_id IS NULL")
+    gate(fld_null_fid == 0, "fielding_events: no NULL fielder_id", f"{fld_null_fid} rows")
+    fld_super = q(
+        f"SELECT COUNT(*) FROM read_parquet('{fld_p}') fe WHERE fe.match_id || ':' || "
+        f"CAST(fe.innings_number AS VARCHAR) IN (SELECT match_id || ':' || CAST(innings_number AS VARCHAR) "
+        f"FROM innings WHERE super_over IS TRUE)"
+    )
+    gate(fld_super == 0, "fielding_events: no super-over rows", f"{fld_super} rows")
+    # kind is exactly the four credited-fielder kinds.
+    fld_kinds = q(
+        f"SELECT COUNT(*) FROM read_parquet('{fld_p}') "
+        f"WHERE kind NOT IN ('caught','caught and bowled','stumped','run out')"
+    )
+    gate(fld_kinds == 0, "fielding_events: kind in {caught,c&b,stumped,run out}", f"{fld_kinds} rows")
+
+    # --- PART B spell-wicket consistency: for spell_count=1 the single spell
+    # spans all the bowler's deliveries, so open_spell_wkts (spell 1's wickets)
+    # must equal the innings `wickets` total exactly (0 mismatches). This is the
+    # Wave-4 fix — spell wickets now count ALL spell deliveries (not legal-only),
+    # matching cricdb's own wickets / wkt_by_ball.
+    spell1_mismatch = q(
+        f"SELECT COUNT(*) FROM read_parquet('{bowl_p}') "
+        f"WHERE spell_count = 1 AND open_spell_wkts <> wickets"
+    )
+    gate(spell1_mismatch == 0,
+         "spell fix: spell_count=1 => open_spell_wkts == wickets",
+         f"{spell1_mismatch} mismatched innings")
 
     # Gate 2 (XI sanity): count (match, team) groups where a team has != 11 rows
     # with a non-null team. Historical data legitimately has XII / substitutes,
@@ -3211,6 +3354,9 @@ def main():
 
     log("Writing player_profiles.parquet ...")
     write_parquet(con, sql_player_profiles(), os.path.join(args.out, "player_profiles.parquet"))
+
+    log("Writing fielding_events.parquet ...")
+    write_parquet(con, sql_fielding_events(), os.path.join(args.out, "fielding_events.parquet"))
 
     log("Writing matchup_batting.parquet ...")
     write_parquet(con, sql_matchup_batting(), os.path.join(args.out, "matchup_batting.parquet"))
