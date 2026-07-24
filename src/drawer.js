@@ -507,7 +507,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     // separate "Regular position" singleton (c:rpos, the modal-position editor),
     // injected into the Basic-metrics group after "Innings" below.
     const numericMetrics = eligibleMetrics(ns, s.formats).filter((m) => m.kind !== "position");
-    const { basic, dismissal, advanced } = partitionFilterMetrics(numericMetrics);
+    const { basic, dismissal, fielding, impact, advanced } = partitionFilterMetrics(numericMetrics);
     // A singleton already showing is disabled in every group's dropdown (at most
     // one each); presence re-enables it the moment its row is removed.
     const present = SINGLETON_TYPES.filter((t) => isPresent(t, s)).map((t) => t.key);
@@ -568,7 +568,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
       <optgroup label="Match">${singletonOpts(MATCH_ADD_ORDER)}</optgroup>
       <optgroup label="Basic metrics">${basicOpts()}</optgroup>
       ${advanced.length || vsTopOpt ? `<optgroup label="Advanced metrics">${vsTopOpt}${metricOpts(advanced)}</optgroup>` : ""}
-      ${dismissal.length ? `<optgroup label="Dismissal type">${dismissalOpts}</optgroup>` : ""}`;
+      ${dismissal.length ? `<optgroup label="Dismissal type">${dismissalOpts}</optgroup>` : ""}
+      ${fielding.length ? `<optgroup label="Fielding">${metricOpts(fielding)}</optgroup>` : ""}
+      ${impact.length ? `<optgroup label="Impact">${metricOpts(impact)}</optgroup>` : ""}`;
   }
 
   // ── Singleton rows: show/hide + editor sync ─────────────────────────────────

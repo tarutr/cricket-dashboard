@@ -656,6 +656,21 @@ function advancedToHaving(advanced, discipline, exprFn) {
   return parts.length > 1 ? `(${parts.join(topJoiner)})` : parts[0];
 }
 
+/** True if any ACTIVE advanced condition targets a Fielding/Impact metric
+ * (Wave 3: source "player_matches", excluding the JS-merged "matches"). Those
+ * metrics only exist in the query through the fielding_cte LEFT JOIN, and their
+ * sqlExpression is MAX(fielding_cte.<col>) — so buildQuery must add that join
+ * whenever a condition references one, even with no fielding COLUMN visible, or
+ * the emitted HAVING would reference an unjoined CTE and the query would fail. */
+function advancedReferencesFielding(advanced, discipline) {
+  return activeGroups(advanced).some((g) =>
+    g.conds.some((c) => {
+      const m = getMetric(c.metricKey, discipline);
+      return m && m.source === "player_matches" && m.key !== "matches";
+    })
+  );
+}
+
 /**
  * R. Pos. column support (task 5): a `WITH r_pos_cte AS (...)` fragment (the
  * "WITH " keyword itself is NOT included — the caller prepends it, since this
@@ -752,6 +767,25 @@ export function buildQuery(state, visibleColumns) {
     }
   }
 
+  // Fielding / Impact columns (Wave 3): source "player_matches", so EXCLUDED
+  // from inningsMetrics above (they aren't in the batting/bowling views). They
+  // are surfaced instead via the per-player `fielding_cte` LEFT JOIN wired into
+  // the FROM below; each sqlExpression is MAX(fielding_cte.<col>) — the value is
+  // constant across a player's group (the CTE is one row per player), so MAX
+  // just projects that constant, exactly like the R. Pos. join's MAX. The join
+  // never multiplies innings rows, so every existing aggregate above stays
+  // byte-identical. `wantsFielding` also lights up for a fielding STAT CONDITION
+  // with no visible fielding column, so the HAVING's MAX(fielding_cte.…) always
+  // has its CTE joined.
+  const fieldingMetrics = visibleColumns
+    .map((key) => getMetric(key, discipline))
+    .filter((m) => m && m.source === "player_matches" && m.key !== "matches");
+  for (const m of fieldingMetrics) {
+    selectParts.push(`${m.sqlExpression} AS ${m.key}`);
+  }
+  const wantsFielding =
+    fieldingMetrics.length > 0 || advancedReferencesFielding(state.advanced, discipline);
+
   const whereClauses = buildScopeClauses(state, {
     includeTeams: true,
     teamColumn: teamCol,
@@ -775,6 +809,36 @@ export function buildQuery(state, visibleColumns) {
   // decision 47a), so plain and Vs pin-handling can never diverge.
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
   const whereSql = whereWithPinExemption(whereClauses, buildCoreScopeClauses(state), idCol, pins);
+
+  // Fielding subquery (Wave 3): pre-aggregate player_matches to ONE row per
+  // player, over the SAME scope player_matches can express — core (gender/
+  // format/date/team-type) + team + event/venue + profile + R. Pos., pin-exempt
+  // — built with the EXACT options the "matches" secondary query uses below, so
+  // fielding and matches never diverge on scope. Opposition and matchup striker-
+  // position filters have no player_matches column, so (like "matches") they are
+  // not applied to the fielding totals — the one honesty gap, flagged for the
+  // owner. Only built when a fielding column is shown or a fielding stat
+  // condition is active; with neither, `sql` is byte-identical to before.
+  let fieldingCteSql = null;
+  if (wantsFielding) {
+    const fldFull = buildScopeClauses(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
+    const fldCore = buildCoreScopeClauses(state);
+    const fldExtra = fldFull.slice(fldCore.length);
+    if (state.search && state.search.trim()) {
+      fldExtra.push(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
+    }
+    const fldWhereSql = whereWithPinExemption([...fldCore, ...fldExtra], fldCore, "player_id", pins);
+    fieldingCteSql = [
+      "fielding_cte AS (",
+      "  SELECT player_id AS fld_player_id,",
+      "         SUM(catches) AS catches, SUM(stumpings) AS stumpings,",
+      "         SUM(run_outs) AS run_outs, SUM(player_of_match) AS player_of_match",
+      "  FROM player_matches",
+      `  WHERE ${fldWhereSql}`,
+      "  GROUP BY player_id",
+      ")",
+    ].join("\n");
+  }
 
   // decision 44c: the BASE query applies NO minimum-innings gate — a player
   // appears if they have any qualifying innings row (equivalent to min 1). The
@@ -808,10 +872,20 @@ export function buildQuery(state, visibleColumns) {
   // of that exact name post-JOIN, making every existing bare `${idCol}`
   // reference elsewhere in this SELECT/GROUP BY (batter_id AS id, GROUP BY
   // batter_id, ...) ambiguous. "pos_batter_id" can never collide.
-  const fromSql = wantsRPos ? `${view} LEFT JOIN r_pos_cte ON r_pos_cte.pos_batter_id = ${idCol}` : view;
+  // r_pos_cte and fielding_cte are each one row per player and LEFT JOINed on
+  // the id column, so neither multiplies the innings rows the aggregates run
+  // over. Both use collision-safe join keys (pos_batter_id / fld_player_id) so
+  // no bare `${idCol}` reference in this SELECT/GROUP BY becomes ambiguous.
+  const cteDefs = [];
+  if (wantsRPos) cteDefs.push(regularPositionCteSql(state));
+  if (wantsFielding) cteDefs.push(fieldingCteSql);
+
+  let fromSql = view;
+  if (wantsRPos) fromSql += ` LEFT JOIN r_pos_cte ON r_pos_cte.pos_batter_id = ${idCol}`;
+  if (wantsFielding) fromSql += ` LEFT JOIN fielding_cte ON fielding_cte.fld_player_id = ${idCol}`;
 
   const sql = [
-    ...(wantsRPos ? [`WITH ${regularPositionCteSql(state)}`] : []),
+    ...(cteDefs.length ? [`WITH ${cteDefs.join(",\n")}`] : []),
     `SELECT ${selectParts.join(", ")}`,
     `FROM ${fromSql}`,
     `WHERE ${whereSql}`,
@@ -2455,8 +2529,15 @@ export function mountTable(
     const state = store.get();
     const ns = effectiveDiscipline(state);
     const all = eligibleMetrics(ns, state.formats);
-    const basic = all.filter((m) => !m.isPhaseMetric && m.section !== "dismissal");
+    const basic = all.filter(
+      (m) => !m.isPhaseMetric && m.section !== "dismissal" && m.section !== "fielding" && m.section !== "impact"
+    );
     const dismissal = all.filter((m) => m.section === "dismissal");
+    // Fielding / Impact (Wave 3): their own sub-headers in BOTH views. Plain
+    // data-key checkboxes (same mechanics as Basic) — the generic
+    // [data-key] change handler below already wires them.
+    const fielding = all.filter((m) => m.section === "fielding");
+    const impact = all.filter((m) => m.section === "impact");
     const phase = all.filter((m) => m.isPhaseMetric);
     const visible = new Set(state.columns[ns]);
 
@@ -2505,7 +2586,12 @@ export function mountTable(
       dismissalHTML = section("Dismissals", dismissal);
     }
 
-    popover.innerHTML = section("Basic", basic) + dismissalHTML + section("Phase", phase);
+    popover.innerHTML =
+      section("Basic", basic) +
+      dismissalHTML +
+      section("Fielding", fielding) +
+      section("Impact", impact) +
+      section("Phase", phase);
     document.body.appendChild(popover);
     positionColumnsPopover(popover, anchor);
 

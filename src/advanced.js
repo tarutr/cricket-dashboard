@@ -209,25 +209,34 @@ export function isDismissalTypeMetric(metric) {
   return false;
 }
 
-/** "basic" | "dismissal" | "advanced" | null (null = removed from the dropdown). */
+/** "basic" | "dismissal" | "fielding" | "impact" | "advanced" | null
+ * (null = removed from the dropdown). Fielding/Impact (Wave 3) get their own
+ * groups — same structural, key-list-free rule as Dismissal type: driven off
+ * the metric's `section` so no key list can drift. */
 export function metricFilterGroup(metric) {
   if (isMetricRemovedFromFilters(metric)) return null;
   if (isDismissalTypeMetric(metric)) return "dismissal";
+  if (metric.section === "fielding") return "fielding";
+  if (metric.section === "impact") return "impact";
   return BASIC_METRIC_KEYS.has(metric.key) ? "basic" : "advanced";
 }
 
-/** Partition an eligible-metrics list into { basic, dismissal, advanced },
- * dropping the removed (dismissal-%) ones. Preserves catalogue order within
- * each group. */
+/** Partition an eligible-metrics list into
+ * { basic, dismissal, fielding, impact, advanced }, dropping the removed
+ * (dismissal-%) ones. Preserves catalogue order within each group. */
 export function partitionFilterMetrics(metrics) {
   const basic = [];
   const dismissal = [];
+  const fielding = [];
+  const impact = [];
   const advanced = [];
   for (const m of metrics) {
     const g = metricFilterGroup(m);
     if (g === "basic") basic.push(m);
     else if (g === "dismissal") dismissal.push(m);
+    else if (g === "fielding") fielding.push(m);
+    else if (g === "impact") impact.push(m);
     else if (g === "advanced") advanced.push(m);
   }
-  return { basic, dismissal, advanced };
+  return { basic, dismissal, fielding, impact, advanced };
 }

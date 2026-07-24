@@ -25,11 +25,19 @@
 //   Therefore boundary balls == fours_hit + sixes_hit (batting) and
 //   fours_conceded + sixes_conceded (bowling). We must NOT re-derive it.
 //
-// EXCEPTION: metrics with `source: "player_matches"` (only `matches`) cannot be
-// computed from the innings views (a player may appear in a match without batting
-// or bowling). They are computed in a SEPARATE grouped query over the
-// `player_matches` view with the SAME match-level filters, then joined on
-// player_id by the table builder.
+// EXCEPTION: metrics with `source: "player_matches"` cannot be computed from the
+// innings views (a player may appear in a match without batting or bowling), so
+// they read the `player_matches` view instead. Two shapes:
+//   • `matches` — a SEPARATE grouped query over player_matches with the SAME
+//     match-level filters, joined on player_id in JS by the table builder.
+//   • Fielding / Impact (Wave 3: catches / stumpings / run_outs /
+//     dismissals_effected / player_of_match) — surfaced IN the main sql: buildQuery
+//     LEFT JOINs a per-player pre-aggregated `fielding_cte` (one row per player,
+//     SUM over the same scope) onto the batting/bowling GROUP BY, so their
+//     `sqlExpression` is `MAX(fielding_cte.<col>)` — a constant-per-group value
+//     (the join never multiplies innings rows, so existing aggregates are
+//     byte-identical). Living in the main sql lets them also drive HAVING (stat
+//     conditions) and the graph pool, which `matches` cannot.
 //
 // ── Ratio safety (SPEC §5.3) ──────────────────────────────────────────────────
 // EVERY denominator is wrapped in NULLIF(<d>, 0) so division by zero yields SQL
@@ -1065,6 +1073,51 @@ const BOWLING_METRICS = [
     kind: "total",
   },
 ];
+
+// ── Fielding + Impact (Wave 3) ──────────────────────────────────────────────
+// Player-level fielding (catches / stumpings / run-outs / dismissals effected)
+// and match impact (Player-of-the-Match count). NOT a batting or bowling stat —
+// they aggregate the `player_matches` view (per (match, player) counts, derived
+// in export_parquet.py from the raw wickets/wicket_fielders/deliveries tables).
+// buildQuery (src/table.js) LEFT JOINs a per-player pre-aggregated `fielding_cte`
+// (SUM over the same scope, ONE row per player) onto the batting/bowling GROUP
+// BY, so each value is constant across a player's group and projected with MAX()
+// — the same shape as the R. Pos. join. Because the CTE is one row per player,
+// the join never multiplies innings rows → every existing aggregate stays
+// byte-identical. Defined once and pushed into BOTH disciplines (owner:
+// "available in BOTH the batting and bowling leaderboards"). `section`
+// "fielding"/"impact" places them under those sub-headers in the column picker
+// and the "+ Add condition…" list; higherIsBetter true (more dismissals /
+// awards ranks better).
+const FIELDING_METRIC_SPECS = [
+  { key: "catches", label: "Catches", shortLabel: "Ct", section: "fielding",
+    sqlExpression: "MAX(fielding_cte.catches)" },
+  { key: "stumpings", label: "Stumpings", shortLabel: "St", section: "fielding",
+    sqlExpression: "MAX(fielding_cte.stumpings)" },
+  { key: "run_outs", label: "Run-outs", shortLabel: "RO", section: "fielding",
+    sqlExpression: "MAX(fielding_cte.run_outs)" },
+  { key: "dismissals_effected", label: "Dismissals Effected", shortLabel: "Dis Eff", section: "fielding",
+    sqlExpression: "MAX(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs)" },
+  { key: "player_of_match", label: "Player of the Match", shortLabel: "PoM", section: "impact",
+    sqlExpression: "MAX(fielding_cte.player_of_match)" },
+];
+for (const disc of ["batting", "bowling"]) {
+  for (const f of FIELDING_METRIC_SPECS) {
+    (disc === "batting" ? BATTING_METRICS : BOWLING_METRICS).push({
+      key: f.key,
+      label: f.label,
+      shortLabel: f.shortLabel,
+      discipline: disc,
+      source: "player_matches",
+      section: f.section,
+      sqlExpression: f.sqlExpression,
+      higherIsBetter: true, format: "int",
+      isPhaseMetric: null, zeroIsData: true,
+      additive: true,
+      kind: "total",
+    });
+  }
+}
 
 // ── Matchups (D4 R3) ─────────────────────────────────────────────────────────
 // Batter-vs-bowling-style and bowler-vs-batting-hand splits. Base tables are
