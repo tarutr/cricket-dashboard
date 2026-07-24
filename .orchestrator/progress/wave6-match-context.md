@@ -26,5 +26,25 @@ Branch: polish-b1-mechanical. Owner-approved design: `.orchestrator/wave6-design
   Implemented the raw event_stage multi-select (fully correct) + a keyword-based Knockout
   convenience; the exact group/knockout taxonomy needs owner confirmation.
 
-## Status
-- (in progress)
+## Status — COMPLETE (committed 293f575, wip)
+Files: export_parquet.py (sql_matches + run_gates oracle), src/state.js, src/filters.js,
+src/table.js, src/drawer.js, src/drawerInnings.js, src/pills.js. Progress note here.
+config.js was TEMPORARILY pointed at local /tmp/export_w6 data for the browser boot test,
+then REVERTED to R2 (not committed).
+
+### Verified
+- Byte-identical matches.parquet 14 shared cols (EXCEPT both ways = 0, row order preserved);
+  new schema = 27 cols. Other 8 parquets byte-identical vs baseline (HEAD) export.
+- Emitted buildQuery/buildMatchupQuery SQL byte-identical to HEAD across 8 states when NO
+  context filter active (node harness diff = IDENTICAL).
+- Data oracle (gates PASS): is_super_over==108; match_winner==winner (regulation),
+  ∈teams (super over), NULL (true tie/draw/no-result); team_batting_first==innings-0; season present.
+- Per-filter independent DuckDB recompute (batting+bowling+matchup): won/lost/knockout/exclDL/
+  toss-won+bat/batted-first/bowled-first/won-or-tied/super-over/matches-col — ALL 15 PASS.
+- Anchors reproduce: 2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34 / Bumrah vs RHB
+  pos1-2 27·177·9. Reproduced again LIVE in-browser.
+- Browser: 0 console errors; "Match context" group + 6 filters in both Stats & Graph pickers;
+  applied Result=Won live -> 1,998 rows, pill shows, SA Yadav -> 48·1277 (won-only). matches.parquet
+  269,694 -> 409,732 bytes (+140KB).
+
+### Flag: "Knockout" shortcut taxonomy needs owner confirmation (see report).
