@@ -48,6 +48,29 @@ charts stay byte-identical.
   body == buildQuery's fielding_cte body (identical string).
 - `node --check` src/table.js + src/graph/charts.js OK.
 
-## Pending: browser verification (localhost:8000, config-override to local parquet
-with fielding_events) — Catches/PoM bar render + value match vs Stats table; a
-fielding scatter; a non-fielding chart unchanged; 0 console errors.
+## Browser verification — DONE (localhost:8000; local parquet w/ fielding_events
+built via scratchpad DB copy + build_profiles.py → export_parquet.py --out /tmp/gfix;
+config.js DATA_BASE_URL temporarily → /gfix_data/, REVERTED after). 0 console
+messages (not just 0 errors) throughout.
+- Anchors intact: 2,813 players; Karanbir 2,454; SA Yadav 60/1,544/29.13/150.34;
+  Waseem 1,978. (query builders unchanged — confirmed on screen.)
+- Independent DuckDB recompute over the `fielding` view (hand-written, NOT via
+  buildQuery), anchor scope Men/T20/Intl 2023-07-01..2026-07-02: top catchers
+  Ahmad Ramdoni 52 / Waseem 51 / Muniandy 47 / Liton Das 40.
+- fetchSelectedPlayerMetrics (the fixed fn) for those ids: catches 52/51/47/40 ==
+  independent; dismissals_effected 79/56/50/61 == independent; player_of_match
+  1/8/0/3 == independent; runs alongside (scatter case) works.
+- Stats table Catches column: Waseem 51 (== chart == independent).
+- UI: Catches BAR renders (15 most-capped); all 15 plotted values == independent
+  recompute by name (JC Buttler 33, Q de Kock 21, GJ Maxwell 20 … V Kohli 2,
+  RA Jadeja 1). Player-of-Match BAR renders; all values == independent. Runs×Catches
+  SCATTER renders (fielding on Y); 60 pts, maxCatches 40 (Liton Das), maxRuns 1691
+  (S Raza). Non-fielding Runs BAR renders; all 15 values == independent recompute.
+- node --check src/table.js + src/graph/charts.js OK.
+
+## Status: COMPLETE. Committed wip cf48fff on polish-b1-mechanical. No push/merge.
+Sibling fetch paths audited: only fetchSelectedPlayerMetrics had the broken
+topology; fetchWindowMetric/benchmark.js/players.js seed all route through
+buildQuery (CTEs for free); timeseries excludes fielding (source!="innings");
+grouped-bars only offers innings-source phase families so fielding never reaches
+it (my change is a no-op there).
