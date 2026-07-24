@@ -46,6 +46,8 @@ import {
   TOSS_RESULT_OPTIONS,
   TOSS_DECISION_OPTIONS,
   INNINGS_ORDER_OPTIONS,
+  METHOD_NONE,
+  methodOptionLabel,
 } from "./state.js";
 import { searchTeams, searchEvents, searchVenues, searchEventSeasons } from "./playerData.js";
 import { query } from "./db.js";
@@ -379,11 +381,12 @@ export function mountFieldingPhase(container, store, onChange, opts = {}) {
 // the fielding slices, they have no matchup gate). Four are fixed-vocabulary
 // checkbox multi-selects over a TOP-LEVEL state array (result / tossResult /
 // tossDecision / inningsOrder); Stage is a scope-loaded checkbox list plus a
-// "Knockout" convenience button; Method is a single boolean toggle
-// (state.excludeMethod). Each is the same self-contained `{ sync }` controller
-// as the pickers above and slots into a singleton row in drawer.js. None writes
-// anything but its own state key, so the query stays byte-identical until a value
-// is set (see filters.js buildMatchContextClauses).
+// "Knockout" convenience button; Rain-affected matches (state.method, FIX 3) is a
+// scope-loaded method multi-select ("Not affected" + the distinct methods).
+// Each is the same self-contained `{ sync }` controller as the pickers above and
+// slots into a singleton row in drawer.js. None writes anything but its own state
+// key, so the query stays byte-identical until a value is set (see filters.js
+// buildMatchContextClauses).
 
 /** Short toggle summary for a token multi-select: 0 → anyLabel; 1 → that
  * option's label; >1 → "N selected". */
@@ -491,21 +494,66 @@ export function mountInningsOrder(container, store, onChange, opts = {}) {
 // scope-reactive picker is the next task); the QUERY is unaffected by which
 // options are shown (it applies `event_stage IN (picked)` regardless).
 //
-// KNOCKOUT — FLAGGED JUDGEMENT CALL: the design says "the non-group stages",
-// but `event_stage` is free text with ~53 values (Final, Semi Final, Qualifier,
-// Eliminator, 3rd Place Play-Off, … but also round-robin "Super League / Super
-// Eight / Super Four / First Round" and stray data-error 'T20'/'ODI'). There is
-// no owner-confirmed group/knockout taxonomy, so "Knockout" here selects the
-// in-scope stages that match a KNOCKOUT keyword and are NOT a group/round-robin
-// stage. This is a convenience only — the checkboxes give full manual control —
-// and the exact taxonomy is reported for owner confirmation.
-const KNOCKOUT_RE = /final|semi[-\s]?final|quarter[-\s]?final|elimin|qualifier|play[-\s]?off|challenger|knockout/i;
-const GROUP_RE = /group|super\s?league|super\s?six|super\s?ten|super\s?10|super\s?eight|super\s?four|super\s?three|super\s?12|super\s?twelve|first\s?round|round\s?robin|preliminary/i;
+// KNOCKOUT — EXPLICIT VETTED LIST (FIX 1): the "Knockout games" button used to
+// classify stages with a keyword regex, which was brittle against `event_stage`
+// being free text. It now selects the in-scope stages present in this
+// owner-vetted, exhaustive set of the 42 knockout `event_stage` values (every
+// distinct knockout value in the current data; cross-checked against the events).
+// The remaining 11 distinct values are deliberately EXCLUDED — group/round-robin
+// stages (Super League / Super Sixes / Super 10 / Super Eight / Super Four /
+// Super Three / First Round / Group Stage / Qualifying Group) and two data-error
+// stray values ('T20' / 'ODI'). Kept as a clearly-named constant Set so a future
+// name-collapse (e.g. folding the "Semi Final" / "Semi-Final" / "Semi-final"
+// casing variants into one) can remap membership in one place.
+const KNOCKOUT_STAGES = new Set([
+  "Final",
+  "Semi Final",
+  "Quarter Final",
+  "Eliminator",
+  "3rd Place Play-Off",
+  "Qualifier 2",
+  "Qualifier 1",
+  "5th Place Play-Off",
+  "7th Place Play-Off",
+  "Semi-Final",
+  "Qualifier",
+  "Challenger",
+  "Knockout",
+  "Play-off",
+  "Preliminary Final",
+  "Quarter-Final",
+  "Preliminary Quarter Final",
+  "Quarter-final",
+  "Semi-final",
+  "4th Place Play-Off",
+  "9th Place Play-Off",
+  "Elimination Final",
+  "Play-Off",
+  "Preliminary quarter-final",
+  "Qualifier 3",
+  "3rd Place Play-off",
+  "Play-off Semi-Final",
+  "Qualifying Play-off",
+  "Trophy Semi Final",
+  "11th Place Play-Off",
+  "13th Place Play-Off",
+  "15th Place Play-Off",
+  "5th Place Play-Off Semi Final",
+  "Qualifier 4",
+  "Qualifying Play-off Semi-Final",
+  "Race to the Final",
+  "Shield 3rd Place Play-Off",
+  "Shield Final",
+  "Shield Semi Final",
+  "Super League Final",
+  "Trophy 3rd Place Play-Off",
+  "Trophy Final",
+]);
 
-/** A stage value counts as "knockout" for the shortcut iff it matches a knockout
- * keyword and is not a group/round-robin stage. */
+/** A stage value counts as "knockout" for the shortcut iff it is in the vetted
+ * KNOCKOUT_STAGES set. */
 function isKnockoutStage(stage) {
-  return KNOCKOUT_RE.test(stage) && !GROUP_RE.test(stage);
+  return KNOCKOUT_STAGES.has(stage);
 }
 
 /** Mount the Stage picker (state.stage). `embedded` suppresses the outer label.
@@ -624,25 +672,129 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
   return { sync };
 }
 
-/** Method filter — single "Exclude D/L & method-decided" toggle (state.excludeMethod).
- * `embedded` accepted for call-site parity. Returns `{ sync }`. */
+// ── Rain-affected matches picker (state.method) ─────────────────────────────
+// FIX 3: replaces the old single "Exclude D/L & method-decided" boolean toggle
+// with a full multi-select mirroring the Stage picker's mechanics. Options are
+// loaded from `matches` (gender-scoped, like the Stage path) as the distinct
+// non-null `method` values present (D/L / VJD / Awarded / Lost fewer wickets),
+// PLUS a leading "Not affected" option (the METHOD_NONE sentinel) standing for
+// method IS NULL. Empty selection = inactive (query byte-identical). Once a value
+// is picked the sole remaining checked box is disabled (min-one guard, like the
+// Format dropdown) — the row/pill × is how the whole filter is cleared.
+
+/** Mount the Rain-affected-matches picker (state.method). `embedded` suppresses
+ * the outer label. Returns `{ sync }`. */
 export function mountMethod(container, store, onChange, { embedded = false } = {}) {
-  void embedded;
+  const get = () => store.get().method || [];
+  const set = (vals) => store.set({ method: vals });
+
   container.innerHTML = `
     <div class="filter-group filter-group--positions" data-role="mc-group">
-      <label class="dropdown__item mc-method-row">
-        <input type="checkbox" data-role="mc-exclude-method" />
-        <span>Exclude D/L &amp; method-decided</span>
-      </label>
+      ${embedded ? "" : `<span class="filter-label">Rain-affected matches</span>`}
+      <div class="dropdown" data-role="mc-dropdown">
+        <button type="button" class="select dropdown__toggle" data-role="mc-toggle" aria-haspopup="true" aria-expanded="false">All matches</button>
+        <div class="dropdown__panel" data-role="mc-panel" hidden>
+          <div class="dropdown__list" data-role="mc-list"><p class="profile-note">Loading methods…</p></div>
+        </div>
+      </div>
     </div>`;
-  const cb = container.querySelector('[data-role="mc-exclude-method"]');
-  cb.addEventListener("change", () => {
-    store.set({ excludeMethod: cb.checked });
-    onChange();
-  });
-  function sync() {
-    cb.checked = store.get().excludeMethod === true;
+
+  const els = {
+    toggle: container.querySelector('[data-role="mc-toggle"]'),
+    panel: container.querySelector('[data-role="mc-panel"]'),
+    list: container.querySelector('[data-role="mc-list"]'),
+  };
+
+  let methodOptions = null; // string[] of the raw non-null methods in scope; null until loaded
+  let loadedGender = null;
+  let loading = false;
+
+  const updateLabel = () => {
+    const vals = get();
+    els.toggle.textContent =
+      vals.length === 0
+        ? "All matches"
+        : vals.length === 1
+        ? methodOptionLabel(vals[0])
+        : `${vals.length} selected`;
+  };
+
+  wirePortalDropdown(els.toggle, els.panel);
+
+  function renderList() {
+    if (methodOptions === null) {
+      els.list.innerHTML = `<p class="profile-note">Loading methods…</p>`;
+      return;
+    }
+    // The "Not affected" sentinel (method IS NULL) always leads; the real methods
+    // (if any in scope) follow in the order the query returned them.
+    const opts = [METHOD_NONE, ...methodOptions];
+    const selected = new Set(get());
+    const sole = selected.size === 1; // min-one guard: don't let the last box be unchecked here
+    els.list.innerHTML = opts
+      .map((v) => {
+        const isChecked = selected.has(v);
+        const disabled = isChecked && sole;
+        return `<label class="dropdown__item${disabled ? " is-disabled" : ""}">
+          <input type="checkbox" data-mc-value="${escAttr(v)}" ${isChecked ? "checked" : ""} ${disabled ? "disabled" : ""} ${
+          disabled ? 'title="At least one method must stay selected — use the × to clear"' : ""
+        } />
+          <span>${escHtml(methodOptionLabel(v))}</span>
+        </label>`;
+      })
+      .join("");
+    els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const value = cb.dataset.mcValue;
+        const current = get().slice();
+        const idx = current.indexOf(value);
+        if (cb.checked) {
+          if (idx === -1) current.push(value);
+        } else if (idx !== -1) {
+          if (current.length <= 1) {
+            cb.checked = true; // defensive: the disabled attribute should already prevent this
+            return;
+          }
+          current.splice(idx, 1);
+        }
+        set(current);
+        updateLabel();
+        renderList(); // re-render so the min-one guard's disabled state tracks the new count
+        onChange();
+      });
+    });
   }
+
+  async function ensureLoaded() {
+    const gender = store.get().gender;
+    if (loadedGender === gender || loading) return;
+    loading = true;
+    try {
+      const { rows } = await query(
+        `SELECT DISTINCT method AS m FROM matches WHERE method IS NOT NULL AND gender = '${String(gender).replace(
+          /'/g,
+          "''"
+        )}' ORDER BY method`
+      );
+      methodOptions = rows.map((r) => r.m);
+      loadedGender = gender;
+    } catch (e) {
+      methodOptions = null; // retry on a later sync
+    }
+    loading = false;
+    renderList();
+  }
+
+  function sync() {
+    updateLabel();
+    if (loadedGender !== store.get().gender) {
+      methodOptions = null;
+      ensureLoaded();
+    } else {
+      renderList();
+    }
+  }
+
   sync();
   return { sync };
 }

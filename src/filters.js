@@ -22,6 +22,7 @@ import {
   eventFilterActive,
   anyEventSeasonNarrowing,
   venueFilterActive,
+  METHOD_NONE,
   escSql as esc,
 } from "./state.js";
 
@@ -358,9 +359,20 @@ export function buildMatchContextClauses(state, rowTeamCol) {
     clauses.push(`${A}.event_stage IN (${st.map((s) => `'${esc(s)}'`).join(", ")})`);
   }
 
-  // 5b. Method: keep only matches NOT decided by D/L / VJD / any method (method IS NULL).
-  if (state.excludeMethod === true) {
-    clauses.push(`${A}.method IS NULL`);
+  // 5b. Rain-affected matches (FIX 3): a multi-select over the distinct non-null
+  //     `method` values (D/L / VJD / Awarded / Lost fewer wickets) PLUS a "Not
+  //     affected" sentinel (METHOD_NONE) standing for method IS NULL. Emit the
+  //     IN(...) disjunct only when ≥1 real method is picked, and the IS NULL
+  //     disjunct only when the sentinel is picked; OR them together when both
+  //     are present. Empty selection contributes nothing (byte-identical).
+  const methods = state.method || [];
+  if (methods.length) {
+    const reals = methods.filter((m) => m !== METHOD_NONE);
+    const wantsNone = methods.includes(METHOD_NONE);
+    const parts = [];
+    if (reals.length) parts.push(`${A}.method IN (${reals.map((m) => `'${esc(m)}'`).join(", ")})`);
+    if (wantsNone) parts.push(`${A}.method IS NULL`);
+    if (parts.length) clauses.push(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`);
   }
 
   return clauses;
@@ -722,7 +734,12 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
       // selection must not silently survive into a scope where it no longer
       // occurs. Profile filters are format-independent, so (like team-type)
       // they are intentionally kept.
-      store.set({ formats: [...set], teams: [], event: [], venue: [], opposition: [], eventSeasons: {} });
+      // Wave 6 close-out (FIX 2): the Stage option list is scope-specific too, so
+      // a format switch clears state.stage alongside event/eventSeasons — a stale
+      // stage selection makes no sense in a scope where it may not occur. Only
+      // `stage` among the match-context filters is scope-dependent; result/toss/
+      // innings/method are not, so they are left untouched.
+      store.set({ formats: [...set], teams: [], event: [], venue: [], opposition: [], eventSeasons: {}, stage: [] });
       syncFormatDropdown();
       if (onFormatsChanged) onFormatsChanged();
       onChange();
@@ -851,6 +868,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
       venue: [],
       opposition: [],
       eventSeasons: {}, // Wave 6 pt2: drop any season narrowing with the cleared event picks
+      stage: [], // Wave 6 close-out (FIX 2): the Stage option list is gender-scoped, so drop stale picks
     });
     render();
     onChange();

@@ -139,13 +139,13 @@ const SINGLETON_TYPES = [
   // the MATCH's context. Both genders; work in batting, bowling AND matchup views
   // (no matchup gate), so — unlike the fielding slices — isPresent has no Vs
   // carve-out for them. They write their own top-level state key (result /
-  // tossResult / tossDecision / inningsOrder / stage) or the excludeMethod boolean.
+  // tossResult / tossDecision / inningsOrder / stage / method).
   { key: "mc_result", label: "Result", group: "Match context", menOnly: false },
   { key: "mc_toss_result", label: "Toss result", group: "Match context", menOnly: false },
   { key: "mc_toss_decision", label: "Toss decision", group: "Match context", menOnly: false },
   { key: "mc_innings_order", label: "Innings order", group: "Match context", menOnly: false },
   { key: "mc_stage", label: "Stage", group: "Match context", menOnly: false },
-  { key: "mc_method", label: "Rain / method", group: "Match context", menOnly: false },
+  { key: "mc_method", label: "Rain-affected matches", group: "Match context", menOnly: false },
 ];
 
 // Dropdown OPTION order per group (R5 Wave 1a, item 7; "bowling" re-added R5
@@ -493,7 +493,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
       case "mc_toss_decision": return (s.tossDecision || []).length > 0;
       case "mc_innings_order": return (s.inningsOrder || []).length > 0;
       case "mc_stage": return (s.stage || []).length > 0;
-      case "mc_method": return s.excludeMethod === true;
+      case "mc_method": return (s.method || []).length > 0;
       default: return false;
     }
   }
@@ -532,7 +532,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
       case "mc_toss_decision": store.set({ tossDecision: [] }); break;
       case "mc_innings_order": store.set({ inningsOrder: [] }); break;
       case "mc_stage": store.set({ stage: [] }); break;
-      case "mc_method": store.set({ excludeMethod: false }); break;
+      case "mc_method": store.set({ method: [] }); break;
     }
   }
 

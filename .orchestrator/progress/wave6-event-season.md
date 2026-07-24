@@ -37,3 +37,31 @@ Branch: polish-b1-mechanical  ·  Status: COMPLETE (verified on localhost, ancho
   2026-07-18). Pre-existing toolbar/popup asymmetry (affects event/venue/teams too) — NOT reversed.
 - App player count runs ~2-3 above raw COUNT(DISTINCT batter_id) (pre-existing app count definition;
   per-player aggregates match exactly). Baseline anchor 2,813 reproduces in-app exactly.
+
+## Close-out — Wave 6 four match-context fixes (COMPLETE; anchors held)
+All additive; query byte-identical when no match-context filter is active. Verified on localhost
+with the local Wave-6 export in `data/export/` (config override pointed there, then REVERTED to R2).
+
+- FIX 1 — Knockout button: `drawerInnings.js` KNOCKOUT_RE/GROUP_RE/isKnockoutStage replaced by an
+  explicit 42-value `KNOCKOUT_STAGES` Set (owner-vetted). Independent DuckDB check: the 42-set
+  covers exactly the 42 knockout event_stage values in the data (0 absent) and the 11 excluded are
+  precisely the group/junk list. Men scope: button selects 33 of 40 stages on screen (7 group ones
+  stay off) — matches the raw split.
+- FIX 2 — `filters.js`: `stage: []` added to the format-change and gender-change clear handlers
+  (alongside eventSeasons). Verified via the real mountFilters handlers: format/gender change clears
+  stage → []; result/toss/innings/method left untouched (control passed).
+- FIX 3 — `state.excludeMethod` boolean → `state.method: string[]` multi-select ("Rain-affected
+  matches"). METHOD_NONE = "(not affected)" sentinel (state.js) = method IS NULL. Clause in
+  filters.js emits `IN(...)` for real methods, `IS NULL` for the sentinel, OR'd when both. UI renders
+  "Not affected / Awarded / D/L / Lost fewer wickets / VJD" for men (gender-scoped). Pill "Rain
+  method: D/L" / "N methods". SA Yadav split verified: Not-affected 58/1462 + D/L 2/82 = 60/1544.
+- FIX 4 — `graph/charts.js` fetchSelectedPlayerMetrics plain branch now appends matchContextJoinSql +
+  buildMatchContextClauses (as table.js does). Verified: SA Yadav graph runs 1544 (baseline) → 1277
+  (Result=Won) → 82 (method=D/L); Won recompute from raw = 1277 runs / 815 balls / SR 156.69 (exact).
+
+Byte-identical proof: node harness diffed buildQuery/buildMatchupQuery + the graph fetch SQL, HEAD vs
+working tree, across batting/bowling/matchup with no context filter → IDENTICAL. Anchors reproduced
+in-app: 2,813 / Karanbir 2,454 / SA Yadav 60·1544·29.13·150.34. 0 console errors. Files touched:
+state.js, filters.js, table.js (serializeQueryState key rename only), drawer.js, drawerInnings.js,
+pills.js, graph/charts.js. Concern flagged in report: FIX 3 min-one guard + "Awarded"/"Lost fewer
+wickets" inclusion.

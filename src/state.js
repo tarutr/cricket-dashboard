@@ -329,6 +329,22 @@ export const INNINGS_ORDER_OPTIONS = [
   { value: "second", label: "Bowled first" },
 ];
 
+// Rain-affected matches (Wave 6 close-out, FIX 3): the method filter is a
+// multi-select over the distinct non-null `method` values in scope (D/L / VJD /
+// Awarded / Lost fewer wickets), PLUS a leading "Not affected" option standing
+// for `method IS NULL` (matches decided by regular play). The stored array holds
+// raw method strings and/or this single sentinel; empty = inactive (no narrowing
+// → query byte-identical). METHOD_NONE is a clearly non-colliding sentinel — no
+// real method equals "(not affected)" — so buildMatchContextClauses can tell the
+// IS-NULL disjunct apart from the IN(...) list. "Awarded" / "Lost fewer wickets"
+// (5 matches total) aren't literally rain but are grouped here for completeness.
+export const METHOD_NONE = "(not affected)";
+/** Human label for a stored method value: the sentinel renders as "Not affected",
+ * every real method renders as itself. Shared by the picker, pills, and subtitle. */
+export function methodOptionLabel(value) {
+  return value === METHOD_NONE ? "Not affected" : value;
+}
+
 /** True if the Result filter (state.result) is narrowing the set. */
 export function resultFilterActive(state) {
   return Array.isArray(state.result) && state.result.length > 0;
@@ -349,9 +365,9 @@ export function inningsOrderFilterActive(state) {
 export function stageFilterActive(state) {
   return Array.isArray(state.stage) && state.stage.length > 0;
 }
-/** True if the "Exclude D/L & method-decided" toggle (state.excludeMethod) is on. */
+/** True if the Rain-affected-matches filter (state.method) is narrowing the set. */
 export function methodFilterActive(state) {
-  return state.excludeMethod === true;
+  return Array.isArray(state.method) && state.method.length > 0;
 }
 /** True if ANY match-context filter is active — the single gate table.js uses
  * to decide whether to LEFT JOIN `matches` and append the context clauses (and
@@ -509,7 +525,8 @@ export function createInitialState(maxMonth) {
     tossDecision: [],  // subset of {"bat","field"} — matches.toss_decision
     inningsOrder: [],  // subset of {"first","second"} — row team ==/<> team_batting_first
     stage: [],         // raw event_stage strings to keep (matches.event_stage IN (...))
-    excludeMethod: false, // "Exclude D/L & method-decided" — keep only method IS NULL
+    method: [],        // "Rain-affected matches" multi-select (FIX 3): raw method strings
+                       // (D/L / VJD / …) and/or the METHOD_NONE sentinel; empty = inactive
     matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)
     pinnedPlayers: [], // [{id, name}] — owner decision 46 task 3b: players ADDED to the table's
                    // result set regardless of the other leaderboard-only filters (team/opposition/
@@ -896,7 +913,8 @@ export function createStore(initial) {
     // Match-context filters (Wave 6): honest tokens, only when actually applied.
     // Values map to their human labels; multi-selects join with commas (they are
     // OR within a filter). These narrow the leaderboard query (buildQuery /
-    // buildMatchupQuery); the Graph Builder does not yet honor them (flagged).
+    // buildMatchupQuery) AND the Graph Builder (FIX 4 wired the context join +
+    // clauses into graph/charts.js's fetch).
     const labelsFor = (vals, opts) =>
       (vals || []).map((v) => opts.find((o) => o.value === v)?.label || v);
     if (resultFilterActive(s)) parts.push(`Result: ${labelsFor(s.result, RESULT_OPTIONS).join(", ")}`);
@@ -906,7 +924,13 @@ export function createStore(initial) {
     if (stageFilterActive(s)) {
       parts.push(s.stage.length <= 3 ? `Stage: ${s.stage.join(", ")}` : `Stage: ${s.stage.length} stages`);
     }
-    if (methodFilterActive(s)) parts.push("excl. D/L & method-decided");
+    if (methodFilterActive(s)) {
+      parts.push(
+        s.method.length <= 2
+          ? `Rain method: ${s.method.map(methodOptionLabel).join(", ")}`
+          : `Rain method: ${s.method.length} methods`
+      );
+    }
 
     // Stat conditions (decision 42): up to two list out in full, symbol-style
     // (matching the pills); beyond that the subtitle collapses to a count

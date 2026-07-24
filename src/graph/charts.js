@@ -17,9 +17,9 @@
 
 import { getMetric, hasMetricData, metricDisplayLabel } from "../metrics.js";
 import { query } from "../db.js";
-import { buildScopeClauses } from "../filters.js";
+import { buildScopeClauses, buildMatchContextClauses, matchContextJoinSql } from "../filters.js";
 import { buildQuery, buildFieldingCteSql, buildPomCteSql, isFieldingEventMetric, isPomMetric } from "../table.js";
-import { escSql as esc, matchupVsActive } from "../state.js";
+import { escSql as esc, matchupVsActive, matchContextActive } from "../state.js";
 
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
 const NAME_COL = { batting: "batter_name", bowling: "bowler_name" };
@@ -106,6 +106,19 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   });
   whereClauses.push(`${idCol} IN (${playerIds.map((id) => `'${esc(id)}'`).join(", ")})`);
 
+  // Match-context filters (Wave 6, FIX 4): the Graph Builder's scope line lists
+  // the active Result/Toss/Innings/Stage/Rain-method filters, so the charted
+  // numbers must actually honor them — wired in EXACTLY as table.js's buildQuery
+  // does (append matchContextJoinSql to the FROM, push buildMatchContextClauses
+  // comparing the row's own team column to the joined match fields). The matchup
+  // ("Vs") branch above already inherits these via buildMatchupQuery. With no
+  // context filter active `wantsMatchContext` is false and the SQL is
+  // byte-identical to before this change.
+  const wantsMatchContext = matchContextActive(state);
+  if (wantsMatchContext) {
+    for (const c of buildMatchContextClauses(state, teamCol)) whereClauses.push(c);
+  }
+
   // Fielding/Impact CTEs + LEFT JOINs (mirrors buildQuery's FROM assembly): each
   // CTE is one row per player joined on the id column, so it never multiplies
   // the innings rows the other aggregates run over.
@@ -114,6 +127,9 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   if (wantsPom) cteDefs.push(buildPomCteSql(state));
 
   let fromSql = view;
+  // Match-context 1:1 LEFT JOIN by match_id (added first so the mctx alias exists
+  // for the WHERE clauses above; one match per match_id, so no aggregate changes).
+  if (wantsMatchContext) fromSql += matchContextJoinSql(view);
   if (wantsFielding) fromSql += ` LEFT JOIN fielding_cte ON fielding_cte.fld_player_id = ${idCol}`;
   if (wantsPom) fromSql += ` LEFT JOIN pom_cte ON pom_cte.pom_player_id = ${idCol}`;
 

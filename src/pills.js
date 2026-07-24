@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsOrderFilterActive, stageFilterActive, methodFilterActive, RESULT_OPTIONS, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS, INNINGS_ORDER_OPTIONS } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsOrderFilterActive, stageFilterActive, methodFilterActive, methodOptionLabel, RESULT_OPTIONS, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS, INNINGS_ORDER_OPTIONS } from "./state.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
@@ -265,9 +265,9 @@ export function mountPills(
 
     // Match-context filters (Wave 6): one removable pill per active filter. Each
     // multi-select collapses into a single pill listing its picked labels (they
-    // are OR within the filter); ×/+ captures + restores the whole array (or the
-    // excludeMethod boolean). These narrow the leaderboard query (buildQuery /
-    // buildMatchupQuery); an active one is always "narrowing" in every view.
+    // are OR within the filter); ×/+ captures + restores the whole array. These
+    // narrow the leaderboard query (buildQuery / buildMatchupQuery); an active one
+    // is always "narrowing" in every view.
     const labelsFor = (vals, opts) => (vals || []).map((v) => opts.find((o) => o.value === v)?.label || v);
     if (resultFilterActive(s)) {
       const captured = [...s.result];
@@ -291,7 +291,12 @@ export function mountPills(
       pills.push({ key: "mc_stage", label, remove: () => store.set({ stage: [] }), restore: () => store.set({ stage: captured }) });
     }
     if (methodFilterActive(s)) {
-      pills.push({ key: "mc_method", label: "Excl. D/L & method-decided", remove: () => store.set({ excludeMethod: false }), restore: () => store.set({ excludeMethod: true }) });
+      const captured = [...s.method];
+      const label =
+        s.method.length === 1
+          ? `Rain method: ${methodOptionLabel(s.method[0])}`
+          : `Rain method: ${s.method.length} methods`;
+      pills.push({ key: "mc_method", label, remove: () => store.set({ method: [] }), restore: () => store.set({ method: captured }) });
     }
 
     // Fielding SLICE conditions (fielding rebuild): one pill per active slice,
