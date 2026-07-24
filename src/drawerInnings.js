@@ -900,7 +900,42 @@ function mountEventSeasons(container, store, onChange) {
     for (const r of rows) (grouped[r.event] = grouped[r.event] || []).push(r);
     optionsByEvent = grouped;
     loadedKey = key;
+    reconcileNarrowing(); // keep any narrowing honest against the freshly-loaded seasons
     render();
+  }
+
+  /** After a fresh load (scope OR selection changed), reconcile each event's
+   * season narrowing against the seasons NOW in scope: intersect (preserving the
+   * in-scope order), and collapse to "All" (drop the key) when the intersection
+   * is empty OR already covers every in-scope season. This is what keeps the
+   * picker honest when the date window shrinks while an event stays selected —
+   * e.g. narrowing to 2024, then a TOOLBAR date change to a 2026-only window
+   * (the toolbar date, unlike the popup date, does NOT clear the event): 2024
+   * falls out of scope, the group collapses to "All seasons", and the STATE
+   * matches (no stale `season IN ('2024')` that would silently return nothing).
+   * Only writes when something changed, so it converges (no store-churn loop). */
+  function reconcileNarrowing() {
+    const es = getES();
+    const events = store.get().event || [];
+    const next = { ...es };
+    let changed = false;
+    for (const e of events) {
+      const cur = es[e];
+      if (!Array.isArray(cur) || cur.length === 0) continue; // already "All"
+      const inScope = inScopeSeasons(e);
+      const kept = inScope.filter((sn) => cur.includes(sn)); // ∩, in-scope (desc) order
+      const isFull = inScope.length > 0 && kept.length >= inScope.length;
+      if (kept.length === 0 || isFull) {
+        if (e in next) {
+          delete next[e];
+          changed = true;
+        }
+      } else if (kept.length !== cur.length || kept.some((sn, i) => sn !== cur[i])) {
+        next[e] = kept;
+        changed = true;
+      }
+    }
+    if (changed) store.set({ eventSeasons: next });
   }
 
   function groupHTML(eventName) {
