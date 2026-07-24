@@ -18,7 +18,7 @@
 import { getMetric, hasMetricData, metricDisplayLabel } from "../metrics.js";
 import { query } from "../db.js";
 import { buildScopeClauses } from "../filters.js";
-import { buildQuery } from "../table.js";
+import { buildQuery, buildFieldingCteSql, buildPomCteSql, isFieldingEventMetric, isPomMetric } from "../table.js";
 import { escSql as esc, matchupVsActive } from "../state.js";
 
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
@@ -73,6 +73,23 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
     if (m.sortExpression) selectParts.push(`${m.sortExpression} AS ${m.key}__sort`);
   }
 
+  // Fielding-event (catches / stumpings / run_outs / dismissals_effected) and
+  // Impact (player_of_match) metrics are NOT columns on the batting/bowling
+  // view — they exist in the query ONLY through LEFT-JOINed CTEs, and their
+  // sqlExpression above is `MAX(fielding_cte.…)` / `MAX(pom_cte.…)`. So charting
+  // any of them needs the SAME fielding_cte / pom_cte that table.js's buildQuery
+  // builds for the Stats table, or the SELECT references an unjoined CTE and
+  // DuckDB throws a binder error (the bug this fixes). Detect the need with the
+  // SAME `source` predicates buildQuery uses, then attach the join via the
+  // SHARED builders (buildFieldingCteSql / buildPomCteSql, extracted from
+  // buildQuery) — so a fielding value charted here is byte-for-byte the value
+  // the Stats table shows for the same scope (identical CTE, identical scope
+  // clauses, pins read from state). With NO such metric selected, `cteDefs` is
+  // empty, no `WITH` is emitted and `fromSql` stays the bare view — the SQL is
+  // then byte-identical to before this change (non-fielding charts untouched).
+  const wantsFielding = metrics.some(isFieldingEventMetric);
+  const wantsPom = metrics.some(isPomMetric);
+
   // Opposition + batting-position filters (D4 Piece 3) apply here too — the
   // card's scope line describes them, so the charted numbers must honor them.
   // includePositions only for batting: the striker-position filter is
@@ -89,9 +106,21 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   });
   whereClauses.push(`${idCol} IN (${playerIds.map((id) => `'${esc(id)}'`).join(", ")})`);
 
+  // Fielding/Impact CTEs + LEFT JOINs (mirrors buildQuery's FROM assembly): each
+  // CTE is one row per player joined on the id column, so it never multiplies
+  // the innings rows the other aggregates run over.
+  const cteDefs = [];
+  if (wantsFielding) cteDefs.push(buildFieldingCteSql(state));
+  if (wantsPom) cteDefs.push(buildPomCteSql(state));
+
+  let fromSql = view;
+  if (wantsFielding) fromSql += ` LEFT JOIN fielding_cte ON fielding_cte.fld_player_id = ${idCol}`;
+  if (wantsPom) fromSql += ` LEFT JOIN pom_cte ON pom_cte.pom_player_id = ${idCol}`;
+
   const sql = [
+    ...(cteDefs.length ? [`WITH ${cteDefs.join(",\n")}`] : []),
     `SELECT ${selectParts.join(", ")}`,
-    `FROM ${view}`,
+    `FROM ${fromSql}`,
     `WHERE ${whereClauses.join(" AND ")}`,
     `GROUP BY ${idCol}, ${nameCol}`,
   ].join("\n");

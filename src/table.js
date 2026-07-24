@@ -671,11 +671,14 @@ function advancedReferencesMetric(advanced, discipline, pred) {
   );
 }
 /** Metrics sourced from the event-grain `fielding` view (catches/stumpings/
- * run_outs/dismissals_effected) — surfaced via the `fielding_cte` join. */
-const isFieldingEventMetric = (m) => m && m.source === "fielding_events";
+ * run_outs/dismissals_effected) — surfaced via the `fielding_cte` join.
+ * Exported so the Graph Builder's per-player fetch (graph/charts.js) detects
+ * the need for the fielding join with the IDENTICAL predicate buildQuery uses. */
+export const isFieldingEventMetric = (m) => m && m.source === "fielding_events";
 /** Impact metric(s) sourced from `player_matches` (player_of_match, NOT the
- * JS-merged `matches`) — surfaced via the parallel `pom_cte` join. */
-const isPomMetric = (m) => m && m.source === "player_matches" && m.key !== "matches";
+ * JS-merged `matches`) — surfaced via the parallel `pom_cte` join. Exported
+ * for the same graph-fetch reuse as isFieldingEventMetric. */
+export const isPomMetric = (m) => m && m.source === "player_matches" && m.key !== "matches";
 
 /** SQL WHERE predicates for the fielding SLICE conditions (fielding rebuild) —
  * the fielding metric's OWN dims, applied inside `fielding_cte` so the
@@ -700,6 +703,83 @@ export function buildFieldingSliceClauses(state) {
     clauses.push(`phase IN (${f.phases.map((p) => `'${esc(p)}'`).join(", ")})`);
   }
   return clauses;
+}
+
+/**
+ * Build the `fielding_cte` definition (the CTE body WITHOUT the leading
+ * "WITH " — the caller prepends/comma-joins it, exactly like regularPositionCteSql).
+ * One row per fielder over the EVENT-GRAIN `fielding` view, honoring the FULL
+ * leaderboard scope — core (gender/format/date/team-type) + team (fielding_team)
+ * + OPPOSITION + event/venue + profile, pin-exempt — PLUS the fielding SLICE
+ * conditions (dismissed-batter position / dismissal kind / phase), substitutes
+ * excluded. Pins are read from state (the same filter buildQuery applies) so a
+ * pinned player keeps their fielding numbers under the leaderboard-only filters.
+ *
+ * Extracted verbatim from buildQuery (was inline) so the Graph Builder's
+ * per-player fetch (graph/charts.js) can attach the IDENTICAL join when a
+ * fielding-event metric is charted — the CTE can never diverge between the Stats
+ * table and the graph. buildQuery's emitted SQL is byte-identical to before the
+ * extraction (verified by a node harness diff across every scenario).
+ */
+export function buildFieldingCteSql(state) {
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  const fieldingSliceClauses = buildFieldingSliceClauses(state);
+  const fldFull = buildScopeClauses(state, {
+    includeTeams: true,
+    teamColumn: "fielding_team",
+    idColumn: "fielder_id",
+    oppositionColumn: "opposition",
+  });
+  const fldCore = buildCoreScopeClauses(state);
+  const fldExtra = fldFull.slice(fldCore.length);
+  if (state.search && state.search.trim()) {
+    fldExtra.push(`fielder_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
+  }
+  const fldScopeSql = whereWithPinExemption([...fldCore, ...fldExtra], fldCore, "fielder_id", pins);
+  // substitute exclusion + slice conditions are AND'd OUTSIDE the pin
+  // exemption: they define WHAT is counted (like a phase column), so they apply
+  // to every fielder including pins — pins only bypass the "who/which match"
+  // scope above.
+  const fldTail = ["substitute IS NOT TRUE", ...fieldingSliceClauses];
+  return [
+    "fielding_cte AS (",
+    "  SELECT fielder_id AS fld_player_id,",
+    "         SUM(CASE WHEN kind IN ('caught','caught and bowled') THEN 1 ELSE 0 END) AS catches,",
+    "         SUM(CASE WHEN kind = 'stumped' THEN 1 ELSE 0 END) AS stumpings,",
+    "         SUM(CASE WHEN kind = 'run out' THEN 1 ELSE 0 END) AS run_outs",
+    "  FROM fielding",
+    `  WHERE ${[fldScopeSql, ...fldTail].join(" AND ")}`,
+    "  GROUP BY fielder_id",
+    ")",
+  ].join("\n");
+}
+
+/**
+ * Build the `pom_cte` definition (Player-of-the-Match, source player_matches) —
+ * same "CTE body without leading WITH" convention as buildFieldingCteSql. A
+ * whole-match award, so it stays on player_matches (which has no opposition/
+ * position column): scope is core + team + event/venue + profile + R. Pos.,
+ * pin-exempt — the SAME options the "matches" secondary query uses, so PoM and
+ * matches never diverge on scope. Extracted verbatim from buildQuery; buildQuery
+ * output stays byte-identical (verified).
+ */
+export function buildPomCteSql(state) {
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  const pomFull = buildScopeClauses(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
+  const pomCore = buildCoreScopeClauses(state);
+  const pomExtra = pomFull.slice(pomCore.length);
+  if (state.search && state.search.trim()) {
+    pomExtra.push(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
+  }
+  const pomWhereSql = whereWithPinExemption([...pomCore, ...pomExtra], pomCore, "player_id", pins);
+  return [
+    "pom_cte AS (",
+    "  SELECT player_id AS pom_player_id, SUM(player_of_match) AS player_of_match",
+    "  FROM player_matches",
+    `  WHERE ${pomWhereSql}`,
+    "  GROUP BY player_id",
+    ")",
+  ].join("\n");
 }
 
 /**
@@ -863,62 +943,19 @@ export function buildQuery(state, visibleColumns) {
   // excluded by default; the slice clauses (metric-definition refinements, not
   // "who to include") always apply, even to pins. Only built when a fielding
   // column is shown or a fielding stat condition is active; with neither, `sql`
-  // is byte-identical to before this wave.
-  const fieldingSliceClauses = buildFieldingSliceClauses(state);
+  // is byte-identical to before this wave. The CTE body is built by the shared
+  // buildFieldingCteSql() helper (extracted so graph/charts.js attaches the
+  // identical join) — same output as the former inline construction.
   let fieldingCteSql = null;
-  if (wantsFielding) {
-    const fldFull = buildScopeClauses(state, {
-      includeTeams: true,
-      teamColumn: "fielding_team",
-      idColumn: "fielder_id",
-      oppositionColumn: "opposition",
-    });
-    const fldCore = buildCoreScopeClauses(state);
-    const fldExtra = fldFull.slice(fldCore.length);
-    if (state.search && state.search.trim()) {
-      fldExtra.push(`fielder_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
-    }
-    const fldScopeSql = whereWithPinExemption([...fldCore, ...fldExtra], fldCore, "fielder_id", pins);
-    // substitute exclusion + slice conditions are AND'd OUTSIDE the pin
-    // exemption: they define WHAT is counted (like a phase column), so they apply
-    // to every fielder including pins — pins only bypass the "who/which match"
-    // scope above.
-    const fldTail = ["substitute IS NOT TRUE", ...fieldingSliceClauses];
-    fieldingCteSql = [
-      "fielding_cte AS (",
-      "  SELECT fielder_id AS fld_player_id,",
-      "         SUM(CASE WHEN kind IN ('caught','caught and bowled') THEN 1 ELSE 0 END) AS catches,",
-      "         SUM(CASE WHEN kind = 'stumped' THEN 1 ELSE 0 END) AS stumpings,",
-      "         SUM(CASE WHEN kind = 'run out' THEN 1 ELSE 0 END) AS run_outs",
-      "  FROM fielding",
-      `  WHERE ${[fldScopeSql, ...fldTail].join(" AND ")}`,
-      "  GROUP BY fielder_id",
-      ")",
-    ].join("\n");
-  }
+  if (wantsFielding) fieldingCteSql = buildFieldingCteSql(state);
 
   // Impact subquery (player_of_match): a whole-match award, so it stays on
   // player_matches (which has no opposition/position column). Same scope options
   // the "matches" secondary query uses below (core + team + event/venue + profile
-  // + R. Pos., pin-exempt), so PoM and matches never diverge on scope.
+  // + R. Pos., pin-exempt), so PoM and matches never diverge on scope. Built by
+  // the shared buildPomCteSql() helper (same output as the former inline block).
   let pomCteSql = null;
-  if (wantsPom) {
-    const pomFull = buildScopeClauses(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
-    const pomCore = buildCoreScopeClauses(state);
-    const pomExtra = pomFull.slice(pomCore.length);
-    if (state.search && state.search.trim()) {
-      pomExtra.push(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
-    }
-    const pomWhereSql = whereWithPinExemption([...pomCore, ...pomExtra], pomCore, "player_id", pins);
-    pomCteSql = [
-      "pom_cte AS (",
-      "  SELECT player_id AS pom_player_id, SUM(player_of_match) AS player_of_match",
-      "  FROM player_matches",
-      `  WHERE ${pomWhereSql}`,
-      "  GROUP BY player_id",
-      ")",
-    ].join("\n");
-  }
+  if (wantsPom) pomCteSql = buildPomCteSql(state);
 
   // decision 44c: the BASE query applies NO minimum-innings gate — a player
   // appears if they have any qualifying innings row (equivalent to min 1). The
