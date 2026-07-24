@@ -811,7 +811,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
       // buildScopeClauses' opposition gate), so clear those selections — a
       // selected IPL event must not silently survive a switch to International.
       // Profile filters are team-type-independent, so they're intentionally kept.
-      store.set({ teamType, teams: [], event: [], venue: [], opposition: [], eventSeasons: {} });
+      store.set({ teamType, teams: [], event: [], venue: [], opposition: [], eventSeasons: {}, stage: [] });
       syncTeamTypeDropdown();
       onChange();
     });
@@ -878,7 +878,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
     if (from > to) from = to;
     // A preset changes the date window → same scope-change vocab clear as a
     // manual date edit (see the From/To handlers, owner decision 2026-07-18).
-    store.set({ dateFrom: from, dateTo: to, teams: [], event: [], venue: [], opposition: [], eventSeasons: {} });
+    store.set({ dateFrom: from, dateTo: to, teams: [], event: [], venue: [], opposition: [], eventSeasons: {}, stage: [] });
     syncDateInputs();
     validateDate();
     onChange();
@@ -899,7 +899,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
       venue: [],
       opposition: [],
       eventSeasons: {}, // Wave 6 pt2: drop any season narrowing with the cleared event picks
-      stage: [], // Wave 6 close-out (FIX 2): the Stage option list is gender-scoped, so drop stale picks
+      stage: [], // Stage options are scope-dependent (all 4 dims, FIX C) → drop stale picks on any scope change (gender/format/team-type/date all clear stage)
     });
     render();
     onChange();
@@ -920,13 +920,13 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
     // Team/Event/Venue/opposition vocab picks on a window change, exactly as
     // gender/team-type/format do, so the full-scope (A9) option lists and any
     // selection stay consistent. Profile filters are date-independent, kept.
-    store.set({ dateFrom: els.dateFrom.value || null, teams: [], event: [], venue: [], opposition: [], eventSeasons: {} });
+    store.set({ dateFrom: els.dateFrom.value || null, teams: [], event: [], venue: [], opposition: [], eventSeasons: {}, stage: [] });
     els.datePresets.value = ""; // a manual edit no longer matches any preset — reset the label
     validateDate();
     onChange();
   });
   els.dateTo.addEventListener("change", () => {
-    store.set({ dateTo: els.dateTo.value || null, teams: [], event: [], venue: [], opposition: [], eventSeasons: {} }); // scope-change vocab clear (see dateFrom)
+    store.set({ dateTo: els.dateTo.value || null, teams: [], event: [], venue: [], opposition: [], eventSeasons: {}, stage: [] }); // scope-change vocab clear (see dateFrom)
     els.datePresets.value = ""; // a manual edit no longer matches any preset — reset the label
     validateDate();
     onChange();
