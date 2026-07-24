@@ -347,7 +347,22 @@ def sql_matches():
     # matches list all matches; super-over exclusion applies to stats rows.
     # The spec sorts by match_date then match_id; a match always has ordinary
     # innings, so keep all matches.
-    return """
+    #
+    # Wave 6 (match context, owner-approved design .orchestrator/wave6-design.md):
+    # ADDITIVE — the 14 pre-existing columns above stay byte-identical; the block
+    # below is appended so the browser can filter on match context (result / toss /
+    # innings order / stage / method) and, in a later task, the Event -> Season
+    # picker. Three DERIVED columns:
+    #   team_batting_first = the innings_number=0 batting_team for the match (the
+    #     authoritative "who batted first"). LEFT JOIN to innings (exactly one
+    #     innings-0 row per match; verified 0 duplicates, 0 super-over at innings 0;
+    #     1 match has no innings 0 -> NULL there, which is correct).
+    #   match_winner = winner (regulation) ELSE the parsed 'tie (X)' team (super
+    #     over) ELSE NULL (true tie / draw / no result). VERIFIED: `winner` and
+    #     `result_type` are mutually exclusive; all 108 'tie (X)' rows parse to a
+    #     team that is exactly team_1 or team_2. So a super-over WIN counts as a Win.
+    #   is_super_over = (result_type LIKE 'tie (%)') -> BOOLEAN (the 108 super overs).
+    return r"""
     SELECT
         m.match_id,
         m.match_type,
@@ -362,8 +377,33 @@ def sql_matches():
         m.team_1,
         m.team_2,
         m.winner,
-        m.result_type
+        m.result_type,
+        -- Wave 6 (ADDITIVE): raw match-context columns straight off `matches`.
+        m.toss_winner,
+        m.toss_decision,
+        m.result_margin,
+        m.result_margin_type,
+        m.method,
+        m.event_stage,
+        m.event_group,
+        m.event_match_number,
+        m.season,
+        m.season_year_start,
+        -- Wave 6 (ADDITIVE): derived columns (see the block comment above).
+        ibf.team_batting_first AS team_batting_first,
+        CASE
+            WHEN m.winner IS NOT NULL THEN m.winner
+            WHEN m.result_type LIKE 'tie (%)'
+                 THEN regexp_extract(m.result_type, '^tie \((.*)\)$', 1)
+            ELSE NULL
+        END AS match_winner,
+        (m.result_type LIKE 'tie (%)') AS is_super_over
     FROM matches m
+    LEFT JOIN (
+        SELECT match_id, batting_team AS team_batting_first
+        FROM innings
+        WHERE innings_number = 0
+    ) ibf ON ibf.match_id = m.match_id
     ORDER BY m.match_date_1, m.match_id
     """
 
@@ -3016,6 +3056,57 @@ def run_gates(con, out_dir):
     )
     log(f"  INFO  batting phase-dismissal shortfall vs dismissed flag: "
         f"T20/IT20={bat_dis_resid_t20}, ODI/ODM={bat_dis_resid_odi}")
+
+    # --- Wave 6: matches match-context columns (data oracle) ---
+    # These assert the additive columns + three derived columns in matches.parquet
+    # against an INDEPENDENT recompute over the source `matches` / `innings` tables
+    # (never the export's own SELECT shape).
+    m_p = paths["matches.parquet"]
+
+    # (a) is_super_over: exactly the 108 'tie (X)' rows, agreeing with the DB.
+    so_parquet = q(f"SELECT COUNT(*) FROM read_parquet('{m_p}') WHERE is_super_over")
+    so_db = q("SELECT COUNT(*) FROM matches WHERE result_type LIKE 'tie (%)'")
+    gate(so_parquet == so_db, "matches is_super_over count == source",
+         f"parquet {so_parquet} vs db {so_db}")
+
+    # (b) match_winner derivation:
+    #  - a regulation win (winner set) => match_winner == winner
+    reg_mismatch = q(
+        f"SELECT COUNT(*) FROM read_parquet('{m_p}') "
+        f"WHERE winner IS NOT NULL AND match_winner IS DISTINCT FROM winner"
+    )
+    gate(reg_mismatch == 0, "matches match_winner == winner for regulation results",
+         f"{reg_mismatch} mismatched rows")
+    #  - a super over => match_winner is a real team (∈ {team_1, team_2}), non-NULL
+    so_bad = q(
+        f"SELECT COUNT(*) FROM read_parquet('{m_p}') "
+        f"WHERE is_super_over AND (match_winner IS NULL OR match_winner NOT IN (team_1, team_2))"
+    )
+    gate(so_bad == 0, "matches match_winner ∈ teams for super overs",
+         f"{so_bad} super-over rows with a bad match_winner")
+    #  - a true tie / draw / no result => match_winner IS NULL
+    tie_bad = q(
+        f"SELECT COUNT(*) FROM read_parquet('{m_p}') "
+        f"WHERE result_type IN ('tie','draw','no result') AND match_winner IS NOT NULL"
+    )
+    gate(tie_bad == 0, "matches match_winner NULL for true tie/draw/no-result",
+         f"{tie_bad} rows with a non-NULL match_winner")
+
+    # (c) team_batting_first == the innings_number=0 batting_team (independent).
+    tbf_mismatch = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{m_p}') p
+            LEFT JOIN (SELECT match_id, batting_team FROM innings WHERE innings_number = 0) i
+              ON i.match_id = p.match_id
+            WHERE p.team_batting_first IS DISTINCT FROM i.batting_team"""
+    )
+    gate(tbf_mismatch == 0, "matches team_batting_first == innings-0 batting_team",
+         f"{tbf_mismatch} mismatched rows")
+
+    # (d) season present + queryable (for the later Event -> Season picker).
+    season_nulls = q(f"SELECT COUNT(*) FROM read_parquet('{m_p}') WHERE season IS NULL")
+    season_db_nulls = q("SELECT COUNT(*) FROM matches WHERE season IS NULL")
+    gate(season_nulls == season_db_nulls, "matches season NULL count == source",
+         f"parquet {season_nulls} vs db {season_db_nulls}")
 
     log("All structural / cross-check gates passed.")
 

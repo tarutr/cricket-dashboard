@@ -265,6 +265,81 @@ export const FIELDING_PHASE_OPTIONS = [
 /** Dismissed-batter positions offered by the fielding position slice (1–11). */
 export const FIELDING_POSITIONS = Array.from({ length: 11 }, (_, i) => i + 1);
 
+// ── Match-context filters (Wave 6, owner-approved design) ───────────────────
+// Five categorical WHERE filters that narrow the innings set by the MATCH's
+// context (result / toss / who batted first / tournament stage / rain-method),
+// grouped under "Match context" in the "+ Add condition…" picker and available
+// in batting, bowling AND matchup views. They are player-RELATIVE where the
+// design calls for it: the innings row's OWN team (batting_team for a batting
+// row, bowling_team for a bowling row; matchup rows carry both) is compared to
+// the match's derived match_winner / toss_winner / team_batting_first — so no
+// extra player join is needed. The query side lives in filters.js
+// (buildMatchContextClauses / matchContextJoinSql) and is wired into
+// table.js's buildQuery / buildMatchupQuery via a LEFT JOIN to `matches`; when
+// NONE of these is active the emitted SQL is byte-identical to before.
+//
+// Each value token below is the EXACT literal the clause builder tests; the
+// `value`s for Stage are raw `event_stage` strings supplied at run time.
+export const RESULT_OPTIONS = [
+  { value: "won", label: "Won" },
+  { value: "lost", label: "Lost" },
+  { value: "drawn", label: "Drawn" },
+  { value: "no_result", label: "No result" },
+  { value: "tied", label: "Tied" },
+  { value: "super_over", label: "Super Over" },
+];
+export const TOSS_RESULT_OPTIONS = [
+  { value: "won", label: "Won toss" },
+  { value: "lost", label: "Lost toss" },
+];
+export const TOSS_DECISION_OPTIONS = [
+  { value: "bat", label: "Chose to bat" },
+  { value: "field", label: "Chose to field" },
+];
+export const INNINGS_ORDER_OPTIONS = [
+  { value: "first", label: "Batted first" },
+  { value: "second", label: "Bowled first" },
+];
+
+/** True if the Result filter (state.result) is narrowing the set. */
+export function resultFilterActive(state) {
+  return Array.isArray(state.result) && state.result.length > 0;
+}
+/** True if the Toss result filter (state.tossResult) is narrowing the set. */
+export function tossResultFilterActive(state) {
+  return Array.isArray(state.tossResult) && state.tossResult.length > 0;
+}
+/** True if the Toss decision filter (state.tossDecision) is narrowing the set. */
+export function tossDecisionFilterActive(state) {
+  return Array.isArray(state.tossDecision) && state.tossDecision.length > 0;
+}
+/** True if the Innings-order filter (state.inningsOrder) is narrowing the set. */
+export function inningsOrderFilterActive(state) {
+  return Array.isArray(state.inningsOrder) && state.inningsOrder.length > 0;
+}
+/** True if the Stage filter (state.stage) is narrowing the set. */
+export function stageFilterActive(state) {
+  return Array.isArray(state.stage) && state.stage.length > 0;
+}
+/** True if the "Exclude D/L & method-decided" toggle (state.excludeMethod) is on. */
+export function methodFilterActive(state) {
+  return state.excludeMethod === true;
+}
+/** True if ANY match-context filter is active — the single gate table.js uses
+ * to decide whether to LEFT JOIN `matches` and append the context clauses (and
+ * whether "matches" must be counted innings-level for honesty). With all six
+ * off, the query is byte-identical to before Wave 6. */
+export function matchContextActive(state) {
+  return (
+    resultFilterActive(state) ||
+    tossResultFilterActive(state) ||
+    tossDecisionFilterActive(state) ||
+    inningsOrderFilterActive(state) ||
+    stageFilterActive(state) ||
+    methodFilterActive(state)
+  );
+}
+
 // ── Stat-condition subtitle tokens (B2R wave 2, decision 42) ─────────────────
 // describeScope() joins the active advanced conditions into the honest scope
 // sentence ("…, Runs ≥ 300") replacing the old "min N innings" phrase (min
@@ -393,6 +468,15 @@ export function createInitialState(maxMonth) {
                // buildFieldingSliceClauses -> fielding_cte WHERE. All empty = no
                // predicate (query byte-identical). Only bite when a fielding
                // column/condition is present (nothing to slice otherwise).
+    // Match-context filters (Wave 6). Five categorical WHERE filters; all empty =
+    // no predicate = query byte-identical to before. See the block above the
+    // RESULT_OPTIONS constants and filters.js buildMatchContextClauses.
+    result: [],        // subset of RESULT_OPTIONS values (won/lost/drawn/no_result/tied/super_over)
+    tossResult: [],    // subset of {"won","lost"} — row team ==/<> toss_winner
+    tossDecision: [],  // subset of {"bat","field"} — matches.toss_decision
+    inningsOrder: [],  // subset of {"first","second"} — row team ==/<> team_batting_first
+    stage: [],         // raw event_stage strings to keep (matches.event_stage IN (...))
+    excludeMethod: false, // "Exclude D/L & method-decided" — keep only method IS NULL
     matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)
     pinnedPlayers: [], // [{id, name}] — owner decision 46 task 3b: players ADDED to the table's
                    // result set regardless of the other leaderboard-only filters (team/opposition/
@@ -775,6 +859,21 @@ export function createStore(initial) {
         parts.push(`vs ${mv.value}`);
       }
     }
+
+    // Match-context filters (Wave 6): honest tokens, only when actually applied.
+    // Values map to their human labels; multi-selects join with commas (they are
+    // OR within a filter). These narrow the leaderboard query (buildQuery /
+    // buildMatchupQuery); the Graph Builder does not yet honor them (flagged).
+    const labelsFor = (vals, opts) =>
+      (vals || []).map((v) => opts.find((o) => o.value === v)?.label || v);
+    if (resultFilterActive(s)) parts.push(`Result: ${labelsFor(s.result, RESULT_OPTIONS).join(", ")}`);
+    if (tossResultFilterActive(s)) parts.push(labelsFor(s.tossResult, TOSS_RESULT_OPTIONS).join(", "));
+    if (tossDecisionFilterActive(s)) parts.push(labelsFor(s.tossDecision, TOSS_DECISION_OPTIONS).join(", "));
+    if (inningsOrderFilterActive(s)) parts.push(labelsFor(s.inningsOrder, INNINGS_ORDER_OPTIONS).join(", "));
+    if (stageFilterActive(s)) {
+      parts.push(s.stage.length <= 3 ? `Stage: ${s.stage.join(", ")}` : `Stage: ${s.stage.length} stages`);
+    }
+    if (methodFilterActive(s)) parts.push("excl. D/L & method-decided");
 
     // Stat conditions (decision 42): up to two list out in full, symbol-style
     // (matching the pills); beyond that the subtitle collapses to a count

@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsOrderFilterActive, stageFilterActive, methodFilterActive, RESULT_OPTIONS, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS, INNINGS_ORDER_OPTIONS } from "./state.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
@@ -241,6 +241,37 @@ export function mountPills(
           },
         });
       }
+    }
+
+    // Match-context filters (Wave 6): one removable pill per active filter. Each
+    // multi-select collapses into a single pill listing its picked labels (they
+    // are OR within the filter); ×/+ captures + restores the whole array (or the
+    // excludeMethod boolean). These narrow the leaderboard query (buildQuery /
+    // buildMatchupQuery); an active one is always "narrowing" in every view.
+    const labelsFor = (vals, opts) => (vals || []).map((v) => opts.find((o) => o.value === v)?.label || v);
+    if (resultFilterActive(s)) {
+      const captured = [...s.result];
+      pills.push({ key: "mc_result", label: `Result: ${labelsFor(s.result, RESULT_OPTIONS).join(", ")}`, remove: () => store.set({ result: [] }), restore: () => store.set({ result: captured }) });
+    }
+    if (tossResultFilterActive(s)) {
+      const captured = [...s.tossResult];
+      pills.push({ key: "mc_toss_result", label: labelsFor(s.tossResult, TOSS_RESULT_OPTIONS).join(", "), remove: () => store.set({ tossResult: [] }), restore: () => store.set({ tossResult: captured }) });
+    }
+    if (tossDecisionFilterActive(s)) {
+      const captured = [...s.tossDecision];
+      pills.push({ key: "mc_toss_decision", label: labelsFor(s.tossDecision, TOSS_DECISION_OPTIONS).join(", "), remove: () => store.set({ tossDecision: [] }), restore: () => store.set({ tossDecision: captured }) });
+    }
+    if (inningsOrderFilterActive(s)) {
+      const captured = [...s.inningsOrder];
+      pills.push({ key: "mc_innings_order", label: labelsFor(s.inningsOrder, INNINGS_ORDER_OPTIONS).join(", "), remove: () => store.set({ inningsOrder: [] }), restore: () => store.set({ inningsOrder: captured }) });
+    }
+    if (stageFilterActive(s)) {
+      const captured = [...s.stage];
+      const label = s.stage.length <= 2 ? `Stage: ${s.stage.join(", ")}` : `Stage: ${s.stage.length} stages`;
+      pills.push({ key: "mc_stage", label, remove: () => store.set({ stage: [] }), restore: () => store.set({ stage: captured }) });
+    }
+    if (methodFilterActive(s)) {
+      pills.push({ key: "mc_method", label: "Excl. D/L & method-decided", remove: () => store.set({ excludeMethod: false }), restore: () => store.set({ excludeMethod: true }) });
     }
 
     // Fielding SLICE conditions (fielding rebuild): one pill per active slice,

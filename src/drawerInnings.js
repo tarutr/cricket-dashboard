@@ -37,8 +37,18 @@
 // list (no meta) and, since decision 51 (R5-F #14), is enabled for every team type.
 
 import { wirePortalDropdown } from "./filters.js";
-import { matchupVsActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, FIELDING_POSITIONS } from "./state.js";
+import {
+  matchupVsActive,
+  FIELDING_KIND_OPTIONS,
+  FIELDING_PHASE_OPTIONS,
+  FIELDING_POSITIONS,
+  RESULT_OPTIONS,
+  TOSS_RESULT_OPTIONS,
+  TOSS_DECISION_OPTIONS,
+  INNINGS_ORDER_OPTIONS,
+} from "./state.js";
 import { searchTeams, searchEvents, searchVenues } from "./playerData.js";
+import { query } from "./db.js";
 import { mountSearchMultiSelect } from "./searchSelect.js";
 import { escHtml, escAttr } from "./html.js";
 
@@ -361,6 +371,280 @@ export function mountFieldingPhase(container, store, onChange, opts = {}) {
     label: "Fielding phase",
     ...opts,
   });
+}
+
+// ── Match-context pickers (Wave 6) ──────────────────────────────────────────
+// Five categorical filters grouped under "Match context" in the "+ Add
+// condition…" picker, available in batting, bowling AND matchup views (unlike
+// the fielding slices, they have no matchup gate). Four are fixed-vocabulary
+// checkbox multi-selects over a TOP-LEVEL state array (result / tossResult /
+// tossDecision / inningsOrder); Stage is a scope-loaded checkbox list plus a
+// "Knockout" convenience button; Method is a single boolean toggle
+// (state.excludeMethod). Each is the same self-contained `{ sync }` controller
+// as the pickers above and slots into a singleton row in drawer.js. None writes
+// anything but its own state key, so the query stays byte-identical until a value
+// is set (see filters.js buildMatchContextClauses).
+
+/** Short toggle summary for a token multi-select: 0 → anyLabel; 1 → that
+ * option's label; >1 → "N selected". */
+function tokenSummary(vals, options, anyLabel) {
+  if (!vals || vals.length === 0) return anyLabel;
+  if (vals.length === 1) return options.find((o) => String(o.value) === String(vals[0]))?.label || String(vals[0]);
+  return `${vals.length} selected`;
+}
+
+/** Generic checkbox multi-select over a TOP-LEVEL state array `field`
+ * (result / tossResult / tossDecision / inningsOrder). `options` is
+ * [{value,label}] with string values. `embedded` suppresses the outer label (the
+ * condition row already names it). Returns `{ sync }`. */
+function mountTokenMultiSelect(container, store, onChange, { field, options, anyLabel, label, embedded = false }) {
+  const get = () => store.get()[field] || [];
+  const set = (vals) => store.set({ [field]: vals });
+
+  container.innerHTML = `
+    <div class="filter-group filter-group--positions" data-role="mc-group">
+      ${embedded ? "" : `<span class="filter-label">${escHtml(label || "")}</span>`}
+      <div class="dropdown" data-role="mc-dropdown">
+        <button type="button" class="select dropdown__toggle" data-role="mc-toggle" aria-haspopup="true" aria-expanded="false">${escHtml(anyLabel)}</button>
+        <div class="dropdown__panel" data-role="mc-panel" hidden>
+          <div class="dropdown__list" data-role="mc-list">
+            ${options
+              .map(
+                (o) => `<label class="dropdown__item">
+                <input type="checkbox" data-mc-value="${escAttr(String(o.value))}" />
+                <span>${escHtml(o.label)}</span>
+              </label>`
+              )
+              .join("")}
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  const els = {
+    toggle: container.querySelector('[data-role="mc-toggle"]'),
+    panel: container.querySelector('[data-role="mc-panel"]'),
+    list: container.querySelector('[data-role="mc-list"]'),
+  };
+  const updateLabel = () => {
+    els.toggle.textContent = tokenSummary(get(), options, anyLabel);
+  };
+  wirePortalDropdown(els.toggle, els.panel);
+
+  els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const value = cb.dataset.mcValue;
+      const current = get().slice();
+      const idx = current.findIndex((v) => String(v) === value);
+      if (cb.checked) {
+        if (idx === -1) current.push(value);
+      } else if (idx !== -1) {
+        current.splice(idx, 1);
+      }
+      set(current);
+      updateLabel();
+      onChange();
+    });
+  });
+
+  function sync() {
+    updateLabel();
+    const selected = new Set(get().map((v) => String(v)));
+    els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.checked = selected.has(cb.dataset.mcValue);
+    });
+  }
+
+  sync();
+  return { sync };
+}
+
+/** Result filter (state.result) — Won / Lost / Drawn / No result / Tied / Super Over. */
+export function mountResult(container, store, onChange, opts = {}) {
+  return mountTokenMultiSelect(container, store, onChange, {
+    field: "result", options: RESULT_OPTIONS, anyLabel: "Any result", label: "Result", ...opts,
+  });
+}
+/** Toss result filter (state.tossResult) — Won toss / Lost toss. */
+export function mountTossResult(container, store, onChange, opts = {}) {
+  return mountTokenMultiSelect(container, store, onChange, {
+    field: "tossResult", options: TOSS_RESULT_OPTIONS, anyLabel: "Any toss result", label: "Toss result", ...opts,
+  });
+}
+/** Toss decision filter (state.tossDecision) — Chose to bat / field. */
+export function mountTossDecision(container, store, onChange, opts = {}) {
+  return mountTokenMultiSelect(container, store, onChange, {
+    field: "tossDecision", options: TOSS_DECISION_OPTIONS, anyLabel: "Any toss decision", label: "Toss decision", ...opts,
+  });
+}
+/** Innings-order filter (state.inningsOrder) — Batted first / Bowled first. */
+export function mountInningsOrder(container, store, onChange, opts = {}) {
+  return mountTokenMultiSelect(container, store, onChange, {
+    field: "inningsOrder", options: INNINGS_ORDER_OPTIONS, anyLabel: "Any innings order", label: "Innings order", ...opts,
+  });
+}
+
+// ── Stage picker (state.stage) ──────────────────────────────────────────────
+// A scope-loaded checkbox list of the raw `event_stage` values, plus a
+// "Knockout" convenience button. The option list is loaded from `matches`,
+// GENDER-scoped (basic functional UI for part 1 — the polished, fully
+// scope-reactive picker is the next task); the QUERY is unaffected by which
+// options are shown (it applies `event_stage IN (picked)` regardless).
+//
+// KNOCKOUT — FLAGGED JUDGEMENT CALL: the design says "the non-group stages",
+// but `event_stage` is free text with ~53 values (Final, Semi Final, Qualifier,
+// Eliminator, 3rd Place Play-Off, … but also round-robin "Super League / Super
+// Eight / Super Four / First Round" and stray data-error 'T20'/'ODI'). There is
+// no owner-confirmed group/knockout taxonomy, so "Knockout" here selects the
+// in-scope stages that match a KNOCKOUT keyword and are NOT a group/round-robin
+// stage. This is a convenience only — the checkboxes give full manual control —
+// and the exact taxonomy is reported for owner confirmation.
+const KNOCKOUT_RE = /final|semi[-\s]?final|quarter[-\s]?final|elimin|qualifier|play[-\s]?off|challenger|knockout/i;
+const GROUP_RE = /group|super\s?league|super\s?six|super\s?ten|super\s?10|super\s?eight|super\s?four|super\s?three|super\s?12|super\s?twelve|first\s?round|round\s?robin|preliminary/i;
+
+/** A stage value counts as "knockout" for the shortcut iff it matches a knockout
+ * keyword and is not a group/round-robin stage. */
+function isKnockoutStage(stage) {
+  return KNOCKOUT_RE.test(stage) && !GROUP_RE.test(stage);
+}
+
+/** Mount the Stage picker (state.stage). `embedded` suppresses the outer label.
+ * Returns `{ sync }`. */
+export function mountStage(container, store, onChange, { embedded = false } = {}) {
+  const get = () => store.get().stage || [];
+  const set = (vals) => store.set({ stage: vals });
+
+  container.innerHTML = `
+    <div class="filter-group filter-group--positions" data-role="mc-group">
+      ${embedded ? "" : `<span class="filter-label">Stage</span>`}
+      <div class="dropdown" data-role="mc-dropdown">
+        <button type="button" class="select dropdown__toggle" data-role="mc-toggle" aria-haspopup="true" aria-expanded="false">Any stage</button>
+        <div class="dropdown__panel" data-role="mc-panel" hidden>
+          <div class="dropdown__quick">
+            <button type="button" class="text-btn" data-role="mc-knockout">Knockout games</button>
+          </div>
+          <div class="dropdown__list" data-role="mc-list"><p class="profile-note">Loading stages…</p></div>
+        </div>
+      </div>
+    </div>`;
+
+  const els = {
+    toggle: container.querySelector('[data-role="mc-toggle"]'),
+    panel: container.querySelector('[data-role="mc-panel"]'),
+    list: container.querySelector('[data-role="mc-list"]'),
+    knockout: container.querySelector('[data-role="mc-knockout"]'),
+  };
+
+  let stageOptions = null; // string[]; null until loaded
+  let loadedGender = null;
+  let loading = false;
+
+  const updateLabel = () => {
+    const vals = get();
+    els.toggle.textContent =
+      vals.length === 0 ? "Any stage" : vals.length === 1 ? vals[0] : `${vals.length} selected`;
+  };
+
+  wirePortalDropdown(els.toggle, els.panel);
+
+  function renderList() {
+    if (stageOptions === null) {
+      els.list.innerHTML = `<p class="profile-note">Loading stages…</p>`;
+      return;
+    }
+    if (stageOptions.length === 0) {
+      els.list.innerHTML = `<p class="profile-note">No tournament stages in this scope.</p>`;
+      return;
+    }
+    const selected = new Set(get());
+    els.list.innerHTML = stageOptions
+      .map(
+        (s) => `<label class="dropdown__item">
+          <input type="checkbox" data-mc-value="${escAttr(s)}" ${selected.has(s) ? "checked" : ""} />
+          <span>${escHtml(s)}</span>
+        </label>`
+      )
+      .join("");
+    els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const value = cb.dataset.mcValue;
+        const current = get().slice();
+        const idx = current.indexOf(value);
+        if (cb.checked) {
+          if (idx === -1) current.push(value);
+        } else if (idx !== -1) {
+          current.splice(idx, 1);
+        }
+        set(current);
+        updateLabel();
+        onChange();
+      });
+    });
+  }
+
+  els.knockout.addEventListener("click", () => {
+    // Select every in-scope knockout stage (see isKnockoutStage). If the list
+    // hasn't loaded yet this no-ops until it does.
+    if (!stageOptions) return;
+    set(stageOptions.filter(isKnockoutStage));
+    updateLabel();
+    renderList();
+    onChange();
+  });
+
+  async function ensureLoaded() {
+    const gender = store.get().gender;
+    if (loadedGender === gender || loading) return;
+    loading = true;
+    try {
+      const { rows } = await query(
+        `SELECT DISTINCT event_stage AS s FROM matches WHERE event_stage IS NOT NULL AND gender = '${String(gender).replace(/'/g, "''")}' ORDER BY event_stage`
+      );
+      stageOptions = rows.map((r) => r.s);
+      loadedGender = gender;
+    } catch (e) {
+      stageOptions = null; // retry on a later sync
+    }
+    loading = false;
+    renderList();
+  }
+
+  function sync() {
+    updateLabel();
+    // (Re)load when the gender changed since the last load, or on first visible.
+    if (loadedGender !== store.get().gender) {
+      stageOptions = null;
+      ensureLoaded();
+    } else {
+      renderList();
+    }
+  }
+
+  sync();
+  return { sync };
+}
+
+/** Method filter — single "Exclude D/L & method-decided" toggle (state.excludeMethod).
+ * `embedded` accepted for call-site parity. Returns `{ sync }`. */
+export function mountMethod(container, store, onChange, { embedded = false } = {}) {
+  void embedded;
+  container.innerHTML = `
+    <div class="filter-group filter-group--positions" data-role="mc-group">
+      <label class="dropdown__item mc-method-row">
+        <input type="checkbox" data-role="mc-exclude-method" />
+        <span>Exclude D/L &amp; method-decided</span>
+      </label>
+    </div>`;
+  const cb = container.querySelector('[data-role="mc-exclude-method"]');
+  cb.addEventListener("change", () => {
+    store.set({ excludeMethod: cb.checked });
+    onChange();
+  });
+  function sync() {
+    cb.checked = store.get().excludeMethod === true;
+  }
+  sync();
+  return { sync };
 }
 
 // Game-count meta label (ROUND 3, task 4): "1,013 games" — localized thousands

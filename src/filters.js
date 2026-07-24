@@ -244,6 +244,102 @@ export function buildScopeClauses(
   return clauses;
 }
 
+// ── Match-context filters (Wave 6) ──────────────────────────────────────────
+// Five categorical WHERE filters keyed off the MATCH's context. Unlike Event /
+// Venue (a non-correlated `match_id IN (SELECT … FROM matches …)` semi-join),
+// several of these are PLAYER-RELATIVE — "did the row's own team win / win the
+// toss / bat first" — so they compare the innings row's own team column
+// (`batting_team` for a batting row, `bowling_team` for a bowling row; matchup
+// rows carry both) to the joined match fields. The owner-approved approach is a
+// LEFT JOIN of `matches` by match_id; buildQuery / buildMatchupQuery add that
+// join (matchContextJoinSql) and append these clauses ONLY when a context filter
+// is active, so with none active the query is byte-identical to before.
+//
+// The join is a SUB-SELECT aliased `mctx` that RENAMES match_id -> mctx_match_id
+// (the same collision-safe-join-key technique r_pos_cte / fielding_cte / pom_cte
+// use), so every bare `match_id` reference already in the query — the event/venue
+// semi-join, COUNT(DISTINCT match_id), the matchup peak CTE's GROUP BY — stays
+// unambiguous after the join. None of the mctx columns (match_winner /
+// result_type / is_super_over / toss_winner / toss_decision / team_batting_first
+// / event_stage / method) shares a name with any base-view column, so no other
+// ambiguity is introduced.
+
+/** LEFT-JOIN clause bringing the match-context columns onto each innings row of
+ * `viewAlias` (the base view/table name — `batting`, `bowling`, `matchup_batting`,
+ * `matchup_bowling`). match_id is projected as `mctx_match_id` to avoid clashing
+ * with the base view's own `match_id`. */
+export function matchContextJoinSql(viewAlias) {
+  return (
+    ` LEFT JOIN (SELECT match_id AS mctx_match_id, match_winner, result_type, ` +
+    `is_super_over, toss_winner, toss_decision, team_batting_first, event_stage, method ` +
+    `FROM matches) mctx ON mctx.mctx_match_id = ${viewAlias}.match_id`
+  );
+}
+
+/** WHERE-clause fragments for the active match-context filters, comparing the
+ * row's own team column (`rowTeamCol` = batting_team | bowling_team) to the
+ * joined `mctx` fields. Each active filter contributes ONE clause; multi-selects
+ * are OR within their own clause (the filters AND together, and AND with the
+ * rest of the scope). Returns [] when nothing is active. */
+export function buildMatchContextClauses(state, rowTeamCol) {
+  const A = "mctx";
+  const clauses = [];
+
+  // 1. Result (multi, OR). Won/Lost use the derived match_winner (so a super-over
+  //    WIN counts as a Win); Super Over is the facet flag (overlaps Won/Lost).
+  const res = state.result || [];
+  if (res.length) {
+    const parts = [];
+    for (const r of res) {
+      if (r === "won") parts.push(`${rowTeamCol} = ${A}.match_winner`);
+      else if (r === "lost") parts.push(`(${A}.match_winner IS NOT NULL AND ${A}.match_winner <> ${rowTeamCol})`);
+      else if (r === "drawn") parts.push(`${A}.result_type = 'draw'`);
+      else if (r === "no_result") parts.push(`${A}.result_type = 'no result'`);
+      else if (r === "tied") parts.push(`${A}.result_type = 'tie'`);
+      else if (r === "super_over") parts.push(`${A}.is_super_over IS TRUE`);
+    }
+    if (parts.length) clauses.push(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`);
+  }
+
+  // 2. Toss result (row team ==/<> toss_winner). A NULL toss_winner (none in the
+  //    data) would drop the row either way — honest (unknown -> excluded).
+  const tr = state.tossResult || [];
+  if (tr.length) {
+    const parts = [];
+    if (tr.includes("won")) parts.push(`${rowTeamCol} = ${A}.toss_winner`);
+    if (tr.includes("lost")) parts.push(`${rowTeamCol} <> ${A}.toss_winner`);
+    if (parts.length) clauses.push(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`);
+  }
+
+  // 3. Toss decision (matches.toss_decision IN …).
+  const td = (state.tossDecision || []).filter((v) => v === "bat" || v === "field");
+  if (td.length) {
+    clauses.push(`${A}.toss_decision IN (${td.map((v) => `'${v}'`).join(", ")})`);
+  }
+
+  // 4. Innings order (row team ==/<> team_batting_first).
+  const io = state.inningsOrder || [];
+  if (io.length) {
+    const parts = [];
+    if (io.includes("first")) parts.push(`${rowTeamCol} = ${A}.team_batting_first`);
+    if (io.includes("second")) parts.push(`${rowTeamCol} <> ${A}.team_batting_first`);
+    if (parts.length) clauses.push(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`);
+  }
+
+  // 5a. Stage (matches.event_stage IN the picked raw stage values).
+  const st = state.stage || [];
+  if (st.length) {
+    clauses.push(`${A}.event_stage IN (${st.map((s) => `'${esc(s)}'`).join(", ")})`);
+  }
+
+  // 5b. Method: keep only matches NOT decided by D/L / VJD / any method (method IS NULL).
+  if (state.excludeMethod === true) {
+    clauses.push(`${A}.method IS NULL`);
+  }
+
+  return clauses;
+}
+
 // ── Pinned-player exemption (owner decision 46 task 3b; Wave 4b, decision 47a) ──
 // Pins are the players ADDED to the result set regardless of the leaderboard-only
 // filters (team/opposition/position/profile/R.Pos/search/stat conditions); only

@@ -10,13 +10,21 @@
 
 import { getMetric, hasMetricData, matchupBucketLabel, DISMISSAL_KINDS, metricDisplayLabel } from "./metrics.js";
 import { query } from "./db.js";
-import { buildScopeClauses, buildCoreScopeClauses, whereWithPinExemption, gateWithPinExemption } from "./filters.js";
+import {
+  buildScopeClauses,
+  buildCoreScopeClauses,
+  whereWithPinExemption,
+  gateWithPinExemption,
+  buildMatchContextClauses,
+  matchContextJoinSql,
+} from "./filters.js";
 import { activeGroups } from "./advanced.js";
 import { escHtml, escAttr } from "./html.js";
 import {
   eligibleMetrics,
   positionsFilterActive,
   oppositionFilterActive,
+  matchContextActive,
   COLUMN_PRESET_DEFS,
   activePresetKey,
   matchupVsActive,
@@ -99,6 +107,14 @@ function serializeQueryState(state) {
     opposition: state.opposition,
     event: state.event,
     venue: state.venue,
+    // Match-context filters (Wave 6): part of the query result + honest-scope
+    // key, so a change re-lights Search and busts the render cache.
+    result: state.result,
+    tossResult: state.tossResult,
+    tossDecision: state.tossDecision,
+    inningsOrder: state.inningsOrder,
+    stage: state.stage,
+    excludeMethod: state.excludeMethod,
     matchupVs: state.matchupVs,
     pinnedPlayers: state.pinnedPlayers,
     search: state.search,
@@ -409,6 +425,18 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   const whereClauses = buildScopeClauses(state, scopeOpts);
   if (searchClause) whereClauses.push(searchClause);
 
+  // Match-context filters (Wave 6): identical treatment to plain buildQuery —
+  // append the context clauses (comparing the matchup row's own team, teamCol =
+  // batting_team | bowling_team, to the joined match fields) after the core
+  // scope so pins bypass them, and LEFT JOIN `matches` on the view below (both
+  // the `agg` scan and the peak CTE's scan). No context filter => byte-identical.
+  const wantsMatchContext = matchContextActive(state);
+  if (wantsMatchContext) {
+    for (const c of buildMatchContextClauses(state, teamCol)) whereClauses.push(c);
+  }
+  // The FROM used by both `agg` and the peak CTE: base view + optional mctx join.
+  const matchupFrom = wantsMatchContext ? view + matchContextJoinSql(view) : view;
+
   // Pinned players (Wave 4b, decision 47a): additive — a pinned player is scanned
   // as long as they have ANY core-scope row in this view, bypassing every
   // leaderboard-only clause above (team/opposition/position/profile/R.Pos/search),
@@ -421,7 +449,7 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
 
   const aggSql = [
     `SELECT ${aggSelectParts.join(", ")}`,
-    `FROM ${view}`,
+    `FROM ${matchupFrom}`,
     `WHERE ${whereSql}`,
     `GROUP BY ${idCol}, ${nameCol}`,
   ].join("\n");
@@ -537,7 +565,7 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
       `SELECT ${idCol} AS peak_id, ${outerParts.join(", ")}`,
       `FROM (`,
       `SELECT ${idCol}, ${innerParts.join(", ")}`,
-      `FROM ${view}`,
+      `FROM ${matchupFrom}`,
       `WHERE ${peakWhere}`,
       `GROUP BY ${idCol}, match_id, innings_number`,
       `) t`,
@@ -922,6 +950,18 @@ export function buildQuery(state, visibleColumns) {
     whereClauses.push(`${nameCol} ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
   }
 
+  // Match-context filters (Wave 6): additive. When ANY context filter is active
+  // we LEFT JOIN `matches` (see fromSql below) and compare the row's own team
+  // (teamCol = batting_team | bowling_team) to the joined match fields. These
+  // clauses are appended AFTER the core scope, so whereWithPinExemption slices
+  // them into the pin-BYPASSED remainder — a pinned player shows regardless of
+  // match context, exactly like team/opposition. With no context filter active
+  // this pushes nothing and the emitted SQL is byte-identical to before.
+  const wantsMatchContext = matchContextActive(state);
+  if (wantsMatchContext) {
+    for (const c of buildMatchContextClauses(state, teamCol)) whereClauses.push(c);
+  }
+
   // Pinned players (task 3b, owner decision 46; Wave 4b routed onto the shared
   // helper): additive OR. buildCoreScopeClauses is guaranteed to be the exact
   // prefix `whereClauses` above already starts with (same state, same
@@ -977,7 +1017,13 @@ export function buildQuery(state, visibleColumns) {
     havingParts.length === 0 ? null : gateWithPinExemption(havingParts.join(" AND "), idCol, pins);
 
   const wantsMatches = visibleColumns.includes("matches");
-  const inningsLevel = positionsFilterActive(state) || oppositionFilterActive(state);
+  // "Matches" honesty (D4 Piece 3, extended for Wave 6): when an innings-level OR
+  // match-context filter narrows the set, "matches" must be COUNT(DISTINCT
+  // match_id) over the FILTERED innings rows (which carry the match-context join +
+  // WHERE) — not the player_matches source, which knows nothing about result/toss/
+  // stage/etc. and would over-count. match_id stays unambiguous (the mctx join
+  // renames its own key to mctx_match_id).
+  const inningsLevel = positionsFilterActive(state) || oppositionFilterActive(state) || wantsMatchContext;
   if (wantsMatches && inningsLevel) {
     selectParts.push(`COUNT(DISTINCT match_id) AS matches`);
   }
@@ -1000,6 +1046,11 @@ export function buildQuery(state, visibleColumns) {
   if (wantsPom) cteDefs.push(pomCteSql);
 
   let fromSql = view;
+  // Match-context (Wave 6): 1:1 LEFT JOIN by match_id (see matchContextJoinSql).
+  // Added first so the mctx alias exists for the WHERE clauses; it never
+  // multiplies innings rows (one match per match_id), so every aggregate stays
+  // byte-identical. Only present when a context filter is active.
+  if (wantsMatchContext) fromSql += matchContextJoinSql(view);
   if (wantsRPos) fromSql += ` LEFT JOIN r_pos_cte ON r_pos_cte.pos_batter_id = ${idCol}`;
   if (wantsFielding) fromSql += ` LEFT JOIN fielding_cte ON fielding_cte.fld_player_id = ${idCol}`;
   if (wantsPom) fromSql += ` LEFT JOIN pom_cte ON pom_cte.pom_player_id = ${idCol}`;

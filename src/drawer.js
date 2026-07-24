@@ -33,6 +33,12 @@ import {
   fieldingPositionActive,
   fieldingKindActive,
   fieldingPhaseActive,
+  resultFilterActive,
+  tossResultFilterActive,
+  tossDecisionFilterActive,
+  inningsOrderFilterActive,
+  stageFilterActive,
+  methodFilterActive,
   matchupVsActive,
   effectiveNamespace,
   eligibleMetrics,
@@ -60,6 +66,12 @@ import {
   mountFieldingPosition,
   mountFieldingKind,
   mountFieldingPhase,
+  mountResult,
+  mountTossResult,
+  mountTossDecision,
+  mountInningsOrder,
+  mountStage,
+  mountMethod,
 } from "./drawerInnings.js";
 import { escHtml, escAttr } from "./html.js";
 
@@ -123,6 +135,17 @@ const SINGLETON_TYPES = [
   { key: "fld_pos", label: "Dismissed position", group: "Fielding", menOnly: false },
   { key: "fld_kind", label: "Dismissal kind", group: "Fielding", menOnly: false },
   { key: "fld_phase", label: "Fielding phase", group: "Fielding", menOnly: false },
+  // Match-context singletons (Wave 6): five categorical WHERE filters keyed off
+  // the MATCH's context. Both genders; work in batting, bowling AND matchup views
+  // (no matchup gate), so — unlike the fielding slices — isPresent has no Vs
+  // carve-out for them. They write their own top-level state key (result /
+  // tossResult / tossDecision / inningsOrder / stage) or the excludeMethod boolean.
+  { key: "mc_result", label: "Result", group: "Match context", menOnly: false },
+  { key: "mc_toss_result", label: "Toss result", group: "Match context", menOnly: false },
+  { key: "mc_toss_decision", label: "Toss decision", group: "Match context", menOnly: false },
+  { key: "mc_innings_order", label: "Innings order", group: "Match context", menOnly: false },
+  { key: "mc_stage", label: "Stage", group: "Match context", menOnly: false },
+  { key: "mc_method", label: "Rain / method", group: "Match context", menOnly: false },
 ];
 
 // Dropdown OPTION order per group (R5 Wave 1a, item 7; "bowling" re-added R5
@@ -133,6 +156,10 @@ const PLAYER_ADD_ORDER = ["team", "opposition", "hand", "bowling", "role"];
 const MATCH_ADD_ORDER = ["event", "venue"];
 // Fielding slice singletons, in the "Fielding" optgroup (after the metric options).
 const FIELDING_SLICE_ADD_ORDER = ["fld_pos", "fld_kind", "fld_phase"];
+// Match-context singletons, in their own "Match context" optgroup (Wave 6).
+const MATCH_CONTEXT_ADD_ORDER = [
+  "mc_result", "mc_toss_result", "mc_toss_decision", "mc_innings_order", "mc_stage", "mc_method",
+];
 
 /**
  * Mount the condition builder into `advancedHost` (the Advanced Filters section
@@ -416,6 +443,13 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
   const fieldingPositionController = mountFieldingPosition(editorHosts.fld_pos, store, onChange, { embedded: true });
   const fieldingKindController = mountFieldingKind(editorHosts.fld_kind, store, onChange, { embedded: true });
   const fieldingPhaseController = mountFieldingPhase(editorHosts.fld_phase, store, onChange, { embedded: true });
+  // Match-context editors (Wave 6): each writes only its own state key.
+  const resultController = mountResult(editorHosts.mc_result, store, onChange, { embedded: true });
+  const tossResultController = mountTossResult(editorHosts.mc_toss_result, store, onChange, { embedded: true });
+  const tossDecisionController = mountTossDecision(editorHosts.mc_toss_decision, store, onChange, { embedded: true });
+  const inningsOrderController = mountInningsOrder(editorHosts.mc_innings_order, store, onChange, { embedded: true });
+  const stageController = mountStage(editorHosts.mc_stage, store, onChange, { embedded: true });
+  const methodController = mountMethod(editorHosts.mc_method, store, onChange, { embedded: true });
 
   // ── Presence + session-added tracking ──────────────────────────────────────
   // sessionAdded: singleton rows the user added THIS popup session that don't
@@ -453,6 +487,13 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
       case "fld_pos": return Boolean(s.fielding && (s.fielding.positions || []).length > 0);
       case "fld_kind": return Boolean(s.fielding && (s.fielding.kinds || []).length > 0);
       case "fld_phase": return Boolean(s.fielding && (s.fielding.phases || []).length > 0);
+      // Match-context singletons (Wave 6): present when their value is set.
+      case "mc_result": return (s.result || []).length > 0;
+      case "mc_toss_result": return (s.tossResult || []).length > 0;
+      case "mc_toss_decision": return (s.tossDecision || []).length > 0;
+      case "mc_innings_order": return (s.inningsOrder || []).length > 0;
+      case "mc_stage": return (s.stage || []).length > 0;
+      case "mc_method": return s.excludeMethod === true;
       default: return false;
     }
   }
@@ -486,6 +527,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
       case "fld_pos": store.set({ fielding: { ...(store.get().fielding || {}), positions: [] } }); break;
       case "fld_kind": store.set({ fielding: { ...(store.get().fielding || {}), kinds: [] } }); break;
       case "fld_phase": store.set({ fielding: { ...(store.get().fielding || {}), phases: [] } }); break;
+      case "mc_result": store.set({ result: [] }); break;
+      case "mc_toss_result": store.set({ tossResult: [] }); break;
+      case "mc_toss_decision": store.set({ tossDecision: [] }); break;
+      case "mc_innings_order": store.set({ inningsOrder: [] }); break;
+      case "mc_stage": store.set({ stage: [] }); break;
+      case "mc_method": store.set({ excludeMethod: false }); break;
     }
   }
 
@@ -598,10 +645,14 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     // phase) join the "Fielding" optgroup below the metric options — PLAIN mode
     // only (fielding has no matchup grain, so nothing to slice under a Vs bucket).
     const fieldingSliceOpts = matchupVsActive(s) ? "" : singletonOpts(FIELDING_SLICE_ADD_ORDER);
+    // Match context (Wave 6): the five categorical match-context filters. Both
+    // genders, all views (no matchup gate) — offered unconditionally.
+    const matchCtxOpts = singletonOpts(MATCH_CONTEXT_ADD_ORDER);
     return `
       <option value="">+ Add condition…</option>
       <optgroup label="Player">${singletonOpts(PLAYER_ADD_ORDER)}</optgroup>
       <optgroup label="Match">${singletonOpts(MATCH_ADD_ORDER)}</optgroup>
+      <optgroup label="Match context">${matchCtxOpts}</optgroup>
       <optgroup label="Basic metrics">${basicOpts()}</optgroup>
       ${advanced.length || vsTopOpt ? `<optgroup label="Advanced metrics">${vsTopOpt}${metricOpts(advanced)}</optgroup>` : ""}
       ${dismissal.length ? `<optgroup label="Dismissal type">${dismissalOpts}</optgroup>` : ""}
@@ -630,6 +681,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     fieldingPositionController.sync();
     fieldingKindController.sync();
     fieldingPhaseController.sync();
+    resultController.sync();
+    tossResultController.sync();
+    tossDecisionController.sync();
+    inningsOrderController.sync();
+    stageController.sync();
+    methodController.sync();
     renderProfileEditors();
   }
 
@@ -924,6 +981,13 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     if (oppositionFilterActive(s)) n++;
     if (eventFilterActive(s)) n++;
     if (venueFilterActive(s)) n++;
+    // Match-context filters (Wave 6): one each when active (all views/genders).
+    if (resultFilterActive(s)) n++;
+    if (tossResultFilterActive(s)) n++;
+    if (tossDecisionFilterActive(s)) n++;
+    if (inningsOrderFilterActive(s)) n++;
+    if (stageFilterActive(s)) n++;
+    if (methodFilterActive(s)) n++;
     // Fielding SLICE conditions — plain mode only (inert under a matchup Vs).
     if (!matchupVsActive(s)) {
       if (fieldingPositionActive(s)) n++;
