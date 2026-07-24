@@ -25,22 +25,32 @@ _fours_conceded/_sixes_conceded` (bowling + matchup_bowling), phases = pp/mid/de
 columns across all 4 parquets. Wired `PHASE_DERIVED` so by-phase Dot% / Boundary% / Fours / Sixes /
 (batting) Average are chartable on the **Line X=Phase** view. Additive (anchors byte-identical); dismissal
 residual = ZERO. Live on R2 + cricdb.vercel.app. Scope was batting+bowling, incl. matchup, total dismissals
-per phase (owner). Size note: matchup pair grew ~30% (feeds load-speed #12).
+per phase (owner). Size note: matchup pair grew ~30% (feeds load-speed #13).
 
 ## 4. Column-group dropdown metrics — **pending build spec**
 [app] · Define which metrics belong to Core/Boundaries/Dismissals/Phases/Progression presets, made
 format-sensitive AND multi-format-sensitive (T20/50-Over/Red Ball mix handling). Needs a detailed spec
 before build.
 
-## 5. First-name player search — **pending owner build**
+## 5. Team/opposition categories + Afghanistan demarcation — **owner-requested (owner 2026-07-24; do AFTER the current full-build data program)**
+[app] · Two parts:
+- **Category groupings in Team/Opposition dropdowns EVERYWHERE** (Stats drawer, matchup Vs picker, graph
+  filters, player-popup filters): add selectable categories alongside individual teams —
+  **Big Three** (India, Australia, England), **Test Nations**, **Associate Nations**.
+- **Afghanistan demarcation footer:** the data excludes ALL games involving Afghanistan (Cricsheet gap,
+  SPEC §4.1). Show a clear note stating this, on the **same row as the "Data as of [date]" footer** but
+  **right-aligned** (right side of the page).
+Relates to #7 (team-name normalization — canonical team names would underpin the category membership lists).
+
+## 6. First-name player search — **pending owner build**
 [data] · Curated common-name map. **Owner note:** owner has a player registry built in a separate project
 and will add those files to the folder to fold in.
 
-## 6. Team-name normalization — **pending owner build**
+## 7. Team-name normalization — **pending owner build**
 [data] · Canonical alias map (RCB Bangalore/Bengaluru, India/India Men, St/Saint Lucia). **Owner note:**
 owner will build this in an outside project ("team registry") and add it in, like the player registry.
 
-## 7. Per-over data layer — **pending owner decision**
+## 8. Per-over data layer — **pending owner decision**
 [data] · Lazy-loaded per-over parquet + a per-over Line X-axis (over 1→20). Absorbs the old R5-E.
 Add per-over aggregates in `export_parquet.py` (source `deliveries` has `over_number`; 11.3 M ball rows),
 expose **per-over** as a Line X-dimension (Y aggregated per over). **SIZE CONCERN:** a full per-over parquet
@@ -50,26 +60,26 @@ picked**. Owner rule: "measure the real size before committing." Test-first/gate
 decision 36's phase/matchup extension); publishes to R2 via CI → needs owner's explicit go for the
 pipeline run.
 
-## 8. Graphs on mobile — **pending spec**
+## 9. Graphs on mobile — **pending spec**
 [app] · Determine how each chart type behaves at phone widths (375px). Dense-label charts drop value
 labels; sidebar controls stack full-width. Needs per-chart-type sizing rules.
 
-## 9. ~375px mobile one-screen fit — **pending CSS audit**
+## 10. ~375px mobile one-screen fit — **pending CSS audit**
 [app] · Final CSS tightening to fit the left-column + chart on one viewport at 375px width. Known residual:
 outer horizontal scroll not yet eliminated (owner deferred Wave 1).
 
-## 10. Player pop-up — full determination — **pending spec**
+## 11. Player pop-up — full determination — **pending spec**
 [app] · Decide the player pop-up in full (owner 2026-07-23): which GRAPHS go into it and HOW they're shown,
 plus a review of the stat blocks it currently shows. The popup's stat blocks are to be **linked to the Stats
 table's column-group dropdown (Core / Boundaries / Dismissals / Phases / Progression) BY FORMAT**, so the two
 stay consistent. Depends on #4 (the column-group metric definitions). Note: the Donut chart is retained
 specifically for the popup, so its role here is part of this spec.
 
-## 11. Full design re-do with incoming brand kit — **comes LAST**
+## 12. Full design re-do with incoming brand kit — **comes LAST**
 [design] · Aesthetic layer only; all functional rules already shipped. Once the brand kit arrives (colors,
 typefaces, spacing), apply to the entire UI + export card per §1 (CHART_SYSTEM.md). Lowest priority.
 
-## 12. Load-speed Tiers 2–4 — **pending discussion**
+## 13. Load-speed Tiers 2–4 — **pending discussion**
 [data] [app] · **Tier 1 DONE** (Cloudflare custom domain + immutable caching). Remaining (in bang-for-buck order):
 - **Tier 2 — shrink the bytes** (pipeline-only; `export_parquet.py`): **ZSTD is already applied** (since
   Phase 0 — not a to-do). Remaining: sort rows to match the default query order (biggest win for the 23 MB
@@ -83,20 +93,10 @@ typefaces, spacing), apply to the entire UI + export card per §1 (CHART_SYSTEM.
 
 **Owner note:** needs a discussion of how the system works to decide tweaks vs a complete overhaul.
 
-## 13. File-split — **pending discussion**
+## 14. File-split — **pending discussion**
 [app] · Split the 5 oversized files (graph.js ~3,960 lines, table.js ~2,750, metrics.js ~1,820,
 charts.js ~1,120, styles.css ~4,570) per FILE_SPLIT_PLAN.md. Staged split, no rush. **Owner note:** needs a
 discussion of how the system works to decide tweaks vs a complete overhaul.
-
-## 14. Team/opposition categories + Afghanistan demarcation — **owner-requested (owner 2026-07-24; priority ~#5, do AFTER the current full-build data program)**
-[app] · Two parts:
-- **Category groupings in Team/Opposition dropdowns EVERYWHERE** (Stats drawer, matchup Vs picker, graph
-  filters, player-popup filters): add selectable categories alongside individual teams —
-  **Big Three** (India, Australia, England), **Test Nations**, **Associate Nations**.
-- **Afghanistan demarcation footer:** the data excludes ALL games involving Afghanistan (Cricsheet gap,
-  SPEC §4.1). Show a clear note stating this, on the **same row as the "Data as of [date]" footer** but
-  **right-aligned** (right side of the page).
-Relates to #6 (team-name normalization — canonical team names would underpin the category membership lists).
 
 ---
 
