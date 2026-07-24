@@ -43,7 +43,19 @@ Spells are match-report-level, NOT leaderboard. Opening/closing spell deleted en
   all-credited convention flips which spell is "best" in 136 multi-spell innings,
   shifting runs too — proven correct by the independent recompute.
 
-## TODO
-- Browser boot on localhost:8000 (config-override to local trim build): confirm
-  Bowling picker + "+ Add condition" show NO spell columns; 0 console errors;
-  reproduce anchors.
+## Browser + anchor verification (DONE)
+Served the trim build locally (temporary absolute-URL DATA_BASE_URL override in
+src/config.js -> reverted; data/export_trim_local/ removed; both untracked/gitignored).
+- App booted clean, 0 console errors. "Data as of 2 Jul 2026".
+- metricsFor('bowling') = 39 metrics, metricsFor('batting') = 65 -> 0 spell in either.
+- Live Bowling "+ Add condition" drawer list = 44 options, 0 spell (shows Wickets/
+  Economy/Maidens/Best Bowling/PP-Mid-Death economy+wickets/kinds/fielding only).
+- Columns picker: 0 spell labels; whole-page innerText has NO "spell" anywhere.
+- Anchors (Men/T20/International, 2023-07-01..2026-07-02 day-bounded):
+  * Batting baseline 2,813 players; row 1 Karanbir Singh 2,454 runs  [on-screen]
+  * SA Yadav 60 inns / 1,544 runs / 29.13 avg / 150.34 SR             [on-screen]
+  * Bumrah vs RHB striker pos 1-2 = 27 inns / 177 balls / 9 wkts
+    [independent DuckDB over matchup_bowling.parquet; identical on pretrim+trim;
+     matchup_bowling.parquet is md5-identical pretrim vs trim]
+
+## Status: COMPLETE (branch polish-b1-mechanical; not pushed/merged)
