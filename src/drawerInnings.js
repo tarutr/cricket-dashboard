@@ -50,6 +50,7 @@ import {
   methodOptionLabel,
 } from "./state.js";
 import { searchTeams, searchEvents, searchVenues, searchEventSeasons } from "./playerData.js";
+import { canonicalStage } from "./canonicalNames.js";
 import { query } from "./db.js";
 import { mountSearchMultiSelect } from "./searchSelect.js";
 import { escHtml, escAttr } from "./html.js";
@@ -488,11 +489,13 @@ export function mountInningsOrder(container, store, onChange, opts = {}) {
 }
 
 // ── Stage picker (state.stage) ──────────────────────────────────────────────
-// A scope-loaded checkbox list of the raw `event_stage` values, plus a
-// "Knockout" convenience button. The option list is loaded from `matches`,
-// GENDER-scoped (basic functional UI for part 1 — the polished, fully
-// scope-reactive picker is the next task); the QUERY is unaffected by which
-// options are shown (it applies `event_stage IN (picked)` regardless).
+// A scope-loaded checkbox list of CANONICAL stage labels (name normalization,
+// backlog #5 — the raw `event_stage` values folded so casing/hyphen variants
+// collapse to one option), plus a "Knockout" convenience button. The option list
+// is loaded from `matches`, GENDER-scoped; state.stage stores the canonical
+// labels and filters.js buildMatchContextClauses expands each back to its raw
+// spelling set for `event_stage IN (…)`, so a picked "Semi-Final" matches every
+// raw spelling. The QUERY is unaffected by which options are shown.
 //
 // KNOCKOUT — EXPLICIT VETTED LIST (FIX 1): the "Knockout games" button used to
 // classify stages with a keyword regex, which was brittle against `event_stage`
@@ -550,10 +553,19 @@ const KNOCKOUT_STAGES = new Set([
   "Trophy Final",
 ]);
 
-/** A stage value counts as "knockout" for the shortcut iff it is in the vetted
- * KNOCKOUT_STAGES set. */
+// Name normalization (backlog #5): the Stage picker now shows CANONICAL stage
+// labels, so the vetted RAW knockout set above is projected into canonical space
+// ONCE here (each raw value mapped through canonicalStage, deduped). Every merged
+// spelling is itself knockout, so this only SHRINKS the set (e.g. "Semi Final" /
+// "Semi-Final" / "Semi-final" → the one canonical "Semi-Final") — no stage
+// changes classification. The "Knockout games" button matches canonical options
+// against THIS set.
+const KNOCKOUT_STAGES_CANON = new Set([...KNOCKOUT_STAGES].map(canonicalStage));
+
+/** A CANONICAL stage label counts as "knockout" for the shortcut iff it is in
+ * the vetted knockout set (projected into canonical space). */
 function isKnockoutStage(stage) {
-  return KNOCKOUT_STAGES.has(stage);
+  return KNOCKOUT_STAGES_CANON.has(stage);
 }
 
 /** Mount the Stage picker (state.stage). `embedded` suppresses the outer label.
@@ -648,7 +660,13 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
       const { rows } = await query(
         `SELECT DISTINCT event_stage AS s FROM matches WHERE event_stage IS NOT NULL AND gender = '${String(gender).replace(/'/g, "''")}' ORDER BY event_stage`
       );
-      stageOptions = rows.map((r) => r.s);
+      // Fold raw spellings to canonical labels (name normalization) and dedup,
+      // so e.g. the three "Semi(-)Final" spellings collapse to one option; the
+      // checkbox value stored in state.stage is the canonical label, which
+      // filters.js expands back to every raw spelling. Sorted A–Z on the label.
+      stageOptions = [...new Set(rows.map((r) => canonicalStage(r.s)))].sort((a, b) =>
+        a < b ? -1 : a > b ? 1 : 0
+      );
       loadedGender = gender;
     } catch (e) {
       stageOptions = null; // retry on a later sync

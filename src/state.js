@@ -497,13 +497,17 @@ export function createInitialState(maxMonth) {
     opposition: [], // opposition team names; [] = no predicate. Was international-only
                    // (decision 20); decision 51 (R5-F #14) enables it for club/domestic
                    // too, on the same raw team names.
-    event: [], // event_name values (Batch 1B, task 1B-1); [] = no predicate. NOT gated on teamType
-               // (event_name is meaningful for domestic competitions too, unlike opposition) — see
-               // eventFilterActive() and filters.js buildScopeClauses' gender-scoped matches join.
+    event: [], // CANONICAL event labels (name normalization, backlog #5 — many raw event_name
+               // spellings fold to one label; filters.js expands each back to its raw alias set).
+               // [] = no predicate. NOT gated on teamType (event_name is meaningful for domestic
+               // competitions too, unlike opposition) — see eventFilterActive() and filters.js
+               // buildScopeClauses' gender-scoped matches join.
     venue: [], // venue values (Batch 1B, task 1B-1); [] = no predicate. See venueFilterActive() and
                // filters.js buildScopeClauses' gender-scoped matches join.
-    eventSeasons: {}, // Event → Season narrowing (Wave 6 pt2): { [event_name]: string[] } of the
-               // specific seasons kept per chosen event. {} = every event on "All seasons" = no
+    eventSeasons: {}, // Event → Season narrowing (Wave 6 pt2): { [canonical event label]: string[] }
+               // of the specific seasons kept per chosen event (keyed by the same canonical labels
+               // state.event holds — name normalization, backlog #5). {} = every event on "All
+               // seasons" = no
                // narrowing = query byte-identical to the event-only filter. See seasonsForEvent()/
                // anyEventSeasonNarrowing() above and filters.js buildScopeClauses. Reset alongside
                // state.event on any scope change (gender/format/team-type/date) in filters.js.
@@ -524,7 +528,8 @@ export function createInitialState(maxMonth) {
     tossResult: [],    // subset of {"won","lost"} — row team ==/<> toss_winner
     tossDecision: [],  // subset of {"bat","field"} — matches.toss_decision
     inningsOrder: [],  // subset of {"first","second"} — row team ==/<> team_batting_first
-    stage: [],         // raw event_stage strings to keep (matches.event_stage IN (...))
+    stage: [],         // CANONICAL stage labels to keep (name normalization, backlog #5 — filters.js
+                       // buildMatchContextClauses expands each to its raw event_stage spelling set)
     method: [],        // "Rain-affected matches" multi-select (FIX 3): raw method strings
                        // (D/L / VJD / …) and/or the METHOD_NONE sentinel; empty = inactive
     matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)

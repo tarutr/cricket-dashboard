@@ -25,6 +25,7 @@ import {
   METHOD_NONE,
   escSql as esc,
 } from "./state.js";
+import { eventAliases, stageAliases } from "./canonicalNames.js";
 
 // ── Day-level date helpers (Batch 1B, task 1B-2) ─────────────────────────────
 // Native <input type="date"> yields "YYYY-MM-DD" (which buildScopeClauses
@@ -190,13 +191,16 @@ export function buildScopeClauses(
     const g = esc(state.gender);
     if (!anyEventSeasonNarrowing(state)) {
       // No chosen event is narrowed to specific seasons (every event on "All
-      // seasons") → emit the EXACT pre-Wave-6-pt2 clause, byte-for-byte. This is
-      // the backward-compatible path: picking an event with All checked filters
-      // exactly as before the season sub-picker existed (anchors + the
-      // All-checked case are guaranteed identical).
+      // seasons"). Each entry in state.event is a CANONICAL label (name
+      // normalization, backlog #5) — expand each to its raw alias set so the
+      // one option matches every raw spelling (e.g. "County Championship" pulls
+      // in LV=/Specsavers/unsponsored). An identity (unlisted) event expands to
+      // just itself, so an all-identity selection emits the same IN-list as
+      // before normalization. Dedup across canonicals for a tidy list.
+      const aliases = [...new Set(state.event.flatMap((e) => eventAliases(e)))];
       clauses.push(
-        `match_id IN (SELECT match_id FROM matches WHERE gender = '${g}' AND event_name IN (${state.event
-          .map((e) => `'${esc(e)}'`)
+        `match_id IN (SELECT match_id FROM matches WHERE gender = '${g}' AND event_name IN (${aliases
+          .map((a) => `'${esc(a)}'`)
           .join(", ")}))`
       );
     } else {
@@ -207,13 +211,19 @@ export function buildScopeClauses(
       // (part 1 additive column), the same table this semi-join already targets,
       // so no extra join is needed. Orphan eventSeasons keys (for events not in
       // state.event) are never read here — only state.event is iterated.
+      // eventSeasons is keyed by CANONICAL label (name normalization); each
+      // canonical expands to its raw alias set, so a narrowed canonical becomes
+      // `(event_name IN (aliases) AND season IN (…))` — the season narrowing
+      // spans every raw era of the merged event (e.g. County Championship
+      // seasons cover the LV=/Specsavers/unsponsored spellings alike).
       const es = state.eventSeasons || {};
       const terms = state.event.map((e) => {
+        const aliasIn = eventAliases(e).map((a) => `'${esc(a)}'`).join(", ");
         const seasons = Array.isArray(es[e]) ? es[e] : [];
         if (seasons.length > 0) {
-          return `(event_name = '${esc(e)}' AND season IN (${seasons.map((sn) => `'${esc(sn)}'`).join(", ")}))`;
+          return `(event_name IN (${aliasIn}) AND season IN (${seasons.map((sn) => `'${esc(sn)}'`).join(", ")}))`;
         }
-        return `event_name = '${esc(e)}'`;
+        return `event_name IN (${aliasIn})`;
       });
       clauses.push(`match_id IN (SELECT match_id FROM matches WHERE gender = '${g}' AND (${terms.join(" OR ")}))`);
     }
@@ -353,10 +363,15 @@ export function buildMatchContextClauses(state, rowTeamCol) {
     if (parts.length) clauses.push(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`);
   }
 
-  // 5a. Stage (matches.event_stage IN the picked raw stage values).
+  // 5a. Stage. state.stage holds CANONICAL stage labels (name normalization,
+  //     backlog #5) — expand each to its raw event_stage spelling set so
+  //     picking "Semi-Final" matches "Semi Final" / "Semi-Final" / "Semi-final"
+  //     alike. An identity (unlisted) stage expands to just itself. Dedup for a
+  //     tidy IN-list. Empty selection contributes nothing (byte-identical).
   const st = state.stage || [];
   if (st.length) {
-    clauses.push(`${A}.event_stage IN (${st.map((s) => `'${esc(s)}'`).join(", ")})`);
+    const stageRaws = [...new Set(st.flatMap((s) => stageAliases(s)))];
+    clauses.push(`${A}.event_stage IN (${stageRaws.map((s) => `'${esc(s)}'`).join(", ")})`);
   }
 
   // 5b. Rain-affected matches (FIX 3): a multi-select over the distinct non-null

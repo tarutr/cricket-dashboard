@@ -13,6 +13,7 @@ import { query } from "./db.js";
 import { buildScopeClauses, buildCoreScopeClauses } from "./filters.js";
 import { getMetric, DISMISSAL_KINDS, metricsFor } from "./metrics.js";
 import { escSql as esc } from "./state.js";
+import { canonicalEvent, eventAliases } from "./canonicalNames.js";
 
 function expr(discipline, key) {
   return getMetric(key, discipline).sqlExpression;
@@ -354,52 +355,111 @@ export async function searchTeams(term, gender, teamType = "both", formats = nul
 }
 
 /**
- * Distinct event_name values in `matches` for the current scope. games = match
- * count; latestDate = MAX(match_date). event_name is one label per tournament
- * SERIES, not per edition/year (verified against live data — e.g. "ICC Men's
- * T20 World Cup" spans matches dated 2014 through 2026 under the one name), so
- * `games` here is the event's total WITHIN the active scope, matching what the
- * picker's "games" column should mean for a series name. `formats`/`dateFrom`/
- * `dateTo` are the A9 additions (optional/additive — see matchOptionScope).
+ * Distinct event options for the Event picker, folded to CANONICAL labels (name
+ * normalization, backlog #5). The raw `event_name` is queried per-spelling, then
+ * MANY raw names collapse to ONE canonical option in JS — its `games` is the SUM
+ * across every raw spelling in scope, and `latestDate` the MAX — so "ICC Men's
+ * T20 World Cup" appears once with the combined total of ICC World Twenty20 +
+ * World T20 + the current name. An unlisted event maps to itself (identity),
+ * typography-normalised. state.event stores these canonical labels; the query
+ * side (filters.js buildScopeClauses) expands the selected canonical back to its
+ * raw alias set. This is an OPTIONS lookup only — it never feeds a leaderboard
+ * aggregate, so numbers are untouched.
+ *
+ * The old SQL ORDER BY is reproduced in JS AFTER the canonical fold (the merge
+ * changes the per-option `games` totals, so ordering must run on the summed
+ * values): text-match tier on the canonical label (only when `term` is
+ * non-blank — the live caller passes ""), then games desc, latestDate desc,
+ * label asc. `formats`/`dateFrom`/`dateTo` are the A9 scope additions (see
+ * matchOptionScope). latestDate is selected as a 'YYYY-MM-DD' string so the JS
+ * tiebreak compares it chronologically without Date coercion.
  */
 export async function searchEvents(term, gender, teamType = "both", formats = null, dateFrom = null, dateTo = null) {
-  const orderBy = relevanceOrderBy("event_name", term, "games DESC, latestDate DESC, event_name ASC");
   const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo);
   const sql = [
-    `SELECT event_name AS value, event_name AS label, COUNT(*) AS games, MAX(match_date) AS latestDate`,
+    `SELECT event_name AS raw, COUNT(*) AS games, CAST(MAX(match_date) AS VARCHAR) AS latestDate`,
     `FROM matches`,
     `WHERE ${scope} AND event_name IS NOT NULL`,
     `GROUP BY event_name`,
-    orderBy,
   ].join("\n");
   const { rows } = await query(sql);
-  return rows;
+  // Fold raw spellings -> canonical option (sum games, max latestDate).
+  const byCanon = new Map();
+  for (const r of rows) {
+    const canon = canonicalEvent(r.raw);
+    let o = byCanon.get(canon);
+    if (!o) {
+      o = { value: canon, label: canon, games: 0, latestDate: null };
+      byCanon.set(canon, o);
+    }
+    o.games += Number(r.games) || 0;
+    if (r.latestDate != null && (o.latestDate == null || r.latestDate > o.latestDate)) o.latestDate = r.latestDate;
+  }
+  const t = (term || "").trim().toLowerCase();
+  return [...byCanon.values()].sort((a, b) => {
+    if (t) {
+      const at = a.label.toLowerCase().includes(t) ? 0 : 1;
+      const bt = b.label.toLowerCase().includes(t) ? 0 : 1;
+      if (at !== bt) return at - bt;
+    }
+    if (b.games !== a.games) return b.games - a.games;
+    const ad = a.latestDate || "";
+    const bd = b.latestDate || "";
+    if (ad !== bd) return ad < bd ? 1 : -1; // latestDate DESC
+    return a.label < b.label ? -1 : a.label > b.label ? 1 : 0; // label ASC
+  });
 }
 
 /**
- * Distinct seasons per event for the Event → Season nested picker (Wave 6 pt2).
- * One row per (event_name, season) that has at least one match INSIDE the current
- * scope, scoped by the SAME matchOptionScope (gender/format/date/team_type) as
- * searchEvents — so the seasons offered are exactly those with matches in the
- * active date window (this is what makes the season list "scoped to the active
- * date range"). Ordered most-recent-first by season_year_start (part-1 additive
- * column). `eventNames` is the currently-selected events; an empty list is a
- * no-op ([]). This is an OPTIONS lookup only — it never feeds a leaderboard
- * aggregate, so numbers are untouched (mirrors searchEvents/searchVenues).
+ * Distinct seasons per event for the Event → Season nested picker (Wave 6 pt2),
+ * name-normalization-aware (backlog #5). `eventNames` is the currently-selected
+ * CANONICAL event labels; each is expanded to its raw alias set so the seasons
+ * offered span EVERY raw spelling of the merged event (e.g. "County
+ * Championship" shows seasons across the LV=/Specsavers/unsponsored eras as one
+ * continuous list). The DB is grouped by (raw event_name, season) within the
+ * SAME matchOptionScope (gender/format/date/team_type) as searchEvents, then
+ * folded back to (canonical, season) in JS so a season shared by two spellings
+ * (or two eras) is ONE row with the summed games. Returned rows carry
+ * `event` = the CANONICAL label (the caller keys its per-event groups on it),
+ * `season`, `syr` (season_year_start, for ordering), `games`. Ordered
+ * most-recent-first (syr desc, season desc). An empty selection is a no-op ([]).
+ * OPTIONS lookup only — never feeds a leaderboard aggregate, so numbers are
+ * untouched.
  */
 export async function searchEventSeasons(eventNames, gender, teamType = "both", formats = null, dateFrom = null, dateTo = null) {
   if (!Array.isArray(eventNames) || eventNames.length === 0) return [];
   const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo);
-  const inList = eventNames.map((e) => `'${esc(e)}'`).join(", ");
+  // Union of every raw alias across the selected canonicals.
+  const rawNames = [...new Set(eventNames.flatMap((e) => eventAliases(e)))];
+  const inList = rawNames.map((e) => `'${esc(e)}'`).join(", ");
   const sql = [
-    `SELECT event_name AS event, season, ANY_VALUE(season_year_start) AS syr, COUNT(*) AS games`,
+    `SELECT event_name AS raw, season, ANY_VALUE(season_year_start) AS syr, COUNT(*) AS games`,
     `FROM matches`,
     `WHERE ${scope} AND event_name IN (${inList}) AND season IS NOT NULL`,
     `GROUP BY event_name, season`,
-    `ORDER BY syr DESC, season DESC`,
   ].join("\n");
   const { rows } = await query(sql);
-  return rows;
+  // Fold raw spellings back to the canonical event, deduping seasons across
+  // aliases/eras (sum games, max season_year_start).
+  const byKey = new Map();
+  for (const r of rows) {
+    const canon = canonicalEvent(r.raw);
+    const key = `${canon} ${r.season}`;
+    let o = byKey.get(key);
+    if (!o) {
+      o = { event: canon, season: r.season, syr: null, games: 0 };
+      byKey.set(key, o);
+    }
+    o.games += Number(r.games) || 0;
+    const syr = r.syr == null ? null : Number(r.syr);
+    if (syr != null && (o.syr == null || syr > o.syr)) o.syr = syr;
+  }
+  return [...byKey.values()].sort((a, b) => {
+    const as = a.syr == null ? -Infinity : a.syr;
+    const bs = b.syr == null ? -Infinity : b.syr;
+    if (as !== bs) return bs - as; // season_year_start DESC
+    return a.season < b.season ? 1 : a.season > b.season ? -1 : 0; // season DESC
+  });
 }
 
 /** Distinct venue values in `matches` for the current scope. games = match
