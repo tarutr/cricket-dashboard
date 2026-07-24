@@ -30,6 +30,9 @@ import {
   oppositionFilterActive,
   eventFilterActive,
   venueFilterActive,
+  fieldingPositionActive,
+  fieldingKindActive,
+  fieldingPhaseActive,
   matchupVsActive,
   effectiveNamespace,
   eligibleMetrics,
@@ -54,6 +57,9 @@ import {
   mountTeam,
   mountEvent,
   mountVenue,
+  mountFieldingPosition,
+  mountFieldingKind,
+  mountFieldingPhase,
 } from "./drawerInnings.js";
 import { escHtml, escAttr } from "./html.js";
 
@@ -108,6 +114,15 @@ const SINGLETON_TYPES = [
   { key: "strikerpos", label: "Batting position", group: "Basic", menOnly: true },
   { key: "event", label: "Event", group: "Match", menOnly: false },
   { key: "venue", label: "Venue", group: "Match", menOnly: false },
+  // Fielding SLICE conditions (fielding rebuild): the fielding metric's OWN dims
+  // — narrow WHICH wicket-events the Catches/Stumpings/Run-outs/Dismissals-
+  // Effected columns count. PLAIN mode only (fielding has no matchup grain);
+  // isPresent gates them on !matchupVsActive. Not menOnly — fielding works for
+  // both genders. They sit in the "Fielding" dropdown optgroup, alongside the
+  // fielding metric conditions.
+  { key: "fld_pos", label: "Dismissed position", group: "Fielding", menOnly: false },
+  { key: "fld_kind", label: "Dismissal kind", group: "Fielding", menOnly: false },
+  { key: "fld_phase", label: "Fielding phase", group: "Fielding", menOnly: false },
 ];
 
 // Dropdown OPTION order per group (R5 Wave 1a, item 7; "bowling" re-added R5
@@ -116,6 +131,8 @@ const SINGLETON_TYPES = [
 // after "Innings".
 const PLAYER_ADD_ORDER = ["team", "opposition", "hand", "bowling", "role"];
 const MATCH_ADD_ORDER = ["event", "venue"];
+// Fielding slice singletons, in the "Fielding" optgroup (after the metric options).
+const FIELDING_SLICE_ADD_ORDER = ["fld_pos", "fld_kind", "fld_phase"];
 
 /**
  * Mount the condition builder into `advancedHost` (the Advanced Filters section
@@ -396,6 +413,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
   const oppositionController = mountOpposition(editorHosts.opposition, store, onChange, { embedded: true });
   const eventController = mountEvent(editorHosts.event, store, onChange);
   const venueController = mountVenue(editorHosts.venue, store, onChange);
+  const fieldingPositionController = mountFieldingPosition(editorHosts.fld_pos, store, onChange, { embedded: true });
+  const fieldingKindController = mountFieldingKind(editorHosts.fld_kind, store, onChange, { embedded: true });
+  const fieldingPhaseController = mountFieldingPhase(editorHosts.fld_phase, store, onChange, { embedded: true });
 
   // ── Presence + session-added tracking ──────────────────────────────────────
   // sessionAdded: singleton rows the user added THIS popup session that don't
@@ -429,9 +449,15 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
       case "opposition": return (s.opposition || []).length > 0;
       case "event": return (s.event || []).length > 0;
       case "venue": return (s.venue || []).length > 0;
+      // Fielding SLICE conditions: present when their list has a value.
+      case "fld_pos": return Boolean(s.fielding && (s.fielding.positions || []).length > 0);
+      case "fld_kind": return Boolean(s.fielding && (s.fielding.kinds || []).length > 0);
+      case "fld_phase": return Boolean(s.fielding && (s.fielding.phases || []).length > 0);
       default: return false;
     }
   }
+
+  const FIELDING_SLICE_KEYS = new Set(["fld_pos", "fld_kind", "fld_phase"]);
 
   function isPresent(t, s) {
     if (t.menOnly && s.gender === "female") return false;
@@ -439,6 +465,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     // (nor auto-appears) outside matchup mode, even if a stale position value or a
     // session-add lingers. Inside matchup it follows the normal presence rule.
     if (t.key === "strikerpos" && !matchupVsActive(s)) return false;
+    // Fielding SLICE conditions are PLAIN-mode only (fielding has no matchup
+    // grain) — never show, nor auto-appear, while a Vs bucket is active.
+    if (FIELDING_SLICE_KEYS.has(t.key) && matchupVsActive(s)) return false;
     return hasValue(t.key, s) || Boolean(sessionAdded[t.key]);
   }
 
@@ -454,6 +483,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
       case "opposition": store.set({ opposition: [] }); break;
       case "event": store.set({ event: [] }); break;
       case "venue": store.set({ venue: [] }); break;
+      case "fld_pos": store.set({ fielding: { ...(store.get().fielding || {}), positions: [] } }); break;
+      case "fld_kind": store.set({ fielding: { ...(store.get().fielding || {}), kinds: [] } }); break;
+      case "fld_phase": store.set({ fielding: { ...(store.get().fielding || {}), phases: [] } }); break;
     }
   }
 
@@ -562,6 +594,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     // already present, same as any other singleton option. The Advanced group
     // renders when there is any advanced metric OR the vs option (men) to hold.
     const vsTopOpt = singletonOpt("vs");
+    // Fielding SLICE singletons (Dismissed position / Dismissal kind / Fielding
+    // phase) join the "Fielding" optgroup below the metric options — PLAIN mode
+    // only (fielding has no matchup grain, so nothing to slice under a Vs bucket).
+    const fieldingSliceOpts = matchupVsActive(s) ? "" : singletonOpts(FIELDING_SLICE_ADD_ORDER);
     return `
       <option value="">+ Add condition…</option>
       <optgroup label="Player">${singletonOpts(PLAYER_ADD_ORDER)}</optgroup>
@@ -569,7 +605,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
       <optgroup label="Basic metrics">${basicOpts()}</optgroup>
       ${advanced.length || vsTopOpt ? `<optgroup label="Advanced metrics">${vsTopOpt}${metricOpts(advanced)}</optgroup>` : ""}
       ${dismissal.length ? `<optgroup label="Dismissal type">${dismissalOpts}</optgroup>` : ""}
-      ${fielding.length ? `<optgroup label="Fielding">${metricOpts(fielding)}</optgroup>` : ""}
+      ${fielding.length || fieldingSliceOpts ? `<optgroup label="Fielding">${metricOpts(fielding)}${fieldingSliceOpts}</optgroup>` : ""}
       ${impact.length ? `<optgroup label="Impact">${metricOpts(impact)}</optgroup>` : ""}`;
   }
 
@@ -591,6 +627,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     oppositionController.sync();
     eventController.sync();
     venueController.sync();
+    fieldingPositionController.sync();
+    fieldingKindController.sync();
+    fieldingPhaseController.sync();
     renderProfileEditors();
   }
 
@@ -885,6 +924,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     if (oppositionFilterActive(s)) n++;
     if (eventFilterActive(s)) n++;
     if (venueFilterActive(s)) n++;
+    // Fielding SLICE conditions — plain mode only (inert under a matchup Vs).
+    if (!matchupVsActive(s)) {
+      if (fieldingPositionActive(s)) n++;
+      if (fieldingKindActive(s)) n++;
+      if (fieldingPhaseActive(s)) n++;
+    }
     n += activeConditionCount(s.advanced);
     return n;
   }

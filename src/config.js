@@ -11,6 +11,10 @@ export const PARQUET_FILES = [
   "player_matches.parquet",
   // D4: profile-powered filters (used now) + matchup aggregates (wired in Pieces 4–5).
   "player_profiles.parquet",
+  // Fielding rebuild: event-grain fielding (one row per wicket-credit) — feeds
+  // the Catches/Stumpings/Run-outs/Dismissals-Effected metrics via the per-fielder
+  // pre-aggregated subquery in table.js buildQuery.
+  "fielding_events.parquet",
   "matchup_batting.parquet",
   "matchup_bowling.parquet",
 ];

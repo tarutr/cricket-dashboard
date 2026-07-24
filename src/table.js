@@ -656,19 +656,50 @@ function advancedToHaving(advanced, discipline, exprFn) {
   return parts.length > 1 ? `(${parts.join(topJoiner)})` : parts[0];
 }
 
-/** True if any ACTIVE advanced condition targets a Fielding/Impact metric
- * (Wave 3: source "player_matches", excluding the JS-merged "matches"). Those
- * metrics only exist in the query through the fielding_cte LEFT JOIN, and their
- * sqlExpression is MAX(fielding_cte.<col>) — so buildQuery must add that join
- * whenever a condition references one, even with no fielding COLUMN visible, or
- * the emitted HAVING would reference an unjoined CTE and the query would fail. */
-function advancedReferencesFielding(advanced, discipline) {
+/** True if any ACTIVE advanced condition targets a metric matching `pred`.
+ * Fielding/Impact metrics only exist in the query through their LEFT-JOINed CTE
+ * (`fielding_cte` / `pom_cte`), and their sqlExpression is MAX(<cte>.<col>) — so
+ * buildQuery must add that join whenever a condition references one, even with
+ * no fielding COLUMN visible, or the emitted HAVING would reference an unjoined
+ * CTE and the query would fail. */
+function advancedReferencesMetric(advanced, discipline, pred) {
   return activeGroups(advanced).some((g) =>
     g.conds.some((c) => {
       const m = getMetric(c.metricKey, discipline);
-      return m && m.source === "player_matches" && m.key !== "matches";
+      return m && pred(m);
     })
   );
+}
+/** Metrics sourced from the event-grain `fielding` view (catches/stumpings/
+ * run_outs/dismissals_effected) — surfaced via the `fielding_cte` join. */
+const isFieldingEventMetric = (m) => m && m.source === "fielding_events";
+/** Impact metric(s) sourced from `player_matches` (player_of_match, NOT the
+ * JS-merged `matches`) — surfaced via the parallel `pom_cte` join. */
+const isPomMetric = (m) => m && m.source === "player_matches" && m.key !== "matches";
+
+/** SQL WHERE predicates for the fielding SLICE conditions (fielding rebuild) —
+ * the fielding metric's OWN dims, applied inside `fielding_cte` so the
+ * Catches/Stumpings/Run-outs/Dismissals-Effected totals count only the sliced
+ * events. Reads `state.fielding` ({ positions:[], kinds:[], phases:[] } — all
+ * multi-select lists, mirroring the app's existing position/opposition pickers).
+ * Returns [] when nothing is set, so the fielding_cte (and the whole query) stays
+ * byte-identical to the un-sliced case. Columns referenced (out_batting_position,
+ * kind, phase) all live on the fielding_events view. */
+export function buildFieldingSliceClauses(state) {
+  const f = state.fielding || {};
+  const clauses = [];
+  if (Array.isArray(f.positions) && f.positions.length > 0) {
+    // user-picked ints; coerce + drop non-integral before it reaches SQL.
+    const nums = f.positions.map(Number).filter(Number.isInteger);
+    if (nums.length > 0) clauses.push(`out_batting_position IN (${nums.join(", ")})`);
+  }
+  if (Array.isArray(f.kinds) && f.kinds.length > 0) {
+    clauses.push(`kind IN (${f.kinds.map((k) => `'${esc(k)}'`).join(", ")})`);
+  }
+  if (Array.isArray(f.phases) && f.phases.length > 0) {
+    clauses.push(`phase IN (${f.phases.map((p) => `'${esc(p)}'`).join(", ")})`);
+  }
+  return clauses;
 }
 
 /**
@@ -735,7 +766,7 @@ export function buildQuery(state, visibleColumns) {
 
   const inningsMetrics = visibleColumns
     .map((key) => getMetric(key, discipline))
-    .filter((m) => m && m.source !== "player_matches");
+    .filter((m) => m && m.source !== "player_matches" && m.source !== "fielding_events");
 
   // R. Pos. column (task 5, B1 Wave 5 polish): batting-only, opts this ONE
   // metric out of the generic "interpolate metric.sqlExpression verbatim"
@@ -767,24 +798,38 @@ export function buildQuery(state, visibleColumns) {
     }
   }
 
-  // Fielding / Impact columns (Wave 3): source "player_matches", so EXCLUDED
-  // from inningsMetrics above (they aren't in the batting/bowling views). They
-  // are surfaced instead via the per-player `fielding_cte` LEFT JOIN wired into
-  // the FROM below; each sqlExpression is MAX(fielding_cte.<col>) — the value is
-  // constant across a player's group (the CTE is one row per player), so MAX
-  // just projects that constant, exactly like the R. Pos. join's MAX. The join
-  // never multiplies innings rows, so every existing aggregate above stays
-  // byte-identical. `wantsFielding` also lights up for a fielding STAT CONDITION
-  // with no visible fielding column, so the HAVING's MAX(fielding_cte.…) always
-  // has its CTE joined.
-  const fieldingMetrics = visibleColumns
+  // Fielding (source "fielding_events") + Impact (player_of_match, source
+  // "player_matches") columns: EXCLUDED from inningsMetrics above (not in the
+  // batting/bowling views). Surfaced via two parallel per-player CTEs LEFT-JOINed
+  // into the FROM below —
+  //   fielding_cte : catches/stumpings/run_outs over the EVENT-GRAIN `fielding`
+  //                  view, honoring the FULL scope incl. OPPOSITION + venue/event
+  //                  + profile, substitutes excluded, plus the fielding SLICE
+  //                  conditions (dismissed-batter position / dismissal kind /
+  //                  phase — the metric's own dims).
+  //   pom_cte      : player_of_match over player_matches (which has no opposition
+  //                  column — a whole-match award, so opposition is not applied).
+  // Each sqlExpression is MAX(<cte>.<col>) — a constant across a player's group
+  // (each CTE is one row per player), so MAX just projects that constant, exactly
+  // like the R. Pos. join's MAX. The joins never multiply innings rows, so every
+  // existing aggregate above stays byte-identical. `wants*` also lights up for a
+  // matching STAT CONDITION with no visible column, so a HAVING referencing the
+  // CTE always has its CTE joined.
+  const fieldingEventCols = visibleColumns
     .map((key) => getMetric(key, discipline))
-    .filter((m) => m && m.source === "player_matches" && m.key !== "matches");
-  for (const m of fieldingMetrics) {
+    .filter(isFieldingEventMetric);
+  const pomCols = visibleColumns
+    .map((key) => getMetric(key, discipline))
+    .filter(isPomMetric);
+  for (const m of [...fieldingEventCols, ...pomCols]) {
     selectParts.push(`${m.sqlExpression} AS ${m.key}`);
   }
   const wantsFielding =
-    fieldingMetrics.length > 0 || advancedReferencesFielding(state.advanced, discipline);
+    fieldingEventCols.length > 0 ||
+    advancedReferencesMetric(state.advanced, discipline, isFieldingEventMetric);
+  const wantsPom =
+    pomCols.length > 0 ||
+    advancedReferencesMetric(state.advanced, discipline, isPomMetric);
 
   const whereClauses = buildScopeClauses(state, {
     includeTeams: true,
@@ -810,31 +855,66 @@ export function buildQuery(state, visibleColumns) {
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
   const whereSql = whereWithPinExemption(whereClauses, buildCoreScopeClauses(state), idCol, pins);
 
-  // Fielding subquery (Wave 3): pre-aggregate player_matches to ONE row per
-  // player, over the SAME scope player_matches can express — core (gender/
-  // format/date/team-type) + team + event/venue + profile + R. Pos., pin-exempt
-  // — built with the EXACT options the "matches" secondary query uses below, so
-  // fielding and matches never diverge on scope. Opposition and matchup striker-
-  // position filters have no player_matches column, so (like "matches") they are
-  // not applied to the fielding totals — the one honesty gap, flagged for the
-  // owner. Only built when a fielding column is shown or a fielding stat
-  // condition is active; with neither, `sql` is byte-identical to before.
+  // Fielding subquery (fielding rebuild): pre-aggregate the EVENT-GRAIN `fielding`
+  // view to ONE row per fielder, honoring the FULL leaderboard scope — core
+  // (gender/format/date/team-type) + team (fielding_team) + OPPOSITION + event/
+  // venue + profile + R. Pos., pin-exempt — PLUS the fielding SLICE conditions
+  // (dismissed-batter position / dismissal kind / phase). Substitutes are
+  // excluded by default; the slice clauses (metric-definition refinements, not
+  // "who to include") always apply, even to pins. Only built when a fielding
+  // column is shown or a fielding stat condition is active; with neither, `sql`
+  // is byte-identical to before this wave.
+  const fieldingSliceClauses = buildFieldingSliceClauses(state);
   let fieldingCteSql = null;
   if (wantsFielding) {
-    const fldFull = buildScopeClauses(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
+    const fldFull = buildScopeClauses(state, {
+      includeTeams: true,
+      teamColumn: "fielding_team",
+      idColumn: "fielder_id",
+      oppositionColumn: "opposition",
+    });
     const fldCore = buildCoreScopeClauses(state);
     const fldExtra = fldFull.slice(fldCore.length);
     if (state.search && state.search.trim()) {
-      fldExtra.push(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
+      fldExtra.push(`fielder_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
     }
-    const fldWhereSql = whereWithPinExemption([...fldCore, ...fldExtra], fldCore, "player_id", pins);
+    const fldScopeSql = whereWithPinExemption([...fldCore, ...fldExtra], fldCore, "fielder_id", pins);
+    // substitute exclusion + slice conditions are AND'd OUTSIDE the pin
+    // exemption: they define WHAT is counted (like a phase column), so they apply
+    // to every fielder including pins — pins only bypass the "who/which match"
+    // scope above.
+    const fldTail = ["substitute IS NOT TRUE", ...fieldingSliceClauses];
     fieldingCteSql = [
       "fielding_cte AS (",
-      "  SELECT player_id AS fld_player_id,",
-      "         SUM(catches) AS catches, SUM(stumpings) AS stumpings,",
-      "         SUM(run_outs) AS run_outs, SUM(player_of_match) AS player_of_match",
+      "  SELECT fielder_id AS fld_player_id,",
+      "         SUM(CASE WHEN kind IN ('caught','caught and bowled') THEN 1 ELSE 0 END) AS catches,",
+      "         SUM(CASE WHEN kind = 'stumped' THEN 1 ELSE 0 END) AS stumpings,",
+      "         SUM(CASE WHEN kind = 'run out' THEN 1 ELSE 0 END) AS run_outs",
+      "  FROM fielding",
+      `  WHERE ${[fldScopeSql, ...fldTail].join(" AND ")}`,
+      "  GROUP BY fielder_id",
+      ")",
+    ].join("\n");
+  }
+
+  // Impact subquery (player_of_match): a whole-match award, so it stays on
+  // player_matches (which has no opposition/position column). Same scope options
+  // the "matches" secondary query uses below (core + team + event/venue + profile
+  // + R. Pos., pin-exempt), so PoM and matches never diverge on scope.
+  let pomCteSql = null;
+  if (wantsPom) {
+    const pomFull = buildScopeClauses(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
+    const pomCore = buildCoreScopeClauses(state);
+    const pomExtra = pomFull.slice(pomCore.length);
+    if (state.search && state.search.trim()) {
+      pomExtra.push(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
+    }
+    const pomWhereSql = whereWithPinExemption([...pomCore, ...pomExtra], pomCore, "player_id", pins);
+    pomCteSql = [
+      "pom_cte AS (",
+      "  SELECT player_id AS pom_player_id, SUM(player_of_match) AS player_of_match",
       "  FROM player_matches",
-      `  WHERE ${fldWhereSql}`,
+      `  WHERE ${pomWhereSql}`,
       "  GROUP BY player_id",
       ")",
     ].join("\n");
@@ -872,17 +952,20 @@ export function buildQuery(state, visibleColumns) {
   // of that exact name post-JOIN, making every existing bare `${idCol}`
   // reference elsewhere in this SELECT/GROUP BY (batter_id AS id, GROUP BY
   // batter_id, ...) ambiguous. "pos_batter_id" can never collide.
-  // r_pos_cte and fielding_cte are each one row per player and LEFT JOINed on
-  // the id column, so neither multiplies the innings rows the aggregates run
-  // over. Both use collision-safe join keys (pos_batter_id / fld_player_id) so
-  // no bare `${idCol}` reference in this SELECT/GROUP BY becomes ambiguous.
+  // r_pos_cte / fielding_cte / pom_cte are each one row per player and LEFT
+  // JOINed on the id column, so none multiplies the innings rows the aggregates
+  // run over. Each uses a collision-safe join key (pos_batter_id / fld_player_id
+  // / pom_player_id) so no bare `${idCol}` reference in this SELECT/GROUP BY
+  // becomes ambiguous.
   const cteDefs = [];
   if (wantsRPos) cteDefs.push(regularPositionCteSql(state));
   if (wantsFielding) cteDefs.push(fieldingCteSql);
+  if (wantsPom) cteDefs.push(pomCteSql);
 
   let fromSql = view;
   if (wantsRPos) fromSql += ` LEFT JOIN r_pos_cte ON r_pos_cte.pos_batter_id = ${idCol}`;
   if (wantsFielding) fromSql += ` LEFT JOIN fielding_cte ON fielding_cte.fld_player_id = ${idCol}`;
+  if (wantsPom) fromSql += ` LEFT JOIN pom_cte ON pom_cte.pom_player_id = ${idCol}`;
 
   const sql = [
     ...(cteDefs.length ? [`WITH ${cteDefs.join(",\n")}`] : []),

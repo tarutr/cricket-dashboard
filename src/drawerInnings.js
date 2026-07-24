@@ -37,7 +37,7 @@
 // list (no meta) and, since decision 51 (R5-F #14), is enabled for every team type.
 
 import { wirePortalDropdown } from "./filters.js";
-import { matchupVsActive } from "./state.js";
+import { matchupVsActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, FIELDING_POSITIONS } from "./state.js";
 import { searchTeams, searchEvents, searchVenues } from "./playerData.js";
 import { mountSearchMultiSelect } from "./searchSelect.js";
 import { escHtml, escAttr } from "./html.js";
@@ -212,6 +212,155 @@ export function mountRegularPositions(container, store, onChange, { embedded = f
 
   sync();
   return { sync };
+}
+
+// ── Fielding SLICE pickers (fielding rebuild) ───────────────────────────────
+// Three multi-select checkbox dropdowns that narrow WHICH wicket-events the
+// Catches/Stumpings/Run-outs/Dismissals-Effected metrics count, by the event's
+// OWN dims — dismissed-batter position (state.fielding.positions), dismissal kind
+// (.kinds), phase (.phases). Same self-contained `{ sync }` shape and portal
+// dropdown as mountBattingPosition above, so they slot into the condition
+// builder's singleton rows the same way. PLAIN mode only: the fielding metrics
+// live in the plain buildQuery (its fielding_cte join) — matchup Vs mode has no
+// fielding, so these self-hide there (mirrors mountBattingPosition's matchup gate,
+// inverted).
+
+/** Generic checkbox multi-select over one list on state.fielding. `field` is
+ * "positions" | "kinds" | "phases"; `options` is [{value,label}] (value is the
+ * literal written to state — number for positions, string for kind/phase);
+ * `summaryFn(selectedValues)` renders the toggle label. `embedded` suppresses the
+ * outer filter-label (the condition row already names it). Returns `{ sync }`. */
+function mountFieldingSlicePicker(container, store, onChange, { field, options, anyLabel, summaryFn, embedded = false, label }) {
+  const setField = (values) =>
+    store.set({ fielding: { ...(store.get().fielding || {}), [field]: values } });
+  const getField = () => (store.get().fielding && store.get().fielding[field]) || [];
+
+  container.innerHTML = `
+    <div class="filter-group filter-group--positions" data-role="fld-group">
+      ${embedded ? "" : `<span class="filter-label">${escHtml(label || "")}</span>`}
+      <div class="dropdown" data-role="fld-dropdown">
+        <button type="button" class="select dropdown__toggle" data-role="fld-toggle" aria-haspopup="true" aria-expanded="false">${escHtml(anyLabel)}</button>
+        <div class="dropdown__panel" data-role="fld-panel" hidden>
+          <div class="dropdown__list" data-role="fld-list">
+            ${options
+              .map(
+                (o) => `<label class="dropdown__item">
+                <input type="checkbox" data-fld-value="${escAttr(String(o.value))}" />
+                <span>${escHtml(o.label)}</span>
+              </label>`
+              )
+              .join("")}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const els = {
+    group: container.querySelector('[data-role="fld-group"]'),
+    toggle: container.querySelector('[data-role="fld-toggle"]'),
+    panel: container.querySelector('[data-role="fld-panel"]'),
+    list: container.querySelector('[data-role="fld-list"]'),
+  };
+
+  // value coercion: positions are numbers, kind/phase are strings. Read the
+  // option's declared type off `options` so the state array carries native types
+  // (so buildFieldingSliceClauses' Number.isInteger / IN-list logic is honored).
+  const valueOf = (raw) => {
+    const opt = options.find((o) => String(o.value) === raw);
+    return opt ? opt.value : raw;
+  };
+
+  function updateToggleLabel() {
+    els.toggle.textContent = summaryFn(getField());
+  }
+
+  const dropdown = wirePortalDropdown(els.toggle, els.panel);
+
+  els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const value = valueOf(cb.dataset.fldValue);
+      const current = getField().slice();
+      const idx = current.findIndex((v) => String(v) === String(value));
+      if (cb.checked) {
+        if (idx === -1) current.push(value);
+      } else if (idx !== -1) {
+        current.splice(idx, 1);
+      }
+      setField(current);
+      updateToggleLabel();
+      onChange();
+    });
+  });
+
+  /** Fielding lives only in PLAIN mode (its fielding_cte join is in buildQuery,
+   * not buildMatchupQuery), so hide entirely while a matchup "Vs" bucket is
+   * active. */
+  function sync() {
+    const state = store.get();
+    const matchupOn = matchupVsActive(state);
+    els.group.hidden = matchupOn;
+    if (matchupOn) {
+      dropdown.close();
+      return;
+    }
+    updateToggleLabel();
+    const selected = new Set(getField().map((v) => String(v)));
+    els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.checked = selected.has(cb.dataset.fldValue);
+    });
+  }
+
+  sync();
+  return { sync };
+}
+
+/** Fielding: dismissed-batter position slice (state.fielding.positions, 1–11). */
+export function mountFieldingPosition(container, store, onChange, opts = {}) {
+  return mountFieldingSlicePicker(container, store, onChange, {
+    field: "positions",
+    options: FIELDING_POSITIONS.map((p) => ({ value: p, label: String(p) })),
+    anyLabel: "Any position",
+    summaryFn: (vals) => {
+      if (!vals || vals.length === 0) return "Any position";
+      const sorted = [...vals].sort((a, b) => a - b);
+      return sorted.length <= 3 ? sorted.join(", ") : `${sorted.length} selected`;
+    },
+    label: "Dismissed position",
+    ...opts,
+  });
+}
+
+/** Fielding: dismissal-kind slice (state.fielding.kinds). */
+export function mountFieldingKind(container, store, onChange, opts = {}) {
+  return mountFieldingSlicePicker(container, store, onChange, {
+    field: "kinds",
+    options: FIELDING_KIND_OPTIONS,
+    anyLabel: "Any dismissal",
+    summaryFn: (vals) => {
+      if (!vals || vals.length === 0) return "Any dismissal";
+      if (vals.length === 1) return FIELDING_KIND_OPTIONS.find((o) => o.value === vals[0])?.label || vals[0];
+      return `${vals.length} selected`;
+    },
+    label: "Dismissal kind",
+    ...opts,
+  });
+}
+
+/** Fielding: phase slice (state.fielding.phases). */
+export function mountFieldingPhase(container, store, onChange, opts = {}) {
+  return mountFieldingSlicePicker(container, store, onChange, {
+    field: "phases",
+    options: FIELDING_PHASE_OPTIONS,
+    anyLabel: "Any phase",
+    summaryFn: (vals) => {
+      if (!vals || vals.length === 0) return "Any phase";
+      if (vals.length === 1) return FIELDING_PHASE_OPTIONS.find((o) => o.value === vals[0])?.label || vals[0];
+      return `${vals.length} selected`;
+    },
+    label: "Fielding phase",
+    ...opts,
+  });
 }
 
 // Game-count meta label (ROUND 3, task 4): "1,013 games" — localized thousands

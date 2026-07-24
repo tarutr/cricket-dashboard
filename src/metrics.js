@@ -25,19 +25,22 @@
 //   Therefore boundary balls == fours_hit + sixes_hit (batting) and
 //   fours_conceded + sixes_conceded (bowling). We must NOT re-derive it.
 //
-// EXCEPTION: metrics with `source: "player_matches"` cannot be computed from the
-// innings views (a player may appear in a match without batting or bowling), so
-// they read the `player_matches` view instead. Two shapes:
-//   • `matches` — a SEPARATE grouped query over player_matches with the SAME
-//     match-level filters, joined on player_id in JS by the table builder.
-//   • Fielding / Impact (Wave 3: catches / stumpings / run_outs /
-//     dismissals_effected / player_of_match) — surfaced IN the main sql: buildQuery
-//     LEFT JOINs a per-player pre-aggregated `fielding_cte` (one row per player,
-//     SUM over the same scope) onto the batting/bowling GROUP BY, so their
-//     `sqlExpression` is `MAX(fielding_cte.<col>)` — a constant-per-group value
-//     (the join never multiplies innings rows, so existing aggregates are
-//     byte-identical). Living in the main sql lets them also drive HAVING (stat
-//     conditions) and the graph pool, which `matches` cannot.
+// EXCEPTION: some metrics cannot be computed from the innings views (a player
+// may appear in a match without batting or bowling, and fielding is a wicket-
+// event concept) — they read a separate view via a per-player CTE the table
+// builder LEFT JOINs onto the batting/bowling GROUP BY. Three shapes:
+//   • `matches` (source "player_matches") — a SEPARATE grouped query over
+//     player_matches with the SAME match-level filters, joined on player_id in JS.
+//   • Fielding (source "fielding_events": catches / stumpings / run_outs /
+//     dismissals_effected) — surfaced IN the main sql via a per-fielder
+//     pre-aggregated `fielding_cte` over the EVENT-GRAIN `fielding` view (one row
+//     per fielder over the scoped fielding_events, substitutes excluded), so their
+//     `sqlExpression` is `MAX(fielding_cte.<col>)`.
+//   • Impact (source "player_matches": player_of_match) — same shape via a
+//     parallel per-player `pom_cte` over player_matches: `MAX(pom_cte.<col>)`.
+// Each CTE is one row per player, so the join never multiplies innings rows and
+// existing aggregates stay byte-identical. Living in the main sql lets them also
+// drive HAVING (stat conditions) and the graph pool, which `matches` cannot.
 //
 // ── Ratio safety (SPEC §5.3) ──────────────────────────────────────────────────
 // EVERY denominator is wrapped in NULLIF(<d>, 0) so division by zero yields SQL
@@ -1202,32 +1205,42 @@ const BOWLING_METRICS = [
   },
 ];
 
-// ── Fielding + Impact (Wave 3) ──────────────────────────────────────────────
+// ── Fielding + Impact (fielding rebuild) ────────────────────────────────────
 // Player-level fielding (catches / stumpings / run-outs / dismissals effected)
-// and match impact (Player-of-the-Match count). NOT a batting or bowling stat —
-// they aggregate the `player_matches` view (per (match, player) counts, derived
-// in export_parquet.py from the raw wickets/wicket_fielders/deliveries tables).
-// buildQuery (src/table.js) LEFT JOINs a per-player pre-aggregated `fielding_cte`
-// (SUM over the same scope, ONE row per player) onto the batting/bowling GROUP
-// BY, so each value is constant across a player's group and projected with MAX()
-// — the same shape as the R. Pos. join. Because the CTE is one row per player,
-// the join never multiplies innings rows → every existing aggregate stays
-// byte-identical. Defined once and pushed into BOTH disciplines (owner:
-// "available in BOTH the batting and bowling leaderboards"). `section`
-// "fielding"/"impact" places them under those sub-headers in the column picker
-// and the "+ Add condition…" list; higherIsBetter true (more dismissals /
-// awards ranks better).
+// and match impact (Player-of-the-Match count). NOT a batting or bowling stat.
+//
+// Fielding (catches/stumpings/run-outs/dismissals-effected) now aggregate the
+// EVENT-GRAIN `fielding` view (one row per wicket-credit, from fielding_events.
+// parquet) — so they honor the FULL shared scope: match context + fielding_team
+// + OPPOSITION + event + venue + profile, plus their own dims (dismissed-batter
+// position/kind/phase via fielding conditions). buildQuery (src/table.js) LEFT
+// JOINs a per-fielder pre-aggregated `fielding_cte` (ONE row per fielder over
+// the scoped fielding_events, substitutes excluded by default) onto the
+// batting/bowling GROUP BY; each value is constant across a player's group and
+// projected with MAX() — the same shape as the R. Pos. join. The CTE is one row
+// per player, so the join never multiplies innings rows → every existing
+// aggregate stays byte-identical.
+//
+// Player-of-the-Match stays sourced from `player_matches` (source
+// "player_matches") — it is genuinely per-match, not a fielding event — and is
+// surfaced via a parallel per-player `pom_cte` LEFT JOIN (MAX(pom_cte.…)).
+//
+// Defined once and pushed into BOTH disciplines (owner: "available in BOTH the
+// batting and bowling leaderboards"). `section` "fielding"/"impact" places them
+// under those sub-headers in the column picker and the "+ Add condition…" list;
+// higherIsBetter true (more dismissals / awards ranks better).
 const FIELDING_METRIC_SPECS = [
   { key: "catches", label: "Catches", shortLabel: "Ct", section: "fielding",
-    sqlExpression: "MAX(fielding_cte.catches)" },
+    source: "fielding_events", sqlExpression: "MAX(fielding_cte.catches)" },
   { key: "stumpings", label: "Stumpings", shortLabel: "St", section: "fielding",
-    sqlExpression: "MAX(fielding_cte.stumpings)" },
+    source: "fielding_events", sqlExpression: "MAX(fielding_cte.stumpings)" },
   { key: "run_outs", label: "Run-outs", shortLabel: "RO", section: "fielding",
-    sqlExpression: "MAX(fielding_cte.run_outs)" },
+    source: "fielding_events", sqlExpression: "MAX(fielding_cte.run_outs)" },
   { key: "dismissals_effected", label: "Dismissals Effected", shortLabel: "Dis Eff", section: "fielding",
+    source: "fielding_events",
     sqlExpression: "MAX(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs)" },
   { key: "player_of_match", label: "Player of the Match", shortLabel: "PoM", section: "impact",
-    sqlExpression: "MAX(fielding_cte.player_of_match)" },
+    source: "player_matches", sqlExpression: "MAX(pom_cte.player_of_match)" },
 ];
 for (const disc of ["batting", "bowling"]) {
   for (const f of FIELDING_METRIC_SPECS) {
@@ -1236,7 +1249,7 @@ for (const disc of ["batting", "bowling"]) {
       label: f.label,
       shortLabel: f.shortLabel,
       discipline: disc,
-      source: "player_matches",
+      source: f.source,
       section: f.section,
       sqlExpression: f.sqlExpression,
       higherIsBetter: true, format: "int",

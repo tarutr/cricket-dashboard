@@ -227,6 +227,44 @@ export function venueFilterActive(state) {
   return Array.isArray(state.venue) && state.venue.length > 0;
 }
 
+// ── Fielding SLICE conditions (fielding rebuild) ────────────────────────────
+// The fielding metric's OWN dims (dismissed-batter position / dismissal kind /
+// phase), narrowing which wicket-events the Catches/Stumpings/Run-outs/Dismissals
+// -Effected totals count. Stored on state.fielding as three multi-select lists.
+// Applied inside table.js's fielding_cte (buildFieldingSliceClauses) — a WHERE
+// slice, not a HAVING condition. Each list active iff non-empty.
+
+/** True if the fielding dismissed-position slice is narrowing the events. */
+export function fieldingPositionActive(state) {
+  return Boolean(state.fielding && Array.isArray(state.fielding.positions) && state.fielding.positions.length > 0);
+}
+/** True if the fielding dismissal-kind slice is narrowing the events. */
+export function fieldingKindActive(state) {
+  return Boolean(state.fielding && Array.isArray(state.fielding.kinds) && state.fielding.kinds.length > 0);
+}
+/** True if the fielding phase slice is narrowing the events. */
+export function fieldingPhaseActive(state) {
+  return Boolean(state.fielding && Array.isArray(state.fielding.phases) && state.fielding.phases.length > 0);
+}
+
+/** The credited-fielder dismissal kinds carried on fielding_events, and the three
+ * phase buckets — the vocabulary the fielding SLICE conditions pick from. The
+ * `value`s are the EXACT literals stored in fielding_events (kind / phase) and
+ * filtered by table.js buildFieldingSliceClauses. */
+export const FIELDING_KIND_OPTIONS = [
+  { value: "caught", label: "Caught" },
+  { value: "caught and bowled", label: "Caught & bowled" },
+  { value: "stumped", label: "Stumped" },
+  { value: "run out", label: "Run out" },
+];
+export const FIELDING_PHASE_OPTIONS = [
+  { value: "pp", label: "Powerplay" },
+  { value: "mid", label: "Middle" },
+  { value: "death", label: "Death" },
+];
+/** Dismissed-batter positions offered by the fielding position slice (1–11). */
+export const FIELDING_POSITIONS = Array.from({ length: 11 }, (_, i) => i + 1);
+
 // ── Stat-condition subtitle tokens (B2R wave 2, decision 42) ─────────────────
 // describeScope() joins the active advanced conditions into the honest scope
 // sentence ("…, Runs ≥ 300") replacing the old "min N innings" phrase (min
@@ -345,6 +383,16 @@ export function createInitialState(maxMonth) {
                // eventFilterActive() and filters.js buildScopeClauses' gender-scoped matches join.
     venue: [], // venue values (Batch 1B, task 1B-1); [] = no predicate. See venueFilterActive() and
                // filters.js buildScopeClauses' gender-scoped matches join.
+    fielding: { positions: [], kinds: [], phases: [] },
+               // Fielding SLICE conditions (fielding rebuild): refine WHAT the
+               // Catches/Stumpings/Run-outs/Dismissals-Effected metrics count, by
+               // the fielding event's OWN dims — dismissed-batter position
+               // (positions[], on out_batting_position), dismissal kind (kinds[]),
+               // and phase (phases[]). All multi-select lists (mirroring the app's
+               // position/opposition pickers). Applied inside table.js
+               // buildFieldingSliceClauses -> fielding_cte WHERE. All empty = no
+               // predicate (query byte-identical). Only bite when a fielding
+               // column/condition is present (nothing to slice otherwise).
     matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)
     pinnedPlayers: [], // [{id, name}] — owner decision 46 task 3b: players ADDED to the table's
                    // result set regardless of the other leaderboard-only filters (team/opposition/

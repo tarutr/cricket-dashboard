@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, hasActiveProfileFilter, matchupVsActive, effectiveNamespace } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS } from "./state.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
@@ -239,6 +239,46 @@ export function mountPills(
             const cur = store.get().venue || [];
             if (!cur.includes(v)) store.set({ venue: [...cur, v] });
           },
+        });
+      }
+    }
+
+    // Fielding SLICE conditions (fielding rebuild): one pill per active slice,
+    // gated to PLAIN mode — the slice only bites the fielding_cte in buildQuery,
+    // so under a matchup Vs bucket it narrows nothing and (per this file's rule:
+    // an inert filter shows no pill) must not render. Each ×/+ acts on the LIVE
+    // store's state.fielding list.
+    if (!matchupVsActive(s)) {
+      const fld = s.fielding || {};
+      const setFld = (patch) => store.set({ fielding: { ...(store.get().fielding || {}), ...patch } });
+      if (fieldingPositionActive(s)) {
+        const captured = [...fld.positions];
+        const sorted = [...fld.positions].sort((a, b) => a - b);
+        pills.push({
+          key: "fld_pos",
+          label: `Dismissed pos: ${sorted.join(", ")}`,
+          remove: () => setFld({ positions: [] }),
+          restore: () => setFld({ positions: captured }),
+        });
+      }
+      if (fieldingKindActive(s)) {
+        const captured = [...fld.kinds];
+        const labels = fld.kinds.map((k) => FIELDING_KIND_OPTIONS.find((o) => o.value === k)?.label || k);
+        pills.push({
+          key: "fld_kind",
+          label: `Dismissal: ${labels.join(", ")}`,
+          remove: () => setFld({ kinds: [] }),
+          restore: () => setFld({ kinds: captured }),
+        });
+      }
+      if (fieldingPhaseActive(s)) {
+        const captured = [...fld.phases];
+        const labels = fld.phases.map((p) => FIELDING_PHASE_OPTIONS.find((o) => o.value === p)?.label || p);
+        pills.push({
+          key: "fld_phase",
+          label: `Fielding phase: ${labels.join(", ")}`,
+          remove: () => setFld({ phases: [] }),
+          restore: () => setFld({ phases: captured }),
         });
       }
     }

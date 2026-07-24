@@ -41,5 +41,30 @@ out_hand, out_role, bowler_id, bowler_name, bowler_style, phase, substitute.
 - Gate: spell_count=1 ⇒ open_spell_wkts == wickets → **0 mismatches**.
 - Source divergence (correct, source is buggy legal-only): **539** extra wickets across **536** spells.
 
-## App wiring — IN PROGRESS
-config.js / db.js register fielding_events (view `fielding`); metrics.js rewire; table.js CTE; conditions.
+## App wiring — DONE + VERIFIED (browser, localhost:8000, config-override → /tmp/export_fld)
+- `config.js` PARQUET_FILES + `db.js` VIEWS: register fielding_events as view `fielding`.
+- `metrics.js`: catches/stumpings/run_outs/dismissals_effected → source `fielding_events`
+  (MAX(fielding_cte.…)); player_of_match → source `player_matches` (MAX(pom_cte.…)). Both
+  disciplines. Header + block comments updated.
+- `table.js` buildQuery: `fielding_cte` now sourced from event-grain `fielding` view, honoring
+  the FULL scope incl. **opposition** (oppositionColumn:"opposition") + team (fielding_team) +
+  event/venue + profile, substitutes excluded, + the fielding SLICE conditions
+  (buildFieldingSliceClauses). NEW parallel `pom_cte` from player_matches for player_of_match
+  (no opposition column — whole-match award). advancedReferencesFielding → advancedReferencesMetric
+  + isFieldingEventMetric/isPomMetric. When no fielding column/condition: byte-identical to before.
+- Fielding SLICE conditions (Dismissed position / Dismissal kind / Fielding phase) added as three
+  singleton condition types in the "Fielding" dropdown group (drawer.js) + `state.fielding`
+  {positions,kinds,phases} (state.js) + pickers (drawerInnings.js mountFieldingPosition/Kind/Phase)
+  + pills (pills.js) + activeCount. PLAIN mode only (fielding has no matchup grain).
+
+### Browser verification (zero console errors throughout, config reverted after):
+- Anchors byte-identical: 2,813 displayed (2,810 distinct-id) / Karanbir 2,454 /
+  SA Yadav 64·60·1,544·29.13·150.34. Bowling baseline 2,049.
+- Fielding columns (batting): SA Yadav Ct=24, St=0, RO=4, PoM=5 (Ct matches independent 24).
+- Fielding columns (bowling): Waseem Muhammad Ct=51 (independent 51), keyed by bowler_id.
+- Fielding SLICE (via app buildQuery + UI): phase=death → SA Yadav Ct 24→6 (independent 6);
+  position 1–3 → 10 (independent 10); opposition=South Africa → 6 (independent 6; SQL uses
+  `opposition IN` in fielding_cte); kind='run out' → Ct 0 / RO 4. PoM UNAFFECTED by slices/opp
+  (separate pom_cte) — correct.
+
+## Status: COMPLETE — all five verification checks green.

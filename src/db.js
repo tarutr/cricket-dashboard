@@ -17,6 +17,8 @@ const VIEWS = {
   player_matches: "player_matches.parquet",
   // D4: one row per matched player_id (profile filters); matchup grains for Pieces 4–5.
   profiles: "player_profiles.parquet",
+  // Fielding rebuild: event-grain fielding (one row per wicket-credit).
+  fielding: "fielding_events.parquet",
   matchup_batting: "matchup_batting.parquet",
   matchup_bowling: "matchup_bowling.parquet",
 };
