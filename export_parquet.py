@@ -850,6 +850,105 @@ def sql_bowling():
         FROM wkt_by_ball
         GROUP BY match_id, innings_number
     ),
+    -- Bowling spells (Wave 4, ADDITIVE). ------------------------------------
+    -- Faithful to reference/ingest.py identify_spells + the build_bowlers spell
+    -- loop. Per (match,inn,bowler) take the DISTINCT over-numbers the bowler
+    -- bowled in (ANY delivery, legal or not -- source uses `all_overs` = set of
+    -- over_number over ALL bdels), sorted ascending; a gap of >= 3 over-numbers
+    -- starts a NEW spell (a gap of 1 or 2 continues the spell). spell_number is
+    -- 1-based and contiguous, so MAX(spell_number) = the spell count.
+    spell_over_map AS (
+        SELECT match_id, innings_number, bowler_id, over_number,
+               1 + SUM(CASE WHEN prev_over IS NOT NULL
+                             AND over_number - prev_over >= 3 THEN 1 ELSE 0 END)
+                   OVER (PARTITION BY match_id, innings_number, bowler_id
+                         ORDER BY over_number
+                         ROWS UNBOUNDED PRECEDING) AS spell_number
+        FROM (
+            SELECT match_id, innings_number, bowler_id, over_number,
+                   LAG(over_number) OVER (
+                       PARTITION BY match_id, innings_number, bowler_id
+                       ORDER BY over_number) AS prev_over
+            FROM (
+                SELECT DISTINCT match_id, innings_number, bowler_id, over_number
+                FROM d
+                WHERE d.bowler_id IS NOT NULL
+            ) distinct_overs
+        ) lagged
+    ),
+    -- Every kept delivery tagged with its spell_number (join on the over it was
+    -- bowled in). The spell over-set spans ILLEGAL deliveries too, exactly as
+    -- the source's `sd = [d for d in bdels if over in sovs]`.
+    spell_deliveries AS (
+        SELECT d.match_id, d.innings_number, d.bowler_id, som.spell_number,
+               d.over_number, d.ball_index,
+               d.wides, d.noballs, d.runs_batter
+        FROM d
+        JOIN spell_over_map som
+          ON d.match_id = som.match_id AND d.innings_number = som.innings_number
+         AND d.bowler_id = som.bowler_id AND d.over_number = som.over_number
+        WHERE d.bowler_id IS NOT NULL
+    ),
+    -- Per-spell bowler-credited wickets: kept_wickets is already filtered to the
+    -- credited kinds; counted on LEGAL deliveries ONLY, mirroring the source's
+    -- `swk` which iterates `sl` (legal balls) not `sd`.
+    spell_wkts AS (
+        SELECT sd.match_id, sd.innings_number, sd.bowler_id, sd.spell_number,
+               COUNT(*) AS s_wkts
+        FROM kept_wickets kw
+        JOIN spell_deliveries sd
+          ON kw.match_id = sd.match_id AND kw.innings_number = sd.innings_number
+         AND kw.over_number = sd.over_number AND kw.ball_index = sd.ball_index
+        WHERE sd.wides IS NULL AND sd.noballs IS NULL
+        GROUP BY sd.match_id, sd.innings_number, sd.bowler_id, sd.spell_number
+    ),
+    -- Per-spell balls / runs conceded / dots. balls = legal deliveries; runs =
+    -- runs_batter+wides+noballs over ALL deliveries in the spell (source `src`);
+    -- dots = legal ball with 0 off the bat (source `sdots` over `sl`).
+    spell_agg AS (
+        SELECT match_id, innings_number, bowler_id, spell_number,
+               SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) AS s_balls,
+               SUM(runs_batter + COALESCE(noballs,0) + COALESCE(wides,0)) AS s_runs,
+               SUM(CASE WHEN wides IS NULL AND noballs IS NULL AND runs_batter = 0 THEN 1 ELSE 0 END) AS s_dots
+        FROM spell_deliveries
+        GROUP BY match_id, innings_number, bowler_id, spell_number
+    ),
+    -- One row per spell with all four components + the innings' spell count.
+    spell_full AS (
+        SELECT sa.match_id, sa.innings_number, sa.bowler_id, sa.spell_number,
+               sa.s_balls, sa.s_runs, sa.s_dots,
+               COALESCE(sw.s_wkts, 0) AS s_wkts,
+               MAX(sa.spell_number) OVER (
+                   PARTITION BY sa.match_id, sa.innings_number, sa.bowler_id) AS n_spells
+        FROM spell_agg sa
+        LEFT JOIN spell_wkts sw
+          ON sa.match_id = sw.match_id AND sa.innings_number = sw.innings_number
+         AND sa.bowler_id = sw.bowler_id AND sa.spell_number = sw.spell_number
+    ),
+    -- Collapse spells to one row per (match,inn,bowler): open = spell 1, close =
+    -- the LAST spell (spell_number = n_spells), longest = max legal balls in any
+    -- spell, best = the innings' best single spell (most wickets, ties -> fewest
+    -- runs). The best-spell pick uses the SAME peak rank the Best-Bowling metric
+    -- uses: wkts*1000 - runs (more wickets always wins; fewer runs breaks ties;
+    -- runs < 1000 always in a spell). If spell_count = 1, open == close == the
+    -- whole innings' single spell.
+    spell_innings AS (
+        SELECT match_id, innings_number, bowler_id,
+               MAX(n_spells) AS spell_count,
+               MAX(CASE WHEN spell_number = 1 THEN s_balls END) AS open_spell_balls,
+               MAX(CASE WHEN spell_number = 1 THEN s_runs  END) AS open_spell_runs,
+               MAX(CASE WHEN spell_number = 1 THEN s_wkts  END) AS open_spell_wkts,
+               MAX(CASE WHEN spell_number = 1 THEN s_dots  END) AS open_spell_dots,
+               MAX(CASE WHEN spell_number = n_spells THEN s_balls END) AS close_spell_balls,
+               MAX(CASE WHEN spell_number = n_spells THEN s_runs  END) AS close_spell_runs,
+               MAX(CASE WHEN spell_number = n_spells THEN s_wkts  END) AS close_spell_wkts,
+               MAX(CASE WHEN spell_number = n_spells THEN s_dots  END) AS close_spell_dots,
+               MAX(s_balls) AS longest_spell_balls,
+               arg_max(s_wkts, s_wkts * 1000 - s_runs) AS best_spell_wkts,
+               arg_max(s_runs, s_wkts * 1000 - s_runs) AS best_spell_runs
+        FROM spell_full
+        GROUP BY match_id, innings_number, bowler_id
+    ),
     -- Per-ball bowling aggregates keyed by (match,inn,bowler).
     bowl_agg AS (
         SELECT
@@ -1008,7 +1107,25 @@ def sql_bowling():
             (b.balls / NULLIF(COALESCE(w.wickets, 0), 0))
             - (tb.t_balls / NULLIF(tw.t_wkts, 0))
             AS FLOAT
-        ) AS team_rel_sr
+        ) AS team_rel_sr,
+        -- Bowling-spell aggregate columns (Wave 4, ADDITIVE; INT). Every bowler
+        -- in bowl_agg bowled >= 1 delivery -> >= 1 over -> >= 1 spell, so the
+        -- LEFT JOIN always matches and these are never NULL; COALESCE guards the
+        -- type only. open_ = spell 1, close_ = the last spell, longest = max
+        -- legal balls in any spell, best_ = the innings' best single spell
+        -- (most wickets, ties -> fewest runs). See the spell_* CTEs above.
+        COALESCE(sp.spell_count, 0)         AS spell_count,
+        COALESCE(sp.open_spell_balls, 0)    AS open_spell_balls,
+        COALESCE(sp.open_spell_runs, 0)     AS open_spell_runs,
+        COALESCE(sp.open_spell_wkts, 0)     AS open_spell_wkts,
+        COALESCE(sp.open_spell_dots, 0)     AS open_spell_dots,
+        COALESCE(sp.close_spell_balls, 0)   AS close_spell_balls,
+        COALESCE(sp.close_spell_runs, 0)    AS close_spell_runs,
+        COALESCE(sp.close_spell_wkts, 0)    AS close_spell_wkts,
+        COALESCE(sp.close_spell_dots, 0)    AS close_spell_dots,
+        COALESCE(sp.longest_spell_balls, 0) AS longest_spell_balls,
+        COALESCE(sp.best_spell_wkts, 0)     AS best_spell_wkts,
+        COALESCE(sp.best_spell_runs, 0)     AS best_spell_runs
     FROM bowl_agg b
     LEFT JOIN wkt_agg w
       ON b.match_id = w.match_id AND b.innings_number = w.innings_number AND b.bowler_id = w.bowler_id
@@ -1022,6 +1139,8 @@ def sql_bowling():
       ON b.match_id = tb.match_id AND b.innings_number = tb.innings_number
     LEFT JOIN team_wkts tw
       ON b.match_id = tw.match_id AND b.innings_number = tw.innings_number
+    LEFT JOIN spell_innings sp
+      ON b.match_id = sp.match_id AND b.innings_number = sp.innings_number AND b.bowler_id = sp.bowler_id
     ORDER BY b.match_date, b.match_id, b.innings_number, b.bowler_id
     """
 
