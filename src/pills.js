@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsOrderFilterActive, stageFilterActive, methodFilterActive, methodOptionLabel, RESULT_OPTIONS, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS, INNINGS_ORDER_OPTIONS } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsOrderFilterActive, stageFilterActive, resultTypeFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_TYPE_OPTIONS, RESULT_TYPE_ALL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS, INNINGS_ORDER_OPTIONS } from "./state.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
@@ -269,9 +269,13 @@ export function mountPills(
     // narrow the leaderboard query (buildQuery / buildMatchupQuery); an active one
     // is always "narrowing" in every view.
     const labelsFor = (vals, opts) => (vals || []).map((v) => opts.find((o) => o.value === v)?.label || v);
+    // Result (FIX A): only the narrowing outcomes label (drop the "All" sentinel).
+    // Removing the pill clears both Result and its nested Result Type (FIX B).
     if (resultFilterActive(s)) {
       const captured = [...s.result];
-      pills.push({ key: "mc_result", label: `Result: ${labelsFor(s.result, RESULT_OPTIONS).join(", ")}`, remove: () => store.set({ result: [] }), restore: () => store.set({ result: captured }) });
+      const capturedType = [...(s.resultType || [])];
+      const outcomes = s.result.filter((v) => v !== RESULT_ALL);
+      pills.push({ key: "mc_result", label: `Result: ${labelsFor(outcomes, RESULT_OPTIONS).join(", ")}`, remove: () => store.set({ result: [], resultType: [] }), restore: () => store.set({ result: captured, resultType: capturedType }) });
     }
     if (tossResultFilterActive(s)) {
       const captured = [...s.tossResult];
@@ -290,13 +294,18 @@ export function mountPills(
       const label = s.stage.length <= 2 ? `Stage: ${s.stage.join(", ")}` : `Stage: ${s.stage.length} stages`;
       pills.push({ key: "mc_stage", label, remove: () => store.set({ stage: [] }), restore: () => store.set({ stage: captured }) });
     }
-    if (methodFilterActive(s)) {
-      const captured = [...s.method];
+    // Result Type (FIX B): the nested method sub-filter. Its own independent pill
+    // (Result and Result Type are independent WHERE conditions). Removing it snaps
+    // back to "All" (resultType: []) without touching the Result condition.
+    if (resultTypeFilterActive(s)) {
+      const captured = [...(s.resultType || [])];
+      const specifics = (s.resultType || []).filter((v) => v !== RESULT_TYPE_ALL);
+      const rtLabelsFor = (vals) => vals.map((v) => RESULT_TYPE_OPTIONS.find((o) => o.value === v)?.label || v);
       const label =
-        s.method.length === 1
-          ? `Rain method: ${methodOptionLabel(s.method[0])}`
-          : `Rain method: ${s.method.length} methods`;
-      pills.push({ key: "mc_method", label, remove: () => store.set({ method: [] }), restore: () => store.set({ method: captured }) });
+        specifics.length === 1
+          ? `Result type: ${rtLabelsFor(specifics)[0]}`
+          : `Result type: ${specifics.length} types`;
+      pills.push({ key: "mc_result_type", label, remove: () => store.set({ resultType: [] }), restore: () => store.set({ resultType: captured }) });
     }
 
     // Fielding SLICE conditions (fielding rebuild): one pill per active slice,

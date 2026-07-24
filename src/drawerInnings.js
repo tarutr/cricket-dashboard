@@ -43,13 +43,14 @@ import {
   FIELDING_PHASE_OPTIONS,
   FIELDING_POSITIONS,
   RESULT_OPTIONS,
+  RESULT_ALL,
+  RESULT_TYPE_OPTIONS,
+  RESULT_TYPE_ALL,
   TOSS_RESULT_OPTIONS,
   TOSS_DECISION_OPTIONS,
   INNINGS_ORDER_OPTIONS,
-  METHOD_NONE,
-  methodOptionLabel,
 } from "./state.js";
-import { searchTeams, searchEvents, searchVenues, searchEventSeasons } from "./playerData.js";
+import { searchTeams, searchEvents, searchVenues, searchEventSeasons, searchStages } from "./playerData.js";
 import { canonicalStage } from "./canonicalNames.js";
 import { query } from "./db.js";
 import { mountSearchMultiSelect } from "./searchSelect.js";
@@ -379,14 +380,14 @@ export function mountFieldingPhase(container, store, onChange, opts = {}) {
 // ── Match-context pickers (Wave 6) ──────────────────────────────────────────
 // Five categorical filters grouped under "Match context" in the "+ Add
 // condition…" picker, available in batting, bowling AND matchup views (unlike
-// the fielding slices, they have no matchup gate). Four are fixed-vocabulary
-// checkbox multi-selects over a TOP-LEVEL state array (result / tossResult /
-// tossDecision / inningsOrder); Stage is a scope-loaded checkbox list plus a
-// "Knockout" convenience button; Rain-affected matches (state.method, FIX 3) is a
-// scope-loaded method multi-select ("Not affected" + the distinct methods).
-// Each is the same self-contained `{ sync }` controller as the pickers above and
-// slots into a singleton row in drawer.js. None writes anything but its own state
-// key, so the query stays byte-identical until a value is set (see filters.js
+// the fielding slices, they have no matchup gate). Toss result / toss decision /
+// innings order are fixed-vocabulary checkbox multi-selects over a TOP-LEVEL state
+// array; Result (FIX A) is an "All + specifics" multi-select carrying a NESTED
+// Result Type sub-picker (FIX B, state.resultType) directly below it; Stage is a
+// scope-loaded checkbox list plus a "Knockout" convenience button. Each is the
+// same self-contained `{ sync }` controller as the pickers above and slots into a
+// singleton row in drawer.js. None writes anything but its own state key(s), so
+// the query stays byte-identical until a value is set (see filters.js
 // buildMatchContextClauses).
 
 /** Short toggle summary for a token multi-select: 0 → anyLabel; 1 → that
@@ -463,11 +464,160 @@ function mountTokenMultiSelect(container, store, onChange, { field, options, any
   return { sync };
 }
 
-/** Result filter (state.result) — Won / Lost / Drawn / No result / Tied / Super Over. */
+// ── "All + specifics" multi-select (FIX A/B) ────────────────────────────────
+// Shared by BOTH the Result outcome picker and the nested Result Type picker: a
+// checkbox list led by an "All" box that means "no narrowing". Semantics (mirror
+// the Format dropdown's min-one and the Event→Season "All seasons" box):
+//   • "All" checked ⟺ the stored array is [allValue] (or empty). While checked,
+//     the All box is DISABLED (you switch away by checking a specific), so the
+//     selection can never fall into an empty/undefined state.
+//   • Checking a specific option removes "All" and adds that option.
+//   • Unchecking the last remaining specific snaps back to "All" ([allValue]).
+// `options` is the specific options only ({value,label}[], EXCLUDING the "All"
+// pseudo-option — the component renders the All box itself). The stored array is
+// [allValue] for All, else the specific tokens (in `options` order). Returns
+// `{ sync }`.
+function mountAllMultiSelect(container, store, onChange, { field, allValue, options, allLabel, label, embedded = false, headLabel }) {
+  const get = () => store.get()[field] || [];
+  const set = (vals) => store.set({ [field]: vals });
+  const specifics = () => get().filter((v) => String(v) !== String(allValue));
+  const isAll = () => specifics().length === 0; // empty OR [allValue] → All
+
+  container.innerHTML = `
+    <div class="filter-group filter-group--positions" data-role="mc-group">
+      ${headLabel ? `<div class="result-type__head">${escHtml(headLabel)}</div>` : ""}
+      ${!headLabel && !embedded ? `<span class="filter-label">${escHtml(label || "")}</span>` : ""}
+      <div class="dropdown" data-role="mc-dropdown">
+        <button type="button" class="select dropdown__toggle" data-role="mc-toggle" aria-haspopup="true" aria-expanded="false">${escHtml(allLabel)}</button>
+        <div class="dropdown__panel" data-role="mc-panel" hidden>
+          <div class="dropdown__list" data-role="mc-list"></div>
+        </div>
+      </div>
+    </div>`;
+
+  const els = {
+    toggle: container.querySelector('[data-role="mc-toggle"]'),
+    panel: container.querySelector('[data-role="mc-panel"]'),
+    list: container.querySelector('[data-role="mc-list"]'),
+  };
+
+  const updateLabel = () => {
+    const sp = specifics();
+    els.toggle.textContent =
+      sp.length === 0
+        ? allLabel
+        : sp.length === 1
+        ? options.find((o) => String(o.value) === String(sp[0]))?.label || String(sp[0])
+        : `${sp.length} selected`;
+  };
+
+  wirePortalDropdown(els.toggle, els.panel);
+
+  function renderList() {
+    const all = isAll();
+    const sel = new Set(specifics().map(String));
+    const allBox = `<label class="dropdown__item${all ? " is-disabled" : ""}">
+      <input type="checkbox" data-mc-all ${all ? "checked disabled" : ""} />
+      <span>${escHtml(allLabel)}</span>
+    </label>`;
+    const specBoxes = options
+      .map(
+        (o) => `<label class="dropdown__item">
+        <input type="checkbox" data-mc-value="${escAttr(String(o.value))}" ${sel.has(String(o.value)) ? "checked" : ""} />
+        <span>${escHtml(o.label)}</span>
+      </label>`
+      )
+      .join("");
+    els.list.innerHTML = allBox + specBoxes;
+    els.list.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        if (cb.hasAttribute("data-mc-all")) {
+          // Disabled while checked, so this only fires when re-checking All →
+          // clear the specifics.
+          if (cb.checked) set([allValue]);
+        } else {
+          const value = cb.dataset.mcValue;
+          const cur = specifics();
+          let next;
+          if (cb.checked) {
+            next = cur.includes(value) ? cur : [...cur, value];
+          } else {
+            next = cur.filter((v) => v !== value);
+          }
+          // Keep option order stable; empty → snap back to All.
+          next = options.map((o) => String(o.value)).filter((v) => next.includes(v));
+          set(next.length ? next : [allValue]);
+        }
+        updateLabel();
+        renderList();
+        onChange();
+      });
+    });
+  }
+
+  function sync() {
+    updateLabel();
+    renderList();
+  }
+
+  sync();
+  return { sync };
+}
+
+// Result outcome options / Result Type options WITHOUT their leading "All"
+// pseudo-option (the mountAllMultiSelect component renders the All box itself).
+const RESULT_SPECIFIC_OPTIONS = RESULT_OPTIONS.filter((o) => o.value !== RESULT_ALL);
+const RESULT_TYPE_SPECIFIC_OPTIONS = RESULT_TYPE_OPTIONS.filter((o) => o.value !== RESULT_TYPE_ALL);
+
+/** Result filter (state.result) with the nested Result Type sub-picker (FIX A/B).
+ * The Result outcome multi-select (Won / Lost / Drawn / No result / Tied / Super
+ * Over, led by "All") sits on top; DIRECTLY BELOW it — exactly like the Event →
+ * Season nesting — the Result Type sub-picker (All / Normal / D/L / VJD / Awarded
+ * / Fewer Wickets) appears whenever the Result CONDITION is present (state.result
+ * non-empty; drawer.js seeds both to ["all"] on add). Result and Result Type are
+ * INDEPENDENT WHERE conditions (outcome vs `match_winner`; type vs `method`) — the
+ * nesting is purely UI. Returns `{ sync }`. */
 export function mountResult(container, store, onChange, opts = {}) {
-  return mountTokenMultiSelect(container, store, onChange, {
-    field: "result", options: RESULT_OPTIONS, anyLabel: "Any result", label: "Result", ...opts,
+  const embedded = Boolean(opts.embedded);
+  container.innerHTML = `
+    <div class="filter-group filter-group--result" data-role="result-wrap">
+      <div data-role="result-ms"></div>
+      <div class="result-type" data-role="result-type" hidden></div>
+    </div>`;
+  const msHost = container.querySelector('[data-role="result-ms"]');
+  const rtHost = container.querySelector('[data-role="result-type"]');
+
+  const rtMs = mountAllMultiSelect(rtHost, store, onChange, {
+    field: "resultType",
+    allValue: RESULT_TYPE_ALL,
+    options: RESULT_TYPE_SPECIFIC_OPTIONS,
+    allLabel: "All result types",
+    headLabel: "Result type",
   });
+
+  function syncResultType() {
+    // The sub-picker shows whenever the Result condition is present (result set
+    // to at least ["all"] on add). Empty result = condition not added = hidden.
+    const present = (store.get().result || []).length > 0;
+    rtHost.hidden = !present;
+    if (present) rtMs.sync();
+  }
+
+  const resultMs = mountAllMultiSelect(msHost, store, () => { syncResultType(); onChange(); }, {
+    field: "result",
+    allValue: RESULT_ALL,
+    options: RESULT_SPECIFIC_OPTIONS,
+    allLabel: "All results",
+    label: "Result",
+    embedded,
+  });
+
+  return {
+    sync() {
+      resultMs.sync();
+      syncResultType();
+    },
+  };
 }
 /** Toss result filter (state.tossResult) — Won toss / Lost toss. */
 export function mountTossResult(container, store, onChange, opts = {}) {
@@ -492,10 +642,12 @@ export function mountInningsOrder(container, store, onChange, opts = {}) {
 // A scope-loaded checkbox list of CANONICAL stage labels (name normalization,
 // backlog #5 — the raw `event_stage` values folded so casing/hyphen variants
 // collapse to one option), plus a "Knockout" convenience button. The option list
-// is loaded from `matches`, GENDER-scoped; state.stage stores the canonical
-// labels and filters.js buildMatchContextClauses expands each back to its raw
-// spelling set for `event_stage IN (…)`, so a picked "Semi-Final" matches every
-// raw spelling. The QUERY is unaffected by which options are shown.
+// is loaded from `matches` scoped to gender + format + date + team-type (FIX C,
+// via searchStages/matchOptionScope — the same scope the Event/Venue pickers use,
+// so a Test scope no longer lists T20-only rounds); state.stage stores the
+// canonical labels and filters.js buildMatchContextClauses expands each back to
+// its raw spelling set for `event_stage IN (…)`, so a picked "Semi-Final" matches
+// every raw spelling. The QUERY is unaffected by which OPTIONS are shown.
 //
 // KNOCKOUT — EXPLICIT VETTED LIST (FIX 1): the "Knockout games" button used to
 // classify stages with a keyword regex, which was brittle against `event_stage`
@@ -596,8 +748,18 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
   };
 
   let stageOptions = null; // string[]; null until loaded
-  let loadedGender = null;
+  let loadedScope = null; // scope key of the last successful load
   let loading = false;
+  let loadToken = 0;
+
+  // FIX C: the Stage options are scoped to the FULL Search Conditions (gender +
+  // format + date + team-type), not gender alone — so a Test scope no longer
+  // lists T20-only rounds. The cache key mirrors mountEventSeasons' scopeKey, so
+  // the list reloads whenever ANY of those four dimensions changes.
+  const scopeKey = () => {
+    const s = store.get();
+    return `${s.gender}|${s.teamType}|${(s.formats || []).join(",")}|${s.dateFrom || ""}|${s.dateTo || ""}`;
+  };
 
   const updateLabel = () => {
     const vals = get();
@@ -653,160 +815,41 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
   });
 
   async function ensureLoaded() {
-    const gender = store.get().gender;
-    if (loadedGender === gender || loading) return;
+    const key = scopeKey();
+    if (loadedScope === key || loading) return;
     loading = true;
+    const token = ++loadToken;
+    const s = store.get();
+    let raws;
     try {
-      const { rows } = await query(
-        `SELECT DISTINCT event_stage AS s FROM matches WHERE event_stage IS NOT NULL AND gender = '${String(gender).replace(/'/g, "''")}' ORDER BY event_stage`
-      );
-      // Fold raw spellings to canonical labels (name normalization) and dedup,
-      // so e.g. the three "Semi(-)Final" spellings collapse to one option; the
-      // checkbox value stored in state.stage is the canonical label, which
-      // filters.js expands back to every raw spelling. Sorted A–Z on the label.
-      stageOptions = [...new Set(rows.map((r) => canonicalStage(r.s)))].sort((a, b) =>
-        a < b ? -1 : a > b ? 1 : 0
-      );
-      loadedGender = gender;
+      // Scoped to gender/format/date/team-type via searchStages (FIX C) — the
+      // SAME matchOptionScope the Event/Venue pickers use.
+      raws = await searchStages(s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo);
     } catch (e) {
-      stageOptions = null; // retry on a later sync
-    }
-    loading = false;
-    renderList();
-  }
-
-  function sync() {
-    updateLabel();
-    // (Re)load when the gender changed since the last load, or on first visible.
-    if (loadedGender !== store.get().gender) {
-      stageOptions = null;
-      ensureLoaded();
-    } else {
+      loading = false;
+      stageOptions = null; // retry on a later sync (e.g. pre-column data)
       renderList();
-    }
-  }
-
-  sync();
-  return { sync };
-}
-
-// ── Rain-affected matches picker (state.method) ─────────────────────────────
-// FIX 3: replaces the old single "Exclude D/L & method-decided" boolean toggle
-// with a full multi-select mirroring the Stage picker's mechanics. Options are
-// loaded from `matches` (gender-scoped, like the Stage path) as the distinct
-// non-null `method` values present (D/L / VJD / Awarded / Lost fewer wickets),
-// PLUS a leading "Not affected" option (the METHOD_NONE sentinel) standing for
-// method IS NULL. Empty selection = inactive (query byte-identical). Once a value
-// is picked the sole remaining checked box is disabled (min-one guard, like the
-// Format dropdown) — the row/pill × is how the whole filter is cleared.
-
-/** Mount the Rain-affected-matches picker (state.method). `embedded` suppresses
- * the outer label. Returns `{ sync }`. */
-export function mountMethod(container, store, onChange, { embedded = false } = {}) {
-  const get = () => store.get().method || [];
-  const set = (vals) => store.set({ method: vals });
-
-  container.innerHTML = `
-    <div class="filter-group filter-group--positions" data-role="mc-group">
-      ${embedded ? "" : `<span class="filter-label">Rain-affected matches</span>`}
-      <div class="dropdown" data-role="mc-dropdown">
-        <button type="button" class="select dropdown__toggle" data-role="mc-toggle" aria-haspopup="true" aria-expanded="false">All matches</button>
-        <div class="dropdown__panel" data-role="mc-panel" hidden>
-          <div class="dropdown__list" data-role="mc-list"><p class="profile-note">Loading methods…</p></div>
-        </div>
-      </div>
-    </div>`;
-
-  const els = {
-    toggle: container.querySelector('[data-role="mc-toggle"]'),
-    panel: container.querySelector('[data-role="mc-panel"]'),
-    list: container.querySelector('[data-role="mc-list"]'),
-  };
-
-  let methodOptions = null; // string[] of the raw non-null methods in scope; null until loaded
-  let loadedGender = null;
-  let loading = false;
-
-  const updateLabel = () => {
-    const vals = get();
-    els.toggle.textContent =
-      vals.length === 0
-        ? "All matches"
-        : vals.length === 1
-        ? methodOptionLabel(vals[0])
-        : `${vals.length} selected`;
-  };
-
-  wirePortalDropdown(els.toggle, els.panel);
-
-  function renderList() {
-    if (methodOptions === null) {
-      els.list.innerHTML = `<p class="profile-note">Loading methods…</p>`;
       return;
     }
-    // The "Not affected" sentinel (method IS NULL) always leads; the real methods
-    // (if any in scope) follow in the order the query returned them.
-    const opts = [METHOD_NONE, ...methodOptions];
-    const selected = new Set(get());
-    const sole = selected.size === 1; // min-one guard: don't let the last box be unchecked here
-    els.list.innerHTML = opts
-      .map((v) => {
-        const isChecked = selected.has(v);
-        const disabled = isChecked && sole;
-        return `<label class="dropdown__item${disabled ? " is-disabled" : ""}">
-          <input type="checkbox" data-mc-value="${escAttr(v)}" ${isChecked ? "checked" : ""} ${disabled ? "disabled" : ""} ${
-          disabled ? 'title="At least one method must stay selected — use the × to clear"' : ""
-        } />
-          <span>${escHtml(methodOptionLabel(v))}</span>
-        </label>`;
-      })
-      .join("");
-    els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const value = cb.dataset.mcValue;
-        const current = get().slice();
-        const idx = current.indexOf(value);
-        if (cb.checked) {
-          if (idx === -1) current.push(value);
-        } else if (idx !== -1) {
-          if (current.length <= 1) {
-            cb.checked = true; // defensive: the disabled attribute should already prevent this
-            return;
-          }
-          current.splice(idx, 1);
-        }
-        set(current);
-        updateLabel();
-        renderList(); // re-render so the min-one guard's disabled state tracks the new count
-        onChange();
-      });
-    });
-  }
-
-  async function ensureLoaded() {
-    const gender = store.get().gender;
-    if (loadedGender === gender || loading) return;
-    loading = true;
-    try {
-      const { rows } = await query(
-        `SELECT DISTINCT method AS m FROM matches WHERE method IS NOT NULL AND gender = '${String(gender).replace(
-          /'/g,
-          "''"
-        )}' ORDER BY method`
-      );
-      methodOptions = rows.map((r) => r.m);
-      loadedGender = gender;
-    } catch (e) {
-      methodOptions = null; // retry on a later sync
-    }
+    if (token !== loadToken) return; // a newer load superseded this one
+    // Fold raw spellings to canonical labels (name normalization) and dedup, so
+    // e.g. the three "Semi(-)Final" spellings collapse to one option; the checkbox
+    // value stored in state.stage is the canonical label, which filters.js expands
+    // back to every raw spelling. Sorted A–Z on the label.
+    stageOptions = [...new Set(raws.map((r) => canonicalStage(r)))].sort((a, b) =>
+      a < b ? -1 : a > b ? 1 : 0
+    );
+    loadedScope = key;
     loading = false;
     renderList();
   }
 
   function sync() {
     updateLabel();
-    if (loadedGender !== store.get().gender) {
-      methodOptions = null;
+    // (Re)load when ANY scope dimension changed since the last load, or on first
+    // visible; render now with whatever is cached (a loading note shows if stale).
+    if (loadedScope !== scopeKey()) {
+      stageOptions = null;
       ensureLoaded();
     } else {
       renderList();

@@ -479,6 +479,28 @@ export async function searchVenues(term, gender, teamType = "both", formats = nu
   return rows;
 }
 
+/**
+ * Distinct RAW `event_stage` values in `matches` for the current scope — the
+ * option source for the Stage picker (FIX C). Previously the Stage list was only
+ * GENDER-scoped, so a Red-Ball/Test scope still listed T20-only rounds; this
+ * scopes it to the SAME full Search Conditions (gender + format + date +
+ * team-type) as the Event/Venue pickers, via the shared matchOptionScope helper.
+ * Returns raw spellings (ORDER BY event_stage) — the caller (mountStage) folds
+ * them to canonical labels, exactly as before. OPTIONS lookup only; it never
+ * feeds a leaderboard aggregate, so no number changes.
+ */
+export async function searchStages(gender, teamType = "both", formats = null, dateFrom = null, dateTo = null) {
+  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo);
+  const sql = [
+    `SELECT DISTINCT event_stage AS s`,
+    `FROM matches`,
+    `WHERE ${scope} AND event_stage IS NOT NULL`,
+    `ORDER BY event_stage`,
+  ].join("\n");
+  const { rows } = await query(sql);
+  return rows.map((r) => r.s);
+}
+
 /** The player's profile row (null for the ~unmatched; profiles are men-only). */
 export async function fetchProfile(playerId) {
   const { rows } = await query(`SELECT * FROM profiles WHERE player_id = '${esc(playerId)}'`);

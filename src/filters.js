@@ -22,7 +22,10 @@ import {
   eventFilterActive,
   anyEventSeasonNarrowing,
   venueFilterActive,
-  METHOD_NONE,
+  RESULT_ALL,
+  RESULT_TYPE_ALL,
+  RESULT_TYPE_NORMAL,
+  resultTypeMethod,
   escSql as esc,
 } from "./state.js";
 import { eventAliases, stageAliases } from "./canonicalNames.js";
@@ -324,11 +327,14 @@ export function buildMatchContextClauses(state, rowTeamCol) {
 
   // 1. Result (multi, OR). Won/Lost use the derived match_winner (so a super-over
   //    WIN counts as a Win); Super Over is the facet flag (overlaps Won/Lost).
+  //    The leading "All" token (RESULT_ALL, FIX A) is the no-narrowing sentinel —
+  //    it contributes no disjunct, so Result = All emits nothing (byte-identical).
   const res = state.result || [];
   if (res.length) {
     const parts = [];
     for (const r of res) {
-      if (r === "won") parts.push(`${rowTeamCol} = ${A}.match_winner`);
+      if (r === RESULT_ALL) continue;
+      else if (r === "won") parts.push(`${rowTeamCol} = ${A}.match_winner`);
       else if (r === "lost") parts.push(`(${A}.match_winner IS NOT NULL AND ${A}.match_winner <> ${rowTeamCol})`);
       else if (r === "drawn") parts.push(`${A}.result_type = 'draw'`);
       else if (r === "no_result") parts.push(`${A}.result_type = 'no result'`);
@@ -374,19 +380,29 @@ export function buildMatchContextClauses(state, rowTeamCol) {
     clauses.push(`${A}.event_stage IN (${stageRaws.map((s) => `'${esc(s)}'`).join(", ")})`);
   }
 
-  // 5b. Rain-affected matches (FIX 3): a multi-select over the distinct non-null
-  //     `method` values (D/L / VJD / Awarded / Lost fewer wickets) PLUS a "Not
-  //     affected" sentinel (METHOD_NONE) standing for method IS NULL. Emit the
-  //     IN(...) disjunct only when ≥1 real method is picked, and the IS NULL
-  //     disjunct only when the sentinel is picked; OR them together when both
-  //     are present. Empty selection contributes nothing (byte-identical).
-  const methods = state.method || [];
-  if (methods.length) {
-    const reals = methods.filter((m) => m !== METHOD_NONE);
-    const wantsNone = methods.includes(METHOD_NONE);
+  // 5b. Result Type (FIX B): the nested method sub-filter under Result. Tokens
+  //     map to `matches.method`: "All" (RESULT_TYPE_ALL) narrows nothing (no
+  //     disjunct → byte-identical); "Normal" (RESULT_TYPE_NORMAL) → method IS NULL
+  //     (regulation result); every other token is a specific method (D/L / VJD /
+  //     Awarded / Lost fewer wickets) collected into an IN(...) list via
+  //     resultTypeMethod. Emit the IN(...) disjunct only when ≥1 specific method
+  //     is picked, and the IS NULL disjunct only when "Normal" is picked; OR them
+  //     together when both are present. Empty / All-only contributes nothing.
+  const resultTypes = state.resultType || [];
+  if (resultTypes.length) {
+    const reals = [];
+    let wantsNormal = false;
+    for (const t of resultTypes) {
+      if (t === RESULT_TYPE_ALL) continue;
+      else if (t === RESULT_TYPE_NORMAL) wantsNormal = true;
+      else {
+        const mth = resultTypeMethod(t);
+        if (mth) reals.push(mth);
+      }
+    }
     const parts = [];
     if (reals.length) parts.push(`${A}.method IN (${reals.map((m) => `'${esc(m)}'`).join(", ")})`);
-    if (wantsNone) parts.push(`${A}.method IS NULL`);
+    if (wantsNormal) parts.push(`${A}.method IS NULL`);
     if (parts.length) clauses.push(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`);
   }
 

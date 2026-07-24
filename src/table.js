@@ -114,7 +114,7 @@ function serializeQueryState(state) {
     tossDecision: state.tossDecision,
     inningsOrder: state.inningsOrder,
     stage: state.stage,
-    method: state.method,
+    resultType: state.resultType,
     matchupVs: state.matchupVs,
     pinnedPlayers: state.pinnedPlayers,
     search: state.search,
