@@ -792,7 +792,7 @@ function isKnockoutStage(stage) {
  * in-scope stages, cross-filtering them by the selected Event(s), deciding whether
  * "No Stage" applies, and hiding the control when there is nothing to choose.
  * Returns `{ sync }`. */
-export function mountStage(container, store, onChange, { embedded = false, onReconcile = () => {} } = {}) {
+export function mountStage(container, store, onChange, { embedded = false } = {}) {
   let namedOptions = null; // canonical stage labels in scope; null until loaded
   let hasNoStage = false; // does the scope contain matches with NO round name?
   let loadedScope = null; // scope key of the last successful load
@@ -887,10 +887,7 @@ export function mountStage(container, store, onChange, { embedded = false, onRec
    * no longer exist here (a scope/event change can strand them) and, when the
    * control is hidden because there is nothing to choose, snap back to "All" so a
    * hidden filter can never stay silently applied. Only writes when something
-   * actually changed, so it converges (no store-churn loop). Only ever called
-   * from ensureLoaded's async load resolution (never a direct user action, which
-   * already goes through onChange elsewhere), so FIX 3 fires the passive
-   * `onReconcile` repaint (pills only, never a re-query) exactly when it wrote. */
+   * actually changed, so it converges (no store-churn loop). */
   function reconcileSelection() {
     const cur = store.get().stage || [];
     if (cur.length === 0) return; // condition not added — nothing to reconcile
@@ -902,11 +899,7 @@ export function mountStage(container, store, onChange, { embedded = false, onRec
       const kept = cur.filter((v) => v === STAGE_ALL || allowed.has(v));
       next = kept.some((v) => v !== STAGE_ALL) ? kept : [STAGE_ALL];
     }
-    const changed = next.length !== cur.length || next.some((v, i) => v !== cur[i]);
-    if (changed) {
-      store.set({ stage: next });
-      onReconcile();
-    }
+    if (next.length !== cur.length || next.some((v, i) => v !== cur[i])) store.set({ stage: next });
   }
 
   function sync() {
@@ -1134,7 +1127,7 @@ export function mountTeam(container, store, onChange) {
 // filters.js) and — with it — state.eventSeasons, so in practice the season list
 // is re-derived by RE-PICKING the event under the new window. See the report's
 // CONCERNS for the interaction with that standing decision.
-function mountEventSeasons(container, store, onChange, onReconcile = () => {}) {
+function mountEventSeasons(container, store, onChange) {
   let optionsByEvent = {}; // { [event_name]: [{ event, season, syr, games }] } for loadedKey
   let loadedKey = null;
   let loadToken = 0;
@@ -1251,15 +1244,7 @@ function mountEventSeasons(container, store, onChange, onReconcile = () => {}) {
         changed = true;
       }
     }
-    if (changed) {
-      store.set({ eventSeasons: next });
-      // FIX 3: this reconcile only ever runs from ensureLoaded's async load
-      // resolution (never from a direct user action, which already goes
-      // through onChange elsewhere), so a stale "Event: X (2024)" pill can
-      // otherwise sit unrefreshed after the state moved back to All. Passive
-      // repaint only — never the general onChange (no re-query).
-      onReconcile();
-    }
+    if (changed) store.set({ eventSeasons: next });
   }
 
   /** Toggle summary for one event's season dropdown. Reads out what is ACTUALLY
@@ -1399,7 +1384,7 @@ function mountEventSeasons(container, store, onChange, onReconcile = () => {}) {
 
 /** "Event" — gender + team-type-scoped competition/series picker (state.event),
  * extended (Wave 6 pt2) with a nested season sub-picker below it. */
-export function mountEvent(container, store, onChange, onReconcile = () => {}) {
+export function mountEvent(container, store, onChange) {
   container.innerHTML = `
     <div class="filter-group filter-group--event" data-role="event-wrap">
       <div data-role="event-ms"></div>
@@ -1408,7 +1393,7 @@ export function mountEvent(container, store, onChange, onReconcile = () => {}) {
   const msHost = container.querySelector('[data-role="event-ms"]');
   const seasonsHost = container.querySelector('[data-role="event-seasons"]');
 
-  const seasons = mountEventSeasons(seasonsHost, store, onChange, onReconcile);
+  const seasons = mountEventSeasons(seasonsHost, store, onChange);
 
   /** Drop eventSeasons narrowing for events no longer selected — so a
    * de-selected + re-selected event returns on "All" and the state keeps no
