@@ -145,3 +145,101 @@ eventSeasons + all six match-context fields, so those edits were DISCARDED on
 6. `src/playerData.js` contains a literal NUL byte (a Map-key separator in a template
    string at `searchEventSeasons`). Harmless at runtime but it makes `grep` treat the
    file as binary. Left alone; ` ` would be equivalent and greppable.
+
+## Follow-up pass (two owner fixes + one scope addition, same branch)
+
+Branch: polish-b1-mechanical (from HEAD f48bb8c). Status: COMPLETE, verified on
+localhost:8000 against `data/export/`.
+
+### FIX 1 — Stage "nothing to choose" must count No Stage as an option
+`src/drawerInnings.js` `mountStage`'s `nothingToChoose()` counted only named
+stages, so a scope with exactly 1 named stage + unlabelled matches (Red Ball +
+International: "Final" + No Stage) wrongly hid the dropdown — the owner flagged
+this as wrong. Fixed: total selectable options = named stages + 1 if
+`hasNoStage`; hidden only when that total is <= 1. `reconcileSelection` uses the
+same function, so it inherited the fix with no separate change.
+
+### FIX 2 — fielding + minInnings missing from the graph's commit list
+`src/graph/graph.js`: the fielding SLICE conditions (Dismissed position /
+Dismissal kind / Fielding phase, `state.fielding`) are mounted onto the SAME
+buffer store as `advanced` by drawer.js's shared `mountFilterDrawer` — so they
+ARE editable in the graph's own Filters popup — but were missing from both
+`scopeSeedKey` and `applyGraphFilters`' commit list, so an edit was silently
+discarded on "Apply to graph" (the exact defect class item 5 fixed for
+event/venue/match-context, one field short). Added `state.fielding` to
+`scopeSeedKey` and `fielding: buf.fielding` to the commit list.
+`minInnings` was ALREADY present in `scopeSeedKey` — but there is NO editable
+control for it anywhere in the app (graph or Stats): decision 44c removed the
+min-innings HAVING gate from `buildQuery` entirely and the brief's own comment
+in `applyGraphFilters` already listed it among fields "the popup never edits".
+Confirmed via grep: zero UI references outside state.js/table.js/graph.js
+comments. Left untouched; flagged below rather than wiring dead state.
+
+### FIX 3 (scope addition, owner via coordinator) - stale pill after an async reconcile
+Concern #4 above: Stage's `reconcileSelection` and Event to Season's
+`reconcileNarrowing` correct `state.stage` / `state.eventSeasons` after an async
+vocabulary reload lands, but never signalled the pills row, which could keep
+showing a filter the state had already dropped. Calling the general `onChange`
+from inside a load resolution risks re-entering the graph's own
+`onScopeChanged()` re-query. Added a narrow, additive `onReconcile` callback
+(default no-op) threaded `mountFilterDrawer` -> `mountStage` /
+`mountEvent` -> `mountEventSeasons`, invoked ONLY when a reconcile actually wrote
+a change (reusing each function's existing `changed` flag). main.js wiring is
+NOT part of this pass's diff (out of the touched-file list for this task) -
+the hook is wired and proven at the component level; a future pass wires
+`() => pillsController?.render()` in for the Stats popup specifically.
+
+## Verified (follow-up pass)
+- `node --check` on all 3 touched files: pass.
+- Byte-identical: `src/table.js`, `src/filters.js`, `src/graph/charts.js`,
+  `src/state.js` - SHA-256 identical to HEAD f48bb8c (none of them touched by
+  this pass at all).
+- Stage cases, via the real exported `mountStage` against the actual scoped
+  vocabulary (real DuckDB, no mocked options):
+  - Red Ball + International: options = All/Final/No Stage -> dropdown SHOWS
+    (2 real choices). This is the case the owner flagged as wrong.
+  - Red Ball + Domestic (`club`) + County Championship (1,429 unlabelled
+    matches, 0 named stages): dropdown HIDDEN, note "No tournament stages to
+    choose in this scope."
+  - T20 + International: dropdown SHOWS with the full named-stage list + No
+    Stage, unaffected.
+- FIX 3, via the real exported `mountStage`/`mountEvent` against real data,
+  with onChange/onReconcile spies:
+  - Stage: seed T20-Intl scope, set stage=["Final"]; switch scope to
+    Red Ball/Domestic/County Championship (no named stages) -> state snapped to
+    ["all"], onReconcileCalls 1, onChangeCalls 0 throughout (no re-query).
+  - Event to Season: County Championship 2014-2026 (12 seasons, 2020 absent =
+    COVID, matches prior verification); narrow to {2014}; shrink the toolbar
+    date to 2026-only -> eventSeasons collapsed to {}, onReconcileCalls 1,
+    onChangeCalls 0.
+- FIX 2, live in the app (Men/T20/International, 2023-07-01 to 2026-07-02, Bar
+  chart, Catches, Top 15): baseline JC Buttler 33 (unfiltered) -> added Fielding
+  phase = Powerplay in the Graph's own Filters popup -> Apply to graph -> roster
+  AND numbers changed (Q de Kock 13 now #1, JC Buttler 7, GJ Maxwell 7, JO
+  Holder 4 - a name that wasn't even in the unfiltered top 15). Independent
+  DuckDB recompute over the `fielding` view for exactly these 15 names,
+  kind='caught' AND phase='pp', same scope: Q de Kock 13 / JC Buttler 7 / GJ
+  Maxwell 7 / JO Holder 4 / Shakib Al Hasan 3 / AU Rashid 3 / DA Miller 2 /
+  seven players at 1 / RA Jadeja 0 - exact match to the chart, byte-for-byte.
+- Anchors in-app (Men/T20/International 2023-07-01 to 2026-07-02): 2,813 players,
+  Karanbir Singh 2,454; SA Yadav 60 inns/1,544 runs/29.13 avg/150.34 SR. Zero
+  console errors throughout (checked repeatedly across the whole pass).
+
+## Concerns (flagged, NOT resolved)
+1. `minInnings`'s absence from `applyGraphFilters`' commit list is NOT a defect
+   - there is no UI anywhere (Stats or Graph) that edits it; decision 44c
+   removed the gate and its control. If the brief's premise assumed a live
+   control exists, that premise doesn't match the current app.
+2. FIX 3 is wired and proven at the `mountStage`/`mountEvent` component level
+   (onReconcile fires exactly on a real state change, never alongside
+   onChange). The actual `() => pillsController.render()` callback is NOT yet
+   passed in from `main.js`'s own `mountFilterDrawer(...)` call (that file
+   wasn't part of this pass's touched-file list) - so today's real Stats pills
+   row does not yet repaint from this hook. Wiring that one call in main.js is
+   a small, obvious follow-up; flagging rather than silently expanding scope
+   into a file not named in the brief.
+3. Season's `reconcileNarrowing` and Stage's `reconcileSelection` are the only
+   two silent-mutation-after-async-load sites found; Event's own selection
+   (`mountScopedMultiSelect`, shared by Team/Opposition/Event/Venue) never
+   writes state back after a reload - `setOptions`/`setValues` only filter the
+   WIDGET's local display, so there is no analogous defect to fix there.
