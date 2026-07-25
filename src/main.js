@@ -675,6 +675,17 @@ function boot() {
             const applied = appliedState || store.get();
             return store.get().discipline !== applied.discipline;
           },
+          // FIX 3 (stale pill after an async option-list reconcile): Stage's and
+          // Event→Season's reconcile paths correct the LIVE store after their
+          // vocabulary reloads land, but must never call the general onChange
+          // (that would route through onFiltersChanged and could re-enter a
+          // query). This passive hook ONLY repaints the pills row, and only
+          // fires when the reconcile actually wrote a change — so a pill can
+          // never keep claiming a filter the state just dropped. Safe pre-first
+          // Search too: pillsController is null until then, so this is a no-op.
+          onReconcile: () => {
+            if (pillsController) pillsController.render();
+          },
         }
       );
 

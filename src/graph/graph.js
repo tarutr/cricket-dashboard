@@ -2678,6 +2678,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       tossDecision: buf.tossDecision,
       inningsOrder: buf.inningsOrder,
       stage: buf.stage,
+      // Fielding SLICE conditions (Dismissed position / Dismissal kind /
+      // Fielding phase) are mounted straight onto this same buffer store by
+      // drawer.js's shared mountFilterDrawer (fieldingPositionController etc.),
+      // so they ARE editable from inside this popup exactly like `advanced` —
+      // but were missing from this commit list, the same class of defect as
+      // the match-context fields above: every edit landed on the buffer and
+      // was silently discarded on "Apply to graph".
+      fielding: buf.fielding,
       positions: buf.positions,
       regularPositions: buf.regularPositions,
       profile: buf.profile,
@@ -2785,6 +2793,8 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    *   result, resultCondition, tossResult, tossDecision, inningsOrder, stage —
    *     the match-context clauses (filters.js buildMatchContextClauses), which
    *     buildQuery/buildMatchupQuery AND the graph's own fetch all apply.
+   *   fielding — the fielding SLICE conditions (state.fielding.positions/kinds/
+   *     phases), buildFieldingSliceClauses' fielding_cte WHERE.
    * Previously omitted positions/opposition/profile/matchupVs/search, so e.g.
    * narrowing to openers-only (a position filter) left a stale middle-order
    * roster seeded from before the filter was applied.
@@ -2794,6 +2804,13 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * roster and the chartability cache keyed to the pre-filter scope — the two
    * things this signature gates. (The same pass fixed the deeper half of that
    * defect: applyGraphFilters was not committing the match-context fields at all.)
+   *
+   * Follow-up: `fielding` was still missing here (and from applyGraphFilters'
+   * commit list) — same defect, different field. `minInnings` was already
+   * present below, but has no editable control anywhere (the min-innings gate
+   * and its UI were removed by decision 44c — buildQuery ignores it entirely),
+   * so there is nothing for the graph popup to commit; left as a harmless no-op
+   * read here for compatibility with the retained state field.
    */
   function scopeSeedKey(state) {
     return JSON.stringify([
@@ -2803,7 +2820,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       state.profile, state.matchupVs,
       state.event, state.eventSeasons, state.venue,
       state.result, state.resultCondition, state.tossResult, state.tossDecision,
-      state.inningsOrder, state.stage,
+      state.inningsOrder, state.stage, state.fielding,
     ]);
   }
 

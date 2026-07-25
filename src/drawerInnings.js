@@ -792,7 +792,7 @@ function isKnockoutStage(stage) {
  * in-scope stages, cross-filtering them by the selected Event(s), deciding whether
  * "No Stage" applies, and hiding the control when there is nothing to choose.
  * Returns `{ sync }`. */
-export function mountStage(container, store, onChange, { embedded = false } = {}) {
+export function mountStage(container, store, onChange, { embedded = false, onReconcile = () => {} } = {}) {
   let namedOptions = null; // canonical stage labels in scope; null until loaded
   let hasNoStage = false; // does the scope contain matches with NO round name?
   let loadedScope = null; // scope key of the last successful load
@@ -819,10 +819,15 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
     return hasNoStage ? [...named, { value: STAGE_NONE, label: STAGE_NONE_LABEL }] : named;
   };
 
-  // Nothing to choose: not loaded yet, or ≤1 named stage in scope (polish item 3
-  // — a one-item list is not a choice). "No Stage" alone is not a choice either:
-  // with no named stage to contrast it against it selects the whole scope.
-  const nothingToChoose = () => !namedOptions || namedOptions.length <= 1;
+  // Nothing to choose: not loaded yet, or the total SELECTABLE option count is
+  // ≤1 (polish item 3 / owner correction). "No Stage" is a real option in its
+  // own right — a scope with one named stage PLUS unlabelled matches has TWO
+  // choices (that named stage vs. no stage) and the dropdown must render. Only
+  // hide when there is truly nothing to contrast (0 named + no No-Stage, or
+  // exactly 1 named + no No-Stage, or 0 named + No-Stage alone with no named
+  // stage to set it against).
+  const totalOptions = () => (namedOptions ? namedOptions.length + (hasNoStage ? 1 : 0) : 0);
+  const nothingToChoose = () => !namedOptions || totalOptions() <= 1;
 
   const picker = mountAllMultiSelect(container, store, onChange, {
     field: "stage",
@@ -882,7 +887,10 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
    * no longer exist here (a scope/event change can strand them) and, when the
    * control is hidden because there is nothing to choose, snap back to "All" so a
    * hidden filter can never stay silently applied. Only writes when something
-   * actually changed, so it converges (no store-churn loop). */
+   * actually changed, so it converges (no store-churn loop). Only ever called
+   * from ensureLoaded's async load resolution (never a direct user action, which
+   * already goes through onChange elsewhere), so FIX 3 fires the passive
+   * `onReconcile` repaint (pills only, never a re-query) exactly when it wrote. */
   function reconcileSelection() {
     const cur = store.get().stage || [];
     if (cur.length === 0) return; // condition not added — nothing to reconcile
@@ -894,7 +902,11 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
       const kept = cur.filter((v) => v === STAGE_ALL || allowed.has(v));
       next = kept.some((v) => v !== STAGE_ALL) ? kept : [STAGE_ALL];
     }
-    if (next.length !== cur.length || next.some((v, i) => v !== cur[i])) store.set({ stage: next });
+    const changed = next.length !== cur.length || next.some((v, i) => v !== cur[i]);
+    if (changed) {
+      store.set({ stage: next });
+      onReconcile();
+    }
   }
 
   function sync() {
@@ -1122,7 +1134,7 @@ export function mountTeam(container, store, onChange) {
 // filters.js) and — with it — state.eventSeasons, so in practice the season list
 // is re-derived by RE-PICKING the event under the new window. See the report's
 // CONCERNS for the interaction with that standing decision.
-function mountEventSeasons(container, store, onChange) {
+function mountEventSeasons(container, store, onChange, onReconcile = () => {}) {
   let optionsByEvent = {}; // { [event_name]: [{ event, season, syr, games }] } for loadedKey
   let loadedKey = null;
   let loadToken = 0;
@@ -1239,7 +1251,15 @@ function mountEventSeasons(container, store, onChange) {
         changed = true;
       }
     }
-    if (changed) store.set({ eventSeasons: next });
+    if (changed) {
+      store.set({ eventSeasons: next });
+      // FIX 3: this reconcile only ever runs from ensureLoaded's async load
+      // resolution (never from a direct user action, which already goes
+      // through onChange elsewhere), so a stale "Event: X (2024)" pill can
+      // otherwise sit unrefreshed after the state moved back to All. Passive
+      // repaint only — never the general onChange (no re-query).
+      onReconcile();
+    }
   }
 
   /** Toggle summary for one event's season dropdown. Reads out what is ACTUALLY
@@ -1379,7 +1399,7 @@ function mountEventSeasons(container, store, onChange) {
 
 /** "Event" — gender + team-type-scoped competition/series picker (state.event),
  * extended (Wave 6 pt2) with a nested season sub-picker below it. */
-export function mountEvent(container, store, onChange) {
+export function mountEvent(container, store, onChange, onReconcile = () => {}) {
   container.innerHTML = `
     <div class="filter-group filter-group--event" data-role="event-wrap">
       <div data-role="event-ms"></div>
@@ -1388,7 +1408,7 @@ export function mountEvent(container, store, onChange) {
   const msHost = container.querySelector('[data-role="event-ms"]');
   const seasonsHost = container.querySelector('[data-role="event-seasons"]');
 
-  const seasons = mountEventSeasons(seasonsHost, store, onChange);
+  const seasons = mountEventSeasons(seasonsHost, store, onChange, onReconcile);
 
   /** Drop eventSeasons narrowing for events no longer selected — so a
    * de-selected + re-selected event returns on "All" and the state keeps no

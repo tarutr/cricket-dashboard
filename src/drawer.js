@@ -172,8 +172,24 @@ const MATCH_CONTEXT_ADD_ORDER = [
 /**
  * Mount the condition builder into `advancedHost` (the Advanced Filters section
  * body). Returns `{ onShow, onHide, sync, activeCount, validate }` for main.js.
+ *
+ * `onReconcile` (FIX 3, display-only): Stage and Event→Season carry an ASYNC
+ * option vocabulary; when a fresh load lands, they silently drop now-invalid
+ * picks against the CURRENT scope (mountStage's reconcileSelection,
+ * mountEventSeasons' reconcileNarrowing) WITHOUT calling `onChange` — calling
+ * the general onChange from inside a load resolution would also re-trigger the
+ * graph's onScopeChanged() re-query in that view (risk of a loop/duplicate
+ * query), which a passive correction must never do. `onReconcile` is the
+ * narrow escape hatch: a caller that shows pills passes a callback that ONLY
+ * repaints the pills row (not a full onChange), so a pill can never keep
+ * claiming a filter the state just dropped. Defaults to a no-op — safe for the
+ * graph's own Filters popup, which shows no pills at all.
  */
-export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, { onChange, isKeepColumnsDisabled }) {
+export function mountFilterDrawer(
+  { advancedHost, keepColumnsCheckbox },
+  store,
+  { onChange, isKeepColumnsDisabled, onReconcile = () => {} }
+) {
   // "Keep Selected Columns" toggle (4d/A5): a plain checkbox in the popup
   // footer (main.js queries it statically from index.html and hands it in
   // here since drawer.js owns the popup's non-Search controls). Reads/writes
@@ -446,7 +462,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
   const matchupPositionController = mountBattingPosition(editorHosts.strikerpos, store, onChange, { embedded: true });
   const teamController = mountTeam(editorHosts.team, store, onChange);
   const oppositionController = mountOpposition(editorHosts.opposition, store, onChange, { embedded: true });
-  const eventController = mountEvent(editorHosts.event, store, onChange);
+  const eventController = mountEvent(editorHosts.event, store, onChange, onReconcile);
   const venueController = mountVenue(editorHosts.venue, store, onChange);
   const fieldingPositionController = mountFieldingPosition(editorHosts.fld_pos, store, onChange, { embedded: true });
   const fieldingKindController = mountFieldingKind(editorHosts.fld_kind, store, onChange, { embedded: true });
@@ -456,7 +472,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
   const tossResultController = mountTossResult(editorHosts.mc_toss_result, store, onChange, { embedded: true });
   const tossDecisionController = mountTossDecision(editorHosts.mc_toss_decision, store, onChange, { embedded: true });
   const inningsOrderController = mountInningsOrder(editorHosts.mc_innings_order, store, onChange, { embedded: true });
-  const stageController = mountStage(editorHosts.mc_stage, store, onChange, { embedded: true });
+  const stageController = mountStage(editorHosts.mc_stage, store, onChange, { embedded: true, onReconcile });
 
   // ── Presence + session-added tracking ──────────────────────────────────────
   // sessionAdded: singleton rows the user added THIS popup session that don't
