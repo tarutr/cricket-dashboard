@@ -40,7 +40,9 @@
 // the Opposition list holds only the teams India faced. A list never narrows by
 // its OWN filter (`siblingExclude` / the `role` passed to searchTeams), so the
 // Event list stays the full in-scope vocabulary while an event is selected, and
-// removing a filter re-expands the others without touching what is already picked.
+// removing a filter re-expands the others without touching what is already picked
+// — except for a pick this scope can no longer satisfy at all, which is dropped
+// (reconcilePicks below: mountStage's ruled behaviour, now shared by every list).
 // The SQL half lives in ONE place (playerData.js siblingOptionClauses, over the
 // shared predicate fragments in filters.js); the cache-key half is
 // optionCacheKey() below, and both take the same self-exclusion list.
@@ -124,6 +126,63 @@ function optionSiblingKey(s, exclude = []) {
  * cross-filters by. */
 function optionCacheKey(s, exclude = []) {
   return `${optionScopeKey(s)}||${optionSiblingKey(s, exclude)}`;
+}
+
+// ── Cascading option lists: the shared "drop impossible picks" reconcile ──────
+// Cross-filtered options stop an impossible combination from being PICKED, but it
+// stays reachable by DESELECTING: pick Venue = {Udayana, Bayuemas Oval}, take the
+// Stage = Final that Bayuemas legitimately offers, then remove Bayuemas — and
+// Udayana + Final is a combination that can only ever return zero rows. mountStage
+// has always handled its own side of that (its reconcileSelection ran on every
+// option reload); this is the SAME rule, now shared by every DB-derived list, so
+// Venue / Event / Team / Opposition / Season reconcile in the mirror-image
+// direction too — e.g. Result Condition = {Normal, D/L} with a venue that only
+// ever hosted Normal matches, then Normal deselected: the venue pick now goes,
+// instead of silently filtering to nothing while vanishing from its own dropdown.
+// (Two filters that BOTH reconcile settle each other at pick time, so the
+// stranding routes that survive are the ones whose other side is a fixed
+// vocabulary — Result Condition, Toss decision — which has nothing to give up.)
+//
+// WHY DROPPING IS SAFE FOR THE NUMBERS (Rule 1): a loader's list is the COMPLETE
+// set of values available for the current scope + siblings (no LIMIT anywhere, and
+// the search term only ever reorders — it never filters rows out). So a picked
+// value that is absent from a freshly-loaded list cannot satisfy the rest of the
+// selection on any match in scope: it is a dead disjunct in its own IN-list, and
+// removing it leaves the result set of the built query EXACTLY as it was. The one
+// place the result does change is the deliberate fallback below — when NOTHING
+// survives, the filter reverts to "no narrowing" (the ruled Stage behaviour) so
+// the user sees widened results rather than a stranded zero-row filter.
+//
+// CONVERGENCE: a reconcile writes state → the state changes some other list's
+// cache key → that list reloads → it reconciles too. That settles because every
+// write here only ever REMOVES values (or drops the filter to inactive), never
+// adds one, and it writes ONLY when something actually changed — so each pass
+// strictly shrinks the total number of picks, of which there are finitely many.
+// Nothing can widen mid-cycle either, and a widened filter can only ever GROW the
+// other lists, so no list can flip back and forth.
+
+/**
+ * Reconcile one filter's picks against the option list just loaded for it.
+ * Returns the next selection, or `null` when nothing changed (the caller must
+ * then NOT write — that guard is what makes the cycle above converge).
+ *
+ * @param {string[]} cur       the filter's current selection
+ * @param {Set<string>} allowed the values the freshly-loaded list offers
+ * @param {object} opts
+ * @param {string[]} opts.sentinels values that are never dropped because they are
+ *   not vocabulary at all (Stage's "All"); they also don't count as survivors.
+ * @param {string[]} opts.inactive  this filter's OWN "no narrowing" representation
+ *   — `[]` for venue/event/teams/opposition, `[STAGE_ALL]` for stage. Each picker
+ *   keeps its existing shape; no new sentinel is introduced.
+ */
+function reconcilePicks(cur, allowed, { sentinels = [], inactive = [] } = {}) {
+  if (!Array.isArray(cur) || cur.length === 0) return null; // filter not applied
+  const keep = new Set(sentinels);
+  const kept = cur.filter((v) => keep.has(v) || allowed.has(v));
+  // Something real survived → keep exactly those; otherwise fall back to inactive.
+  const next = kept.some((v) => !keep.has(v)) ? kept : inactive;
+  const same = next.length === cur.length && next.every((v, i) => v === cur[i]);
+  return same ? null : next;
 }
 
 /**
@@ -943,27 +1002,30 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
     hasNoStage = Boolean(res.hasNoStage);
     loadedScope = key;
     loadingScope = null;
-    reconcileSelection();
+    // Same currency guard as the other lists: only reconcile against a vocabulary
+    // that still matches the live state (see mountScopedMultiSelect's ensureLoaded).
+    if (key === scopeKey()) reconcileSelection();
     picker.sync();
   }
 
   /** Keep state.stage honest against the vocabulary NOW in scope: drop picks that
-   * no longer exist here (a scope/event change can strand them) and, when the
+   * no longer exist here (a scope/sibling change can strand them) and, when the
    * control is hidden because there is nothing to choose, snap back to "All" so a
    * hidden filter can never stay silently applied. Only writes when something
-   * actually changed, so it converges (no store-churn loop). */
+   * actually changed, so it converges (no store-churn loop).
+   *
+   * The pick-filtering itself is the SHARED reconcilePicks() above (identical
+   * behaviour to the hand-rolled version this replaced — same per-value keep, same
+   * STAGE_ALL sentinel, same fallback, same changed-only write); Stage's own
+   * additions are its two sentinels: STAGE_ALL is vocabulary-less (kept, but never
+   * a survivor) and it is also this filter's inactive shape. */
   function reconcileSelection() {
-    const cur = store.get().stage || [];
-    if (cur.length === 0) return; // condition not added — nothing to reconcile
-    let next;
-    if (nothingToChoose()) {
-      next = [STAGE_ALL];
-    } else {
-      const allowed = new Set(optionList().map((o) => o.value));
-      const kept = cur.filter((v) => v === STAGE_ALL || allowed.has(v));
-      next = kept.some((v) => v !== STAGE_ALL) ? kept : [STAGE_ALL];
-    }
-    if (next.length !== cur.length || next.some((v, i) => v !== cur[i])) store.set({ stage: next });
+    const allowed = nothingToChoose() ? new Set() : new Set(optionList().map((o) => o.value));
+    const next = reconcilePicks(store.get().stage || [], allowed, {
+      sentinels: [STAGE_ALL],
+      inactive: [STAGE_ALL],
+    });
+    if (next) store.set({ stage: next });
   }
 
   function sync() {
@@ -1002,7 +1064,7 @@ function gamesMeta(o) {
  * `config`:
  *   { get(state)->string[], set(store,arr), loader(gender,teamType)->Promise<rows>,
  *     emptyLabel, singular, plural, ariaLabel, searchPlaceholder,
- *     showGames?:bool, siblingExclude?:string[],
+ *     showGames?:bool, siblingExclude?:string[], onReconciled?():void,
  *     disabledWhen?(state)->bool, disabledNote?:string }
  * (the loader closes over `store` to read the format/date scope AND to pass the
  * live selection through as the cascading `sel`; the wrapper still calls it with
@@ -1095,9 +1157,35 @@ function mountScopedMultiSelect(container, store, onChange, config) {
     optionsCache = rows || [];
     loadedKey = key;
     handle.setOptions(optionsCache);
+    // Drop any pick this scope + sibling combination can no longer satisfy, BEFORE
+    // reflecting the selection below, so the toggle shows the reconciled truth.
+    // ONLY against a list that still describes the CURRENT state: another picker's
+    // own reconcile can land between this load being issued and its reply, and
+    // reconciling a selection against options loaded for a superseded state could
+    // drop a pick that is valid again. When that happens sync() reloads for the new
+    // key (loadedKey then differs from cacheKey) and reconciles from THAT reply.
+    if (key === cacheKey()) reconcileSelection();
     // Reflect the current selection against the fresh options (keeps the toggle
     // summary + checks honest; setOptions on its own would drop unknown values).
     handle.setValues(config.get(store.get()));
+  }
+
+  /** Keep this picker's selection honest against the vocabulary NOW available —
+   * the same rule mountStage has always applied to state.stage, via the shared
+   * reconcilePicks() (see its header for why dropping cannot move a number, and
+   * why the reconcile → reload cycle converges). Runs ONLY after a successful
+   * load, so a failed query never wipes a selection. This filter's inactive shape
+   * is the EMPTY ARRAY (no narrowing) — there is no "All" sentinel on this side.
+   * A reconcile that empties the selection therefore leaves exactly the state a
+   * user gets by clearing the filter by hand. */
+  function reconcileSelection() {
+    const next = reconcilePicks(config.get(store.get()), new Set(optionsCache.map((o) => o.value)), { inactive: [] });
+    if (!next) return;
+    config.set(store, next); // SAME state field the picker itself writes
+    // Callers with dependent state (mountEvent's per-event season narrowing) get
+    // the same follow-up they run after a user edit, so a reconciled-away value
+    // can't leave orphan state behind.
+    if (config.onReconciled) config.onReconciled();
   }
 
   // Lazy-load fallback: first interaction with the toggle (before it opens).
@@ -1276,12 +1364,16 @@ function mountEventSeasons(container, store, onChange) {
     for (const r of rows) (grouped[r.event] = grouped[r.event] || []).push(r);
     optionsByEvent = grouped;
     loadedKey = key;
-    reconcileNarrowing(); // keep any narrowing honest against the freshly-loaded seasons
+    // Keep any narrowing honest against the freshly-loaded seasons — but only when
+    // this reply still describes the live state (same currency guard as the other
+    // lists; sync() reloads and reconciles again otherwise).
+    if (key === dataKey()) reconcileNarrowing();
     render();
   }
 
-  /** After a fresh load (scope OR selection changed), reconcile each event's
-   * season narrowing against the seasons NOW in scope: intersect (preserving the
+  /** After a fresh load (scope, event selection, OR any sibling filter changed —
+   * dataKey carries all three), reconcile each event's season narrowing against
+   * the seasons NOW in scope: intersect (preserving the
    * in-scope order), and collapse to "All" (drop the key) when the intersection
    * is empty OR already covers every in-scope season. This is what keeps the
    * picker honest when the date window shrinks while an event stays selected —
@@ -1507,6 +1599,13 @@ export function mountEvent(container, store, onChange) {
       // decision, but NEVER by the event selection itself (self-exclusion — the
       // list must stay the full in-scope vocabulary while one event is picked).
       siblingExclude: ["event"],
+      // A reconcile that drops an impossible event must clean up after itself
+      // exactly like a hand de-select does: drop that event's orphan season
+      // narrowing, then re-render the season groups.
+      onReconciled: () => {
+        pruneOrphans();
+        seasons.sync();
+      },
       loader: (gender, teamType) => {
         const s = store.get(); // A9: scope the Event list to the full Search Conditions
         return searchEvents("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s });
