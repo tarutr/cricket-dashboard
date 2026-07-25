@@ -480,25 +480,60 @@ export async function searchVenues(term, gender, teamType = "both", formats = nu
 }
 
 /**
- * Distinct RAW `event_stage` values in `matches` for the current scope — the
- * option source for the Stage picker (FIX C). Previously the Stage list was only
- * GENDER-scoped, so a Red-Ball/Test scope still listed T20-only rounds; this
- * scopes it to the SAME full Search Conditions (gender + format + date +
- * team-type) as the Event/Venue pickers, via the shared matchOptionScope helper.
- * Returns raw spellings (ORDER BY event_stage) — the caller (mountStage) folds
- * them to canonical labels, exactly as before. OPTIONS lookup only; it never
- * feeds a leaderboard aggregate, so no number changes.
+ * The Stage picker's option vocabulary for the current scope (FIX C + polish
+ * item 3). Returns `{ stages, hasNoStage }`:
+ *   stages     — the distinct RAW `event_stage` spellings present, ordered by
+ *                event_stage; the caller (mountStage) folds them to canonical
+ *                labels, exactly as before.
+ *   hasNoStage — whether the scope also contains matches with NO round name
+ *                (`event_stage IS NULL`), which is what makes the "No Stage"
+ *                option a real choice rather than a guaranteed-empty one.
+ *
+ * Previously the Stage list was only GENDER-scoped, so a Red-Ball/Test scope
+ * still listed T20-only rounds; FIX C scoped it to the SAME full Search
+ * Conditions (gender + format + date + team-type) as the Event/Venue pickers,
+ * via the shared matchOptionScope helper.
+ *
+ * Polish item 3 adds the EVENT cross-filter: `eventNames` is the currently
+ * selected CANONICAL event labels (state.event). Each is expanded to its raw
+ * alias set — the same expansion searchEventSeasons and the query builders use —
+ * so the stages offered are those occurring in the selected competition across
+ * every sponsor era of it. An empty/absent selection adds no event predicate, so
+ * the emitted SQL is then identical to the pre-item-3 lookup.
+ *
+ * OPTIONS lookup only; it never feeds a leaderboard aggregate, so no number
+ * changes.
  */
-export async function searchStages(gender, teamType = "both", formats = null, dateFrom = null, dateTo = null) {
+export async function searchStages(
+  gender,
+  teamType = "both",
+  formats = null,
+  dateFrom = null,
+  dateTo = null,
+  eventNames = null
+) {
   const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo);
+  let eventClause = "";
+  if (Array.isArray(eventNames) && eventNames.length > 0) {
+    const rawNames = [...new Set(eventNames.flatMap((e) => eventAliases(e)))];
+    eventClause = ` AND event_name IN (${rawNames.map((e) => `'${esc(e)}'`).join(", ")})`;
+  }
   const sql = [
     `SELECT DISTINCT event_stage AS s`,
     `FROM matches`,
-    `WHERE ${scope} AND event_stage IS NOT NULL`,
+    `WHERE ${scope}${eventClause} AND event_stage IS NOT NULL`,
     `ORDER BY event_stage`,
   ].join("\n");
-  const { rows } = await query(sql);
-  return rows.map((r) => r.s);
+  const noneSql = [
+    `SELECT COUNT(*) AS n`,
+    `FROM matches`,
+    `WHERE ${scope}${eventClause} AND event_stage IS NULL`,
+  ].join("\n");
+  const [named, none] = await Promise.all([query(sql), query(noneSql)]);
+  return {
+    stages: named.rows.map((r) => r.s),
+    hasNoStage: Number(none.rows[0]?.n ?? 0) > 0,
+  };
 }
 
 /** The player's profile row (null for the ~unmatched; profiles are men-only). */

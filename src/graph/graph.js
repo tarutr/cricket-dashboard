@@ -2664,7 +2664,20 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       teams: buf.teams,
       opposition: buf.opposition,
       event: buf.event,
+      // Polish item 5 (defect): the season narrowing and the six match-context
+      // filters are editable in THIS popup but were absent from this commit list,
+      // so every edit to them was silently discarded on "Apply to graph" — the
+      // buffer held them and the shared store never received them. The graph's
+      // fetch already applies all of them (FIX 4 wired the context join + clauses
+      // into graph/charts.js), so committing them is all that was missing.
+      eventSeasons: buf.eventSeasons,
       venue: buf.venue,
+      result: buf.result,
+      resultCondition: buf.resultCondition,
+      tossResult: buf.tossResult,
+      tossDecision: buf.tossDecision,
+      inningsOrder: buf.inningsOrder,
+      stage: buf.stage,
       positions: buf.positions,
       regularPositions: buf.regularPositions,
       profile: buf.profile,
@@ -2767,9 +2780,20 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    *   matchupVs — buildMatchupQuery's bucket predicate AND the
    *     discipline/matchupVs pair together decide whether buildQuery even
    *     takes the matchup path at all (state.js's matchupVsActive).
+   *   event, eventSeasons, venue — the match-level semi-joins in
+   *     buildScopeClauses (the season narrowing rides on the event clause).
+   *   result, resultCondition, tossResult, tossDecision, inningsOrder, stage —
+   *     the match-context clauses (filters.js buildMatchContextClauses), which
+   *     buildQuery/buildMatchupQuery AND the graph's own fetch all apply.
    * Previously omitted positions/opposition/profile/matchupVs/search, so e.g.
    * narrowing to openers-only (a position filter) left a stale middle-order
    * roster seeded from before the filter was applied.
+   *
+   * Polish item 5: the event/venue and match-context filters were missing too, so
+   * applying any of them from the graph's own Filters popup left BOTH the seeded
+   * roster and the chartability cache keyed to the pre-filter scope — the two
+   * things this signature gates. (The same pass fixed the deeper half of that
+   * defect: applyGraphFilters was not committing the match-context fields at all.)
    */
   function scopeSeedKey(state) {
     return JSON.stringify([
@@ -2777,6 +2801,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       state.teams, state.teamType, state.minInnings, state.advanced, state.sort,
       state.search, state.positions, state.regularPositions, state.opposition,
       state.profile, state.matchupVs,
+      state.event, state.eventSeasons, state.venue,
+      state.result, state.resultCondition, state.tossResult, state.tossDecision,
+      state.inningsOrder, state.stage,
     ]);
   }
 

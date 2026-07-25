@@ -362,6 +362,13 @@ def sql_matches():
     #     `result_type` are mutually exclusive; all 108 'tie (X)' rows parse to a
     #     team that is exactly team_1 or team_2. So a super-over WIN counts as a Win.
     #   is_super_over = (result_type LIKE 'tie (%)') -> BOOLEAN (the 108 super overs).
+    #     WRAPPED IN COALESCE(..., false) — DEFECT FIX (Wave 6 polish item 1): the
+    #     bare LIKE returns NULL whenever result_type is NULL, which it is for every
+    #     ordinary win (20,527 of 22,229 rows). Truthy filters were unaffected (NULL
+    #     is not TRUE), but ANY negation (NOT is_super_over) silently dropped those
+    #     20,527 rows instead of keeping them. COALESCE makes the column a true
+    #     BOOLEAN: exactly the same 108 TRUE rows, the other 22,121 now FALSE rather
+    #     than NULL/FALSE. Verified against the live DB: 108 before == 108 after.
     return r"""
     SELECT
         m.match_id,
@@ -397,7 +404,7 @@ def sql_matches():
                  THEN regexp_extract(m.result_type, '^tie \((.*)\)$', 1)
             ELSE NULL
         END AS match_winner,
-        (m.result_type LIKE 'tie (%)') AS is_super_over
+        COALESCE(m.result_type LIKE 'tie (%)', false) AS is_super_over
     FROM matches m
     LEFT JOIN (
         SELECT match_id, batting_team AS team_batting_first

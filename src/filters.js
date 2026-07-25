@@ -23,9 +23,12 @@ import {
   anyEventSeasonNarrowing,
   venueFilterActive,
   RESULT_ALL,
-  RESULT_TYPE_ALL,
-  RESULT_TYPE_NORMAL,
-  resultTypeMethod,
+  RESULT_CONDITION_ALL,
+  RESULT_CONDITION_NORMAL,
+  RESULT_CONDITION_SUPER_OVER,
+  resultConditionMethod,
+  STAGE_ALL,
+  STAGE_NONE,
   escSql as esc,
 } from "./state.js";
 import { eventAliases, stageAliases } from "./canonicalNames.js";
@@ -325,10 +328,14 @@ export function buildMatchContextClauses(state, rowTeamCol) {
   const A = "mctx";
   const clauses = [];
 
-  // 1. Result (multi, OR). Won/Lost use the derived match_winner (so a super-over
-  //    WIN counts as a Win); Super Over is the facet flag (overlaps Won/Lost).
-  //    The leading "All" token (RESULT_ALL, FIX A) is the no-narrowing sentinel —
-  //    it contributes no disjunct, so Result = All emits nothing (byte-identical).
+  // 1. Result (multi, OR) — the OUTCOME only. Won/Lost use the derived
+  //    match_winner, which already resolves a super-over winner, so a super-over
+  //    win counts as a Win and a super-over loss as a Loss. That is exactly why
+  //    "Super Over" is NOT an outcome here anymore (Wave 6 polish item 4): it is a
+  //    FACET of how the result came about, so it lives in the Result Condition
+  //    sub-filter (block 5b) instead. The leading "All" token (RESULT_ALL, FIX A)
+  //    is the no-narrowing sentinel — it contributes no disjunct, so Result = All
+  //    emits nothing (byte-identical).
   const res = state.result || [];
   if (res.length) {
     const parts = [];
@@ -339,7 +346,6 @@ export function buildMatchContextClauses(state, rowTeamCol) {
       else if (r === "drawn") parts.push(`${A}.result_type = 'draw'`);
       else if (r === "no_result") parts.push(`${A}.result_type = 'no result'`);
       else if (r === "tied") parts.push(`${A}.result_type = 'tie'`);
-      else if (r === "super_over") parts.push(`${A}.is_super_over IS TRUE`);
     }
     if (parts.length) clauses.push(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`);
   }
@@ -374,35 +380,70 @@ export function buildMatchContextClauses(state, rowTeamCol) {
   //     picking "Semi-Final" matches "Semi Final" / "Semi-Final" / "Semi-final"
   //     alike. An identity (unlisted) stage expands to just itself. Dedup for a
   //     tidy IN-list. Empty selection contributes nothing (byte-identical).
+  //
+  //     Wave 6 polish item 3 adds two sentinels, mirroring Result's:
+  //       • STAGE_ALL ("All") narrows nothing — no disjunct, so "Stage condition
+  //         added and left on All" emits NOTHING and stays byte-identical.
+  //       • STAGE_NONE ("No Stage") is `event_stage IS NULL` — the 20,689 matches
+  //         with no round name (a league fixture). It is a real choice, not an
+  //         absence of one, so it gets its own disjunct and OR's with any named
+  //         stages picked alongside it.
   const st = state.stage || [];
   if (st.length) {
-    const stageRaws = [...new Set(st.flatMap((s) => stageAliases(s)))];
-    clauses.push(`${A}.event_stage IN (${stageRaws.map((s) => `'${esc(s)}'`).join(", ")})`);
+    const named = st.filter((s) => s !== STAGE_ALL && s !== STAGE_NONE);
+    const parts = [];
+    if (named.length) {
+      const stageRaws = [...new Set(named.flatMap((s) => stageAliases(s)))];
+      parts.push(`${A}.event_stage IN (${stageRaws.map((s) => `'${esc(s)}'`).join(", ")})`);
+    }
+    if (st.includes(STAGE_NONE)) parts.push(`${A}.event_stage IS NULL`);
+    if (parts.length) clauses.push(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`);
   }
 
-  // 5b. Result Type (FIX B): the nested method sub-filter under Result. Tokens
-  //     map to `matches.method`: "All" (RESULT_TYPE_ALL) narrows nothing (no
-  //     disjunct → byte-identical); "Normal" (RESULT_TYPE_NORMAL) → method IS NULL
-  //     (regulation result); every other token is a specific method (D/L / VJD /
-  //     Awarded / Lost fewer wickets) collected into an IN(...) list via
-  //     resultTypeMethod. Emit the IN(...) disjunct only when ≥1 specific method
-  //     is picked, and the IS NULL disjunct only when "Normal" is picked; OR them
-  //     together when both are present. Empty / All-only contributes nothing.
-  const resultTypes = state.resultType || [];
-  if (resultTypes.length) {
+  // 5b. Result Condition (FIX B; renamed from "Result Type", Wave 6 polish item
+  //     4): the nested "how did this result come about" sub-filter under Result.
+  //     Tokens map to `matches.method` plus the super-over facet flag:
+  //       • "All" (RESULT_CONDITION_ALL) narrows nothing (no disjunct →
+  //         byte-identical).
+  //       • "Normal" (RESULT_CONDITION_NORMAL) → a PLAIN result: no method AND no
+  //         super over. The super-over term is item 4's redefinition — before, a
+  //         super over with no method counted as "Normal", which it plainly isn't.
+  //       • "Super Over" (RESULT_CONDITION_SUPER_OVER) → the facet flag, moved here
+  //         from the Result outcome list.
+  //       • every other token is a specific method (D/L / VJD / Awarded / Lost
+  //         fewer wickets) collected into ONE IN(...) list via
+  //         resultConditionMethod.
+  //     Each present group contributes one disjunct, OR'd together (they are
+  //     facets, not a partition — 1 match is both a super over AND has a method).
+  //     Empty / All-only contributes nothing.
+  //
+  //     COALESCE on is_super_over is REQUIRED, not cosmetic (item 1): the exported
+  //     column is NULL — not false — for every match whose result_type is NULL,
+  //     i.e. every ordinary win (20,527 of 22,229 rows). A bare `NOT
+  //     mctx.is_super_over` would evaluate to NULL there and silently drop all of
+  //     them from "Normal". COALESCE(..., false) makes the three-valued column
+  //     behave as the boolean it is meant to be. The pipeline's own derivation is
+  //     fixed too (export_parquet.py sql_matches), so this is belt-and-braces once
+  //     a fresh export lands — and correct against BOTH old and new exports.
+  const resultConditions = state.resultCondition || [];
+  if (resultConditions.length) {
+    const superOverSql = `COALESCE(${A}.is_super_over, false)`;
     const reals = [];
     let wantsNormal = false;
-    for (const t of resultTypes) {
-      if (t === RESULT_TYPE_ALL) continue;
-      else if (t === RESULT_TYPE_NORMAL) wantsNormal = true;
+    let wantsSuperOver = false;
+    for (const t of resultConditions) {
+      if (t === RESULT_CONDITION_ALL) continue;
+      else if (t === RESULT_CONDITION_NORMAL) wantsNormal = true;
+      else if (t === RESULT_CONDITION_SUPER_OVER) wantsSuperOver = true;
       else {
-        const mth = resultTypeMethod(t);
+        const mth = resultConditionMethod(t);
         if (mth) reals.push(mth);
       }
     }
     const parts = [];
     if (reals.length) parts.push(`${A}.method IN (${reals.map((m) => `'${esc(m)}'`).join(", ")})`);
-    if (wantsNormal) parts.push(`${A}.method IS NULL`);
+    if (wantsNormal) parts.push(`(${A}.method IS NULL AND NOT ${superOverSql})`);
+    if (wantsSuperOver) parts.push(superOverSql);
     if (parts.length) clauses.push(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`);
   }
 

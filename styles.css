@@ -819,20 +819,41 @@ a { color: var(--color-accent); }
 .cond-row__value .profile-role { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .cond-row__value .profile-role .select { flex: 0 1 auto; min-width: 0; width: auto; }
 
-/* ── Event → Season nested picker (Wave 6 pt2) ──────────────────────────────
-   The event row stacks the multi-select and, below it, one season group per
-   selected event. Reuses .dropdown__item for the checkboxes (incl. the shared
-   .is-disabled min-one look), so only the layout scaffolding is new here. */
-.filter-group--event { display: flex; flex-direction: column; gap: var(--space-2); align-items: stretch; }
-.event-seasons {
+/* ── Nested pickers: Event → Season and Result → Result Condition ────────────
+   Both rows have the SAME shape (polish item 6), so they share the layout rules
+   here and differ only in their child block's class:
+
+     [Event]  [ Any event ▾ ]            <- parent: label + its OWN dropdown, one row
+              Season  [ All seasons ▾ ]  <- child: indented, own label, own dropdown
+
+   Two things make that work. (1) .cond-row__main centres its items, which — with a
+   two-row stacked editor — floated the row's type label into the gap BETWEEN the
+   parent and child rows; flex-start pins it beside the parent's dropdown instead
+   (the small padding-top optically aligns the bold label text with the control).
+   (2) The child block is indented and hugs its parent: the parent→child gap is
+   --space-1, TIGHTER than the --space-3 that separates whole condition rows, so
+   the pair reads as one group. Checkboxes reuse .dropdown__item throughout. */
+[data-cond="event"] .cond-row__main,
+[data-cond="mc_result"] .cond-row__main { align-items: flex-start; }
+[data-cond="event"] .cond-row__type,
+[data-cond="mc_result"] .cond-row__type { padding-top: 0.4rem; }
+
+.filter-group--event,
+.filter-group--result { display: flex; flex-direction: column; gap: var(--space-1); align-items: stretch; }
+
+/* The child row itself: indented from the parent's dropdown, its label and its
+   dropdown side by side on that one row. */
+.event-seasons,
+.result-condition {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-panel);
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin-left: var(--space-3);
 }
+.nested-pick { flex-direction: row; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.nested-pick__head,
 .event-seasons__head {
   font-size: var(--text-sm2);
   text-transform: uppercase;
@@ -840,37 +861,17 @@ a { color: var(--color-accent); }
   color: var(--color-muted);
   font-weight: 600;
 }
-.event-seasons__group { display: flex; flex-direction: column; gap: var(--space-1); }
-.event-seasons__group + .event-seasons__group {
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--color-border);
+/* One dropdown per selected event. The event's name shows only when more than one
+   event is selected (with one, the parent's own toggle already names it). */
+.event-seasons__group {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
 }
 .event-seasons__name { font-size: 0.9rem; font-weight: 600; }
-.event-seasons__boxes { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
-.event-seasons__boxes .dropdown__item { padding: var(--space-1) var(--space-2); }
 .event-seasons__loading { margin: 0; }
-
-/* Result → Result Type nested sub-picker (FIX B) — mirrors the Event → Season
-   nesting (.filter-group--event / .event-seasons above): the Result outcome
-   picker stacks above, and the Result Type sub-picker sits in an indented panel
-   directly below it, shown only while the Result condition is active. */
-.filter-group--result { display: flex; flex-direction: column; gap: var(--space-2); align-items: stretch; }
-.result-type {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-panel);
-}
-.result-type__head {
-  font-size: var(--text-sm2);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--color-muted);
-  font-weight: 600;
-}
 
 .cond-row__remove { flex-shrink: 0; }
 

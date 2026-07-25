@@ -44,8 +44,11 @@ import {
   FIELDING_POSITIONS,
   RESULT_OPTIONS,
   RESULT_ALL,
-  RESULT_TYPE_OPTIONS,
-  RESULT_TYPE_ALL,
+  RESULT_CONDITION_OPTIONS,
+  RESULT_CONDITION_ALL,
+  STAGE_ALL,
+  STAGE_NONE,
+  STAGE_NONE_LABEL,
   TOSS_RESULT_OPTIONS,
   TOSS_DECISION_OPTIONS,
   INNINGS_ORDER_OPTIONS,
@@ -378,17 +381,19 @@ export function mountFieldingPhase(container, store, onChange, opts = {}) {
 }
 
 // ── Match-context pickers (Wave 6) ──────────────────────────────────────────
-// Five categorical filters grouped under "Match context" in the "+ Add
-// condition…" picker, available in batting, bowling AND matchup views (unlike
-// the fielding slices, they have no matchup gate). Toss result / toss decision /
-// innings order are fixed-vocabulary checkbox multi-selects over a TOP-LEVEL state
-// array; Result (FIX A) is an "All + specifics" multi-select carrying a NESTED
-// Result Type sub-picker (FIX B, state.resultType) directly below it; Stage is a
-// scope-loaded checkbox list plus a "Knockout" convenience button. Each is the
-// same self-contained `{ sync }` controller as the pickers above and slots into a
-// singleton row in drawer.js. None writes anything but its own state key(s), so
-// the query stays byte-identical until a value is set (see filters.js
-// buildMatchContextClauses).
+// Five categorical filters keyed off the MATCH's context, available in batting,
+// bowling AND matchup views (unlike the fielding slices, they have no matchup
+// gate). Four sit in the "Match context" group of the "+ Add condition…" picker;
+// Stage moved up into the "Match" group beside Event (polish item 3). Toss result /
+// toss decision / innings order are fixed-vocabulary checkbox multi-selects over a
+// TOP-LEVEL state array; Result (FIX A) is an "All + specifics" multi-select
+// carrying a NESTED Result Condition sub-picker (FIX B / polish item 4,
+// state.resultCondition) directly below it; Stage is the same "All + specifics"
+// component over a scope-loaded vocabulary, plus a "Knockout" convenience button.
+// Each is the same self-contained `{ sync }` controller as the pickers above and
+// slots into a singleton row in drawer.js. None writes anything but its own state
+// key(s), so the query stays byte-identical until a value narrows something (see
+// filters.js buildMatchContextClauses).
 
 /** Short toggle summary for a token multi-select: 0 → anyLabel; 1 → that
  * option's label; >1 → "N selected". */
@@ -464,63 +469,87 @@ function mountTokenMultiSelect(container, store, onChange, { field, options, any
   return { sync };
 }
 
-// ── "All + specifics" multi-select (FIX A/B) ────────────────────────────────
-// Shared by BOTH the Result outcome picker and the nested Result Type picker: a
-// checkbox list led by an "All" box that means "no narrowing". Semantics (mirror
-// the Format dropdown's min-one and the Event→Season "All seasons" box):
+// ── "All + specifics" multi-select (FIX A/B; Stage joined it, polish item 3) ──
+// The ONE shared "All + specifics" picker: a checkbox list led by an "All" box
+// that means "no narrowing". Used by the Result outcome picker, the nested Result
+// Condition picker AND (polish item 3) the Stage picker, so all three behave
+// identically. Semantics (mirror the Format dropdown's min-one):
 //   • "All" checked ⟺ the stored array is [allValue] (or empty). While checked,
 //     the All box is DISABLED (you switch away by checking a specific), so the
 //     selection can never fall into an empty/undefined state.
 //   • Checking a specific option removes "All" and adds that option.
 //   • Unchecking the last remaining specific snaps back to "All" ([allValue]).
+// NB the Event → Season sub-picker deliberately does NOT use this component: its
+// "All seasons" box is a plain select-all/clear-all TOGGLE (owner ruling, polish
+// item 2) rather than a disabled-while-checked sentinel, so it is its own control.
+//
 // `options` is the specific options only ({value,label}[], EXCLUDING the "All"
-// pseudo-option — the component renders the All box itself). The stored array is
-// [allValue] for All, else the specific tokens (in `options` order). Returns
-// `{ sync }`.
-function mountAllMultiSelect(container, store, onChange, { field, allValue, options, allLabel, label, embedded = false, headLabel }) {
+// pseudo-option — the component renders the All box itself). It may also be a
+// FUNCTION returning that array, for a picker whose vocabulary is loaded async
+// from the data (Stage) — it is re-read on every render.
+// `quick` optionally adds one convenience button above the list ({label, onClick},
+// e.g. Stage's "Knockout games"); `hiddenWhen`/`hiddenNote` optionally hide the
+// whole dropdown and show a plain note in its place when there is nothing to
+// choose (Stage with ≤1 named value in scope — polish item 3).
+// The stored array is [allValue] for All, else the specific tokens (in `options`
+// order). Returns `{ sync }`.
+function mountAllMultiSelect(
+  container,
+  store,
+  onChange,
+  { field, allValue, options, allLabel, label, embedded = false, headLabel, nested = false, quick = null, hiddenWhen = null, hiddenNote = "" }
+) {
+  const getOptions = typeof options === "function" ? options : () => options;
   const get = () => store.get()[field] || [];
   const set = (vals) => store.set({ [field]: vals });
   const specifics = () => get().filter((v) => String(v) !== String(allValue));
   const isAll = () => specifics().length === 0; // empty OR [allValue] → All
 
   container.innerHTML = `
-    <div class="filter-group filter-group--positions" data-role="mc-group">
-      ${headLabel ? `<div class="result-type__head">${escHtml(headLabel)}</div>` : ""}
+    <div class="filter-group filter-group--positions${nested ? " nested-pick" : ""}" data-role="mc-group">
+      ${headLabel ? `<div class="nested-pick__head">${escHtml(headLabel)}</div>` : ""}
       ${!headLabel && !embedded ? `<span class="filter-label">${escHtml(label || "")}</span>` : ""}
       <div class="dropdown" data-role="mc-dropdown">
         <button type="button" class="select dropdown__toggle" data-role="mc-toggle" aria-haspopup="true" aria-expanded="false">${escHtml(allLabel)}</button>
         <div class="dropdown__panel" data-role="mc-panel" hidden>
+          ${quick ? `<div class="dropdown__quick"><button type="button" class="text-btn" data-role="mc-quick">${escHtml(quick.label)}</button></div>` : ""}
           <div class="dropdown__list" data-role="mc-list"></div>
         </div>
       </div>
+      ${hiddenWhen ? `<span class="profile-note" data-role="mc-note" hidden>${escHtml(hiddenNote)}</span>` : ""}
     </div>`;
 
   const els = {
+    dropdown: container.querySelector('[data-role="mc-dropdown"]'),
     toggle: container.querySelector('[data-role="mc-toggle"]'),
     panel: container.querySelector('[data-role="mc-panel"]'),
     list: container.querySelector('[data-role="mc-list"]'),
+    quick: container.querySelector('[data-role="mc-quick"]'),
+    note: container.querySelector('[data-role="mc-note"]'),
   };
 
   const updateLabel = () => {
     const sp = specifics();
+    const opts = getOptions();
     els.toggle.textContent =
       sp.length === 0
         ? allLabel
         : sp.length === 1
-        ? options.find((o) => String(o.value) === String(sp[0]))?.label || String(sp[0])
+        ? opts.find((o) => String(o.value) === String(sp[0]))?.label || String(sp[0])
         : `${sp.length} selected`;
   };
 
-  wirePortalDropdown(els.toggle, els.panel);
+  const dropdown = wirePortalDropdown(els.toggle, els.panel);
 
   function renderList() {
     const all = isAll();
     const sel = new Set(specifics().map(String));
+    const opts = getOptions();
     const allBox = `<label class="dropdown__item${all ? " is-disabled" : ""}">
       <input type="checkbox" data-mc-all ${all ? "checked disabled" : ""} />
       <span>${escHtml(allLabel)}</span>
     </label>`;
-    const specBoxes = options
+    const specBoxes = opts
       .map(
         (o) => `<label class="dropdown__item">
         <input type="checkbox" data-mc-value="${escAttr(String(o.value))}" ${sel.has(String(o.value)) ? "checked" : ""} />
@@ -545,7 +574,7 @@ function mountAllMultiSelect(container, store, onChange, { field, allValue, opti
             next = cur.filter((v) => v !== value);
           }
           // Keep option order stable; empty → snap back to All.
-          next = options.map((o) => String(o.value)).filter((v) => next.includes(v));
+          next = getOptions().map((o) => String(o.value)).filter((v) => next.includes(v));
           set(next.length ? next : [allValue]);
         }
         updateLabel();
@@ -555,7 +584,25 @@ function mountAllMultiSelect(container, store, onChange, { field, allValue, opti
     });
   }
 
+  if (els.quick && quick) {
+    els.quick.addEventListener("click", () => {
+      quick.onClick({ setValues: (vals) => set(vals.length ? vals : [allValue]) });
+      updateLabel();
+      renderList();
+      onChange();
+    });
+  }
+
   function sync() {
+    // Nothing to choose (e.g. Stage with ≤1 named value in this scope): hide the
+    // dropdown entirely and say so plainly, rather than offering a one-item list.
+    if (hiddenWhen) {
+      const hide = Boolean(hiddenWhen());
+      if (hide) dropdown.close();
+      els.dropdown.hidden = hide;
+      if (els.note) els.note.hidden = !hide;
+      if (hide) return;
+    }
     updateLabel();
     renderList();
   }
@@ -564,46 +611,49 @@ function mountAllMultiSelect(container, store, onChange, { field, allValue, opti
   return { sync };
 }
 
-// Result outcome options / Result Type options WITHOUT their leading "All"
+// Result outcome options / Result Condition options WITHOUT their leading "All"
 // pseudo-option (the mountAllMultiSelect component renders the All box itself).
 const RESULT_SPECIFIC_OPTIONS = RESULT_OPTIONS.filter((o) => o.value !== RESULT_ALL);
-const RESULT_TYPE_SPECIFIC_OPTIONS = RESULT_TYPE_OPTIONS.filter((o) => o.value !== RESULT_TYPE_ALL);
+const RESULT_CONDITION_SPECIFIC_OPTIONS = RESULT_CONDITION_OPTIONS.filter((o) => o.value !== RESULT_CONDITION_ALL);
 
-/** Result filter (state.result) with the nested Result Type sub-picker (FIX A/B).
- * The Result outcome multi-select (Won / Lost / Drawn / No result / Tied / Super
- * Over, led by "All") sits on top; DIRECTLY BELOW it — exactly like the Event →
- * Season nesting — the Result Type sub-picker (All / Normal / D/L / VJD / Awarded
- * / Fewer Wickets) appears whenever the Result CONDITION is present (state.result
- * non-empty; drawer.js seeds both to ["all"] on add). Result and Result Type are
- * INDEPENDENT WHERE conditions (outcome vs `match_winner`; type vs `method`) — the
- * nesting is purely UI. Returns `{ sync }`. */
+/** Result filter (state.result) with the nested Result Condition sub-picker
+ * (FIX A/B; renamed from "Result Type" in polish item 4). The Result OUTCOME
+ * multi-select (Won / Lost / Drawn / Tied / No result, led by "All") sits on the
+ * parent row next to its label; DIRECTLY BELOW it — exactly like the Event →
+ * Season nesting — an indented child row carries the Result Condition sub-picker
+ * (All / Normal / Super Over / D/L / VJD / Awarded / Fewer Wickets), shown
+ * whenever the Result CONDITION is present (state.result non-empty; drawer.js
+ * seeds both to ["all"] on add). Result and Result Condition are INDEPENDENT
+ * WHERE conditions (outcome vs `match_winner`; condition vs `method` + the
+ * super-over facet) — the nesting is purely UI. Returns `{ sync }`. */
 export function mountResult(container, store, onChange, opts = {}) {
   const embedded = Boolean(opts.embedded);
   container.innerHTML = `
     <div class="filter-group filter-group--result" data-role="result-wrap">
       <div data-role="result-ms"></div>
-      <div class="result-type" data-role="result-type" hidden></div>
+      <div class="result-condition" data-role="result-condition" hidden></div>
     </div>`;
   const msHost = container.querySelector('[data-role="result-ms"]');
-  const rtHost = container.querySelector('[data-role="result-type"]');
+  const rcHost = container.querySelector('[data-role="result-condition"]');
 
-  const rtMs = mountAllMultiSelect(rtHost, store, onChange, {
-    field: "resultType",
-    allValue: RESULT_TYPE_ALL,
-    options: RESULT_TYPE_SPECIFIC_OPTIONS,
-    allLabel: "All result types",
-    headLabel: "Result type",
+  const rcMs = mountAllMultiSelect(rcHost, store, onChange, {
+    field: "resultCondition",
+    allValue: RESULT_CONDITION_ALL,
+    options: RESULT_CONDITION_SPECIFIC_OPTIONS,
+    allLabel: "All conditions",
+    headLabel: "Result Condition",
+    nested: true,
   });
 
-  function syncResultType() {
+  function syncResultCondition() {
     // The sub-picker shows whenever the Result condition is present (result set
     // to at least ["all"] on add). Empty result = condition not added = hidden.
     const present = (store.get().result || []).length > 0;
-    rtHost.hidden = !present;
-    if (present) rtMs.sync();
+    rcHost.hidden = !present;
+    if (present) rcMs.sync();
   }
 
-  const resultMs = mountAllMultiSelect(msHost, store, () => { syncResultType(); onChange(); }, {
+  const resultMs = mountAllMultiSelect(msHost, store, () => { syncResultCondition(); onChange(); }, {
     field: "result",
     allValue: RESULT_ALL,
     options: RESULT_SPECIFIC_OPTIONS,
@@ -615,7 +665,7 @@ export function mountResult(container, store, onChange, opts = {}) {
   return {
     sync() {
       resultMs.sync();
-      syncResultType();
+      syncResultCondition();
     },
   };
 }
@@ -639,15 +689,31 @@ export function mountInningsOrder(container, store, onChange, opts = {}) {
 }
 
 // ── Stage picker (state.stage) ──────────────────────────────────────────────
-// A scope-loaded checkbox list of CANONICAL stage labels (name normalization,
+// A scope-loaded "All + specifics" picker (the SHARED mountAllMultiSelect, same
+// as Result — polish item 3) over CANONICAL stage labels (name normalization,
 // backlog #5 — the raw `event_stage` values folded so casing/hyphen variants
-// collapse to one option), plus a "Knockout" convenience button. The option list
-// is loaded from `matches` scoped to gender + format + date + team-type (FIX C,
-// via searchStages/matchOptionScope — the same scope the Event/Venue pickers use,
-// so a Test scope no longer lists T20-only rounds); state.stage stores the
-// canonical labels and filters.js buildMatchContextClauses expands each back to
-// its raw spelling set for `event_stage IN (…)`, so a picked "Semi-Final" matches
-// every raw spelling. The QUERY is unaffected by which OPTIONS are shown.
+// collapse to one option), plus a "Knockout games" convenience button. state.stage
+// stores the canonical labels and filters.js buildMatchContextClauses expands each
+// back to its raw spelling set for `event_stage IN (…)`, so a picked "Semi-Final"
+// matches every raw spelling. The QUERY is unaffected by which OPTIONS are shown.
+//
+// Polish item 3 changes, all OPTIONS-side or sentinel-side:
+//   • "All" leads the list and is the no-narrowing default (drawer.js seeds
+//     stage=["all"] when the condition is added), exactly like Result.
+//   • "No Stage" (STAGE_NONE) is offered whenever the scope actually contains
+//     matches with no round name — the 20,689 `event_stage IS NULL` rows (98.8% of
+//     red-ball domestic). Offered only when present in scope, for the same reason
+//     the named list is scope-filtered: an option that can only return zero rows
+//     is not a choice.
+//   • The option list CROSS-FILTERS by the selected Event(s): with an Event picked,
+//     only stages that occur in THAT event are listed (canonical → raw aliases
+//     expanded, so every sponsor era of a merged event counts). Red Ball +
+//     Domestic + County Championship therefore lists NO named stages — all 1,429
+//     of its matches have a NULL stage — where before it leaked Super Eight/Final
+//     in from other competitions.
+//   • With ≤1 named stage in scope there is nothing to choose, so the dropdown is
+//     not rendered at all (a plain note takes its place) and any leftover
+//     narrowing snaps back to "All" so nothing invisible can stay applied.
 //
 // KNOCKOUT — EXPLICIT VETTED LIST (FIX 1): the "Knockout games" button used to
 // classify stages with a keyword regex, which was brittle against `event_stage`
@@ -721,97 +787,61 @@ function isKnockoutStage(stage) {
 }
 
 /** Mount the Stage picker (state.stage). `embedded` suppresses the outer label.
+ * The picker itself is the SHARED "All + specifics" component (mountAllMultiSelect,
+ * as Result uses); this wrapper owns the async option vocabulary — loading the
+ * in-scope stages, cross-filtering them by the selected Event(s), deciding whether
+ * "No Stage" applies, and hiding the control when there is nothing to choose.
  * Returns `{ sync }`. */
 export function mountStage(container, store, onChange, { embedded = false } = {}) {
-  const get = () => store.get().stage || [];
-  const set = (vals) => store.set({ stage: vals });
-
-  container.innerHTML = `
-    <div class="filter-group filter-group--positions" data-role="mc-group">
-      ${embedded ? "" : `<span class="filter-label">Stage</span>`}
-      <div class="dropdown" data-role="mc-dropdown">
-        <button type="button" class="select dropdown__toggle" data-role="mc-toggle" aria-haspopup="true" aria-expanded="false">Any stage</button>
-        <div class="dropdown__panel" data-role="mc-panel" hidden>
-          <div class="dropdown__quick">
-            <button type="button" class="text-btn" data-role="mc-knockout">Knockout games</button>
-          </div>
-          <div class="dropdown__list" data-role="mc-list"><p class="profile-note">Loading stages…</p></div>
-        </div>
-      </div>
-    </div>`;
-
-  const els = {
-    toggle: container.querySelector('[data-role="mc-toggle"]'),
-    panel: container.querySelector('[data-role="mc-panel"]'),
-    list: container.querySelector('[data-role="mc-list"]'),
-    knockout: container.querySelector('[data-role="mc-knockout"]'),
-  };
-
-  let stageOptions = null; // string[]; null until loaded
+  let namedOptions = null; // canonical stage labels in scope; null until loaded
+  let hasNoStage = false; // does the scope contain matches with NO round name?
   let loadedScope = null; // scope key of the last successful load
   let loading = false;
   let loadToken = 0;
 
   // FIX C: the Stage options are scoped to the FULL Search Conditions (gender +
   // format + date + team-type), not gender alone — so a Test scope no longer
-  // lists T20-only rounds. The cache key mirrors mountEventSeasons' scopeKey, so
-  // the list reloads whenever ANY of those four dimensions changes.
+  // lists T20-only rounds. Polish item 3 adds the selected EVENT(s) to that key,
+  // so the list also cross-filters by competition and reloads when the event
+  // selection changes. Mirrors mountEventSeasons' dataKey.
   const scopeKey = () => {
     const s = store.get();
-    return `${s.gender}|${s.teamType}|${(s.formats || []).join(",")}|${s.dateFrom || ""}|${s.dateTo || ""}`;
+    const events = [...(s.event || [])].sort().join("~");
+    return `${s.gender}|${s.teamType}|${(s.formats || []).join(",")}|${s.dateFrom || ""}|${s.dateTo || ""}||${events}`;
   };
 
-  const updateLabel = () => {
-    const vals = get();
-    els.toggle.textContent =
-      vals.length === 0 ? "Any stage" : vals.length === 1 ? vals[0] : `${vals.length} selected`;
+  // The specifics offered to the shared picker: the in-scope named stages, plus
+  // the "No Stage" sentinel when the scope actually holds unnamed-round matches.
+  // Read fresh on every render (the component takes a function), so an async load
+  // landing later is picked up without remounting.
+  const optionList = () => {
+    const named = (namedOptions || []).map((s) => ({ value: s, label: s }));
+    return hasNoStage ? [...named, { value: STAGE_NONE, label: STAGE_NONE_LABEL }] : named;
   };
 
-  wirePortalDropdown(els.toggle, els.panel);
+  // Nothing to choose: not loaded yet, or ≤1 named stage in scope (polish item 3
+  // — a one-item list is not a choice). "No Stage" alone is not a choice either:
+  // with no named stage to contrast it against it selects the whole scope.
+  const nothingToChoose = () => !namedOptions || namedOptions.length <= 1;
 
-  function renderList() {
-    if (stageOptions === null) {
-      els.list.innerHTML = `<p class="profile-note">Loading stages…</p>`;
-      return;
-    }
-    if (stageOptions.length === 0) {
-      els.list.innerHTML = `<p class="profile-note">No tournament stages in this scope.</p>`;
-      return;
-    }
-    const selected = new Set(get());
-    els.list.innerHTML = stageOptions
-      .map(
-        (s) => `<label class="dropdown__item">
-          <input type="checkbox" data-mc-value="${escAttr(s)}" ${selected.has(s) ? "checked" : ""} />
-          <span>${escHtml(s)}</span>
-        </label>`
-      )
-      .join("");
-    els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const value = cb.dataset.mcValue;
-        const current = get().slice();
-        const idx = current.indexOf(value);
-        if (cb.checked) {
-          if (idx === -1) current.push(value);
-        } else if (idx !== -1) {
-          current.splice(idx, 1);
-        }
-        set(current);
-        updateLabel();
-        onChange();
-      });
-    });
-  }
-
-  els.knockout.addEventListener("click", () => {
-    // Select every in-scope knockout stage (see isKnockoutStage). If the list
-    // hasn't loaded yet this no-ops until it does.
-    if (!stageOptions) return;
-    set(stageOptions.filter(isKnockoutStage));
-    updateLabel();
-    renderList();
-    onChange();
+  const picker = mountAllMultiSelect(container, store, onChange, {
+    field: "stage",
+    allValue: STAGE_ALL,
+    options: optionList,
+    allLabel: "All stages",
+    label: "Stage",
+    embedded,
+    // The knockout shortcut selects every in-scope KNOCKOUT stage (see
+    // isKnockoutStage) and nothing else — never "All", never "No Stage" (a league
+    // fixture with no round name is by definition not a knockout). If the list
+    // hasn't loaded, or holds no knockout round, it snaps back to "All" rather
+    // than leaving an empty selection.
+    quick: {
+      label: "Knockout games",
+      onClick: ({ setValues }) => setValues((namedOptions || []).filter(isKnockoutStage)),
+    },
+    hiddenWhen: nothingToChoose,
+    hiddenNote: "No tournament stages to choose in this scope.",
   });
 
   async function ensureLoaded() {
@@ -820,15 +850,17 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
     loading = true;
     const token = ++loadToken;
     const s = store.get();
-    let raws;
+    let res;
     try {
       // Scoped to gender/format/date/team-type via searchStages (FIX C) — the
-      // SAME matchOptionScope the Event/Venue pickers use.
-      raws = await searchStages(s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo);
+      // SAME matchOptionScope the Event/Venue pickers use — and cross-filtered by
+      // the selected canonical event(s), which searchStages expands to their raw
+      // aliases (polish item 3).
+      res = await searchStages(s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo, s.event);
     } catch (e) {
       loading = false;
-      stageOptions = null; // retry on a later sync (e.g. pre-column data)
-      renderList();
+      namedOptions = null; // retry on a later sync (e.g. pre-column data)
+      picker.sync();
       return;
     }
     if (token !== loadToken) return; // a newer load superseded this one
@@ -836,24 +868,44 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
     // e.g. the three "Semi(-)Final" spellings collapse to one option; the checkbox
     // value stored in state.stage is the canonical label, which filters.js expands
     // back to every raw spelling. Sorted A–Z on the label.
-    stageOptions = [...new Set(raws.map((r) => canonicalStage(r)))].sort((a, b) =>
+    namedOptions = [...new Set(res.stages.map((r) => canonicalStage(r)))].sort((a, b) =>
       a < b ? -1 : a > b ? 1 : 0
     );
+    hasNoStage = Boolean(res.hasNoStage);
     loadedScope = key;
     loading = false;
-    renderList();
+    reconcileSelection();
+    picker.sync();
+  }
+
+  /** Keep state.stage honest against the vocabulary NOW in scope: drop picks that
+   * no longer exist here (a scope/event change can strand them) and, when the
+   * control is hidden because there is nothing to choose, snap back to "All" so a
+   * hidden filter can never stay silently applied. Only writes when something
+   * actually changed, so it converges (no store-churn loop). */
+  function reconcileSelection() {
+    const cur = store.get().stage || [];
+    if (cur.length === 0) return; // condition not added — nothing to reconcile
+    let next;
+    if (nothingToChoose()) {
+      next = [STAGE_ALL];
+    } else {
+      const allowed = new Set(optionList().map((o) => o.value));
+      const kept = cur.filter((v) => v === STAGE_ALL || allowed.has(v));
+      next = kept.some((v) => v !== STAGE_ALL) ? kept : [STAGE_ALL];
+    }
+    if (next.length !== cur.length || next.some((v, i) => v !== cur[i])) store.set({ stage: next });
   }
 
   function sync() {
-    updateLabel();
-    // (Re)load when ANY scope dimension changed since the last load, or on first
-    // visible; render now with whatever is cached (a loading note shows if stale).
+    // (Re)load when ANY scope dimension — or the event selection — changed since
+    // the last load, or on first visible; render now with whatever is cached.
     if (loadedScope !== scopeKey()) {
-      stageOptions = null;
+      namedOptions = null;
+      hasNoStage = false;
       ensureLoaded();
-    } else {
-      renderList();
     }
+    picker.sync();
   }
 
   sync();
@@ -1035,20 +1087,33 @@ export function mountTeam(container, store, onChange) {
   });
 }
 
-// ── Event → Season nested picker (Wave 6 pt2, owner-approved design §B) ──────
+// ── Event → Season nested picker (Wave 6 pt2; multi-check DROPDOWN, item 2) ───
 // mountEvent gains a nested season sub-picker rendered directly BELOW the event
-// multi-select. Each SELECTED event gets its own group: an "All seasons" box
-// plus one box per in-scope season (season_year_start DESC). "All" checked ⟺ no
-// narrowing (state.eventSeasons carries no key for that event) — so an event on
-// All filters exactly as it did before this picker existed (backward-compatible;
-// the query is byte-identical, see filters.js). Unchecking a season auto-unchecks
-// All and narrows to the remaining seasons.
+// multi-select, as an indented child row. Each SELECTED event gets its own
+// multi-check DROPDOWN — the same portal-dropdown mechanics as the Format /
+// Team-type dropdowns in the scope strip (polish item 2 replaced the former inline
+// checkbox rows, which sprawled once an event had many seasons). Inside: an "All
+// seasons" box plus one box per in-scope season (season_year_start DESC).
 //
-// Min-one guards mirror the format dropdown (filters.js syncFormatDropdown): the
-// "All" box is disabled WHILE checked (so it can't be turned off into an empty
-// selection — you narrow by unchecking a SEASON instead), and the sole remaining
-// checked season is disabled. An event with ≤1 in-scope season collapses to "All
-// seasons" only (no per-season boxes, no narrowing) — the design's edge case.
+// "All" checked ⟺ NO narrowing (state.eventSeasons carries no key for that event)
+// — so an event on All filters exactly as it did before this picker existed
+// (backward-compatible; the query is byte-identical, see filters.js).
+//
+// "All seasons" is a REAL TOGGLE (owner ruling, polish item 2): checking it
+// selects every season, UNCHECKING it clears every season. It is never disabled or
+// greyed. That means an empty selection is reachable, and it means exactly what
+// the owner ruled it means — Empty = All = NO narrowing. It is stored as an EMPTY
+// ARRAY (as against the absent key that means All), purely so the picker can show
+// "nothing ticked" faithfully; both shapes emit the identical event-only clause
+// (filters.js only narrows on a non-empty season list, and anyEventSeasonNarrowing
+// only counts non-empty ones), so neither can move a number. The former min-one
+// guards (All disabled while checked; sole season undeselectable) are gone with it.
+//
+// An event with ≤1 in-scope season renders NO dropdown at all (owner ruling): a
+// one-option list is nothing to choose from. reconcileNarrowing drops any stored
+// narrowing for such an event, so hiding the control can never leave an invisible
+// filter applied. If NO selected event has more than one season, the whole child
+// row is hidden.
 //
 // Season OPTIONS come from searchEventSeasons, scoped to the SAME full Search
 // Conditions as the event list (gender/format/date/team-type), cached, and
@@ -1062,6 +1127,12 @@ function mountEventSeasons(container, store, onChange) {
   let loadedKey = null;
   let loadToken = 0;
   let loading = false;
+  // One persistent dropdown per event label, created lazily and REUSED. The nodes
+  // must outlive a render: wirePortalDropdown registers document-level listeners
+  // and remembers the panel's home slot, so rebuilding the markup each render
+  // would both leak listeners and strand the portal. Rendering therefore only
+  // re-fills each group's list + toggle and re-appends the existing element.
+  const groupCache = new Map(); // event -> { el, toggle, list, dropdown }
 
   const scopeKey = () => {
     const s = store.get();
@@ -1073,17 +1144,24 @@ function mountEventSeasons(container, store, onChange) {
 
   const inScopeSeasons = (eventName) => (optionsByEvent[eventName] || []).map((r) => r.season);
   const getES = () => store.get().eventSeasons || {};
+  /** The selected events that get a dropdown: only those with MORE THAN ONE
+   * in-scope season (owner ruling — one option is nothing to choose). */
+  const visibleEvents = () => (store.get().event || []).filter((e) => inScopeSeasons(e).length > 1);
 
-  /** Write the season narrowing for one event. A null/empty list — OR a list
-   * covering EVERY in-scope season — collapses to "All" (removes the key → no
-   * narrowing → byte-identical query), so re-checking the last season snaps back
-   * to All rather than emitting a redundant `season IN (all)`. */
+  /** Write the season narrowing for one event.
+   *   null            → "All seasons" (removes the key → no narrowing).
+   *   the FULL in-scope set → also collapses to All, so re-checking the last
+   *                     season snaps back rather than emitting a redundant
+   *                     `season IN (every season)`.
+   *   []              → the owner's empty selection: stored as an empty array so
+   *                     the picker can show nothing ticked; still NO narrowing.
+   *   a proper subset → the narrowing itself. */
   function setEventSeasons(eventName, seasons) {
     const es = { ...getES() };
     const all = inScopeSeasons(eventName);
     const isFull =
-      seasons && all.length > 0 && seasons.length >= all.length && all.every((sn) => seasons.includes(sn));
-    if (!seasons || seasons.length === 0 || isFull) delete es[eventName];
+      seasons && seasons.length > 0 && all.length > 0 && seasons.length >= all.length && all.every((sn) => seasons.includes(sn));
+    if (seasons === null || isFull) delete es[eventName];
     else es[eventName] = seasons;
     store.set({ eventSeasons: es });
   }
@@ -1126,18 +1204,31 @@ function mountEventSeasons(container, store, onChange) {
    * (the toolbar date, unlike the popup date, does NOT clear the event): 2024
    * falls out of scope, the group collapses to "All seasons", and the STATE
    * matches (no stale `season IN ('2024')` that would silently return nothing).
-   * Only writes when something changed, so it converges (no store-churn loop). */
+   *
+   * It ALSO drops the key outright for an event with ≤1 in-scope season, whose
+   * dropdown is not rendered at all (owner ruling): with no control on screen,
+   * any leftover narrowing would be an invisible filter. Only writes when
+   * something changed, so it converges (no store-churn loop). */
   function reconcileNarrowing() {
     const es = getES();
     const events = store.get().event || [];
     const next = { ...es };
     let changed = false;
     for (const e of events) {
-      const cur = es[e];
-      if (!Array.isArray(cur) || cur.length === 0) continue; // already "All"
       const inScope = inScopeSeasons(e);
+      if (inScope.length <= 1) {
+        // No dropdown for this event → it must carry no narrowing at all.
+        if (e in next) {
+          delete next[e];
+          changed = true;
+        }
+        continue;
+      }
+      const cur = es[e];
+      if (!Array.isArray(cur)) continue; // already "All"
+      if (cur.length === 0) continue; // the owner's empty selection — honest, no narrowing
       const kept = inScope.filter((sn) => cur.includes(sn)); // ∩, in-scope (desc) order
-      const isFull = inScope.length > 0 && kept.length >= inScope.length;
+      const isFull = kept.length >= inScope.length;
       if (kept.length === 0 || isFull) {
         if (e in next) {
           delete next[e];
@@ -1151,104 +1242,129 @@ function mountEventSeasons(container, store, onChange) {
     if (changed) store.set({ eventSeasons: next });
   }
 
-  function groupHTML(eventName) {
-    const all = inScopeSeasons(eventName);
+  /** Toggle summary for one event's season dropdown. Reads out what is ACTUALLY
+   * applied (§8.4 honesty): both "All" and the empty selection filter to every
+   * season, so both read "All seasons". */
+  function summaryLabel(eventName) {
     const cur = getES()[eventName];
-    const isNarrowed = Array.isArray(cur) && cur.length > 0;
-    const nameHTML = `<div class="event-seasons__name">${escHtml(eventName)}</div>`;
-    // Edge case: an event with no season data or a single in-scope season →
-    // "All seasons" only (no per-season boxes; nothing to narrow to).
-    if (all.length <= 1) {
-      return `<div class="event-seasons__group" data-event="${escAttr(eventName)}">
-        ${nameHTML}
-        <div class="event-seasons__boxes">
-          <label class="dropdown__item is-disabled">
-            <input type="checkbox" data-all checked disabled />
-            <span>All seasons</span>
-          </label>
+    if (!Array.isArray(cur) || cur.length === 0) return "All seasons";
+    if (cur.length === 1) return cur[0];
+    return `${cur.length} seasons`;
+  }
+
+  /** Create (once) the persistent DOM + portal wiring for one event's dropdown.
+   * The change handler is delegated on the PANEL, not the outer container: while
+   * open, wirePortalDropdown moves the panel to <body>, so events inside it never
+   * reach the container. */
+  function ensureGroup(eventName) {
+    const cached = groupCache.get(eventName);
+    if (cached) return cached;
+    const el = document.createElement("div");
+    el.className = "event-seasons__group";
+    el.setAttribute("data-event", eventName);
+    el.innerHTML = `
+      <div class="event-seasons__name" data-role="es-name" hidden></div>
+      <div class="dropdown" data-role="es-dropdown">
+        <button type="button" class="select dropdown__toggle" data-role="es-toggle" aria-haspopup="true" aria-expanded="false">All seasons</button>
+        <div class="dropdown__panel" data-role="es-panel" hidden>
+          <div class="dropdown__list" data-role="es-list"></div>
         </div>
       </div>`;
+    const g = {
+      el,
+      name: el.querySelector('[data-role="es-name"]'),
+      toggle: el.querySelector('[data-role="es-toggle"]'),
+      panel: el.querySelector('[data-role="es-panel"]'),
+      list: el.querySelector('[data-role="es-list"]'),
+    };
+    g.dropdown = wirePortalDropdown(g.toggle, g.panel);
+    g.panel.addEventListener("change", (ev) => {
+      const input = ev.target;
+      if (!(input instanceof HTMLInputElement)) return;
+      const all = inScopeSeasons(eventName);
+      if (input.hasAttribute("data-all")) {
+        // A REAL toggle (owner ruling): checked → every season; unchecked → none.
+        setEventSeasons(eventName, input.checked ? null : []);
+      } else if (input.hasAttribute("data-season")) {
+        const sn = input.getAttribute("data-season");
+        const curES = getES()[eventName];
+        // On "All" the effective starting set is EVERY in-scope season; on the
+        // empty selection it is nothing.
+        const base = Array.isArray(curES) ? curES.slice() : all.slice();
+        let next = input.checked ? (base.includes(sn) ? base : [...base, sn]) : base.filter((x) => x !== sn);
+        // Keep the season order stable (in-scope order = season_year_start desc).
+        next = all.filter((x) => next.includes(x));
+        setEventSeasons(eventName, next);
+      } else {
+        return;
+      }
+      renderGroup(eventName);
+      onChange();
+    });
+    groupCache.set(eventName, g);
+    return g;
+  }
+
+  /** Re-fill one event's dropdown (toggle summary + checkbox list) from state. */
+  function renderGroup(eventName, showName) {
+    const g = ensureGroup(eventName);
+    if (showName !== undefined) {
+      g.name.textContent = eventName;
+      g.name.hidden = !showName;
     }
-    const sel = new Set(isNarrowed ? cur : all); // All → every season box shown checked
-    const allChecked = !isNarrowed;
-    const soleSeason = isNarrowed && cur.length === 1 ? cur[0] : null;
+    g.toggle.textContent = summaryLabel(eventName);
+    const all = inScopeSeasons(eventName);
+    const cur = getES()[eventName];
+    const onAll = !Array.isArray(cur);
+    const sel = new Set(onAll ? all : cur);
+    // Neither box is ever disabled: "All seasons" toggles select-all/clear-all,
+    // and any season can be unchecked (clearing the last one just lands on the
+    // empty selection, which filters to everything).
+    const allBox = `<label class="dropdown__item">
+      <input type="checkbox" data-all ${onAll ? "checked" : ""} />
+      <span>All seasons</span>
+    </label>`;
     const seasonBoxes = all
-      .map((sn) => {
-        const checked = sel.has(sn);
-        const disabled = sn === soleSeason; // min-one: can't uncheck the last remaining season
-        return `<label class="dropdown__item${disabled ? " is-disabled" : ""}">
-          <input type="checkbox" data-season="${escAttr(sn)}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""} />
+      .map(
+        (sn) => `<label class="dropdown__item">
+          <input type="checkbox" data-season="${escAttr(sn)}" ${sel.has(sn) ? "checked" : ""} />
           <span>${escHtml(sn)}</span>
-        </label>`;
-      })
+        </label>`
+      )
       .join("");
-    return `<div class="event-seasons__group" data-event="${escAttr(eventName)}">
-      ${nameHTML}
-      <div class="event-seasons__boxes">
-        <label class="dropdown__item${allChecked ? " is-disabled" : ""}">
-          <input type="checkbox" data-all ${allChecked ? "checked disabled" : ""} />
-          <span>All seasons</span>
-        </label>
-        ${seasonBoxes}
-      </div>
-    </div>`;
+    g.list.innerHTML = allBox + seasonBoxes;
   }
 
   function render() {
     const events = store.get().event || [];
     if (events.length === 0) {
       container.hidden = true;
-      container.innerHTML = "";
+      container.textContent = "";
       return;
     }
-    container.hidden = false;
     // Options for the current scope+selection not loaded yet → a light note;
     // ensureLoaded() (kicked from sync) re-renders when it lands.
     if (loadedKey !== dataKey()) {
+      container.hidden = false;
       container.innerHTML = `<p class="event-seasons__loading profile-note">Loading seasons…</p>`;
       return;
     }
-    container.innerHTML =
-      `<div class="event-seasons__head">Seasons</div>` + events.map(groupHTML).join("");
-  }
-
-  // ONE delegated change handler for every checkbox in every group (the groups
-  // are rebuilt via innerHTML, so a per-input listener would need re-attaching —
-  // delegation on the stable container avoids that).
-  container.addEventListener("change", (e) => {
-    const input = e.target;
-    if (!(input instanceof HTMLInputElement)) return;
-    const groupEl = input.closest("[data-event]");
-    if (!groupEl) return;
-    const eventName = groupEl.getAttribute("data-event");
-    const all = inScopeSeasons(eventName);
-    if (input.hasAttribute("data-all")) {
-      // "All" is disabled while checked, so this only fires when turning it back
-      // ON → clear the narrowing (select every season).
-      if (input.checked) setEventSeasons(eventName, null);
-    } else if (input.hasAttribute("data-season")) {
-      const sn = input.getAttribute("data-season");
-      const curES = getES()[eventName];
-      // When on "All", the effective starting set is EVERY in-scope season.
-      const base = Array.isArray(curES) && curES.length > 0 ? curES.slice() : all.slice();
-      let next;
-      if (input.checked) {
-        next = base.includes(sn) ? base : [...base, sn];
-      } else {
-        if (base.length <= 1) {
-          input.checked = true; // min-one guard (defensive; the sole box is disabled)
-          return;
-        }
-        next = base.filter((x) => x !== sn);
-      }
-      // Keep the season order stable (in-scope order = season_year_start desc).
-      next = all.filter((x) => next.includes(x));
-      setEventSeasons(eventName, next);
-    } else {
+    const visible = visibleEvents();
+    if (visible.length === 0) {
+      // Every selected event has ≤1 season in scope — nothing to choose anywhere.
+      container.hidden = true;
+      container.textContent = "";
       return;
     }
-    onChange();
-  });
+    container.hidden = false;
+    container.innerHTML = `<div class="event-seasons__head">Season</div>`;
+    for (const e of visible) {
+      // With ONE event the parent's own toggle already names it, so the per-event
+      // caption would just repeat it; with several, each dropdown needs its name.
+      renderGroup(e, visible.length > 1);
+      container.appendChild(groupCache.get(e).el);
+    }
+  }
 
   function sync() {
     // (Re)load when the scope OR selection changed since the last load; render

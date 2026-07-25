@@ -316,15 +316,21 @@ export const FIELDING_POSITIONS = Array.from({ length: 11 }, (_, i) => i + 1);
 // stored array is either [RESULT_ALL] (or empty) for "All", else the specific
 // outcome tokens (never mixed — resultFilterActive treats any non-All token as
 // narrowing).
+//
+// "Super Over" was REMOVED from this list (Wave 6 polish item 4): `match_winner`
+// already resolves the super-over winner, so those 108 matches ALREADY count as
+// Won/Lost here — listing "Super Over" beside the outcomes wrongly implied it was
+// a fifth, mutually-exclusive outcome. It is a FACET of a result, so it moved to
+// the Result Condition sub-picker below (alongside Normal / D/L / VJD / …). Drawn
+// and Tied stay SEPARATE options (owner ruling) — they are different outcomes.
 export const RESULT_ALL = "all";
 export const RESULT_OPTIONS = [
   { value: "all", label: "All" },
   { value: "won", label: "Won" },
   { value: "lost", label: "Lost" },
   { value: "drawn", label: "Drawn" },
-  { value: "no_result", label: "No result" },
   { value: "tied", label: "Tied" },
-  { value: "super_over", label: "Super Over" },
+  { value: "no_result", label: "No result" },
 ];
 export const TOSS_RESULT_OPTIONS = [
   { value: "won", label: "Won toss" },
@@ -339,38 +345,59 @@ export const INNINGS_ORDER_OPTIONS = [
   { value: "second", label: "Bowled first" },
 ];
 
-// Result Type (FIX B): a NESTED sub-picker under Result (shown only while the
-// Result condition is active — see mountResult / drawer.js), mirroring the
-// Event → Season nesting. It narrows by the match's `method`: "All" = no
-// narrowing (clause emits nothing → byte-identical), "Normal" = method IS NULL
-// (regulation result), and one option per real method (D/L / VJD / Awarded /
-// Lost fewer wickets). Like Result, "All" leads and is auto-checked as the
-// default; picking a specific option unchecks it. The stored array (state.resultType)
-// is [RESULT_TYPE_ALL] (or empty) for "All", else the specific tokens below;
-// resultTypeMethod maps each specific token to its raw `method` string, and
-// filters.js buildMatchContextClauses turns the selection into the WHERE fragment.
-// Replaces the former standalone "Rain-affected matches" filter (state.method),
-// whose method logic now lives here. "Awarded" / "Lost fewer wickets" (5 matches
-// total) aren't literally rain but are grouped here for completeness.
-export const RESULT_TYPE_ALL = "all";
-export const RESULT_TYPE_NORMAL = "normal";
-export const RESULT_TYPE_OPTIONS = [
+// Result Condition (FIX B; RENAMED from "Result Type", Wave 6 polish item 4): a
+// NESTED sub-picker under Result (shown only while the Result condition is active
+// — see mountResult / drawer.js), mirroring the Event → Season nesting. It
+// narrows by HOW the result came about — the match's `method` plus the super-over
+// facet: "All" = no narrowing (clause emits nothing → byte-identical); "Normal" =
+// a plain result (no method AND no super over); "Super Over" = the super-over
+// facet flag; and one option per real method (D/L / VJD / Awarded / Lost fewer
+// wickets). Like Result, "All" leads and is auto-checked as the default; picking a
+// specific option unchecks it. The stored array (state.resultCondition) is
+// [RESULT_CONDITION_ALL] (or empty) for "All", else the specific tokens below;
+// resultConditionMethod maps each method-backed token to its raw `method` string,
+// and filters.js buildMatchContextClauses turns the selection into the WHERE
+// fragment. Replaces the former standalone "Rain-affected matches" filter
+// (state.method), whose method logic now lives here. "Awarded" / "Lost fewer
+// wickets" (5 matches total) aren't literally rain but are grouped here for
+// completeness.
+//
+// These are FACETS, not partitions: exactly 1 of the 108 super overs also carries
+// a method, so Super Over legitimately overlaps a method option. "Normal"
+// excludes both (method IS NULL AND NOT super over) — that is the one option that
+// is defined by absence, which is why it needs the super-over term (item 4).
+export const RESULT_CONDITION_ALL = "all";
+export const RESULT_CONDITION_NORMAL = "normal";
+export const RESULT_CONDITION_SUPER_OVER = "super_over";
+export const RESULT_CONDITION_OPTIONS = [
   { value: "all", label: "All" },
   { value: "normal", label: "Normal" },
+  { value: "super_over", label: "Super Over" },
   { value: "dl", label: "D/L (Rain)", method: "D/L" },
   { value: "vjd", label: "VJD (Rain)", method: "VJD" },
   { value: "awarded", label: "Awarded", method: "Awarded" },
   { value: "fewer", label: "Fewer Wickets", method: "Lost fewer wickets" },
 ];
-const RESULT_TYPE_METHOD = Object.fromEntries(
-  RESULT_TYPE_OPTIONS.filter((o) => o.method).map((o) => [o.value, o.method])
+const RESULT_CONDITION_METHOD = Object.fromEntries(
+  RESULT_CONDITION_OPTIONS.filter((o) => o.method).map((o) => [o.value, o.method])
 );
-/** The raw `matches.method` string a specific Result-Type token narrows to (D/L,
- * VJD, Awarded, Lost fewer wickets), or null for "all"/"normal" (which carry no
- * IN(...) method — "normal" is the separate method-IS-NULL disjunct). */
-export function resultTypeMethod(token) {
-  return RESULT_TYPE_METHOD[token] || null;
+/** The raw `matches.method` string a specific Result-Condition token narrows to
+ * (D/L, VJD, Awarded, Lost fewer wickets), or null for "all"/"normal"/"super_over"
+ * (which carry no IN(...) method — those three are their own disjuncts). */
+export function resultConditionMethod(token) {
+  return RESULT_CONDITION_METHOD[token] || null;
 }
+
+// Stage (Wave 6 polish item 3): the tournament-round filter gains the SAME
+// "All" no-narrowing sentinel Result has, plus a "No Stage" option for the
+// 20,689 matches whose `event_stage` IS NULL (98.8% of red-ball domestic — a
+// league round with no round name). The remaining values in state.stage are
+// CANONICAL stage labels, which filters.js expands to their raw spellings.
+// Neither sentinel can collide with a real stage: verified against the live data
+// that no `event_stage` equals "all" or "(no stage)".
+export const STAGE_ALL = "all";
+export const STAGE_NONE = "(no stage)";
+export const STAGE_NONE_LABEL = "No Stage";
 
 /** True if the Result filter (state.result) is narrowing the set. "All"
  * (RESULT_ALL) is a no-narrowing sentinel, so a selection of only "All" (or
@@ -391,15 +418,19 @@ export function tossDecisionFilterActive(state) {
 export function inningsOrderFilterActive(state) {
   return Array.isArray(state.inningsOrder) && state.inningsOrder.length > 0;
 }
-/** True if the Stage filter (state.stage) is narrowing the set. */
+/** True if the Stage filter (state.stage) is narrowing the set. Like Result,
+ * "All" (STAGE_ALL) is the no-narrowing sentinel (Wave 6 polish item 3), so an
+ * All-only (or empty) selection is INACTIVE — which is what keeps "Stage
+ * condition added, left on All" byte-identical to having no Stage condition. */
 export function stageFilterActive(state) {
-  return Array.isArray(state.stage) && state.stage.length > 0;
+  return Array.isArray(state.stage) && state.stage.some((v) => v !== STAGE_ALL);
 }
-/** True if the Result Type sub-filter (state.resultType) is narrowing the set.
- * Like Result, "All" (RESULT_TYPE_ALL) is the no-narrowing sentinel, so an
- * All-only (or empty) selection is INACTIVE and stays byte-identical. */
-export function resultTypeFilterActive(state) {
-  return Array.isArray(state.resultType) && state.resultType.some((v) => v !== RESULT_TYPE_ALL);
+/** True if the Result Condition sub-filter (state.resultCondition) is narrowing
+ * the set. Like Result, "All" (RESULT_CONDITION_ALL) is the no-narrowing
+ * sentinel, so an All-only (or empty) selection is INACTIVE and stays
+ * byte-identical. */
+export function resultConditionFilterActive(state) {
+  return Array.isArray(state.resultCondition) && state.resultCondition.some((v) => v !== RESULT_CONDITION_ALL);
 }
 /** True if ANY match-context filter is active — the single gate table.js uses
  * to decide whether to LEFT JOIN `matches` and append the context clauses (and
@@ -412,7 +443,7 @@ export function matchContextActive(state) {
     tossDecisionFilterActive(state) ||
     inningsOrderFilterActive(state) ||
     stageFilterActive(state) ||
-    resultTypeFilterActive(state)
+    resultConditionFilterActive(state)
   );
 }
 
@@ -558,15 +589,19 @@ export function createInitialState(maxMonth) {
     // RESULT_OPTIONS constants and filters.js buildMatchContextClauses.
     result: [],        // Result outcome facets (FIX A): empty when the condition isn't added; on add
                        // it defaults to [RESULT_ALL] ("All", no narrowing), else the specific outcome
-                       // tokens (won/lost/drawn/no_result/tied/super_over). See RESULT_OPTIONS.
+                       // tokens (won/lost/drawn/tied/no_result). See RESULT_OPTIONS.
     tossResult: [],    // subset of {"won","lost"} — row team ==/<> toss_winner
     tossDecision: [],  // subset of {"bat","field"} — matches.toss_decision
     inningsOrder: [],  // subset of {"first","second"} — row team ==/<> team_batting_first
-    stage: [],         // CANONICAL stage labels to keep (name normalization, backlog #5 — filters.js
-                       // buildMatchContextClauses expands each to its raw event_stage spelling set)
-    resultType: [],    // Result Type sub-filter (FIX B): nested under Result. Empty until the Result
-                       // condition is added, then defaults to [RESULT_TYPE_ALL]; else the specific
-                       // tokens (normal/dl/vjd/awarded/fewer). See RESULT_TYPE_OPTIONS + resultTypeMethod.
+    stage: [],         // Stage: empty when the condition isn't added; on add it defaults to
+                       // [STAGE_ALL] ("All", no narrowing), else CANONICAL stage labels to keep
+                       // (name normalization, backlog #5 — filters.js buildMatchContextClauses
+                       // expands each to its raw event_stage spelling set) and/or STAGE_NONE
+                       // ("No Stage" = event_stage IS NULL).
+    resultCondition: [], // Result Condition sub-filter (FIX B, renamed item 4): nested under Result.
+                       // Empty until the Result condition is added, then defaults to
+                       // [RESULT_CONDITION_ALL]; else the specific tokens (normal/super_over/dl/vjd/
+                       // awarded/fewer). See RESULT_CONDITION_OPTIONS + resultConditionMethod.
     matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)
     pinnedPlayers: [], // [{id, name}] — owner decision 46 task 3b: players ADDED to the table's
                    // result set regardless of the other leaderboard-only filters (team/opposition/
@@ -966,17 +1001,23 @@ export function createStore(initial) {
     if (tossResultFilterActive(s)) parts.push(labelsFor(s.tossResult, TOSS_RESULT_OPTIONS).join(", "));
     if (tossDecisionFilterActive(s)) parts.push(labelsFor(s.tossDecision, TOSS_DECISION_OPTIONS).join(", "));
     if (inningsOrderFilterActive(s)) parts.push(labelsFor(s.inningsOrder, INNINGS_ORDER_OPTIONS).join(", "));
+    // Stage: list only the narrowing picks — drop the "All" sentinel and read the
+    // "No Stage" sentinel out as its label (item 3).
     if (stageFilterActive(s)) {
-      parts.push(s.stage.length <= 3 ? `Stage: ${s.stage.join(", ")}` : `Stage: ${s.stage.length} stages`);
+      const picks = (s.stage || [])
+        .filter((v) => v !== STAGE_ALL)
+        .map((v) => (v === STAGE_NONE ? STAGE_NONE_LABEL : v));
+      parts.push(picks.length <= 3 ? `Stage: ${picks.join(", ")}` : `Stage: ${picks.length} stages`);
     }
-    // Result Type (FIX B): the nested method sub-filter; list only the narrowing
-    // options (drop the "All" sentinel), collapse to a count beyond two.
-    if (resultTypeFilterActive(s)) {
-      const specifics = (s.resultType || []).filter((v) => v !== RESULT_TYPE_ALL);
+    // Result Condition (FIX B, renamed item 4): the nested how-the-result-came-
+    // about sub-filter; list only the narrowing options (drop the "All" sentinel),
+    // collapse to a count beyond two.
+    if (resultConditionFilterActive(s)) {
+      const specifics = (s.resultCondition || []).filter((v) => v !== RESULT_CONDITION_ALL);
       parts.push(
         specifics.length <= 2
-          ? `Result type: ${labelsFor(specifics, RESULT_TYPE_OPTIONS).join(", ")}`
-          : `Result type: ${specifics.length} types`
+          ? `Result condition: ${labelsFor(specifics, RESULT_CONDITION_OPTIONS).join(", ")}`
+          : `Result condition: ${specifics.length} conditions`
       );
     }
 

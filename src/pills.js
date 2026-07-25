@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsOrderFilterActive, stageFilterActive, resultTypeFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_TYPE_OPTIONS, RESULT_TYPE_ALL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS, INNINGS_ORDER_OPTIONS } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsOrderFilterActive, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS, INNINGS_ORDER_OPTIONS } from "./state.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
@@ -270,12 +270,12 @@ export function mountPills(
     // is always "narrowing" in every view.
     const labelsFor = (vals, opts) => (vals || []).map((v) => opts.find((o) => o.value === v)?.label || v);
     // Result (FIX A): only the narrowing outcomes label (drop the "All" sentinel).
-    // Removing the pill clears both Result and its nested Result Type (FIX B).
+    // Removing the pill clears both Result and its nested Result Condition (FIX B).
     if (resultFilterActive(s)) {
       const captured = [...s.result];
-      const capturedType = [...(s.resultType || [])];
+      const capturedCondition = [...(s.resultCondition || [])];
       const outcomes = s.result.filter((v) => v !== RESULT_ALL);
-      pills.push({ key: "mc_result", label: `Result: ${labelsFor(outcomes, RESULT_OPTIONS).join(", ")}`, remove: () => store.set({ result: [], resultType: [] }), restore: () => store.set({ result: captured, resultType: capturedType }) });
+      pills.push({ key: "mc_result", label: `Result: ${labelsFor(outcomes, RESULT_OPTIONS).join(", ")}`, remove: () => store.set({ result: [], resultCondition: [] }), restore: () => store.set({ result: captured, resultCondition: capturedCondition }) });
     }
     if (tossResultFilterActive(s)) {
       const captured = [...s.tossResult];
@@ -289,23 +289,29 @@ export function mountPills(
       const captured = [...s.inningsOrder];
       pills.push({ key: "mc_innings_order", label: labelsFor(s.inningsOrder, INNINGS_ORDER_OPTIONS).join(", "), remove: () => store.set({ inningsOrder: [] }), restore: () => store.set({ inningsOrder: captured }) });
     }
+    // Stage: label only the narrowing picks — the "All" sentinel is never one, and
+    // the "No Stage" sentinel reads out as its label (polish item 3). Removing the
+    // pill snaps back to "All", leaving the Stage condition itself in place (the
+    // same semantics as the Result Condition pill below).
     if (stageFilterActive(s)) {
       const captured = [...s.stage];
-      const label = s.stage.length <= 2 ? `Stage: ${s.stage.join(", ")}` : `Stage: ${s.stage.length} stages`;
-      pills.push({ key: "mc_stage", label, remove: () => store.set({ stage: [] }), restore: () => store.set({ stage: captured }) });
+      const picks = s.stage.filter((v) => v !== STAGE_ALL).map((v) => (v === STAGE_NONE ? STAGE_NONE_LABEL : v));
+      const label = picks.length <= 2 ? `Stage: ${picks.join(", ")}` : `Stage: ${picks.length} stages`;
+      pills.push({ key: "mc_stage", label, remove: () => store.set({ stage: [STAGE_ALL] }), restore: () => store.set({ stage: captured }) });
     }
-    // Result Type (FIX B): the nested method sub-filter. Its own independent pill
-    // (Result and Result Type are independent WHERE conditions). Removing it snaps
-    // back to "All" (resultType: []) without touching the Result condition.
-    if (resultTypeFilterActive(s)) {
-      const captured = [...(s.resultType || [])];
-      const specifics = (s.resultType || []).filter((v) => v !== RESULT_TYPE_ALL);
-      const rtLabelsFor = (vals) => vals.map((v) => RESULT_TYPE_OPTIONS.find((o) => o.value === v)?.label || v);
+    // Result Condition (FIX B; renamed from "Result type" in polish item 4): the
+    // nested how-the-result-came-about sub-filter. Its own independent pill (Result
+    // and Result Condition are independent WHERE conditions). Removing it snaps back
+    // to "All" (resultCondition: []) without touching the Result condition.
+    if (resultConditionFilterActive(s)) {
+      const captured = [...(s.resultCondition || [])];
+      const specifics = (s.resultCondition || []).filter((v) => v !== RESULT_CONDITION_ALL);
+      const rcLabelsFor = (vals) => vals.map((v) => RESULT_CONDITION_OPTIONS.find((o) => o.value === v)?.label || v);
       const label =
         specifics.length === 1
-          ? `Result type: ${rtLabelsFor(specifics)[0]}`
-          : `Result type: ${specifics.length} types`;
-      pills.push({ key: "mc_result_type", label, remove: () => store.set({ resultType: [] }), restore: () => store.set({ resultType: captured }) });
+          ? `Result condition: ${rcLabelsFor(specifics)[0]}`
+          : `Result condition: ${specifics.length} conditions`;
+      pills.push({ key: "mc_result_condition", label, remove: () => store.set({ resultCondition: [] }), restore: () => store.set({ resultCondition: captured }) });
     }
 
     // Fielding SLICE conditions (fielding rebuild): one pill per active slice,

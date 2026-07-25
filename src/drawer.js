@@ -38,7 +38,7 @@ import {
   tossDecisionFilterActive,
   inningsOrderFilterActive,
   stageFilterActive,
-  resultTypeFilterActive,
+  resultConditionFilterActive,
   matchupVsActive,
   effectiveNamespace,
   eligibleMetrics,
@@ -124,6 +124,12 @@ const SINGLETON_TYPES = [
   // (matchup coverage ~0% for women; matchupVsActive hard-gates on male anyway).
   { key: "strikerpos", label: "Batting position", group: "Basic", menOnly: true },
   { key: "event", label: "Event", group: "Match", menOnly: false },
+  // Stage (tournament round) moved OUT of the "Match context" group into "Match",
+  // directly under Event and above Venue (owner, polish item 3) — it is a property
+  // of the competition you are already picking, and its options now cross-filter by
+  // the selected Event(s). Its position here also drives the APPLIED-row order, so
+  // the Stage row renders next to the Event row it belongs with.
+  { key: "mc_stage", label: "Stage", group: "Match", menOnly: false },
   { key: "venue", label: "Venue", group: "Match", menOnly: false },
   // Fielding SLICE conditions (fielding rebuild): the fielding metric's OWN dims
   // — narrow WHICH wicket-events the Catches/Stumpings/Run-outs/Dismissals-
@@ -140,12 +146,12 @@ const SINGLETON_TYPES = [
   // carve-out for them. They write their own top-level state key (result /
   // tossResult / tossDecision / inningsOrder / stage). The former standalone
   // "Rain-affected matches" (mc_method) is gone — its method logic now lives in
-  // the Result Type sub-picker NESTED inside Result (state.resultType, FIX B).
+  // the Result Condition sub-picker NESTED inside Result (state.resultCondition,
+  // FIX B / polish item 4). Stage has moved up into the "Match" group (see above).
   { key: "mc_result", label: "Result", group: "Match context", menOnly: false },
   { key: "mc_toss_result", label: "Toss result", group: "Match context", menOnly: false },
   { key: "mc_toss_decision", label: "Toss decision", group: "Match context", menOnly: false },
   { key: "mc_innings_order", label: "Innings order", group: "Match context", menOnly: false },
-  { key: "mc_stage", label: "Stage", group: "Match context", menOnly: false },
 ];
 
 // Dropdown OPTION order per group (R5 Wave 1a, item 7; "bowling" re-added R5
@@ -153,12 +159,14 @@ const SINGLETON_TYPES = [
 // batting filters). "rpos" is injected into the Basic-metrics optgroup right
 // after "Innings".
 const PLAYER_ADD_ORDER = ["team", "opposition", "hand", "bowling", "role"];
-const MATCH_ADD_ORDER = ["event", "venue"];
+// Stage sits between Event and Venue (owner, polish item 3) — the round is part of
+// the competition, and its option list now cross-filters by the picked Event(s).
+const MATCH_ADD_ORDER = ["event", "mc_stage", "venue"];
 // Fielding slice singletons, in the "Fielding" optgroup (after the metric options).
 const FIELDING_SLICE_ADD_ORDER = ["fld_pos", "fld_kind", "fld_phase"];
 // Match-context singletons, in their own "Match context" optgroup (Wave 6).
 const MATCH_CONTEXT_ADD_ORDER = [
-  "mc_result", "mc_toss_result", "mc_toss_decision", "mc_innings_order", "mc_stage",
+  "mc_result", "mc_toss_result", "mc_toss_decision", "mc_innings_order",
 ];
 
 /**
@@ -487,9 +495,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
       case "fld_kind": return Boolean(s.fielding && (s.fielding.kinds || []).length > 0);
       case "fld_phase": return Boolean(s.fielding && (s.fielding.phases || []).length > 0);
       // Match-context singletons (Wave 6): present when their value is set. Result
-      // (FIX A) is present once its condition is added — result seeded to ["all"]
-      // (the "All" default) — so length > 0 covers both All and specific outcomes;
-      // Result Type (state.resultType) has no separate row (it nests inside Result).
+      // (FIX A) and Stage (polish item 3) are present once their condition is added
+      // — each seeded to ["all"] (the "All" default) — so length > 0 covers both All
+      // and specific picks; Result Condition (state.resultCondition) has no separate
+      // row (it nests inside Result).
       case "mc_result": return (s.result || []).length > 0;
       case "mc_toss_result": return (s.tossResult || []).length > 0;
       case "mc_toss_decision": return (s.tossDecision || []).length > 0;
@@ -528,8 +537,8 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
       case "fld_pos": store.set({ fielding: { ...(store.get().fielding || {}), positions: [] } }); break;
       case "fld_kind": store.set({ fielding: { ...(store.get().fielding || {}), kinds: [] } }); break;
       case "fld_phase": store.set({ fielding: { ...(store.get().fielding || {}), phases: [] } }); break;
-      // Removing Result also removes its nested Result Type (FIX B).
-      case "mc_result": store.set({ result: [], resultType: [] }); break;
+      // Removing Result also removes its nested Result Condition (FIX B).
+      case "mc_result": store.set({ result: [], resultCondition: [] }); break;
       case "mc_toss_result": store.set({ tossResult: [] }); break;
       case "mc_toss_decision": store.set({ tossDecision: [] }); break;
       case "mc_innings_order": store.set({ inningsOrder: [] }); break;
@@ -829,16 +838,19 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
           const key = v.slice(2);
           sessionAdded[key] = true;
           // Result (FIX A/B): adding the condition auto-checks "All" for BOTH the
-          // Result outcome picker and its nested Result Type sub-picker — All =
+          // Result outcome picker and its nested Result Condition sub-picker — All =
           // no narrowing, so the query stays byte-identical until the user picks a
-          // specific outcome/type. Seed only when unset so re-adding after a manual
-          // clear doesn't clobber an existing choice.
+          // specific outcome/condition. Stage (polish item 3) gets the same "All"
+          // default. Seed only when unset so re-adding after a manual clear doesn't
+          // clobber an existing choice.
           if (key === "mc_result") {
             const s = store.get();
             const patch = {};
             if ((s.result || []).length === 0) patch.result = ["all"];
-            if ((s.resultType || []).length === 0) patch.resultType = ["all"];
+            if ((s.resultCondition || []).length === 0) patch.resultCondition = ["all"];
             if (Object.keys(patch).length) store.set(patch);
+          } else if (key === "mc_stage") {
+            if ((store.get().stage || []).length === 0) store.set({ stage: ["all"] });
           }
           syncSingletonRows();
           renderNumeric(store.get(), true); // refresh disabled states in every group's dropdown
@@ -995,14 +1007,15 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     if (eventFilterActive(s)) n++;
     if (venueFilterActive(s)) n++;
     // Match-context filters (Wave 6): one each when NARROWING (all views/genders).
-    // Result and Result Type are independent WHERE conditions, so each counts on
-    // its own; "All" on either is a no-narrowing sentinel and never counts.
+    // Result and Result Condition are independent WHERE conditions, so each counts
+    // on its own; "All" on Result / Result Condition / Stage is a no-narrowing
+    // sentinel and never counts.
     if (resultFilterActive(s)) n++;
     if (tossResultFilterActive(s)) n++;
     if (tossDecisionFilterActive(s)) n++;
     if (inningsOrderFilterActive(s)) n++;
     if (stageFilterActive(s)) n++;
-    if (resultTypeFilterActive(s)) n++;
+    if (resultConditionFilterActive(s)) n++;
     // Fielding SLICE conditions — plain mode only (inert under a matchup Vs).
     if (!matchupVsActive(s)) {
       if (fieldingPositionActive(s)) n++;

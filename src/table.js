@@ -106,6 +106,10 @@ function serializeQueryState(state) {
     regularPositions: state.regularPositions,
     opposition: state.opposition,
     event: state.event,
+    // eventSeasons narrows the event clause (Event → Season picker), so it belongs
+    // in this key exactly as `event` does — without it, changing a season left the
+    // Search button unlit and the render cache stale (defect found in this pass).
+    eventSeasons: state.eventSeasons,
     venue: state.venue,
     // Match-context filters (Wave 6): part of the query result + honest-scope
     // key, so a change re-lights Search and busts the render cache.
@@ -114,7 +118,7 @@ function serializeQueryState(state) {
     tossDecision: state.tossDecision,
     inningsOrder: state.inningsOrder,
     stage: state.stage,
-    resultType: state.resultType,
+    resultCondition: state.resultCondition,
     matchupVs: state.matchupVs,
     pinnedPlayers: state.pinnedPlayers,
     search: state.search,
