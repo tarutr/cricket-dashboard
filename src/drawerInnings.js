@@ -33,6 +33,17 @@
 // reload when ANY scope dimension changes — gender, team type, format, or date
 // (the cacheKey below carries all four). ROUND 3 task 8 (team type): on
 // International the Event list drops domestic-only competitions like the IPL.
+//
+// CASCADING (owner rule, this pass): every one of those option lists ALSO respects
+// the OTHER advanced match filters currently picked — pick Event = County
+// Championship and the Venue list holds only county grounds; pick Team = India and
+// the Opposition list holds only the teams India faced. A list never narrows by
+// its OWN filter (`siblingExclude` / the `role` passed to searchTeams), so the
+// Event list stays the full in-scope vocabulary while an event is selected, and
+// removing a filter re-expands the others without touching what is already picked.
+// The SQL half lives in ONE place (playerData.js siblingOptionClauses, over the
+// shared predicate fragments in filters.js); the cache-key half is
+// optionCacheKey() below, and both take the same self-exclusion list.
 // Team/Event/Venue rows show a "<name>  N games" meta; Opposition keeps its plain
 // list (no meta) and, since decision 51 (R5-F #14), is enabled for every team type.
 
@@ -60,6 +71,60 @@ import { mountSearchMultiSelect } from "./searchSelect.js";
 import { escHtml, escAttr } from "./html.js";
 
 const POSITIONS = Array.from({ length: 12 }, (_, i) => i + 1);
+
+// ── Cascading option lists: the shared cache-key fingerprint ─────────────────
+// Every DB-derived option list (Team / Opposition / Event / Season / Venue /
+// Stage) now cross-filters by the OTHER advanced match filters that are picked —
+// playerData.js's matchOptionScope does the SQL half (see siblingOptionClauses
+// there for the sender/receiver rules and self-exclusion). This is the UI half:
+// each list caches its options under a scope key, so that key MUST also carry
+// every sibling selection it depends on, or the list serves stale options after a
+// sibling changes. One shared builder keyed the same way for all six, using the
+// same sender keys as the SQL side: each list excludes exactly its OWN filter, so
+// the key changes precisely when something that narrows the list changes. (Team
+// and Opposition share one loader but are two filters, so each excludes only its
+// own half — the Team key carries `opposition` and vice versa, matching what
+// searchTeams actually narrows by for that role.)
+//
+// eventSeasons is serialised per SELECTED event only (the predicate reads no
+// other key, so an orphan key must not trigger a pointless reload) and in stored
+// order (a reorder changes the emitted IN-list, so it should reload).
+
+/** The Search-Conditions half of every option-list cache key (gender / team type
+ * / formats / date window) — unchanged by the cascading pass. */
+function optionScopeKey(s) {
+  return `${s.gender}|${s.teamType}|${(s.formats || []).join(",")}|${s.dateFrom || ""}|${s.dateTo || ""}`;
+}
+
+/** The sibling-selection half: every cascading sender EXCEPT the ones this list
+ * must ignore. `exclude` mirrors playerData.js's sender keys exactly ("event"
+ * also covering that event's season narrowing, as in the SQL builder). */
+function optionSiblingKey(s, exclude = []) {
+  const skip = new Set(exclude);
+  const list = (arr) => (arr || []).join("~");
+  const events = s.event || [];
+  const seasons = skip.has("event") || skip.has("eventSeasons")
+    ? ""
+    : events
+        .map((e) => `${e}:${JSON.stringify((s.eventSeasons || {})[e] || null)}`)
+        .join("~");
+  return [
+    skip.has("event") ? "" : list(events),
+    seasons,
+    skip.has("venue") ? "" : list(s.venue),
+    skip.has("stage") ? "" : list(s.stage),
+    skip.has("teams") ? "" : list(s.teams),
+    skip.has("opposition") ? "" : list(s.opposition),
+    skip.has("resultCondition") ? "" : list(s.resultCondition),
+    skip.has("tossDecision") ? "" : list(s.tossDecision),
+  ].join("|");
+}
+
+/** The full cache key for an option list: Search Conditions + the siblings it
+ * cross-filters by. */
+function optionCacheKey(s, exclude = []) {
+  return `${optionScopeKey(s)}||${optionSiblingKey(s, exclude)}`;
+}
 
 /**
  * Live summary label for a position dropdown's toggle button. Up to three
@@ -796,19 +861,17 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
   let namedOptions = null; // canonical stage labels in scope; null until loaded
   let hasNoStage = false; // does the scope contain matches with NO round name?
   let loadedScope = null; // scope key of the last successful load
-  let loading = false;
+  let loadingScope = null; // scope key of the load currently in flight
   let loadToken = 0;
 
   // FIX C: the Stage options are scoped to the FULL Search Conditions (gender +
   // format + date + team-type), not gender alone — so a Test scope no longer
-  // lists T20-only rounds. Polish item 3 adds the selected EVENT(s) to that key,
-  // so the list also cross-filters by competition and reloads when the event
-  // selection changes. Mirrors mountEventSeasons' dataKey.
-  const scopeKey = () => {
-    const s = store.get();
-    const events = [...(s.event || [])].sort().join("~");
-    return `${s.gender}|${s.teamType}|${(s.formats || []).join(",")}|${s.dateFrom || ""}|${s.dateTo || ""}||${events}`;
-  };
+  // lists T20-only rounds. Polish item 3 added the selected EVENT(s); the
+  // cascading pass generalises that to EVERY sibling match filter (event +
+  // seasons, venue, team, opposition, result condition, toss decision) via the
+  // shared optionCacheKey, self-excluding "stage" so the list never collapses to
+  // the stage already picked.
+  const scopeKey = () => optionCacheKey(store.get(), ["stage"]);
 
   // The specifics offered to the shared picker: the in-scope named stages, plus
   // the "No Stage" sentinel when the scope actually holds unnamed-round matches.
@@ -851,19 +914,20 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
 
   async function ensureLoaded() {
     const key = scopeKey();
-    if (loadedScope === key || loading) return;
-    loading = true;
+    // Guard on the KEY (not a bare boolean): a second sender can change while a
+    // load is in flight, and a plain flag would swallow the reload.
+    if (loadedScope === key || loadingScope === key) return;
+    loadingScope = key;
     const token = ++loadToken;
     const s = store.get();
     let res;
     try {
       // Scoped to gender/format/date/team-type via searchStages (FIX C) — the
       // SAME matchOptionScope the Event/Venue pickers use — and cross-filtered by
-      // the selected canonical event(s), which searchStages expands to their raw
-      // aliases (polish item 3).
-      res = await searchStages(s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo, s.event);
+      // every OTHER picked match filter (`sel`), with "stage" self-excluded.
+      res = await searchStages(s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo, { sel: s });
     } catch (e) {
-      loading = false;
+      if (loadingScope === key) loadingScope = null;
       namedOptions = null; // retry on a later sync (e.g. pre-column data)
       picker.sync();
       return;
@@ -878,7 +942,7 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
     );
     hasNoStage = Boolean(res.hasNoStage);
     loadedScope = key;
-    loading = false;
+    loadingScope = null;
     reconcileSelection();
     picker.sync();
   }
@@ -938,15 +1002,19 @@ function gamesMeta(o) {
  * `config`:
  *   { get(state)->string[], set(store,arr), loader(gender,teamType)->Promise<rows>,
  *     emptyLabel, singular, plural, ariaLabel, searchPlaceholder,
- *     showGames?:bool, disabledWhen?(state)->bool, disabledNote?:string }
- * (the loader closes over `store` to read the format/date scope; the wrapper
- * still calls it with gender + team type.)
+ *     showGames?:bool, siblingExclude?:string[],
+ *     disabledWhen?(state)->bool, disabledNote?:string }
+ * (the loader closes over `store` to read the format/date scope AND to pass the
+ * live selection through as the cascading `sel`; the wrapper still calls it with
+ * gender + team type. `siblingExclude` names this picker's OWN filter so the cache
+ * key ignores it, matching the self-exclusion the loader applies in SQL.)
  *
  * Options load lazily — on the row becoming visible OR first toggle interaction
  * — and reload when ANY scope dimension changes (gender, team type, format, or
- * date; see cacheKey). filters.js clears the selection on a gender OR team-type
- * change, so a stale pick never survives those; a format/date change reloads the
- * list but does NOT clear the selection (see the final report's CONCERNS).
+ * date) OR any sibling selection this list cross-filters by (see cacheKey).
+ * filters.js clears the selection on a gender OR team-type change, so a stale
+ * pick never survives those; a format/date/sibling change reloads the list but
+ * does NOT clear the selection (see the final report's CONCERNS).
  * Returns `{ sync }`. */
 function mountScopedMultiSelect(container, store, onChange, config) {
   container.innerHTML = `
@@ -997,29 +1065,33 @@ function mountScopedMultiSelect(container, store, onChange, config) {
   // format, OR date invalidates the cache and reloads the list for the new scope
   // (sync() below diffs loadedKey against this on every store change while the
   // popup is open, which is how a format/date edit live-refreshes the list).
+  // CASCADING: the key ALSO carries every sibling selection that narrows this
+  // list (config.siblingExclude names this picker's own filter, which must not
+  // narrow it) — so picking an Event immediately reloads the Venue list, etc.
   let optionsCache = [];
   let loadedKey = null;
   let loadToken = 0;
-  let loading = false;
-  const cacheKey = () => {
-    const s = store.get();
-    return `${s.gender}|${s.teamType}|${(s.formats || []).join(",")}|${s.dateFrom || ""}|${s.dateTo || ""}`;
-  };
+  let loadingKey = null;
+  const cacheKey = () => optionCacheKey(store.get(), config.siblingExclude || []);
   async function ensureLoaded() {
     const key = cacheKey();
-    if (loadedKey === key || loading) return;
-    loading = true;
+    // Guard on the KEY, not a bare boolean: with cascading, a second sender can
+    // change while a load is still in flight, and a plain `loading` flag would
+    // swallow the reload and leave stale options. The loadToken below discards
+    // the superseded response.
+    if (loadedKey === key || loadingKey === key) return;
+    loadingKey = key;
     const token = ++loadToken;
     const s = store.get();
     let rows;
     try {
       rows = await config.loader(s.gender, s.teamType);
     } catch (e) {
-      loading = false;
+      if (loadingKey === key) loadingKey = null;
       return; // leave options empty; a later open retries
     }
     if (token !== loadToken) return;
-    loading = false;
+    loadingKey = null;
     optionsCache = rows || [];
     loadedKey = key;
     handle.setOptions(optionsCache);
@@ -1074,14 +1146,18 @@ function mountScopedMultiSelect(container, store, onChange, config) {
   return { sync };
 }
 
-/** "Played for" — single gender + team-type-scoped team picker (state.teams). */
+/** "Played for" — single gender + team-type-scoped team picker (state.teams).
+ * Cascading: narrowed by every other picked match filter INCLUDING Opposition
+ * (so with Opposition = Australia this lists the teams that actually played
+ * Australia), but never by state.teams itself — hence role: "teams". */
 export function mountTeam(container, store, onChange) {
   return mountScopedMultiSelect(container, store, onChange, {
     get: (s) => s.teams || [],
     set: (st, arr) => st.set({ teams: arr }),
+    siblingExclude: ["teams"],
     loader: (gender, teamType) => {
       const s = store.get(); // A9: scope the Team list to the full Search Conditions
-      return searchTeams("", gender, teamType, s.formats, s.dateFrom, s.dateTo);
+      return searchTeams("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s, role: "teams" });
     },
     emptyLabel: "All teams",
     singular: "team",
@@ -1131,7 +1207,7 @@ function mountEventSeasons(container, store, onChange) {
   let optionsByEvent = {}; // { [event_name]: [{ event, season, syr, games }] } for loadedKey
   let loadedKey = null;
   let loadToken = 0;
-  let loading = false;
+  let loadingKey = null;
   // One persistent dropdown per event label, created lazily and REUSED. The nodes
   // must outlive a render: wirePortalDropdown registers document-level listeners
   // and remembers the panel's home slot, so rebuilding the markup each render
@@ -1139,13 +1215,15 @@ function mountEventSeasons(container, store, onChange) {
   // re-fills each group's list + toggle and re-appends the existing element.
   const groupCache = new Map(); // event -> { el, toggle, list, dropdown }
 
-  const scopeKey = () => {
-    const s = store.get();
-    return `${s.gender}|${s.teamType}|${(s.formats || []).join(",")}|${s.dateFrom || ""}|${s.dateTo || ""}`;
-  };
-  // Cache key: the full scope PLUS the (sorted) selected-event set — a change to
-  // either reloads the per-event season lists.
-  const dataKey = () => `${scopeKey()}||${[...(store.get().event || [])].sort().join("~")}`;
+  // Cache key: the full Search-Conditions scope, the selected-event set (this
+  // loader's own axis — a change to it reloads the per-event season lists), AND
+  // every sibling match filter that cross-filters the seasons offered (venue,
+  // stage, team, opposition, result condition, toss decision). "event" and
+  // "eventSeasons" are self-excluded from the sibling half: the event set is
+  // already carried explicitly here, and the season narrowing must never narrow
+  // the season list itself.
+  const dataKey = () =>
+    `${optionCacheKey(store.get(), ["event", "eventSeasons"])}||${[...(store.get().event || [])].sort().join("~")}`;
 
   const inScopeSeasons = (eventName) => (optionsByEvent[eventName] || []).map((r) => r.season);
   const getES = () => store.get().eventSeasons || {};
@@ -1179,19 +1257,21 @@ function mountEventSeasons(container, store, onChange) {
       loadedKey = key;
       return;
     }
-    if (loadedKey === key || loading) return;
-    loading = true;
+    // Guard on the KEY (not a bare boolean): with cascading a second sender can
+    // change while a load is in flight, and a plain flag would swallow the reload.
+    if (loadedKey === key || loadingKey === key) return;
+    loadingKey = key;
     const token = ++loadToken;
     const s = store.get();
     let rows;
     try {
-      rows = await searchEventSeasons(events, s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo);
+      rows = await searchEventSeasons(events, s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo, { sel: s });
     } catch (e) {
-      loading = false;
+      if (loadingKey === key) loadingKey = null;
       return; // leave options empty; a later sync retries (e.g. pre-column data)
     }
     if (token !== loadToken) return;
-    loading = false;
+    loadingKey = null;
     const grouped = {};
     for (const r of rows) (grouped[r.event] = grouped[r.event] || []).push(r);
     optionsByEvent = grouped;
@@ -1423,9 +1503,13 @@ export function mountEvent(container, store, onChange) {
     {
       get: (s) => s.event || [],
       set: (st, arr) => st.set({ event: arr }),
+      // Cascading: narrowed by venue/stage/team/opposition/result-condition/toss
+      // decision, but NEVER by the event selection itself (self-exclusion — the
+      // list must stay the full in-scope vocabulary while one event is picked).
+      siblingExclude: ["event"],
       loader: (gender, teamType) => {
         const s = store.get(); // A9: scope the Event list to the full Search Conditions
-        return searchEvents("", gender, teamType, s.formats, s.dateFrom, s.dateTo);
+        return searchEvents("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s });
       },
       emptyLabel: "Any event",
       singular: "event",
@@ -1444,14 +1528,17 @@ export function mountEvent(container, store, onChange) {
   };
 }
 
-/** "Venue" — gender + team-type-scoped ground picker (state.venue). */
+/** "Venue" — gender + team-type-scoped ground picker (state.venue). Cascading:
+ * with Event = County Championship this lists ONLY county grounds; never narrowed
+ * by state.venue itself (self-exclusion). */
 export function mountVenue(container, store, onChange) {
   return mountScopedMultiSelect(container, store, onChange, {
     get: (s) => s.venue || [],
     set: (st, arr) => st.set({ venue: arr }),
+    siblingExclude: ["venue"],
     loader: (gender, teamType) => {
       const s = store.get(); // A9: scope the Venue list to the full Search Conditions
-      return searchVenues("", gender, teamType, s.formats, s.dateFrom, s.dateTo);
+      return searchVenues("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s });
     },
     emptyLabel: "Any venue",
     singular: "venue",
@@ -1479,9 +1566,13 @@ export function mountOpposition(container, store, onChange, { embedded = false }
   return mountScopedMultiSelect(container, store, onChange, {
     get: (s) => s.opposition || [],
     set: (st, arr) => st.set({ opposition: arr }),
+    // Cascading: narrowed by "Played for" (with Team = India this lists exactly
+    // the teams India faced) but never by state.opposition itself — role:
+    // "opposition" is what tells the shared loader which half is self.
+    siblingExclude: ["opposition"],
     loader: (gender, teamType) => {
       const s = store.get(); // A9: scope the Opposition list to the full Search Conditions
-      return searchTeams("", gender, teamType, s.formats, s.dateFrom, s.dateTo);
+      return searchTeams("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s, role: "opposition" });
     },
     emptyLabel: "Any opposition",
     singular: "opponent",

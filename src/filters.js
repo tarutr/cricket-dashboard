@@ -149,6 +149,126 @@ export function buildCoreScopeClauses(state, { includeGender = true } = {}) {
   return clauses;
 }
 
+// ── Shared `matches`-row predicate fragments (cascading option lists) ─────────
+// Five WHERE fragments over columns that live on `matches` — event_name/season,
+// venue, event_stage, method/is_super_over, toss_decision. Each is defined ONCE
+// here and consumed by BOTH:
+//   • the number-critical query path — buildScopeClauses' event/venue semi-joins
+//     and buildMatchContextClauses' Stage / Result Condition / Toss-decision
+//     clauses (where every one of these semantics was born), and
+//   • the drawer's OPTION-LIST loaders (playerData.js matchOptionScope), where a
+//     picked filter must narrow every OTHER picker's option vocabulary.
+// Sharing is the whole point: an option list that re-implemented "Normal = no
+// method AND not a super over" could drift from what the query actually counts,
+// and the picker would then offer choices that return nothing (or hide choices
+// that do return rows). Each function returns a SQL string, or null when the
+// selection narrows nothing (empty, or sentinel-only).
+//
+// `alias` qualifies the column reference: the live query reads these columns off
+// the LEFT-JOINed sub-select aliased `mctx`, while an option list scans `matches`
+// itself and wants a bare column name. Default "" = bare; the live-query callers
+// pass "mctx" explicitly.
+
+/** `alias.col`, or a bare `col` when there is no alias. */
+function matchCol(alias, col) {
+  return alias ? `${alias}.${col}` : col;
+}
+
+/** OR-join disjuncts the way every match-context clause does: one part stands
+ * alone, several are parenthesised. Returns null for an empty list. */
+function orJoin(parts) {
+  if (parts.length === 0) return null;
+  return parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`;
+}
+
+/** The Event predicate, INCLUDING each event's per-season narrowing (state.event
+ * + state.eventSeasons). Emitted against `matches` columns (event_name/season),
+ * so it is used both inside buildScopeClauses' match_id semi-join and by the
+ * option loaders that scan `matches` directly. Two shapes, exactly as before:
+ * with no event narrowed to specific seasons, ONE deduped alias IN-list; with any
+ * narrowing, a per-event OR of `(event_name IN (aliases) AND season IN (…))` /
+ * `event_name IN (aliases)`. state.event holds CANONICAL labels (name
+ * normalization, backlog #5) — each expands to its raw alias set. */
+export function eventPredicateSql(state) {
+  if (!eventFilterActive(state)) return null;
+  if (!anyEventSeasonNarrowing(state)) {
+    const aliases = [...new Set(state.event.flatMap((e) => eventAliases(e)))];
+    return `event_name IN (${aliases.map((a) => `'${esc(a)}'`).join(", ")})`;
+  }
+  const es = state.eventSeasons || {};
+  const terms = state.event.map((e) => {
+    const aliasIn = eventAliases(e).map((a) => `'${esc(a)}'`).join(", ");
+    const seasons = Array.isArray(es[e]) ? es[e] : [];
+    if (seasons.length > 0) {
+      return `(event_name IN (${aliasIn}) AND season IN (${seasons.map((sn) => `'${esc(sn)}'`).join(", ")}))`;
+    }
+    return `event_name IN (${aliasIn})`;
+  });
+  return `(${terms.join(" OR ")})`;
+}
+
+/** The Venue predicate (`venue IN (…)`) — raw venue strings, as stored. */
+export function venuePredicateSql(state) {
+  if (!venueFilterActive(state)) return null;
+  return `venue IN (${state.venue.map((v) => `'${esc(v)}'`).join(", ")})`;
+}
+
+/** The Stage predicate. `stages` is state.stage: CANONICAL labels expanded to
+ * their raw `event_stage` spellings, plus two sentinels — STAGE_ALL contributes
+ * nothing (no narrowing) and STAGE_NONE is `event_stage IS NULL` (a league
+ * fixture with no round name). Named stages and the No-Stage disjunct OR
+ * together. */
+export function stagePredicateSql(stages, alias = "") {
+  const st = stages || [];
+  if (st.length === 0) return null;
+  const named = st.filter((s) => s !== STAGE_ALL && s !== STAGE_NONE);
+  const parts = [];
+  if (named.length) {
+    const stageRaws = [...new Set(named.flatMap((s) => stageAliases(s)))];
+    parts.push(`${matchCol(alias, "event_stage")} IN (${stageRaws.map((s) => `'${esc(s)}'`).join(", ")})`);
+  }
+  if (st.includes(STAGE_NONE)) parts.push(`${matchCol(alias, "event_stage")} IS NULL`);
+  return orJoin(parts);
+}
+
+/** The Result Condition predicate. `conditions` is state.resultCondition:
+ * RESULT_CONDITION_ALL contributes nothing; specific methods collect into ONE
+ * `method IN (…)`; "Normal" is `method IS NULL AND NOT COALESCE(is_super_over,
+ * false)`; "Super Over" is that same COALESCE'd flag. The COALESCE is REQUIRED,
+ * not cosmetic — is_super_over is NULL (not false) for every ordinary win, so a
+ * bare negation would silently drop them. The three groups are facets, not a
+ * partition, so they OR together. */
+export function resultConditionPredicateSql(conditions, alias = "") {
+  const tokens = conditions || [];
+  if (tokens.length === 0) return null;
+  const superOverSql = `COALESCE(${matchCol(alias, "is_super_over")}, false)`;
+  const reals = [];
+  let wantsNormal = false;
+  let wantsSuperOver = false;
+  for (const t of tokens) {
+    if (t === RESULT_CONDITION_ALL) continue;
+    else if (t === RESULT_CONDITION_NORMAL) wantsNormal = true;
+    else if (t === RESULT_CONDITION_SUPER_OVER) wantsSuperOver = true;
+    else {
+      const mth = resultConditionMethod(t);
+      if (mth) reals.push(mth);
+    }
+  }
+  const parts = [];
+  if (reals.length) parts.push(`${matchCol(alias, "method")} IN (${reals.map((m) => `'${esc(m)}'`).join(", ")})`);
+  if (wantsNormal) parts.push(`(${matchCol(alias, "method")} IS NULL AND NOT ${superOverSql})`);
+  if (wantsSuperOver) parts.push(superOverSql);
+  return orJoin(parts);
+}
+
+/** The Toss-decision predicate (`toss_decision IN (…)`). Anything other than the
+ * two known tokens is dropped, so only fixed literals ever reach the SQL. */
+export function tossDecisionPredicateSql(tossDecision, alias = "") {
+  const td = (tossDecision || []).filter((v) => v === "bat" || v === "field");
+  if (td.length === 0) return null;
+  return `${matchCol(alias, "toss_decision")} IN (${td.map((v) => `'${v}'`).join(", ")})`;
+}
+
 /** Shared WHERE-clause builder for gender/format/date/team_type/(team) — used by
  * both the drawer's team/opposition-options lookups and src/table.js's main
  * query. Exported so table.js, drawer.js, and graph builders all build an
@@ -193,52 +313,21 @@ export function buildScopeClauses(
   // and venue live on ONE table (`matches`) regardless of caller. Both are OFF
   // by default (state.event / state.venue start as [] — see state.js), so this
   // is a no-op addition until a picker UI (1B-2) sets either array.
+  // The event/season and venue predicates themselves come from the SHARED
+  // fragment builders above (eventPredicateSql / venuePredicateSql) — the same
+  // ones the drawer's option-list loaders use for cross-filtering, so the
+  // vocabulary a picker offers can never drift from what the query counts. The
+  // emitted SQL is unchanged: eventPredicateSql returns either ONE deduped
+  // alias IN-list (no event narrowed to specific seasons) or the parenthesised
+  // per-event OR of `(event_name IN (aliases) AND season IN (…))` terms, exactly
+  // as this block spelled out inline before.
   if (eventFilterActive(state)) {
     const g = esc(state.gender);
-    if (!anyEventSeasonNarrowing(state)) {
-      // No chosen event is narrowed to specific seasons (every event on "All
-      // seasons"). Each entry in state.event is a CANONICAL label (name
-      // normalization, backlog #5) — expand each to its raw alias set so the
-      // one option matches every raw spelling (e.g. "County Championship" pulls
-      // in LV=/Specsavers/unsponsored). An identity (unlisted) event expands to
-      // just itself, so an all-identity selection emits the same IN-list as
-      // before normalization. Dedup across canonicals for a tidy list.
-      const aliases = [...new Set(state.event.flatMap((e) => eventAliases(e)))];
-      clauses.push(
-        `match_id IN (SELECT match_id FROM matches WHERE gender = '${g}' AND event_name IN (${aliases
-          .map((a) => `'${esc(a)}'`)
-          .join(", ")}))`
-      );
-    } else {
-      // At least one chosen event is narrowed to specific seasons (Event → Season
-      // picker, Wave 6 pt2). Emit a per-event OR of terms: a narrowed event
-      // contributes `(event_name = X AND season IN (…))`; a non-narrowed event
-      // stays `event_name = X` (all its seasons). `season` lives on `matches`
-      // (part 1 additive column), the same table this semi-join already targets,
-      // so no extra join is needed. Orphan eventSeasons keys (for events not in
-      // state.event) are never read here — only state.event is iterated.
-      // eventSeasons is keyed by CANONICAL label (name normalization); each
-      // canonical expands to its raw alias set, so a narrowed canonical becomes
-      // `(event_name IN (aliases) AND season IN (…))` — the season narrowing
-      // spans every raw era of the merged event (e.g. County Championship
-      // seasons cover the LV=/Specsavers/unsponsored spellings alike).
-      const es = state.eventSeasons || {};
-      const terms = state.event.map((e) => {
-        const aliasIn = eventAliases(e).map((a) => `'${esc(a)}'`).join(", ");
-        const seasons = Array.isArray(es[e]) ? es[e] : [];
-        if (seasons.length > 0) {
-          return `(event_name IN (${aliasIn}) AND season IN (${seasons.map((sn) => `'${esc(sn)}'`).join(", ")}))`;
-        }
-        return `event_name IN (${aliasIn})`;
-      });
-      clauses.push(`match_id IN (SELECT match_id FROM matches WHERE gender = '${g}' AND (${terms.join(" OR ")}))`);
-    }
+    clauses.push(`match_id IN (SELECT match_id FROM matches WHERE gender = '${g}' AND ${eventPredicateSql(state)})`);
   }
   if (venueFilterActive(state)) {
     clauses.push(
-      `match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND venue IN (${state.venue
-        .map((v) => `'${esc(v)}'`)
-        .join(", ")}))`
+      `match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND ${venuePredicateSql(state)})`
     );
   }
 
@@ -360,11 +449,9 @@ export function buildMatchContextClauses(state, rowTeamCol) {
     if (parts.length) clauses.push(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`);
   }
 
-  // 3. Toss decision (matches.toss_decision IN …).
-  const td = (state.tossDecision || []).filter((v) => v === "bat" || v === "field");
-  if (td.length) {
-    clauses.push(`${A}.toss_decision IN (${td.map((v) => `'${v}'`).join(", ")})`);
-  }
+  // 3. Toss decision (matches.toss_decision IN …) — shared fragment builder.
+  const tossDecisionSql = tossDecisionPredicateSql(state.tossDecision, A);
+  if (tossDecisionSql) clauses.push(tossDecisionSql);
 
   // 4. Innings order (row team ==/<> team_batting_first).
   const io = state.inningsOrder || [];
@@ -388,17 +475,12 @@ export function buildMatchContextClauses(state, rowTeamCol) {
   //         with no round name (a league fixture). It is a real choice, not an
   //         absence of one, so it gets its own disjunct and OR's with any named
   //         stages picked alongside it.
-  const st = state.stage || [];
-  if (st.length) {
-    const named = st.filter((s) => s !== STAGE_ALL && s !== STAGE_NONE);
-    const parts = [];
-    if (named.length) {
-      const stageRaws = [...new Set(named.flatMap((s) => stageAliases(s)))];
-      parts.push(`${A}.event_stage IN (${stageRaws.map((s) => `'${esc(s)}'`).join(", ")})`);
-    }
-    if (st.includes(STAGE_NONE)) parts.push(`${A}.event_stage IS NULL`);
-    if (parts.length) clauses.push(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`);
-  }
+  //
+  //     The predicate itself comes from the SHARED stagePredicateSql fragment
+  //     (see above) — the same builder the drawer's option lists cross-filter
+  //     with, so a stage the picker offers is always a stage the query can find.
+  const stageSql = stagePredicateSql(state.stage, A);
+  if (stageSql) clauses.push(stageSql);
 
   // 5b. Result Condition (FIX B; renamed from "Result Type", Wave 6 polish item
   //     4): the nested "how did this result come about" sub-filter under Result.
@@ -425,27 +507,13 @@ export function buildMatchContextClauses(state, rowTeamCol) {
   //     behave as the boolean it is meant to be. The pipeline's own derivation is
   //     fixed too (export_parquet.py sql_matches), so this is belt-and-braces once
   //     a fresh export lands — and correct against BOTH old and new exports.
-  const resultConditions = state.resultCondition || [];
-  if (resultConditions.length) {
-    const superOverSql = `COALESCE(${A}.is_super_over, false)`;
-    const reals = [];
-    let wantsNormal = false;
-    let wantsSuperOver = false;
-    for (const t of resultConditions) {
-      if (t === RESULT_CONDITION_ALL) continue;
-      else if (t === RESULT_CONDITION_NORMAL) wantsNormal = true;
-      else if (t === RESULT_CONDITION_SUPER_OVER) wantsSuperOver = true;
-      else {
-        const mth = resultConditionMethod(t);
-        if (mth) reals.push(mth);
-      }
-    }
-    const parts = [];
-    if (reals.length) parts.push(`${A}.method IN (${reals.map((m) => `'${esc(m)}'`).join(", ")})`);
-    if (wantsNormal) parts.push(`(${A}.method IS NULL AND NOT ${superOverSql})`);
-    if (wantsSuperOver) parts.push(superOverSql);
-    if (parts.length) clauses.push(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`);
-  }
+  //
+  //     The predicate itself comes from the SHARED resultConditionPredicateSql
+  //     fragment (see above), which the drawer's option lists also use — so
+  //     "Result Condition = D/L" narrows every other picker's vocabulary by the
+  //     exact same definition the query counts by.
+  const resultConditionSql = resultConditionPredicateSql(state.resultCondition, A);
+  if (resultConditionSql) clauses.push(resultConditionSql);
 
   return clauses;
 }

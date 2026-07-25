@@ -10,7 +10,15 @@
 // apply here — the page's own honest scope line states exactly this.
 
 import { query } from "./db.js";
-import { buildScopeClauses, buildCoreScopeClauses } from "./filters.js";
+import {
+  buildScopeClauses,
+  buildCoreScopeClauses,
+  eventPredicateSql,
+  venuePredicateSql,
+  stagePredicateSql,
+  resultConditionPredicateSql,
+  tossDecisionPredicateSql,
+} from "./filters.js";
 import { getMetric, DISMISSAL_KINDS, metricsFor } from "./metrics.js";
 import { escSql as esc } from "./state.js";
 import { canonicalEvent, eventAliases } from "./canonicalNames.js";
@@ -314,15 +322,131 @@ function teamTypeMatchClause(teamType) {
  * `matches` parquet carries (verified against the live schema). It is an
  * AND-only chain, so callers append their own "<entity> IS NOT NULL" with a
  * bare ` AND `.
+ *
+ * CASCADING (`sel` + `exclude`, owner rule "a dropdown's options must respect
+ * every other active selection"): `sel` is the drawer's live selection state and
+ * `exclude` names the sender key(s) the calling list is itself the picker for.
+ * Both are OPTIONAL and ADDITIVE in the same way — omit `sel` and the emitted
+ * predicate is exactly the core scope, unchanged. See siblingOptionClauses below
+ * for the sender/receiver rules and why self-exclusion is mandatory.
  */
-function matchOptionScope(gender, teamType, formats, dateFrom, dateTo) {
-  if (formats == null) {
-    // Pre-A9 fallback: gender + team type only. No live caller uses this (the
-    // drawer always passes formats), but it keeps the loaders usable
-    // gender+team-type-only per the additive contract.
-    return `gender = '${esc(gender)}'${teamTypeMatchClause(teamType)}`;
+function matchOptionScope(gender, teamType, formats, dateFrom, dateTo, sel = null, exclude = []) {
+  const core =
+    formats == null
+      ? // Pre-A9 fallback: gender + team type only. No live caller uses this (the
+        // drawer always passes formats), but it keeps the loaders usable
+        // gender+team-type-only per the additive contract.
+        `gender = '${esc(gender)}'${teamTypeMatchClause(teamType)}`
+      : buildCoreScopeClauses({ gender, formats, dateFrom, dateTo, teamType }).join(" AND ");
+  // CASCADING (cross-filtered) option lists: narrow by every OTHER advanced
+  // match filter currently picked. Omitting `sel` emits exactly the pre-cascade
+  // core scope, so a caller that doesn't opt in is byte-identical to before.
+  const siblings = siblingOptionClauses(sel, exclude);
+  return siblings.length ? [core, ...siblings].join(" AND ") : core;
+}
+
+// ── Cascading option lists: the sibling-narrowing predicate (owner rule) ─────
+// "Inside the advanced filters, a dropdown's OPTIONS must respect every other
+// active selection." So each of the six DB-derived option lists (Team,
+// Opposition, Event, Season, Venue, Stage) is scoped not just by the Search
+// Conditions (gender/format/date/team-type — the `core` above) but ALSO by every
+// other advanced match filter the user has picked. Removing a filter re-expands
+// the options; it never touches what is already selected (that stays the job of
+// each picker's own reconcile path).
+//
+// SENDERS (the selections that narrow a list) are exactly the filters that can be
+// expressed on a `matches` row: event (+ its per-event season narrowing), venue,
+// stage, teams, opposition, result condition, toss decision. Every one of them
+// reuses the SHARED fragment builder in filters.js, so the vocabulary offered can
+// never drift from what the leaderboard query counts.
+//
+// NOT senders (owner-confirmed): Result, Toss result and Innings order are
+// PLAYER-RELATIVE — they compare the innings row's OWN team to the match, and an
+// option list has no row-team to compare with — plus `vs`, the position/hand/
+// role/fielding pickers and every numeric stat condition, which are fixed
+// vocabularies or player-level rather than match-level.
+//
+// SELF-EXCLUSION is the load-bearing part: a list must never narrow by its own
+// filter, or it collapses to just what is already picked (the Event list would
+// show only the selected event). `exclude` names the sender key(s) the caller is
+// itself the picker for. Excluding "event" drops the season narrowing with it
+// (the seasons ARE a narrowing OF the event predicate — there is no season
+// predicate on its own); excluding only "eventSeasons" keeps the plain event
+// alias IN-list, which is exactly what the Season list needs.
+
+/** `'a', 'b'` — a SQL-quoted IN-list body. */
+function optionInList(values) {
+  return values.map((v) => `'${esc(v)}'`).join(", ");
+}
+
+/**
+ * The Team/Opposition sender predicate on a `matches` row (team_1/team_2).
+ *
+ * The leaderboard query applies these on the INNINGS row (batting_team IN teams
+ * AND bowling_team IN opposition), which is a statement about the two SIDES of
+ * the match: with both picked, a match qualifies only when one side is in `teams`
+ * and the OTHER side is in `opposition`. Spelling that out as the pair-OR below
+ * (rather than two independent "match involves X" tests) is what keeps the option
+ * lists honest — "involves India" AND "involves India" would keep matches that
+ * the real query returns nothing for.
+ */
+function teamPairPredicateSql(teams, opposition) {
+  const t = teams || [];
+  const o = opposition || [];
+  if (t.length === 0 && o.length === 0) return null;
+  if (t.length > 0 && o.length > 0) {
+    const tin = optionInList(t);
+    const oin = optionInList(o);
+    return `((team_1 IN (${tin}) AND team_2 IN (${oin})) OR (team_2 IN (${tin}) AND team_1 IN (${oin})))`;
   }
-  return buildCoreScopeClauses({ gender, formats, dateFrom, dateTo, teamType }).join(" AND ");
+  const one = optionInList(t.length > 0 ? t : o);
+  return `(team_1 IN (${one}) OR team_2 IN (${one}))`;
+}
+
+/**
+ * WHERE fragments narrowing a `matches`-based option list by the OTHER advanced
+ * match filters currently picked. `sel` is a state-like object (the drawer's live
+ * store — including edits not yet applied, so the lists react as the user picks);
+ * `exclude` names the sender key(s) this list is itself the picker for.
+ * Returns [] when nothing else is picked, which is what keeps a non-cascading
+ * caller byte-identical.
+ */
+function siblingOptionClauses(sel, exclude = []) {
+  if (!sel) return [];
+  const skip = new Set(exclude);
+  const clauses = [];
+
+  if (!skip.has("event")) {
+    // Excluding "eventSeasons" (the Season list's own case) keeps the event
+    // predicate but drops the season narrowing — passed as an empty map, which is
+    // exactly the "every event on All seasons" shape.
+    const p = eventPredicateSql(skip.has("eventSeasons") ? { ...sel, eventSeasons: {} } : sel);
+    if (p) clauses.push(p);
+  }
+  if (!skip.has("venue")) {
+    const p = venuePredicateSql(sel);
+    if (p) clauses.push(p);
+  }
+  if (!skip.has("stage")) {
+    const p = stagePredicateSql(sel.stage, "");
+    if (p) clauses.push(p);
+  }
+  if (!skip.has("resultCondition")) {
+    const p = resultConditionPredicateSql(sel.resultCondition, "");
+    if (p) clauses.push(p);
+  }
+  if (!skip.has("tossDecision")) {
+    const p = tossDecisionPredicateSql(sel.tossDecision, "");
+    if (p) clauses.push(p);
+  }
+  // Team + Opposition go through ONE pair predicate (they are two halves of the
+  // same statement about a match's two sides), so self-exclusion is applied by
+  // emptying the excluded half. searchTeams excludes BOTH and handles the
+  // surviving half itself — see its own `other`-side note.
+  const pair = teamPairPredicateSql(skip.has("teams") ? [] : sel.teams, skip.has("opposition") ? [] : sel.opposition);
+  if (pair) clauses.push(pair);
+
+  return clauses;
 }
 
 /**
@@ -334,18 +458,45 @@ function matchOptionScope(gender, teamType, formats, dateFrom, dateTo) {
  * untouched by this task. `formats` (bucket keys) + `dateFrom`/`dateTo` are the
  * A9 additions (optional/additive — see matchOptionScope); state.teams itself
  * and its query-side handling are untouched.
+ *
+ * CASCADING (`opts.sel` + `opts.role`): this ONE loader feeds TWO pickers, which
+ * are DIFFERENT filters — so it must be told which role it is serving. The Team
+ * list narrows by `opposition` (never by `teams`, its own filter); the Opposition
+ * list narrows by `teams`. Both are applied on the OTHER side of the match: the
+ * sides CTE carries `other`, so with Team = India the Opposition list is exactly
+ * the teams India actually faced — India itself is not offered, because
+ * batting_team = India AND bowling_team = India is a match that cannot exist.
+ * (With several teams picked a co-selected team CAN still be a legal opponent —
+ * Team = {India, Australia} keeps Australia in the Opposition list, because an
+ * India-v-Australia match satisfies it. The `other`-side test gets that right;
+ * a plain "match involves a picked team" test would not.)
+ * `games` follows the same narrowing: it counts the matches this team appears in
+ * WITHIN the cross-filtered set.
  */
-export async function searchTeams(term, gender, teamType = "both", formats = null, dateFrom = null, dateTo = null) {
+export async function searchTeams(
+  term,
+  gender,
+  teamType = "both",
+  formats = null,
+  dateFrom = null,
+  dateTo = null,
+  { sel = null, role = null } = {}
+) {
   const orderBy = relevanceOrderBy("team", term, "games DESC, team ASC");
-  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo);
+  // Both team keys are excluded from the shared sibling builder: this list IS the
+  // team axis, so the surviving half is applied below against `other` instead of
+  // "either side of the match".
+  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo, sel, ["teams", "opposition"]);
+  const otherSide = !sel || !role ? [] : role === "opposition" ? sel.teams || [] : sel.opposition || [];
+  const otherClause = otherSide.length > 0 ? `\nWHERE other IN (${optionInList(otherSide)})` : "";
   const sql = [
     `WITH sides AS (`,
-    `  SELECT team_1 AS team FROM matches WHERE ${scope}`,
+    `  SELECT team_1 AS team, team_2 AS other FROM matches WHERE ${scope}`,
     `  UNION ALL`,
-    `  SELECT team_2 AS team FROM matches WHERE ${scope}`,
+    `  SELECT team_2 AS team, team_1 AS other FROM matches WHERE ${scope}`,
     `)`,
     `SELECT team AS value, team AS label, COUNT(*) AS games`,
-    `FROM sides`,
+    `FROM (SELECT team, other FROM sides${otherClause})`,
     `WHERE team IS NOT NULL`,
     `GROUP BY team`,
     orderBy,
@@ -374,8 +525,19 @@ export async function searchTeams(term, gender, teamType = "both", formats = nul
  * matchOptionScope). latestDate is selected as a 'YYYY-MM-DD' string so the JS
  * tiebreak compares it chronologically without Date coercion.
  */
-export async function searchEvents(term, gender, teamType = "both", formats = null, dateFrom = null, dateTo = null) {
-  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo);
+export async function searchEvents(
+  term,
+  gender,
+  teamType = "both",
+  formats = null,
+  dateFrom = null,
+  dateTo = null,
+  { sel = null } = {}
+) {
+  // Cascading: narrowed by every other picked match filter, and NEVER by `event`
+  // itself (self-exclusion — otherwise the list would collapse to just the event
+  // already picked). Excluding "event" drops its season narrowing too.
+  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo, sel, ["event"]);
   const sql = [
     `SELECT event_name AS raw, COUNT(*) AS games, CAST(MAX(match_date) AS VARCHAR) AS latestDate`,
     `FROM matches`,
@@ -426,9 +588,23 @@ export async function searchEvents(term, gender, teamType = "both", formats = nu
  * OPTIONS lookup only — never feeds a leaderboard aggregate, so numbers are
  * untouched.
  */
-export async function searchEventSeasons(eventNames, gender, teamType = "both", formats = null, dateFrom = null, dateTo = null) {
+export async function searchEventSeasons(
+  eventNames,
+  gender,
+  teamType = "both",
+  formats = null,
+  dateFrom = null,
+  dateTo = null,
+  { sel = null } = {}
+) {
   if (!Array.isArray(eventNames) || eventNames.length === 0) return [];
-  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo);
+  // Cascading: narrowed by every other picked match filter. Self-exclusion drops
+  // `eventSeasons` (this list IS the season axis) AND `event` — because this
+  // loader already applies its own `event_name IN (…)` from `eventNames` below,
+  // which is the identical predicate the shared builder would emit for the same
+  // canonical labels with no season narrowing. So the event scoping is applied
+  // exactly once, and the seasons offered stay the full in-scope list.
+  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo, sel, ["event", "eventSeasons"]);
   // Union of every raw alias across the selected canonicals.
   const rawNames = [...new Set(eventNames.flatMap((e) => eventAliases(e)))];
   const inList = rawNames.map((e) => `'${esc(e)}'`).join(", ");
@@ -464,10 +640,22 @@ export async function searchEventSeasons(eventNames, gender, teamType = "both", 
 
 /** Distinct venue values in `matches` for the current scope. games = match
  * count. `formats`/`dateFrom`/`dateTo` are the A9 additions (optional/additive
- * — see matchOptionScope). */
-export async function searchVenues(term, gender, teamType = "both", formats = null, dateFrom = null, dateTo = null) {
+ * — see matchOptionScope); `opts.sel` is the cascading addition (every OTHER
+ * picked match filter narrows the list, so Event = County Championship leaves
+ * only county grounds, and `games` counts only the cross-filtered matches). */
+export async function searchVenues(
+  term,
+  gender,
+  teamType = "both",
+  formats = null,
+  dateFrom = null,
+  dateTo = null,
+  { sel = null } = {}
+) {
   const orderBy = relevanceOrderBy("venue", term, "games DESC, venue ASC");
-  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo);
+  // Cascading: narrowed by every other picked match filter, never by `venue`
+  // itself (self-exclusion).
+  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo, sel, ["venue"]);
   const sql = [
     `SELECT venue AS value, venue AS label, COUNT(*) AS games`,
     `FROM matches`,
@@ -494,12 +682,13 @@ export async function searchVenues(term, gender, teamType = "both", formats = nu
  * Conditions (gender + format + date + team-type) as the Event/Venue pickers,
  * via the shared matchOptionScope helper.
  *
- * Polish item 3 adds the EVENT cross-filter: `eventNames` is the currently
- * selected CANONICAL event labels (state.event). Each is expanded to its raw
- * alias set — the same expansion searchEventSeasons and the query builders use —
- * so the stages offered are those occurring in the selected competition across
- * every sponsor era of it. An empty/absent selection adds no event predicate, so
- * the emitted SQL is then identical to the pre-item-3 lookup.
+ * Polish item 3 added the EVENT cross-filter; the cascading pass GENERALISED it.
+ * `opts.sel` is the drawer's live selection state and the list now narrows by
+ * EVERY other picked match filter — event (canonical → raw aliases, and its
+ * per-event season narrowing), venue, team, opposition, result condition and toss
+ * decision — never by `stage` itself (self-exclusion, or the list would collapse
+ * to the stage already picked). Omitting `sel` adds no sibling predicate, so the
+ * emitted SQL is then identical to the pre-cascade lookup.
  *
  * OPTIONS lookup only; it never feeds a leaderboard aggregate, so no number
  * changes.
@@ -510,24 +699,19 @@ export async function searchStages(
   formats = null,
   dateFrom = null,
   dateTo = null,
-  eventNames = null
+  { sel = null } = {}
 ) {
-  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo);
-  let eventClause = "";
-  if (Array.isArray(eventNames) && eventNames.length > 0) {
-    const rawNames = [...new Set(eventNames.flatMap((e) => eventAliases(e)))];
-    eventClause = ` AND event_name IN (${rawNames.map((e) => `'${esc(e)}'`).join(", ")})`;
-  }
+  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo, sel, ["stage"]);
   const sql = [
     `SELECT DISTINCT event_stage AS s`,
     `FROM matches`,
-    `WHERE ${scope}${eventClause} AND event_stage IS NOT NULL`,
+    `WHERE ${scope} AND event_stage IS NOT NULL`,
     `ORDER BY event_stage`,
   ].join("\n");
   const noneSql = [
     `SELECT COUNT(*) AS n`,
     `FROM matches`,
-    `WHERE ${scope}${eventClause} AND event_stage IS NULL`,
+    `WHERE ${scope} AND event_stage IS NULL`,
   ].join("\n");
   const [named, none] = await Promise.all([query(sql), query(noneSql)]);
   return {
