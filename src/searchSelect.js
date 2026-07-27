@@ -471,7 +471,27 @@ export function mountSearchSelect(hostEl, {
  * @param {string} [opts.ariaLabel]
  * @param {boolean} [opts.disabled]
  * @param {(opt:object) => string} [opts.renderRow] custom option-row inner HTML
+ * @param {boolean} [opts.keepMissingSelected] see the "missing selected values" note below
+ * @param {string} [opts.missingNote] short annotation shown on a missing-selected row
  * @returns {{setValues:Function,getValues:Function,setOptions:Function,setInvalid:Function,open:Function,close:Function,destroy:Function}}
+ *
+ * ── MISSING SELECTED VALUES (`keepMissingSelected`) ─────────────────────────
+ * By default the widget owns a closed world: a selected value with no matching
+ * option row is silently dropped from the selection (setValues/setOptions both
+ * filter). That is right for a static list (the graph's metric/axis pickers),
+ * but wrong for the Filters drawer, where the option list is CROSS-FILTERED by
+ * the other filters: a legitimately-picked venue can fall out of the list the
+ * moment a Stage is picked, and dropping it would make the control disagree
+ * with the filter that is actually applied.
+ *
+ * With `keepMissingSelected` the widget keeps such a value in the selection and
+ * renders it as an extra row at the TOP of the list — ticked, muted, annotated
+ * with `missingNote`, and still clickable so it can be un-ticked (once
+ * un-ticked it disappears, because it is not a real option). UNSELECTED values
+ * absent from the list stay absent: this never re-expands the option list, it
+ * only refuses to lose a pick. Rows are only treated as missing once real
+ * options have arrived (`setOptions` has been called at least once), so a slow
+ * first load doesn't flash the whole selection as dead.
  */
 export function mountSearchMultiSelect(hostEl, {
   options = [],
@@ -486,10 +506,18 @@ export function mountSearchMultiSelect(hostEl, {
   disabled = false,
   renderRow = null,
   portal = false,
+  keepMissingSelected = false,
+  missingNote = "",
 } = {}) {
   const uid = `smsel-${++uidCounter}`;
   let allOptions = normalizeOptions(options);
-  let selected = new Set(values.filter((v) => allOptions.some((o) => o.value === v)));
+  /** Has a real option list landed yet? (see keepMissingSelected above) */
+  let optionsEverSet = false;
+  const isKnown = (v) => allOptions.some((o) => o.value === v);
+  /** Incoming selection, filtered to what this widget is willing to hold. */
+  const acceptValues = (vals) =>
+    (Array.isArray(vals) ? vals : []).filter((v) => keepMissingSelected || isKnown(v));
+  let selected = new Set(acceptValues(values));
   let isOpen = false;
   let activeIndex = -1; // index into the CURRENTLY-FILTERED list
   let filtered = [];
@@ -584,13 +612,27 @@ export function mountSearchMultiSelect(hostEl, {
     }
   }
 
-  /** Selected values in OPTIONS order (stable, tick-order-independent). */
+  /** Selected values the loaded option list has no row for (keepMissingSelected
+   * only) — as synthetic option objects, in selection order. */
+  function missingSelected() {
+    if (!keepMissingSelected || !optionsEverSet) return [];
+    return [...selected]
+      .filter((v) => !isKnown(v))
+      .map((v) => ({ value: v, label: String(v), missing: true }));
+  }
+
+  /** Selected values in OPTIONS order (stable, tick-order-independent), led by
+   * any missing-selected values in the order they arrived (they have no place
+   * in the option order — see the keepMissingSelected note). */
   function selectedValues() {
-    return allOptions.filter((o) => selected.has(o.value)).map((o) => o.value);
+    const live = allOptions.filter((o) => selected.has(o.value)).map((o) => o.value);
+    const missing = [...selected].filter((v) => !isKnown(v));
+    return missing.length ? [...missing, ...live] : live;
   }
 
   function isRowDisabled(o) {
     if (!o) return true;
+    if (o.missing) return false; // a dead pick must always be un-tickable
     if (o.disabled) return true;
     return !!(isOptionDisabled && isOptionDisabled(o.value, selected));
   }
@@ -619,10 +661,26 @@ export function mountSearchMultiSelect(hostEl, {
 
   function applyFilter(term) {
     const t = term.trim().toLowerCase();
-    filtered = t ? allOptions.filter((o) => o.label.toLowerCase().includes(t)) : allOptions.slice();
+    const match = (o) => o.label.toLowerCase().includes(t);
+    const rows = t ? allOptions.filter(match) : allOptions.slice();
+    // Missing-selected rows lead the list so a dead pick is the first thing the
+    // user sees (and can un-tick) rather than hiding below a long option list.
+    const missing = missingSelected();
+    const missingRows = t ? missing.filter(match) : missing;
+    filtered = missingRows.length ? [...missingRows, ...rows] : rows;
   }
 
   function rowInnerHTML(o) {
+    if (o.missing) {
+      // Rendered by the widget itself, never through the caller's renderRow: a
+      // dead pick has no option record, so caller metadata (e.g. a games count)
+      // does not exist for it.
+      return (
+        `<span class="search-select__check" aria-hidden="true"></span>` +
+        `<span class="search-select__opt-label">${escHtml(o.label)}</span>` +
+        (missingNote ? `<span class="search-select__meta">${escHtml(missingNote)}</span>` : "")
+      );
+    }
     if (renderRow) return renderRow(o);
     return `<span class="search-select__check" aria-hidden="true"></span><span class="search-select__opt-label">${escHtml(o.label)}</span>`;
   }
@@ -639,7 +697,7 @@ export function mountSearchMultiSelect(hostEl, {
         const active = i === activeIndex;
         const rowDisabled = isRowDisabled(o);
         return (
-          `<div id="${uid}-opt-${i}" class="search-select__option search-select__option--multi${active ? " is-active" : ""}${isSel ? " is-selected" : ""}${rowDisabled ? " is-disabled" : ""}"` +
+          `<div id="${uid}-opt-${i}" class="search-select__option search-select__option--multi${active ? " is-active" : ""}${isSel ? " is-selected" : ""}${o.missing ? " is-missing" : ""}${rowDisabled ? " is-disabled" : ""}"` +
           ` role="option" aria-selected="${isSel}" data-idx="${i}">${rowInnerHTML(o)}</div>`
         );
       })
@@ -694,6 +752,12 @@ export function mountSearchMultiSelect(hostEl, {
     // all reflect the new selection immediately (rows stay put — no reorder).
     syncToggleLabel();
     syncNote();
+    if (keepMissingSelected) {
+      // Un-ticking a dead pick removes its synthetic row outright — it is not a
+      // real option, so it must not stay behind un-ticked and re-tickable.
+      applyFilter(filterEl.value);
+      if (activeIndex >= filtered.length) activeIndex = filtered.length - 1;
+    }
     renderList();
     onChange(selectedValues());
   }
@@ -790,9 +854,15 @@ export function mountSearchMultiSelect(hostEl, {
   // ── Handle ──────────────────────────────────────────────────────────────
   return {
     setValues(vals) {
-      selected = new Set((Array.isArray(vals) ? vals : []).filter((v) => allOptions.some((o) => o.value === v)));
+      selected = new Set(acceptValues(vals));
       syncToggleLabel();
       if (isOpen) {
+        // The missing-selected rows are derived from the selection, so the
+        // filtered list has to be rebuilt whenever the selection changes.
+        if (keepMissingSelected) {
+          applyFilter(filterEl.value);
+          if (activeIndex >= filtered.length) activeIndex = filtered.length - 1;
+        }
         syncNote();
         renderList();
       }
@@ -802,9 +872,12 @@ export function mountSearchMultiSelect(hostEl, {
     },
     setOptions(opts) {
       allOptions = normalizeOptions(opts);
+      optionsEverSet = true;
       // Drop any selection that no longer resolves; callers own any onChange
       // decision (this never fires onChange, matching the single-pick handle).
-      selected = new Set([...selected].filter((v) => allOptions.some((o) => o.value === v)));
+      // With keepMissingSelected the pick is KEPT and surfaced as a muted row
+      // instead — the caller (the Filters drawer) owns whether it survives.
+      selected = new Set(acceptValues([...selected]));
       syncToggleLabel();
       if (isOpen) {
         applyFilter(filterEl.value);

@@ -636,6 +636,26 @@ a { color: var(--color-accent); }
 
 .dropdown__item.is-disabled input { cursor: not-allowed; }
 
+/* A DEAD PICK — a value that is still selected (and still part of the filter,
+   so it counts in the toggle's summary) but that the rest of the current filter
+   combination has made impossible. Muted in the same recolor-only language as
+   the disabled state, but deliberately NOT disabled: the whole point is that it
+   stays clickable so it can be un-ticked. The note drops to its own line so a
+   narrow dropdown panel never has to grow sideways to fit it. */
+.dropdown__item--dead {
+  color: var(--color-muted);
+  flex-wrap: wrap;
+  white-space: normal;
+}
+
+.dropdown__item-note {
+  flex: 1 0 100%;
+  padding-left: 1.5rem;
+  font-size: var(--text-sm2, 0.75rem);
+  font-style: italic;
+  color: var(--color-muted);
+}
+
 /* ── Profile filters (D4.2) — second filter row ────────────────────────────── */
 
 .profile-note {
@@ -2687,6 +2707,29 @@ a { color: var(--color-accent); }
 .search-select__option--multi.is-disabled .search-select__check {
   border-color: var(--color-line);
 }
+/* A DEAD PICK — a still-selected value the narrowed option list no longer
+   offers (mountSearchMultiSelect's keepMissingSelected). Muted like the
+   disabled state but fully interactive: it exists so the user can SEE that the
+   filter is still applying it, and un-tick it. The tick stays accented (it IS
+   selected) while the label and its note go quiet; the note wraps onto its own
+   line rather than widening the panel. Both themes come free — --color-muted
+   and --color-accent are theme variables. */
+.search-select__option--multi.is-missing {
+  flex-wrap: wrap;
+  color: var(--color-muted);
+}
+.search-select__option--multi.is-missing .search-select__opt-label {
+  color: var(--color-muted);
+  font-weight: 400; /* override the .is-selected bold — this pick is inert */
+}
+.search-select__option--multi.is-missing .search-select__meta {
+  flex: 1 0 100%;
+  margin-left: 0;
+  padding-left: 1.35rem;
+  font-style: italic;
+  white-space: normal;
+}
+
 /* Trailing games-count meta on Team / Event / Venue rows (R2-2b-ii). The multi
    row is flex-start (box → label), so push the meta to the trailing edge; muted
    + non-wrapping so it reads as an annotation, not part of the name. */
