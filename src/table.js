@@ -11,8 +11,9 @@
 import { getMetric, hasMetricData, matchupBucketLabel, DISMISSAL_KINDS, metricDisplayLabel } from "./metrics.js";
 import { query } from "./db.js";
 import {
-  buildScopeClauses,
+  buildScopeClausesTagged,
   buildCoreScopeClauses,
+  bypassableClause,
   whereWithPinExemption,
   gateWithPinExemption,
   buildMatchContextClauses,
@@ -426,14 +427,17 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // C1: WHERE no longer includes the bucket predicate — scope + search only,
   // identical to the old standalone coverageSql's WHERE. The bucket predicate
   // now lives exclusively in the per-column FILTER clauses above.
-  const whereClauses = buildScopeClauses(state, scopeOpts);
-  if (searchClause) whereClauses.push(searchClause);
+  // Clauses are TAGGED for the pin exemption (filters.js): the builder tags its
+  // own five leaderboard-only filters, and the name search is tagged here.
+  const whereClauses = buildScopeClausesTagged(state, scopeOpts);
+  if (searchClause) whereClauses.push(bypassableClause(searchClause));
 
   // Match-context filters (Wave 6): identical treatment to plain buildQuery —
   // append the context clauses (comparing the matchup row's own team, teamCol =
-  // batting_team | bowling_team, to the joined match fields) after the core
-  // scope so pins bypass them, and LEFT JOIN `matches` on the view below (both
-  // the `agg` scan and the peak CTE's scan). No context filter => byte-identical.
+  // batting_team | bowling_team, to the joined match fields), and LEFT JOIN
+  // `matches` on the view below (both the `agg` scan and the peak CTE's scan).
+  // Pushed UNTAGGED = always-applies, so a pin is measured over the same matches
+  // as every other row. No context filter => byte-identical.
   const wantsMatchContext = matchContextActive(state);
   if (wantsMatchContext) {
     for (const c of buildMatchContextClauses(state, teamCol)) whereClauses.push(c);
@@ -442,14 +446,14 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   const matchupFrom = wantsMatchContext ? view + matchContextJoinSql(view) : view;
 
   // Pinned players (Wave 4b, decision 47a): additive — a pinned player is scanned
-  // as long as they have ANY core-scope row in this view, bypassing every
-  // leaderboard-only clause above (team/opposition/position/profile/R.Pos/search),
-  // exactly as buildQuery does. The bucket predicate is NOT in this WHERE (it is a
-  // per-aggregate FILTER), so pins keep it automatically. With no pins this is
-  // byte-identical to the former `whereClauses.join(" AND ")`.
+  // as long as they have a row that passes every ALWAYS-APPLIES clause above
+  // (core scope + event/venue + match context), bypassing only the leaderboard-only
+  // ones (team/opposition/position/profile/R.Pos/search), exactly as buildQuery
+  // does. The bucket predicate is NOT in this WHERE (it is a per-aggregate FILTER),
+  // so pins keep it automatically. With no pins this is byte-identical to the
+  // former `whereClauses.join(" AND ")`.
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
-  const coreClauses = buildCoreScopeClauses(state);
-  const whereSql = whereWithPinExemption(whereClauses, coreClauses, idCol, pins);
+  const whereSql = whereWithPinExemption(whereClauses, idCol, pins);
 
   const aggSql = [
     `SELECT ${aggSelectParts.join(", ")}`,
@@ -756,18 +760,16 @@ export function buildFieldingSliceClauses(state) {
 export function buildFieldingCteSql(state) {
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
   const fieldingSliceClauses = buildFieldingSliceClauses(state);
-  const fldFull = buildScopeClauses(state, {
+  const fldClauses = buildScopeClausesTagged(state, {
     includeTeams: true,
     teamColumn: "fielding_team",
     idColumn: "fielder_id",
     oppositionColumn: "opposition",
   });
-  const fldCore = buildCoreScopeClauses(state);
-  const fldExtra = fldFull.slice(fldCore.length);
   if (state.search && state.search.trim()) {
-    fldExtra.push(`fielder_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
+    fldClauses.push(bypassableClause(`fielder_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
   }
-  const fldScopeSql = whereWithPinExemption([...fldCore, ...fldExtra], fldCore, "fielder_id", pins);
+  const fldScopeSql = whereWithPinExemption(fldClauses, "fielder_id", pins);
   // substitute exclusion + slice conditions are AND'd OUTSIDE the pin
   // exemption: they define WHAT is counted (like a phase column), so they apply
   // to every fielder including pins — pins only bypass the "who/which match"
@@ -797,13 +799,11 @@ export function buildFieldingCteSql(state) {
  */
 export function buildPomCteSql(state) {
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
-  const pomFull = buildScopeClauses(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
-  const pomCore = buildCoreScopeClauses(state);
-  const pomExtra = pomFull.slice(pomCore.length);
+  const pomClauses = buildScopeClausesTagged(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
   if (state.search && state.search.trim()) {
-    pomExtra.push(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
+    pomClauses.push(bypassableClause(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
   }
-  const pomWhereSql = whereWithPinExemption([...pomCore, ...pomExtra], pomCore, "player_id", pins);
+  const pomWhereSql = whereWithPinExemption(pomClauses, "player_id", pins);
   return [
     "pom_cte AS (",
     "  SELECT player_id AS pom_player_id, SUM(player_of_match) AS player_of_match",
@@ -943,7 +943,11 @@ export function buildQuery(state, visibleColumns) {
     pomCols.length > 0 ||
     advancedReferencesMetric(state.advanced, discipline, isPomMetric);
 
-  const whereClauses = buildScopeClauses(state, {
+  // Clauses arrive TAGGED for the pin exemption (filters.js
+  // buildScopeClausesTagged): the builder marks its own five leaderboard-only
+  // filters bypassable, everything else always-applies. The name search is a
+  // leaderboard-only filter too, so it is tagged here.
+  const whereClauses = buildScopeClausesTagged(state, {
     includeTeams: true,
     teamColumn: teamCol,
     idColumn: idCol,
@@ -951,33 +955,32 @@ export function buildQuery(state, visibleColumns) {
     includePositions: true,
   });
   if (state.search && state.search.trim()) {
-    whereClauses.push(`${nameCol} ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
+    whereClauses.push(bypassableClause(`${nameCol} ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
   }
 
   // Match-context filters (Wave 6): additive. When ANY context filter is active
   // we LEFT JOIN `matches` (see fromSql below) and compare the row's own team
-  // (teamCol = batting_team | bowling_team) to the joined match fields. These
-  // clauses are appended AFTER the core scope, so whereWithPinExemption slices
-  // them into the pin-BYPASSED remainder — a pinned player shows regardless of
-  // match context, exactly like team/opposition. With no context filter active
-  // this pushes nothing and the emitted SQL is byte-identical to before.
+  // (teamCol = batting_team | bowling_team) to the joined match fields. Pushed
+  // UNTAGGED, i.e. ALWAYS-APPLIES: a pin obeys result / result condition / stage /
+  // toss / innings order just like every other row, so the pinned row is measured
+  // over the same matches the rest of the table is. (They used to be swept into
+  // the pin-bypassed remainder purely because they were appended last — that is
+  // the defect the explicit tagging fixes.) With no context filter active this
+  // pushes nothing and the emitted SQL is byte-identical to before.
   const wantsMatchContext = matchContextActive(state);
   if (wantsMatchContext) {
     for (const c of buildMatchContextClauses(state, teamCol)) whereClauses.push(c);
   }
 
   // Pinned players (task 3b, owner decision 46; Wave 4b routed onto the shared
-  // helper): additive OR. buildCoreScopeClauses is guaranteed to be the exact
-  // prefix `whereClauses` above already starts with (same state, same
-  // includeGender default), so the helper slices off precisely the
-  // "leaderboard-only" remainder — team/opposition/position/profile/R. Pos./
-  // search — without recomputing or duplicating any of that filter logic. A
-  // pinned player's CORE scope (gender/format/date window/team type) still
-  // applies unconditionally; only the leaderboard-only part is bypassed, for
-  // exactly their id. buildMatchupQuery now calls the SAME helper (Wave 4b,
-  // decision 47a), so plain and Vs pin-handling can never diverge.
+  // helper): additive OR. The helper reads each clause's OWN bypass tag, so it
+  // never has to know the clause order — a pinned player bypasses exactly
+  // team/opposition/position/profile/R. Pos./search, and still obeys the core
+  // scope (gender/format/date window/team type) plus event/venue/match context.
+  // buildMatchupQuery calls the SAME helper (Wave 4b, decision 47a), so plain and
+  // Vs pin-handling can never diverge.
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
-  const whereSql = whereWithPinExemption(whereClauses, buildCoreScopeClauses(state), idCol, pins);
+  const whereSql = whereWithPinExemption(whereClauses, idCol, pins);
 
   // Fielding subquery (fielding rebuild): pre-aggregate the EVENT-GRAIN `fielding`
   // view to ONE row per fielder, honoring the FULL leaderboard scope — core
@@ -1072,13 +1075,11 @@ export function buildQuery(state, visibleColumns) {
 
   let matchesSql = null;
   if (wantsMatches && !inningsLevel) {
-    const pmFull = buildScopeClauses(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
-    const pmCoreClauses = buildCoreScopeClauses(state);
-    const pmExtra = pmFull.slice(pmCoreClauses.length);
+    const pmClauses = buildScopeClausesTagged(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
     if (state.search && state.search.trim()) {
-      pmExtra.push(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`);
+      pmClauses.push(bypassableClause(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
     }
-    const pmWhereSql = whereWithPinExemption([...pmCoreClauses, ...pmExtra], pmCoreClauses, "player_id", pins);
+    const pmWhereSql = whereWithPinExemption(pmClauses, "player_id", pins);
     matchesSql = [
       `SELECT player_id AS id, COUNT(DISTINCT match_id) AS matches`,
       `FROM player_matches`,

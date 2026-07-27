@@ -95,14 +95,15 @@ function nextCalendarDay(yyyymmdd) {
 
 /** The four filters that make up EVERY query's inescapable "core scope" —
  * gender / format / date window / team type — factored out of
- * buildScopeClauses (owner decision 46, task 3) so table.js's additive
- * pinned-player union (buildQuery) can compute "core scope only, still
- * applies even to a pinned player" without duplicating this logic or
- * depending on buildScopeClauses' internal clause ordering by inspection.
- * buildScopeClauses below ALWAYS starts its clause list with exactly this
- * function's output (same options, same order) before appending its own
- * caller-specific extras — table.js relies on that invariant to slice the
- * "leaderboard-only" remainder off a full buildScopeClauses() call. */
+ * buildScopeClauses (owner decision 46, task 3) so callers that need "the scope
+ * dims alone" (regularPositionCteSql's modal-position window) can compute it
+ * without duplicating this logic. buildScopeClauses below ALWAYS starts its
+ * clause list with exactly this function's output (same options, same order).
+ *
+ * NOTE: this is NO LONGER the pinned-player boundary. Pins used to bypass
+ * "everything after the core scope", by POSITION — see the clause-tagging block
+ * further down (buildScopeClausesTagged / whereWithPinExemption) for the explicit
+ * bypass set that replaced it. */
 export function buildCoreScopeClauses(state, { includeGender = true } = {}) {
   const clauses = [];
   // Player-page queries (R2) filter by a specific player_id, so gender is
@@ -269,6 +270,55 @@ export function tossDecisionPredicateSql(tossDecision, alias = "") {
   return `${matchCol(alias, "toss_decision")} IN (${td.map((v) => `'${v}'`).join(", ")})`;
 }
 
+// ── Clause tagging: which clauses a PINNED player is allowed to bypass ───────
+// Every clause the scope builder emits is a `{ sql, bypassable }` record, and
+// **the default is `bypassable: false`** — a pinned player must still obey it.
+// Only the leaderboard-only filters the owner ruled a pin is added "in spite of"
+// opt IN, by being wrapped in bypassableClause():
+//
+//     team · opposition · batting/striker position · R. Pos. · player profile
+//     · the name search · the numeric stat conditions (the separate
+//       post-aggregation gate, gateWithPinExemption)
+//
+// Everything else ALWAYS applies to a pin: the core scope (gender / format /
+// date window / team type), event (+ its per-event season narrowing), venue, and
+// the whole Wave-6 match-context family (result, result condition, stage, toss
+// result, toss decision, innings order).
+//
+// WHY THIS EXISTS (the defect it fixes): whereWithPinExemption used to split the
+// clause list POSITIONALLY — `core AND (everything-after-core OR id IN pins)` via
+// `fullClauses.slice(coreClauses.length)`. So every filter added to the builder
+// after the pin exemption was written silently joined the bypass list just by
+// being appended later — event, venue and all five match-context filters, none of
+// which the owner ever ruled bypassable. The visible damage: a pinned SA Yadav
+// under Result Condition = D/L reported his whole-scope 60 innings / 1,544 runs
+// instead of the 2 / 82 in that filter, and a pinned fielder in an event+venue
+// chart plotted his whole-scope 24 catches against everyone else's ≤2 — one chart
+// mixing two different scopes.
+//
+// RULE FOR ANY FUTURE FILTER: push a bare string (or alwaysClause()) and it
+// applies to pins too. Making a filter pin-bypassable now takes a deliberate
+// bypassableClause() call, so it can never happen by accident again.
+
+/** A clause a pinned player must still obey (the default for a bare string). */
+export function alwaysClause(sql) {
+  return { sql, bypassable: false };
+}
+/** A leaderboard-only clause a pinned player is exempt from. Deliberate opt-in. */
+export function bypassableClause(sql) {
+  return { sql, bypassable: true };
+}
+/** Normalise a mixed list of bare strings / tagged records. A bare string is
+ * ALWAYS-APPLIES — the safe default, so an untagged clause can never leak into
+ * the bypass set. */
+export function asTaggedClauses(clauses) {
+  return (clauses || []).map((c) => (typeof c === "string" ? { sql: c, bypassable: false } : c));
+}
+/** Just the SQL, in the order the clauses were built. */
+export function clauseSqlList(clauses) {
+  return asTaggedClauses(clauses).map((c) => c.sql);
+}
+
 /** Shared WHERE-clause builder for gender/format/date/team_type/(team) — used by
  * both the drawer's team/opposition-options lookups and src/table.js's main
  * query. Exported so table.js, drawer.js, and graph builders all build an
@@ -287,18 +337,29 @@ export function tossDecisionPredicateSql(tossDecision, alias = "") {
  * always apply when state.event/state.venue are non-empty, for every caller,
  * via a match_id semi-join against `matches` (no column-name parameter needed;
  * see the inline comment at the clause itself). */
-export function buildScopeClauses(
+export function buildScopeClauses(state, opts) {
+  return clauseSqlList(buildScopeClausesTagged(state, opts));
+}
+
+/** buildScopeClauses' clause list WITH the pin-bypass tag on each entry (see the
+ * clause-tagging block above). Same clauses, same order — buildScopeClauses is
+ * literally this function's `sql` fields joined, so every existing caller and
+ * every emitted query string is unchanged. table.js hands this straight to
+ * whereWithPinExemption, which no longer needs to know the clause ORDER at all. */
+export function buildScopeClausesTagged(
   state,
   { includeTeams = true, teamColumn, idColumn, oppositionColumn, includePositions = false, includeGender = true } = {}
 ) {
-  const clauses = buildCoreScopeClauses(state, { includeGender });
+  // Bare strings are always-applies (see asTaggedClauses) — only the five
+  // leaderboard-only filters below wrap themselves in bypassableClause().
+  const clauses = buildCoreScopeClauses(state, { includeGender }).map(alwaysClause);
 
   if (includeTeams && state.teams && state.teams.length > 0 && teamColumn) {
-    clauses.push(`${teamColumn} IN (${state.teams.map((t) => `'${esc(t)}'`).join(", ")})`);
+    clauses.push(bypassableClause(`${teamColumn} IN (${state.teams.map((t) => `'${esc(t)}'`).join(", ")})`));
   }
 
   if (oppositionColumn && oppositionFilterActive(state)) {
-    clauses.push(`${oppositionColumn} IN (${state.opposition.map((t) => `'${esc(t)}'`).join(", ")})`);
+    clauses.push(bypassableClause(`${oppositionColumn} IN (${state.opposition.map((t) => `'${esc(t)}'`).join(", ")})`));
   }
 
   // Event / Venue (Batch 1B, task 1B-1): additive match-level filters via a
@@ -321,6 +382,12 @@ export function buildScopeClauses(
   // alias IN-list (no event narrowed to specific seasons) or the parenthesised
   // per-event OR of `(event_name IN (aliases) AND season IN (…))` terms, exactly
   // as this block spelled out inline before.
+  //
+  // Event and Venue are ALWAYS-APPLIES, pins included (untagged = alwaysClause):
+  // "which matches am I looking at" is the same question the core scope asks, so a
+  // pinned player measured over a DIFFERENT set of matches than every other row is
+  // not a comparison. They only ever bypassed these because the old positional
+  // split swept up whatever was appended after the core scope.
   if (eventFilterActive(state)) {
     const g = esc(state.gender);
     clauses.push(`match_id IN (SELECT match_id FROM matches WHERE gender = '${g}' AND ${eventPredicateSql(state)})`);
@@ -335,7 +402,7 @@ export function buildScopeClauses(
     // Positions are user-picked ints; coerce + drop anything non-integral so
     // nothing unsanitized reaches the SQL.
     const nums = state.positions.map(Number).filter(Number.isInteger);
-    if (nums.length > 0) clauses.push(`batting_position IN (${nums.join(", ")})`);
+    if (nums.length > 0) clauses.push(bypassableClause(`batting_position IN (${nums.join(", ")})`));
   }
 
   // Profile-powered filters (D4.2): semi-join to matched player_ids. Only added
@@ -344,7 +411,7 @@ export function buildScopeClauses(
   // profile filter is active. profileSemiJoinSql itself no-ops for women.
   if (idColumn) {
     const profileClause = profileSemiJoinSql(state, idColumn);
-    if (profileClause) clauses.push(profileClause);
+    if (profileClause) clauses.push(bypassableClause(profileClause));
   }
 
   // R. Pos. (owner decision 46): restrict to players whose MOST COMMON batting
@@ -364,11 +431,13 @@ export function buildScopeClauses(
     if (nums.length > 0) {
       const innerScope = buildScopeClauses(state, { includeTeams: false }).join(" AND ");
       clauses.push(
-        `${idColumn} IN (SELECT player_id FROM (` +
-          `SELECT batter_id AS player_id, batting_position AS pos, ` +
-          `ROW_NUMBER() OVER (PARTITION BY batter_id ORDER BY COUNT(*) DESC, batting_position ASC) AS rn ` +
-          `FROM batting WHERE ${innerScope} AND batting_position IS NOT NULL ` +
-          `GROUP BY batter_id, batting_position) WHERE rn = 1 AND pos IN (${nums.join(", ")}))`
+        bypassableClause(
+          `${idColumn} IN (SELECT player_id FROM (` +
+            `SELECT batter_id AS player_id, batting_position AS pos, ` +
+            `ROW_NUMBER() OVER (PARTITION BY batter_id ORDER BY COUNT(*) DESC, batting_position ASC) AS rn ` +
+            `FROM batting WHERE ${innerScope} AND batting_position IS NOT NULL ` +
+            `GROUP BY batter_id, batting_position) WHERE rn = 1 AND pos IN (${nums.join(", ")}))`
+        )
       );
     }
   }
@@ -519,14 +588,21 @@ export function buildMatchContextClauses(state, rowTeamCol) {
 }
 
 // ── Pinned-player exemption (owner decision 46 task 3b; Wave 4b, decision 47a) ──
-// Pins are the players ADDED to the result set regardless of the leaderboard-only
-// filters (team/opposition/position/profile/R.Pos/search/stat conditions); only
-// their CORE scope (gender/format/date window/team type) still applies. Wave 4b
-// (decision 47a) moves pins onto the SAME shared path buildScopeClauses is on, so
-// both the plain query (table.js buildQuery) and the Vs query (buildMatchupQuery)
-// exempt pins through ONE mechanism and can never diverge again. With no pins,
-// every helper below returns exactly what the un-pinned query produced, so the
-// number-critical normal query stays byte-identical.
+// Pins are the players ADDED to the result set regardless of the LEADERBOARD-ONLY
+// filters — team / opposition / position / R.Pos / profile / search / stat
+// conditions, and nothing else. Everything that decides WHICH MATCHES are in view
+// still applies to them: the core scope (gender / format / date window / team
+// type), event (+ seasons), venue, and the match-context filters (result, result
+// condition, stage, toss result, toss decision, innings order).
+//
+// The bypass set is declared per-clause at the point each clause is BUILT (see the
+// clause-tagging block above buildScopeClausesTagged) — never inferred from clause
+// position here, which is the bug this replaced. Wave 4b (decision 47a) put pins on
+// the SAME shared path buildScopeClauses is on, so the plain query (table.js
+// buildQuery) and the Vs query (buildMatchupQuery) exempt pins through ONE
+// mechanism and can never diverge. With no pins, every helper below returns exactly
+// what the un-pinned query produced, so the number-critical normal query stays
+// byte-identical.
 
 /** The pinned-player id set as a SQL literal list (`'id1', 'id2'`), or null when
  * there are no pins. `pins` is [{id, name}]; entries without an id are dropped
@@ -536,20 +612,30 @@ export function pinnedIdSetSql(pins) {
   return ids.length ? ids.join(", ") : null;
 }
 
-/** Wrap a full WHERE-clause list so pinned players bypass every leaderboard-only
- * clause while still obeying the inescapable CORE scope. `coreClauses` MUST be the
- * exact prefix `fullClauses` begins with (buildCoreScopeClauses output, same
- * options/order) — the remainder is the leaderboard-only part pins skip. Emits
- * `core AND (extra OR idColumn IN (pins))`; `extra` collapses to TRUE when there
- * is nothing leaderboard-only to bypass. With no pins this returns exactly
- * `fullClauses.join(" AND ")` — byte-identical to the un-pinned query. */
-export function whereWithPinExemption(fullClauses, coreClauses, idColumn, pins) {
+/** Wrap a WHERE-clause list so pinned players bypass the LEADERBOARD-ONLY clauses
+ * while still obeying every always-applies clause. `clauses` is a mixed list of
+ * bare strings (always-applies) and tagged records from bypassableClause() /
+ * alwaysClause() — see asTaggedClauses. Emits
+ * `always AND (bypassable OR idColumn IN (pins))`, with the bypassable group
+ * collapsing to TRUE when the caller has nothing pin-bypassable active.
+ *
+ * There is deliberately NO clause-position argument any more: the old
+ * `coreClauses` parameter made the split positional, so every clause appended
+ * after the core scope became pin-bypassable by accident (event, venue, and all
+ * five match-context filters). Classification now travels WITH each clause, and
+ * the default is always-applies. With no pins this returns exactly
+ * `clauses.join(" AND ")` — byte-identical to the un-pinned query. */
+export function whereWithPinExemption(clauses, idColumn, pins) {
+  const tagged = asTaggedClauses(clauses);
   const idSet = pinnedIdSetSql(pins);
-  if (!idSet) return fullClauses.join(" AND ");
-  const extra = fullClauses.slice(coreClauses.length);
-  const corePart = coreClauses.join(" AND ");
-  const extraPart = extra.length ? `(${extra.join(" AND ")})` : "TRUE";
-  return `${corePart} AND (${extraPart} OR ${idColumn} IN (${idSet}))`;
+  if (!idSet) return tagged.map((c) => c.sql).join(" AND ");
+  const always = tagged.filter((c) => !c.bypassable).map((c) => c.sql);
+  const bypassable = tagged.filter((c) => c.bypassable).map((c) => c.sql);
+  const bypassPart = bypassable.length ? `(${bypassable.join(" AND ")})` : "TRUE";
+  const pinPart = `(${bypassPart} OR ${idColumn} IN (${idSet}))`;
+  // `always` is never empty in practice (the core scope always contributes at
+  // least gender + match_type), but guard so we can't emit a leading " AND ".
+  return always.length ? `${always.join(" AND ")} AND ${pinPart}` : pinPart;
 }
 
 /** Wrap a post-aggregation gate (buildQuery's HAVING, or buildMatchupQuery's
