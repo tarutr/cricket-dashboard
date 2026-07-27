@@ -418,9 +418,11 @@ function onPinsChanged() {
  * filters — a removable "+ name" pill (pills.js), backed by
  * state.pinnedPlayers and an additive WHERE/HAVING OR in table.js's
  * buildQuery. Their core scope (gender/format/date window/team type) still
- * applies — only the OTHER, leaderboard-only filters (team/opposition/
- * position/profile/R. Pos./search/stat conditions) are bypassed for their
- * row alone. Wave 4b (decision 47a) extended the same bypass to matchup
+ * applies, and so does everything else that says WHICH matches or balls are
+ * being measured (opposition, striker position, event, venue, match context) —
+ * only the PLAYER-SHORTLISTING filters (team/profile/R. Pos./search/stat
+ * conditions) are bypassed for their row alone: a pin changes who is listed,
+ * never what their numbers mean. Wave 4b (decision 47a) extended the same bypass to matchup
  * ("Vs") mode via buildMatchupQuery, so the pin is live in both.
  *
  * R4 Wave 4a ADDENDUM: pinning is now INSTANT (onPinsChanged, above) — the

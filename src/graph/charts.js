@@ -17,7 +17,12 @@
 
 import { getMetric, hasMetricData, metricDisplayLabel } from "../metrics.js";
 import { query } from "../db.js";
-import { buildScopeClauses, buildMatchContextClauses, matchContextJoinSql } from "../filters.js";
+import {
+  buildScopeClausesTagged,
+  whereWithPinExemption,
+  buildMatchContextClauses,
+  matchContextJoinSql,
+} from "../filters.js";
 import { buildQuery, buildFieldingCteSql, buildPomCteSql, isFieldingEventMetric, isPomMetric } from "../table.js";
 import { escSql as esc, matchupVsActive, matchContextActive } from "../state.js";
 
@@ -98,12 +103,19 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   // emitting the clause there is a binder error (hit via the chooser in
   // matchup-bowling mode with a position filter). Plain batting keeps it: the
   // column exists and means the batter's own position.
-  const whereClauses = buildScopeClauses(state, {
+  //
+  // Clauses arrive TAGGED for the pinned-player exemption (filters.js
+  // buildScopeClausesTagged) and go through the SAME whereWithPinExemption helper
+  // table.js's buildQuery / buildMatchupQuery use — see below.
+  const whereClauses = buildScopeClausesTagged(state, {
     includeTeams: true,
     teamColumn: teamCol,
     oppositionColumn: discipline === "batting" ? "bowling_team" : "batting_team",
     includePositions: discipline === "batting",
   });
+  // The charted roster restriction is pushed UNTAGGED = always-applies. It is not
+  // a filter the user set, it IS the chart: a pinned player who was never added to
+  // the graph must not appear, and the exemption below must never widen this.
   whereClauses.push(`${idCol} IN (${playerIds.map((id) => `'${esc(id)}'`).join(", ")})`);
 
   // Match-context filters (Wave 6, FIX 4): the Graph Builder's scope line lists
@@ -118,6 +130,26 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   if (wantsMatchContext) {
     for (const c of buildMatchContextClauses(state, teamCol)) whereClauses.push(c);
   }
+
+  // Pinned players: the Graph Builder must treat a PIN exactly as the Stats table
+  // does, or the same player reads two different numbers in two places. Before
+  // this, every scope clause applied to every charted id with NO exemption, so a
+  // player the user deliberately charted silently VANISHED from their own chart
+  // the moment a shortlisting filter excluded them (e.g. Team = Australia + SA
+  // Yadav pinned and charted → the Stats table showed 60 inns / 1,544 runs, the
+  // graph returned no row at all). This routes through the SHARED
+  // whereWithPinExemption over the SHARED tagged clause list — deliberately NOT a
+  // second copy of the policy, so the two can never diverge again: a pinned id
+  // bypasses exactly the player-shortlisting clauses (here that is `team`; the
+  // profile / R. Pos. semi-joins need an idColumn this caller does not pass) and
+  // still obeys the core scope, opposition, striker position, event, venue and
+  // match context. NOTE the graph's charted roster and state.pinnedPlayers are
+  // different sets: an unpinned, merely-selected player keeps obeying every
+  // filter, and the always-applies roster clause above keeps an uncharted pin out.
+  // With no pins the helper returns `clauses.join(" AND ")` — byte-identical to
+  // what this line emitted before.
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  const whereSql = whereWithPinExemption(whereClauses, idCol, pins);
 
   // Fielding/Impact CTEs + LEFT JOINs (mirrors buildQuery's FROM assembly): each
   // CTE is one row per player joined on the id column, so it never multiplies
@@ -137,7 +169,7 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
     ...(cteDefs.length ? [`WITH ${cteDefs.join(",\n")}`] : []),
     `SELECT ${selectParts.join(", ")}`,
     `FROM ${fromSql}`,
-    `WHERE ${whereClauses.join(" AND ")}`,
+    `WHERE ${whereSql}`,
     `GROUP BY ${idCol}, ${nameCol}`,
   ].join("\n");
 

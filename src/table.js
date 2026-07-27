@@ -428,7 +428,8 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // identical to the old standalone coverageSql's WHERE. The bucket predicate
   // now lives exclusively in the per-column FILTER clauses above.
   // Clauses are TAGGED for the pin exemption (filters.js): the builder tags its
-  // own five leaderboard-only filters, and the name search is tagged here.
+  // own three player-shortlisting filters (team/profile/R. Pos.), and the name
+  // search is tagged here.
   const whereClauses = buildScopeClausesTagged(state, scopeOpts);
   if (searchClause) whereClauses.push(bypassableClause(searchClause));
 
@@ -447,8 +448,9 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
 
   // Pinned players (Wave 4b, decision 47a): additive — a pinned player is scanned
   // as long as they have a row that passes every ALWAYS-APPLIES clause above
-  // (core scope + event/venue + match context), bypassing only the leaderboard-only
-  // ones (team/opposition/position/profile/R.Pos/search), exactly as buildQuery
+  // (core scope + opposition + striker position + event/venue + match context),
+  // bypassing only the player-shortlisting ones (team/profile/R. Pos./search),
+  // exactly as buildQuery
   // does. The bucket predicate is NOT in this WHERE (it is a per-aggregate FILTER),
   // so pins keep it automatically. With no pins this is byte-identical to the
   // former `whereClauses.join(" AND ")`.
@@ -749,7 +751,9 @@ export function buildFieldingSliceClauses(state) {
  * + OPPOSITION + event/venue + profile, pin-exempt — PLUS the fielding SLICE
  * conditions (dismissed-batter position / dismissal kind / phase), substitutes
  * excluded. Pins are read from state (the same filter buildQuery applies) so a
- * pinned player keeps their fielding numbers under the leaderboard-only filters.
+ * pinned player keeps their fielding numbers under the player-shortlisting
+ * filters (team / profile / R. Pos. / search) while still obeying opposition,
+ * event, venue and match context like every other row.
  *
  * Extracted verbatim from buildQuery (was inline) so the Graph Builder's
  * per-player fetch (graph/charts.js) can attach the IDENTICAL join when a
@@ -944,9 +948,10 @@ export function buildQuery(state, visibleColumns) {
     advancedReferencesMetric(state.advanced, discipline, isPomMetric);
 
   // Clauses arrive TAGGED for the pin exemption (filters.js
-  // buildScopeClausesTagged): the builder marks its own five leaderboard-only
-  // filters bypassable, everything else always-applies. The name search is a
-  // leaderboard-only filter too, so it is tagged here.
+  // buildScopeClausesTagged): the builder marks its own three player-shortlisting
+  // filters (team / profile / R. Pos.) bypassable, everything else
+  // always-applies. The name search is a shortlisting device too, so it is tagged
+  // here.
   const whereClauses = buildScopeClausesTagged(state, {
     includeTeams: true,
     teamColumn: teamCol,
@@ -975,8 +980,9 @@ export function buildQuery(state, visibleColumns) {
   // Pinned players (task 3b, owner decision 46; Wave 4b routed onto the shared
   // helper): additive OR. The helper reads each clause's OWN bypass tag, so it
   // never has to know the clause order — a pinned player bypasses exactly
-  // team/opposition/position/profile/R. Pos./search, and still obeys the core
-  // scope (gender/format/date window/team type) plus event/venue/match context.
+  // team/profile/R. Pos./search, and still obeys the core scope (gender/format/
+  // date window/team type) plus opposition, the matchup striker position, and
+  // event/venue/match context.
   // buildMatchupQuery calls the SAME helper (Wave 4b, decision 47a), so plain and
   // Vs pin-handling can never diverge.
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);

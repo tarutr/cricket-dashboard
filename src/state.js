@@ -604,9 +604,12 @@ export function createInitialState(maxMonth) {
                        // awarded/fewer). See RESULT_CONDITION_OPTIONS + resultConditionMethod.
     matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)
     pinnedPlayers: [], // [{id, name}] — owner decision 46 task 3b: players ADDED to the table's
-                   // result set regardless of the other leaderboard-only filters (team/opposition/
-                   // position/profile/R. Pos./search/stat conditions). Their CORE scope
-                   // (gender/format/date window/team type) still applies. Wave 4b (decision 47a):
+                   // result set regardless of the PLAYER-SHORTLISTING filters (team/profile/
+                   // R. Pos./search/stat conditions). A pin changes WHO is listed, never WHAT
+                   // their numbers mean, so their CORE scope (gender/format/date window/team
+                   // type) still applies — and so does everything else that selects matches or
+                   // balls: opposition, the matchup striker position, event, venue, match
+                   // context. Wave 4b (decision 47a):
                    // pins now apply in BOTH plain (buildQuery) and matchup ("Vs", buildMatchupQuery)
                    // mode, through ONE shared exemption helper (filters.js whereWithPinExemption /
                    // gateWithPinExemption) so the two builders can never diverge; the pill is live

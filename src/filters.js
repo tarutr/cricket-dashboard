@@ -271,19 +271,34 @@ export function tossDecisionPredicateSql(tossDecision, alias = "") {
 }
 
 // ── Clause tagging: which clauses a PINNED player is allowed to bypass ───────
-// Every clause the scope builder emits is a `{ sql, bypassable }` record, and
-// **the default is `bypassable: false`** — a pinned player must still obey it.
-// Only the leaderboard-only filters the owner ruled a pin is added "in spite of"
-// opt IN, by being wrapped in bypassableClause():
+// THE PRINCIPLE (owner's words): **a pin changes WHO is listed, never WHAT their
+// numbers mean.** So the test for every clause is simply: does it describe the
+// PLAYER, or does it describe the MATCHES / BALLS being measured?
+//   • Describes the PLAYER ("who counts as a candidate") → pin-bypassable. The
+//     pin is the user overriding the shortlist; the player is added in spite of
+//     not qualifying, and their numbers are unaffected either way.
+//   • Describes the MATCHES or the BALLS ("which innings/deliveries am I
+//     measuring") → ALWAYS applies. Bypassing one of these would make the pinned
+//     row answer a DIFFERENT QUESTION from every other row in the same table —
+//     which is not a comparison, it is a mislabelled number.
 //
-//     team · opposition · batting/striker position · R. Pos. · player profile
-//     · the name search · the numeric stat conditions (the separate
-//       post-aggregation gate, gateWithPinExemption)
+// Every clause the scope builder emits is a `{ sql, bypassable }` record, and
+// **the default is `bypassable: false`**. Exactly five things opt in, by being
+// wrapped in bypassableClause() (or, for the last one, its own gate helper):
+//
+//     1. team              — "plays for India"        (player attribute)
+//     2. player profile    — role / hand / bowl style (player attribute)
+//     3. R. Pos.           — "their usual slot"       (player attribute)
+//     4. the name search   — a shortlisting device, not a measurement
+//     5. the numeric stat conditions — the separate post-aggregation gate,
+//        gateWithPinExemption (a threshold on the player's own numbers)
 //
 // Everything else ALWAYS applies to a pin: the core scope (gender / format /
-// date window / team type), event (+ its per-event season narrowing), venue, and
-// the whole Wave-6 match-context family (result, result condition, stage, toss
-// result, toss decision, innings order).
+// date window / team type), OPPOSITION ("innings against Australia" selects
+// matches), the matchup STRIKER POSITION (`state.positions` selects balls),
+// event (+ its per-event season narrowing), venue, and the whole Wave-6
+// match-context family (result, result condition, stage, toss result, toss
+// decision, innings order).
 //
 // WHY THIS EXISTS (the defect it fixes): whereWithPinExemption used to split the
 // clause list POSITIONALLY — `core AND (everything-after-core OR id IN pins)` via
@@ -294,7 +309,10 @@ export function tossDecisionPredicateSql(tossDecision, alias = "") {
 // under Result Condition = D/L reported his whole-scope 60 innings / 1,544 runs
 // instead of the 2 / 82 in that filter, and a pinned fielder in an event+venue
 // chart plotted his whole-scope 24 catches against everyone else's ≤2 — one chart
-// mixing two different scopes.
+// mixing two different scopes. Opposition and striker position were the same
+// defect class surviving the first fix: pinned SA Yadav under Opposition =
+// Australia reported 60 / 1,544 (his career total) where the honest answer for
+// that filter is 10 / 259.
 //
 // RULE FOR ANY FUTURE FILTER: push a bare string (or alwaysClause()) and it
 // applies to pins too. Making a filter pin-bypassable now takes a deliberate
@@ -350,16 +368,26 @@ export function buildScopeClausesTagged(
   state,
   { includeTeams = true, teamColumn, idColumn, oppositionColumn, includePositions = false, includeGender = true } = {}
 ) {
-  // Bare strings are always-applies (see asTaggedClauses) — only the five
-  // leaderboard-only filters below wrap themselves in bypassableClause().
+  // Bare strings are always-applies (see asTaggedClauses) — only the three
+  // player-shortlisting filters below (team, profile, R. Pos.) wrap themselves in
+  // bypassableClause(). The other two bypassables live outside this function: the
+  // name search (tagged at each table.js call site) and the numeric stat
+  // conditions (gateWithPinExemption, post-aggregation).
   const clauses = buildCoreScopeClauses(state, { includeGender }).map(alwaysClause);
 
   if (includeTeams && state.teams && state.teams.length > 0 && teamColumn) {
     clauses.push(bypassableClause(`${teamColumn} IN (${state.teams.map((t) => `'${esc(t)}'`).join(", ")})`));
   }
 
+  // Opposition is ALWAYS-APPLIES, pins included (untagged = alwaysClause).
+  // "Innings against Australia" selects MATCHES, not players — it is the same
+  // kind of question the core scope and Event/Venue ask, so a pinned player
+  // measured over their whole career while every other row shows only their
+  // innings against Australia is not a comparison. (Before this change a pinned
+  // SA Yadav under Opposition = Australia read 60 inns / 1,544 runs — his career
+  // total — instead of the 10 / 259 he actually made against them.)
   if (oppositionColumn && oppositionFilterActive(state)) {
-    clauses.push(bypassableClause(`${oppositionColumn} IN (${state.opposition.map((t) => `'${esc(t)}'`).join(", ")})`));
+    clauses.push(`${oppositionColumn} IN (${state.opposition.map((t) => `'${esc(t)}'`).join(", ")})`);
   }
 
   // Event / Venue (Batch 1B, task 1B-1): additive match-level filters via a
@@ -398,11 +426,20 @@ export function buildScopeClausesTagged(
     );
   }
 
+  // The MATCHUP striker/batter position filter (`state.positions`, matchup-only —
+  // positionsFilterActive gates on matchupVsActive) is ALWAYS-APPLIES, pins
+  // included (untagged = alwaysClause). It selects BALLS: in matchup_bowling the
+  // position of the striker faced, in matchup_batting the batter's own position on
+  // that ball. "Bumrah vs right-handers at positions 1–2" is a description of the
+  // deliveries being counted, so a pinned Bumrah must be counted over the same
+  // deliveries as everyone else or his row means something different.
+  // NOT to be confused with R. Pos. (`state.regularPositions`) further down —
+  // that one IS a player attribute ("their usual slot") and stays bypassable.
   if (includePositions && positionsFilterActive(state)) {
     // Positions are user-picked ints; coerce + drop anything non-integral so
     // nothing unsanitized reaches the SQL.
     const nums = state.positions.map(Number).filter(Number.isInteger);
-    if (nums.length > 0) clauses.push(bypassableClause(`batting_position IN (${nums.join(", ")})`));
+    if (nums.length > 0) clauses.push(`batting_position IN (${nums.join(", ")})`);
   }
 
   // Profile-powered filters (D4.2): semi-join to matched player_ids. Only added
@@ -588,12 +625,14 @@ export function buildMatchContextClauses(state, rowTeamCol) {
 }
 
 // ── Pinned-player exemption (owner decision 46 task 3b; Wave 4b, decision 47a) ──
-// Pins are the players ADDED to the result set regardless of the LEADERBOARD-ONLY
-// filters — team / opposition / position / R.Pos / profile / search / stat
-// conditions, and nothing else. Everything that decides WHICH MATCHES are in view
+// A pin changes WHO is listed, never WHAT their numbers mean. Pins are the players
+// ADDED to the result set regardless of the five PLAYER-SHORTLISTING filters —
+// team / player profile / R. Pos. / name search / numeric stat conditions — and
+// nothing else. Everything that decides WHICH MATCHES OR BALLS are being measured
 // still applies to them: the core scope (gender / format / date window / team
-// type), event (+ seasons), venue, and the match-context filters (result, result
-// condition, stage, toss result, toss decision, innings order).
+// type), opposition, the matchup striker position, event (+ seasons), venue, and
+// the match-context filters (result, result condition, stage, toss result, toss
+// decision, innings order).
 //
 // The bypass set is declared per-clause at the point each clause is BUILT (see the
 // clause-tagging block above buildScopeClausesTagged) — never inferred from clause
