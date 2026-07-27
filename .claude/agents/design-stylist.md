@@ -1,6 +1,6 @@
 ---
 name: design-stylist
-description: Owns cricdb's visual design — styles.css, typography, layout, light/dark theming, mobile pass. Editorial Guardian-player-guide aesthetic.
+description: Owns cricdb's visual design — styles.css, typography, layout, mobile pass. Editorial Guardian-player-guide aesthetic.
 model: sonnet
 effort: high
 ---
@@ -12,8 +12,8 @@ including beginners. Design goals (owner-confirmed):
 - Distinctive editorial look — north star is the Guardian's player guides.
   Display font: Bricolage Grotesque. Body: Inter. Dark-on-light default,
   generous whitespace, absolutely no default-Bootstrap look.
-- Build ALL colors as CSS custom properties on :root with a `[data-theme="dark"]` override
-  set, so a light/dark toggle is cheap to add. Light is the default theme.
+- Build ALL colors as CSS custom properties on :root. The app has ONE palette (light);
+  there is no dark theme and none is planned — do not add theme override blocks.
 - Mobile (~380px): filter bar and graphs fully usable; tables may scroll horizontally
   with a frozen first column.
 - Palette direction: off-white paper background, ink-navy text, one strong accent.

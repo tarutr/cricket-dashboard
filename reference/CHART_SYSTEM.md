@@ -247,9 +247,8 @@ full-width; the roster dropdown must fit `min(20rem, 100vw − 2rem)`.
 4. **Click-to-highlight** on bars/dots/slices/minis (one player emphasised, the
    rest strongly de-emphasised).
 5. **🎲 Randomise** — archetype-driven random chart generator.
-6. App-frame dark mode (theme hooks exist; the exported card stays single-look
-   per §1.1). 7. Social-size export presets (square / 16:9). 8. Team & venue
-   popups. 9. Headshots beyond the player popup — the data has ~1,360 real player
+6. Social-size export presets (square / 16:9). 7. Team & venue popups.
+   8. Headshots beyond the player popup — the data has ~1,360 real player
    photo URLs plus a designed-fallback requirement (initials medallion) for
    everyone else; any asset using player imagery needs that fallback story.
 

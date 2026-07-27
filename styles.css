@@ -501,8 +501,8 @@ a { color: var(--color-accent); }
    size/overflow/padding vary per instance and stay on each specific
    selector. This pass also fixes a real token bug: .graph-player-search__results
    used to read var(--color-bg) where the other two correctly used
-   var(--color-bg-raised) — a visible shade mismatch once dark mode ships;
-   all three now consistently use --color-bg-raised. */
+   var(--color-bg-raised) — an inconsistent shade for the same floating-panel
+   shape; all three now consistently use --color-bg-raised. */
 .team-dropdown__panel,
 .columns-popover,
 .graph-player-search__results,
