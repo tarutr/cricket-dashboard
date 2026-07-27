@@ -510,6 +510,12 @@ export function mountSearchSelect(hostEl, {
  * when a newly-ticked value joins the block and an unticked one drops back to
  * its games-count position. Dead picks (keepMissingSelected above) lead the
  * block, as they always have.
+ *
+ * ── GROUP HEADERS (opt-in, via each option's `group`) ───────────────────────
+ * Identical to mountSearchSelect's: an option carrying a `group` string gets a
+ * quiet non-interactive heading row whenever the group changes. No `group` on the
+ * options = a flat list, exactly as before. Headers are suppressed inside the
+ * `pinSelected` block (see renderList for why), so the two options compose.
  */
 export function mountSearchMultiSelect(hostEl, {
   options = [],
@@ -741,13 +747,36 @@ export function mountSearchMultiSelect(hostEl, {
       filterEl.removeAttribute("aria-activedescendant");
       return;
     }
+    // Opt-in group headers, the same mechanism mountSearchSelect's renderList
+    // uses: when options carry a `group` string, a quiet non-interactive header
+    // row is emitted whenever the group changes. Options with no `group` render
+    // flat exactly as before, so every existing multi-select is unaffected.
+    // Headers are NOT options — they carry no data-idx, so `filtered` indexing,
+    // arrow-key nav, the disabled cap/floor logic and checkbox toggling are all
+    // untouched.
+    //
+    // ONE difference from the single-select: headers are suppressed inside the
+    // PINNED block (i < pinnedRowCount). That block reorders rows by selection,
+    // so a group's members can appear both there and again in their natural slot
+    // below — emitting a header inside it would print the same heading twice and
+    // label a mixed block wrongly. Radar/Benchmark pass no `pinSelected`, so
+    // their pinnedRowCount is 0 and they behave exactly like the single-select;
+    // the drawer's pinning pickers pass no `group`. The two features compose.
+    let prevGroup = null;
     listEl.innerHTML = filtered
       .map((o, i) => {
         const isSel = selected.has(o.value);
         const active = i === activeIndex;
         const rowDisabled = isRowDisabled(o);
         const pinEdge = pinnedRowCount > 0 && i === pinnedRowCount - 1;
+        let header = "";
+        const grouped = i >= pinnedRowCount;
+        if (grouped && o.group && o.group !== prevGroup) {
+          header = `<div class="search-select__group" role="presentation">${escHtml(o.group)}</div>`;
+        }
+        if (grouped) prevGroup = o.group;
         return (
+          header +
           `<div id="${uid}-opt-${i}" class="search-select__option search-select__option--multi${active ? " is-active" : ""}${isSel ? " is-selected" : ""}${o.missing ? " is-missing" : ""}${rowDisabled ? " is-disabled" : ""}${pinEdge ? " is-pin-last" : ""}"` +
           ` role="option" aria-selected="${isSel}" data-idx="${i}">${rowInnerHTML(o)}</div>`
         );

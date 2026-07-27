@@ -1420,7 +1420,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       const radarHost = els.metricControls.querySelector('[data-role="radar-metrics"]');
       if (radarHost) {
         const handle = mountSearchMultiSelect(radarHost, {
-          options: eligible.map((m) => ({ value: m.key, label: metricDisplayLabel(m, formats) })),
+          // Same grouped options the seven single-metric pickers use
+          // (metricSelectOptions -> metricGroups.groupedMetricOptions): Basic ·
+          // Advanced · Dismissal type · Fielding · Impact. Identical metric SET to
+          // the former flat `eligible.map(...)` — grouped and reordered only.
+          options: metricSelectOptions(eligible),
           values: radarMetricKeys,
           placeholder: eligible.length ? "Choose metrics…" : "No metrics available",
           filterPlaceholder: "Search metrics…",
@@ -1713,7 +1717,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         // CHECKED row disables (can't drop below 4); at the cap of 12 every
         // UNchecked row disables.
         const metricsHandle = mountSearchMultiSelect(metricsHost, {
-          options: eligible.map((m) => ({ value: m.key, label: metricDisplayLabel(m, formats) })),
+          // Grouped exactly like the single-metric pickers (metricSelectOptions);
+          // same metric SET as the former flat `eligible.map(...)`.
+          options: metricSelectOptions(eligible),
           values: benchmarkMetricKeys,
           placeholder: "Choose metrics…",
           filterPlaceholder: "Search metrics…",
@@ -1726,7 +1732,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
             return atFloor || atCap;
           },
           onChange: (vals) => {
-            benchmarkMetricKeys = vals; // already in catalogue order (options order)
+            // Keep CATALOGUE order (radarMetricKeys does the same). Before the
+            // grouping change the picker's option order WAS catalogue order, so
+            // `vals` already arrived that way; now the options are grouped, so the
+            // order is re-derived here to keep this value byte-identical to before.
+            // (The drawn rows re-derive catalogue order anyway — see renderChart's
+            // benchmark branch — and the reseed key sorts, so nothing downstream
+            // depends on it; this just stops the stored value drifting.)
+            benchmarkMetricKeys = eligible.map((m) => m.key).filter((k) => vals.includes(k));
             metricEverChosen = true; // item 4: benchmark metric-set edit counts
             syncChartTypeButtons();
             markDirty({ paramsChanged: true });
