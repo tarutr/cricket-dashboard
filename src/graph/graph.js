@@ -17,6 +17,7 @@ import { getManifest, query } from "../db.js";
 import { mountFilters, buildScopeClauses } from "../filters.js";
 import { mountFilterDrawer } from "../drawer.js";
 import { mountSearchSelect, mountSearchMultiSelect } from "../searchSelect.js";
+import { groupedMetricOptions } from "./metricGroups.js";
 import {
   CHART_CAPS,
   createSelection,
@@ -1195,10 +1196,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * graph's picker can never show a format-inappropriate suffix (e.g. "Best
    * Bowling (Innings)") when the shared Filters drawer — which already routes
    * through metricDisplayLabel — does not. Display-only: metric.label/key are
-   * untouched. */
+   * untouched.
+   * Polish (task "graph-metric-groups"): options now carry the SAME group
+   * headings the "+ Add condition" dropdown uses (src/graph/metricGroups.js,
+   * itself built on src/advanced.js's partitionFilterMetrics — the one
+   * classification source) — grouped/ordered only, same metric SET as before. */
   function metricSelectOptions(metrics) {
     const formats = store.get().formats;
-    return metrics.map((m) => ({ value: m.key, label: metricDisplayLabel(m, formats) }));
+    return groupedMetricOptions(metrics, (m) => metricDisplayLabel(m, formats));
   }
 
   /** R2-2a: mount a per-type metric searchSelect into the metric-controls host
