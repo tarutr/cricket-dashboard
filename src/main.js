@@ -660,6 +660,10 @@ function boot() {
           // load, so querying it here (ahead of the filtersPopupEl lookups
           // below) is safe.
           keepColumnsCheckbox: document.querySelector('[data-role="fpop-keep-columns"]'),
+          // The "this will come back empty" notice band above the footer — also
+          // static in index.html; drawer.js owns its text (it is the thing that
+          // knows which filter's whole selection has gone impossible).
+          noticeEl: document.querySelector('[data-role="fpop-notice"]'),
         },
         store,
         {

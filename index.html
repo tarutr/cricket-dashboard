@@ -32,11 +32,18 @@
              with Gender · Discipline · Format · Date range · Team type (ROUND 3
              task 1: Gender and Discipline are now compact <select>s rendered by
              filters.js, so there's no static Discipline markup here any more). -->
+        <!-- Minimise/maximise fires ONLY from the chevron BUTTON, never from the
+             header row (owner fix, polish): with a filter dropdown open you
+             instinctively click outside it to dismiss it, and that click used to
+             land on the whole-row header button and collapse the section. The
+             header is now plain text; the chevron is the one focusable control
+             and carries aria-expanded/aria-controls (main.js finds it by
+             data-role, unchanged). -->
         <section class="filters-popup__section">
-          <button type="button" class="filters-popup__section-header" data-role="fpop-section-toggle" aria-expanded="true" aria-controls="fpop-body-conditions">
+          <div class="filters-popup__section-header">
             <span class="filters-popup__section-name">Search Conditions</span>
-            <span class="filters-popup__chevron" aria-hidden="true">▾</span>
-          </button>
+            <button type="button" class="filters-popup__chevron" data-role="fpop-section-toggle" aria-expanded="true" aria-controls="fpop-body-conditions" aria-label="Show or hide Search Conditions"><span aria-hidden="true">▾</span></button>
+          </div>
           <div class="filters-popup__section-body" id="fpop-body-conditions">
             <div class="filter-bar" id="filter-bar"></div>
           </div>
@@ -48,14 +55,25 @@
              types alongside Team, Match, and the numeric metric conditions.
              Mounted by src/drawer.js's mountFilterDrawer into #popup-advanced-host. -->
         <section class="filters-popup__section">
-          <button type="button" class="filters-popup__section-header" data-role="fpop-section-toggle" aria-expanded="true" aria-controls="fpop-body-advanced">
+          <div class="filters-popup__section-header">
             <span class="filters-popup__section-name">Advanced Filters</span>
-            <span class="filters-popup__chevron" aria-hidden="true">▾</span>
-          </button>
+            <button type="button" class="filters-popup__chevron" data-role="fpop-section-toggle" aria-expanded="true" aria-controls="fpop-body-advanced" aria-label="Show or hide Advanced Filters"><span aria-hidden="true">▾</span></button>
+          </div>
           <div class="filters-popup__section-body" id="fpop-body-advanced">
             <div id="popup-advanced-host"></div>
           </div>
         </section>
+      </div>
+
+      <!-- "This will come back empty" notice. A pick that the rest of your filters
+           have made impossible is kept and greyed rather than reset (owner ruling),
+           so the search can legitimately return nothing; when a whole filter's
+           selection is impossible, drawer.js says so here in plain English. It
+           INFORMS ONLY — Search is never disabled. Sits between the scrolling body
+           and the footer so it is on screen whatever you have scrolled to. -->
+      <div class="filters-popup__notice" data-role="fpop-notice" role="status" hidden>
+        <p class="filters-popup__notice-main" data-role="fpop-notice-main"></p>
+        <p class="filters-popup__notice-hint" data-role="fpop-notice-hint"></p>
       </div>
 
       <div class="filters-popup__footer">

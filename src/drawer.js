@@ -173,7 +173,7 @@ const MATCH_CONTEXT_ADD_ORDER = [
  * Mount the condition builder into `advancedHost` (the Advanced Filters section
  * body). Returns `{ onShow, onHide, sync, activeCount, validate }` for main.js.
  */
-export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, { onChange, isKeepColumnsDisabled }) {
+export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl }, store, { onChange, isKeepColumnsDisabled }) {
   // "Keep Selected Columns" toggle (4d/A5): a plain checkbox in the popup
   // footer (main.js queries it statically from index.html and hands it in
   // here since drawer.js owns the popup's non-Search controls). Reads/writes
@@ -444,10 +444,15 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
   // Neither filter's QUERY changed — only where each control lives.
   const regularPositionController = mountRegularPositions(editorHosts.rpos, store, onChange, { embedded: true });
   const matchupPositionController = mountBattingPosition(editorHosts.strikerpos, store, onChange, { embedded: true });
-  const teamController = mountTeam(editorHosts.team, store, onChange);
-  const oppositionController = mountOpposition(editorHosts.opposition, store, onChange, { embedded: true });
-  const eventController = mountEvent(editorHosts.event, store, onChange);
-  const venueController = mountVenue(editorHosts.venue, store, onChange);
+  // The five CASCADING pickers each know which of their picked values the rest of
+  // the filters have made impossible, and tell us when their option list reloads
+  // (onOptionsLoaded) so the empty-result notice below can be re-derived — a load
+  // changes nothing in state, so nothing else would prompt a refresh.
+  const onCascadeOptionsLoaded = () => syncEmptyNotice();
+  const teamController = mountTeam(editorHosts.team, store, onChange, { onOptionsLoaded: onCascadeOptionsLoaded });
+  const oppositionController = mountOpposition(editorHosts.opposition, store, onChange, { embedded: true, onOptionsLoaded: onCascadeOptionsLoaded });
+  const eventController = mountEvent(editorHosts.event, store, onChange, { onOptionsLoaded: onCascadeOptionsLoaded });
+  const venueController = mountVenue(editorHosts.venue, store, onChange, { onOptionsLoaded: onCascadeOptionsLoaded });
   const fieldingPositionController = mountFieldingPosition(editorHosts.fld_pos, store, onChange, { embedded: true });
   const fieldingKindController = mountFieldingKind(editorHosts.fld_kind, store, onChange, { embedded: true });
   const fieldingPhaseController = mountFieldingPhase(editorHosts.fld_phase, store, onChange, { embedded: true });
@@ -456,7 +461,55 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
   const tossResultController = mountTossResult(editorHosts.mc_toss_result, store, onChange, { embedded: true });
   const tossDecisionController = mountTossDecision(editorHosts.mc_toss_decision, store, onChange, { embedded: true });
   const inningsOrderController = mountInningsOrder(editorHosts.mc_innings_order, store, onChange, { embedded: true });
-  const stageController = mountStage(editorHosts.mc_stage, store, onChange, { embedded: true });
+  const stageController = mountStage(editorHosts.mc_stage, store, onChange, { embedded: true, onOptionsLoaded: onCascadeOptionsLoaded });
+
+  // ── "This will come back empty" notice (owner ruling) ──────────────────────
+  // Since a dead-end pick is now KEPT and greyed rather than reset, a search can
+  // legitimately return no rows. When one filter's ENTIRE selection is currently
+  // impossible, that filter ALONE guarantees an empty result — a fact each picker
+  // already has from its own option list, so this costs no extra query. Say so
+  // plainly, name the control, and leave Search fully enabled: it informs, it
+  // never blocks. Only these five report; the fixed-vocabulary pickers (Result,
+  // Toss…, Innings order) have no cross-filtered list and can't go dead this way.
+  const cascadeControllers = [venueController, eventController, teamController, oppositionController, stageController];
+  const noticeMainEl = noticeEl ? noticeEl.querySelector('[data-role="fpop-notice-main"]') : null;
+  const noticeHintEl = noticeEl ? noticeEl.querySelector('[data-role="fpop-notice-hint"]') : null;
+
+  /** "Venue selection (Lord's, The Oval)" — the control's name plus what is in it,
+   * capped so a long list can't run away. */
+  function describeDeadFilter(report) {
+    const shown = report.values.slice(0, 3);
+    const extra = report.values.length - shown.length;
+    const list = shown.join(", ") + (extra > 0 ? `, and ${extra} more` : "");
+    return `${report.label} selection (${list})`;
+  }
+
+  function syncEmptyNotice() {
+    if (!noticeEl || !noticeMainEl || !noticeHintEl) return;
+    const reports = [];
+    for (const c of cascadeControllers) {
+      const r = c.deadReport ? c.deadReport() : null;
+      if (r && r.values.length) reports.push(r);
+    }
+    if (reports.length === 0) {
+      noticeEl.hidden = true;
+      noticeMainEl.textContent = "";
+      noticeHintEl.textContent = "";
+      return;
+    }
+    const parts = reports.map(describeDeadFilter);
+    const list =
+      parts.length === 1
+        ? parts[0]
+        : `${parts.slice(0, -1).join("; ")}${parts.length > 2 ? ";" : ""} and ${parts[parts.length - 1]}`;
+    const verb = reports.length === 1 ? "has" : "have";
+    noticeMainEl.textContent = `No matches: your ${list} ${verb} no games once your other filters are applied.`;
+    noticeHintEl.textContent =
+      reports.length === 1
+        ? "You can still press Search — it will just come back with nothing. To get results, untick the greyed-out value in that list, or loosen your other filters."
+        : "You can still press Search — it will just come back with nothing. To get results, untick the greyed-out values in those lists, or loosen your other filters.";
+    noticeEl.hidden = false;
+  }
 
   // ── Presence + session-added tracking ──────────────────────────────────────
   // sessionAdded: singleton rows the user added THIS popup session that don't
@@ -982,6 +1035,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox }, store, 
     syncSingletonRows();
     renderNumeric(s);
     syncKeepColumns();
+    syncEmptyNotice();
   }
 
   /** Badge count: only filters ACTUALLY applied right now (inert selections

@@ -2517,24 +2517,34 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         <button type="button" class="filters-popup__close" data-role="gfpop-close" aria-label="Close">&times;</button>
       </div>
       <div class="filters-popup__body">
+        <!-- Minimise/maximise fires ONLY from the chevron BUTTON, never from the
+             header row — same owner fix as the Stats popup (index.html): clicking
+             beside an open filter dropdown to dismiss it must not also fold the
+             section away. -->
         <section class="filters-popup__section">
-          <button type="button" class="filters-popup__section-header" data-role="gfpop-section-toggle" aria-expanded="true">
+          <div class="filters-popup__section-header">
             <span class="filters-popup__section-name">Search Conditions</span>
-            <span class="filters-popup__chevron" aria-hidden="true">▾</span>
-          </button>
+            <button type="button" class="filters-popup__chevron" data-role="gfpop-section-toggle" aria-expanded="true" aria-label="Show or hide Search Conditions"><span aria-hidden="true">▾</span></button>
+          </div>
           <div class="filters-popup__section-body">
             <div class="filter-bar" data-role="gfpop-filter-bar"></div>
           </div>
         </section>
         <section class="filters-popup__section">
-          <button type="button" class="filters-popup__section-header" data-role="gfpop-section-toggle" aria-expanded="true">
+          <div class="filters-popup__section-header">
             <span class="filters-popup__section-name">Advanced Filters</span>
-            <span class="filters-popup__chevron" aria-hidden="true">▾</span>
-          </button>
+            <button type="button" class="filters-popup__chevron" data-role="gfpop-section-toggle" aria-expanded="true" aria-label="Show or hide Advanced Filters"><span aria-hidden="true">▾</span></button>
+          </div>
           <div class="filters-popup__section-body">
             <div data-role="gfpop-advanced-host"></div>
           </div>
         </section>
+      </div>
+      <!-- Same "this will come back empty" notice as the Stats popup: the shared
+           drawer fills it in when one filter's whole selection has gone impossible. -->
+      <div class="filters-popup__notice" data-role="gfpop-notice" role="status" hidden>
+        <p class="filters-popup__notice-main" data-role="fpop-notice-main"></p>
+        <p class="filters-popup__notice-hint" data-role="fpop-notice-hint"></p>
       </div>
       <div class="filters-popup__footer">
         <button type="button" class="btn btn--primary" data-role="gfpop-apply">Apply to graph</button>
@@ -2553,10 +2563,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
 
   // Section collapse/expand (same behaviour as main.js's Stats-popup toggles,
   // but keyed off DOM structure so the two popups' section-body ids never
-  // collide).
+  // collide). The toggle is now the chevron button INSIDE the header row (owner
+  // fix), so the section body is found from the enclosing <section> rather than
+  // as the toggle's next sibling.
   gpopEl.querySelectorAll('[data-role="gfpop-section-toggle"]').forEach((toggle) => {
     toggle.addEventListener("click", () => {
-      const body = toggle.nextElementSibling;
+      const body = toggle.closest(".filters-popup__section")?.querySelector(".filters-popup__section-body");
       const expanded = toggle.getAttribute("aria-expanded") === "true";
       if (body) body.hidden = expanded;
       toggle.setAttribute("aria-expanded", String(!expanded));
@@ -2592,7 +2604,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     () => {}
   );
   const graphDrawerController = mountFilterDrawer(
-    { advancedHost: gfpop.advancedHost },
+    { advancedHost: gfpop.advancedHost, noticeEl: gpopEl.querySelector('[data-role="gfpop-notice"]') },
     bufferStore,
     { onChange: () => {} }
   );

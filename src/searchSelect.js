@@ -473,6 +473,7 @@ export function mountSearchSelect(hostEl, {
  * @param {(opt:object) => string} [opts.renderRow] custom option-row inner HTML
  * @param {boolean} [opts.keepMissingSelected] see the "missing selected values" note below
  * @param {string} [opts.missingNote] short annotation shown on a missing-selected row
+ * @param {boolean} [opts.pinSelected] see the "pinned selection" note below
  * @returns {{setValues:Function,getValues:Function,setOptions:Function,setInvalid:Function,open:Function,close:Function,destroy:Function}}
  *
  * ── MISSING SELECTED VALUES (`keepMissingSelected`) ─────────────────────────
@@ -492,6 +493,23 @@ export function mountSearchSelect(hostEl, {
  * only refuses to lose a pick. Rows are only treated as missing once real
  * options have arrived (`setOptions` has been called at least once), so a slow
  * first load doesn't flash the whole selection as dead.
+ *
+ * ── PINNED SELECTION (`pinSelected`) ────────────────────────────────────────
+ * Off by default (the graph's static metric/axis pickers keep their declared
+ * order). On, the TICKED values render as a block at the top of the list, ahead
+ * of the unticked options — whose own order (games-count desc, for the Filters
+ * drawer's DB-derived lists) is untouched. The owner's problem: a venue they had
+ * just ticked kept sliding up and down the list as the games-count ordering
+ * re-shuffled around it.
+ *
+ * The pinned block is a SNAPSHOT, not a live read of the selection. It is taken
+ * when the panel opens and again whenever a fresh option list lands
+ * (`setOptions`), and it is then FROZEN for as long as the panel stays open — so
+ * ticking or unticking while you work never yanks a row out from under the
+ * cursor mid-click. Reopening the panel (or a reload) re-asserts it, which is
+ * when a newly-ticked value joins the block and an unticked one drops back to
+ * its games-count position. Dead picks (keepMissingSelected above) lead the
+ * block, as they always have.
  */
 export function mountSearchMultiSelect(hostEl, {
   options = [],
@@ -508,6 +526,7 @@ export function mountSearchMultiSelect(hostEl, {
   portal = false,
   keepMissingSelected = false,
   missingNote = "",
+  pinSelected = false,
 } = {}) {
   const uid = `smsel-${++uidCounter}`;
   let allOptions = normalizeOptions(options);
@@ -659,15 +678,46 @@ export function mountSearchMultiSelect(hostEl, {
     }
   }
 
+  /** The values pinned to the top of the list right now (see PINNED SELECTION).
+   * A frozen snapshot: taken lazily on the first render after open/setOptions,
+   * and reused until one of those invalidates it, so no row moves mid-session. */
+  let pinnedSnapshot = null;
+  const invalidatePinned = () => {
+    pinnedSnapshot = null;
+  };
+  function pinnedSet() {
+    if (!pinSelected) return null;
+    if (pinnedSnapshot === null) pinnedSnapshot = new Set(selected);
+    return pinnedSnapshot;
+  }
+
+  /** How many leading rows of `filtered` form the pinned block (dead picks +
+   * pinned selection) — renderList draws a hairline under the last of them. */
+  let pinnedRowCount = 0;
+
   function applyFilter(term) {
     const t = term.trim().toLowerCase();
     const match = (o) => o.label.toLowerCase().includes(t);
-    const rows = t ? allOptions.filter(match) : allOptions.slice();
+    let rows = t ? allOptions.filter(match) : allOptions.slice();
     // Missing-selected rows lead the list so a dead pick is the first thing the
     // user sees (and can un-tick) rather than hiding below a long option list.
     const missing = missingSelected();
     const missingRows = t ? missing.filter(match) : missing;
+    // Ticked values next, in the option list's own order; everything else keeps
+    // the order the caller supplied.
+    let pinnedCount = 0;
+    const pin = pinnedSet();
+    if (pin && pin.size > 0) {
+      const head = [];
+      const tail = [];
+      for (const o of rows) (pin.has(o.value) ? head : tail).push(o);
+      pinnedCount = head.length;
+      rows = [...head, ...tail];
+    }
+    pinnedRowCount = missingRows.length + pinnedCount;
     filtered = missingRows.length ? [...missingRows, ...rows] : rows;
+    // A block that swallows the WHOLE list isn't a block — no divider then.
+    if (pinnedRowCount >= filtered.length) pinnedRowCount = 0;
   }
 
   function rowInnerHTML(o) {
@@ -696,8 +746,9 @@ export function mountSearchMultiSelect(hostEl, {
         const isSel = selected.has(o.value);
         const active = i === activeIndex;
         const rowDisabled = isRowDisabled(o);
+        const pinEdge = pinnedRowCount > 0 && i === pinnedRowCount - 1;
         return (
-          `<div id="${uid}-opt-${i}" class="search-select__option search-select__option--multi${active ? " is-active" : ""}${isSel ? " is-selected" : ""}${o.missing ? " is-missing" : ""}${rowDisabled ? " is-disabled" : ""}"` +
+          `<div id="${uid}-opt-${i}" class="search-select__option search-select__option--multi${active ? " is-active" : ""}${isSel ? " is-selected" : ""}${o.missing ? " is-missing" : ""}${rowDisabled ? " is-disabled" : ""}${pinEdge ? " is-pin-last" : ""}"` +
           ` role="option" aria-selected="${isSel}" data-idx="${i}">${rowInnerHTML(o)}</div>`
         );
       })
@@ -721,6 +772,7 @@ export function mountSearchMultiSelect(hostEl, {
     toggleEl.setAttribute("aria-expanded", "true");
     filterEl.setAttribute("aria-expanded", "true");
     filterEl.value = "";
+    invalidatePinned(); // re-assert "ticked things at the top" on every open
     applyFilter("");
     activeIndex = filtered.length ? 0 : -1;
     syncNote();
@@ -878,6 +930,9 @@ export function mountSearchMultiSelect(hostEl, {
       // With keepMissingSelected the pick is KEPT and surfaced as a muted row
       // instead — the caller (the Filters drawer) owns whether it survives.
       selected = new Set(acceptValues([...selected]));
+      // A fresh list = a fresh ordering, which is exactly when a ticked value
+      // used to slide around; re-pin it to the top (see PINNED SELECTION).
+      invalidatePinned();
       syncToggleLabel();
       if (isOpen) {
         applyFilter(filterEl.value);

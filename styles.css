@@ -656,6 +656,13 @@ a { color: var(--color-accent); }
   color: var(--color-muted);
 }
 
+/* PINNED SELECTION (Stage / Season): ticked values sit as a block at the top of
+   the list so a pick can't drift as the list re-orders around it. One hairline
+   marks where the block ends. */
+.dropdown__item.is-pin-last {
+  border-bottom: 1px solid var(--color-line);
+}
+
 /* ── Profile filters (D4.2) — second filter row ────────────────────────────── */
 
 .profile-note {
@@ -872,9 +879,22 @@ a { color: var(--color-accent); }
   gap: var(--space-1) var(--space-2);
   margin-left: var(--space-3);
 }
-.nested-pick { flex-direction: row; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+/* Result Condition's picker component wraps its head + dropdown in one more
+   element than Event → Season does. `display: contents` dissolves that wrapper,
+   so BOTH child rows lay out through the single shared rule above — same indent,
+   same label→dropdown gap, same alignment — instead of through two near-copies
+   that drifted apart (the wrapper is a .filter-group, whose in-popup gap
+   override made Result Condition's gap half of Season's). */
+.result-condition .nested-pick { display: contents; }
+/* ONE shared label column for both child rows, so "Season" and "Result
+   Condition" put their dropdown at exactly the same x. The width fits
+   "CONDITION" on a line of its own (the label wraps to two lines, owner-
+   approved), which keeps the child dropdown under the parent's dropdown box
+   even when the parent's toggle is a short one like "All results". */
 .nested-pick__head,
 .event-seasons__head {
+  flex: 0 0 5.25rem;
+  max-width: 100%;
   font-size: var(--text-sm2);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1209,12 +1229,17 @@ a { color: var(--color-accent); }
 /* Player count — greyed before the first search has produced results. */
 .table-toolbar__row-count.is-disabled { opacity: 0.5; }
 
-/* Empty-state hint inside the table area (first load / no matches). */
+/* Empty-state hint inside the table area (first load / no matches). The no-matches
+   copy explains itself in a sentence or two, so cap the measure and centre the
+   block rather than letting it run the full table width. */
 .table-body-hint {
+  max-width: 46rem;
+  margin: 0 auto;
   padding: var(--space-6) var(--space-5);
   color: var(--color-muted);
   text-align: center;
   font-size: var(--text-md);
+  line-height: 1.5;
 }
 .table-body-hint[hidden] { display: none; }
 
@@ -2730,6 +2755,15 @@ a { color: var(--color-accent); }
   white-space: normal;
 }
 
+/* PINNED SELECTION (mountSearchMultiSelect's pinSelected): the ticked values sit
+   as a block at the top of the list, so a pick can't drift as the games-count
+   ordering re-shuffles around it. One hairline marks where the block ends — no
+   colour, no extra spacing, so a list with nothing ticked looks exactly as it
+   did. */
+.search-select__option--multi.is-pin-last {
+  border-bottom: 1px solid var(--color-line);
+}
+
 /* Trailing games-count meta on Team / Event / Venue rows (R2-2b-ii). The multi
    row is flex-start (box → label), so push the meta to the trailing edge; muted
    + non-wrapping so it reads as an annotation, not part of the name. */
@@ -3611,6 +3645,10 @@ a { color: var(--color-accent); }
 }
 .filters-popup__section:last-child { border-bottom: none; }
 
+/* The header row is PLAIN TEXT — not a control. Only the chevron button
+   collapses/expands the section (owner fix, polish): a click anywhere else on
+   the row must do nothing, so dismissing an open filter dropdown by clicking
+   beside it can never also fold the section away. */
 .filters-popup__section-header {
   display: flex;
   align-items: center;
@@ -3618,10 +3656,6 @@ a { color: var(--color-accent); }
   width: 100%;
   gap: var(--space-3);
   padding: var(--space-4) 0;
-  background: none;
-  border: none;
-  cursor: pointer;
-  font: inherit;
   color: var(--color-fg);
   text-align: left;
 }
@@ -3632,11 +3666,29 @@ a { color: var(--color-accent); }
   font-size: 1.05rem;
 }
 
+/* The one focusable control in the header: a real <button> (Tab reaches it,
+   Enter/Space fire it natively) carrying aria-expanded + aria-controls. The
+   negative right margin keeps a comfortable tap target without pushing the
+   glyph off the body's right edge. */
 .filters-popup__chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  min-height: 2rem;
+  margin-right: calc(-1 * var(--space-2));
+  padding: 0 var(--space-2);
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
   color: var(--color-muted);
   transition: transform 0.15s ease;
 }
-.filters-popup__section-header[aria-expanded="false"] .filters-popup__chevron {
+.filters-popup__chevron:hover { color: var(--color-fg); }
+.filters-popup__chevron[aria-expanded="false"] {
   transform: rotate(-90deg);
 }
 
@@ -3644,6 +3696,29 @@ a { color: var(--color-accent); }
   padding-bottom: var(--space-5);
 }
 .filters-popup__section-body[hidden] { display: none; }
+
+/* "This will come back empty" notice — sits above the footer so it is visible
+   however far the body is scrolled. A NOTICE, never a block: Search stays
+   enabled, so this is coloured as a caution, not an error. */
+.filters-popup__notice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--color-line);
+  background: var(--color-bad-bg);
+}
+.filters-popup__notice-main {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-bad);
+}
+.filters-popup__notice-hint {
+  margin: 0;
+  font-size: var(--text-sm2);
+  color: var(--color-muted);
+}
 
 .filters-popup__footer {
   display: flex;

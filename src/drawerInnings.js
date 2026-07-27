@@ -40,9 +40,9 @@
 // the Opposition list holds only the teams India faced. A list never narrows by
 // its OWN filter (`siblingExclude` / the `role` passed to searchTeams), so the
 // Event list stays the full in-scope vocabulary while an event is selected, and
-// removing a filter re-expands the others without touching what is already picked
-// — except for a pick this scope can no longer satisfy at all, which is dropped
-// (reconcilePicks below: mountStage's ruled behaviour, now shared by every list).
+// removing a filter re-expands the others without touching what is already picked.
+// A pick the current combination has made impossible is NEVER dropped either — it
+// is kept and rendered greyed (owner ruling; see "A PICK IS NEVER REWRITTEN" below).
 // The SQL half lives in ONE place (playerData.js siblingOptionClauses, over the
 // shared predicate fragments in filters.js); the cache-key half is
 // optionCacheKey() below, and both take the same self-exclusion list.
@@ -128,78 +128,52 @@ function optionCacheKey(s, exclude = []) {
   return `${optionScopeKey(s)}||${optionSiblingKey(s, exclude)}`;
 }
 
-// ── Cascading option lists: the shared ALL-OR-NOTHING reconcile ──────────────
+// ── Cascading option lists: A PICK IS NEVER REWRITTEN (owner ruling) ─────────
 // Cross-filtered options are offered with OR-logic across your picks: with
 // Venue = {Mission Road, Gelephu} the Stage list offers Final (Mission Road
-// hosted Finals) AND Semi-Final (Gelephu did). The keep test must use the SAME
-// standard as that offer test, so it is judged over the WHOLE selection, not
-// value by value:
+// hosted Finals) AND Semi-Final (Gelephu did). So a pick can stop being
+// available without the user touching it — pick Stage = Final and Gelephu, which
+// hosted no Final, contributes nothing.
 //
-//   at least one non-sentinel pick still in the freshly-loaded list
-//        → keep the selection EXACTLY as it is (no write, nothing dropped)
-//   every real pick gone
-//        → fall back to this filter's own "no narrowing" shape (the ruled
-//          Stage behaviour: `[]` for venue/event/teams/opposition,
-//          `[STAGE_ALL]` for stage), so results WIDEN instead of stranding a
-//          zero-row filter the user cannot see.
+// THE RULE, as the owner has ruled it: the app NEVER changes the selection. Not
+// value-by-value (an earlier pass), and not as a whole-selection reset back to
+// "no narrowing" (the pass before this one). Silently discarding a choice — or
+// silently WIDENING the results away from what the controls say — is the bug.
+// Instead every currently-impossible value is KEPT and rendered greyed, ticked,
+// annotated `no matches with your current filters`, and still clickable so it can
+// be un-ticked. Each picker computes that "available" set for DISPLAY only:
+// mountSearchMultiSelect's `keepMissingSelected` for Team/Opposition/Event/Venue,
+// `deadSpecifics()` in mountAllMultiSelect for Stage, `deadSeasons()` in
+// mountEventSeasons for Season. Unticked options that are merely irrelevant stay
+// HIDDEN — nothing here re-expands a narrowed list.
 //
-// Judging each value on its own (the previous rule) made the app depend on the
-// ORDER the form was filled in: with the two venues above, ticking Final first
-// deleted Gelephu — which contributes nothing WHILE Final is the only stage —
-// and nothing ever brought it back, so ticking Semi-Final afterwards left the
-// legitimate "either venue, either knockout round" query unbuildable in that
-// click order. All-or-nothing removes that asymmetry.
+// ACCEPTED CONSEQUENCE (owner): a selection whose values are ALL impossible now
+// survives, so the leaderboard can legitimately come back with ZERO rows. That
+// is correct — the greyed rows, the pills and the in-popup notice (drawer.js,
+// fed by the deadReport() each picker exposes below) explain why. It is not a
+// bug to be "fixed" by widening.
 //
-// WHY KEEPING A DEAD PICK IS SAFE FOR THE NUMBERS (Rule 1): a loader's list is
-// the COMPLETE set of values available for the current scope + siblings (no
+// THE INVISIBLE-PICK GUARANTEE: because a pick now lives forever until the user
+// removes it, a control that HOLDS one must always be on screen — otherwise the
+// pick would be both permanent and unreachable. So the two "nothing to choose
+// here, hide the control" rules (Stage's ≤1-option rule, Season's one-season
+// rule) both yield to a control that is actually filtering. See mountStage's
+// `hiddenWhen` and mountEventSeasons' `visibleEvents`.
+//
+// NUMBERS (Rule 1): keeping a dead pick moves nothing by itself. A loader's list
+// is the COMPLETE set of values available for the current scope + siblings (no
 // LIMIT anywhere, and the search term only ever reorders — it never filters rows
-// out). So a picked value that is absent from a freshly-loaded list cannot be
-// satisfied by any match in scope: it is a dead disjunct in its own IN-list, and
-// keeping it in — exactly like removing it — leaves the result set of the built
-// query untouched. The only intentional result change is the fallback above.
+// out), so a picked value absent from a freshly-loaded list cannot be satisfied
+// by any match in scope: it is a dead disjunct in its own IN-list, and keeping it
+// in — exactly like removing it — leaves the built query's result set untouched.
 //
-// A kept-but-dead pick must never become invisible: each picker renders it as a
-// muted, still-un-tickable row in its own dropdown (see DEAD_PICK_NOTE below,
-// mountSearchMultiSelect's `keepMissingSelected`, and the dead-row blocks in
-// mountAllMultiSelect / mountEventSeasons). Unticked options that are merely
-// irrelevant stay HIDDEN — this never re-expands a narrowed list.
-//
-// CONVERGENCE: a reconcile writes state → the state changes some other list's
-// cache key → that list reloads → it reconciles too. That settles, and more
-// easily than before: the only write is a whole-selection reset, which strictly
-// shrinks the total number of picks (finitely many) and never adds one. A reset
-// also WIDENS its filter, and a widened filter can only ever GROW the other
-// lists — growing a list can only turn dead picks live, never the reverse — so
-// nothing can flip back and forth.
+// CONVERGENCE is now trivial: no reconcile writes state at all, so the
+// load → reconcile → reload cycle that had to be argued about no longer exists.
+// An option list reloads only when the user changes something.
 
 /** Shown on a picked value that the current filter combination has made
  * impossible. Kept in ONE place so every picker says the same thing. */
 const DEAD_PICK_NOTE = "no matches with your current filters";
-
-/**
- * Reconcile one filter's picks against the option list just loaded for it.
- * Returns the next selection, or `null` when nothing changed (the caller must
- * then NOT write — that guard is what makes the cycle above converge).
- *
- * @param {string[]} cur       the filter's current selection
- * @param {Set<string>} allowed the values the freshly-loaded list offers
- * @param {object} opts
- * @param {string[]} opts.sentinels values that are never dropped because they are
- *   not vocabulary at all (Stage's "All"); they also don't count as survivors.
- * @param {string[]} opts.inactive  this filter's OWN "no narrowing" representation
- *   — `[]` for venue/event/teams/opposition, `[STAGE_ALL]` for stage. Each picker
- *   keeps its existing shape; no new sentinel is introduced.
- */
-function reconcilePicks(cur, allowed, { sentinels = [], inactive = [] } = {}) {
-  if (!Array.isArray(cur) || cur.length === 0) return null; // filter not applied
-  const keep = new Set(sentinels);
-  const real = cur.filter((v) => !keep.has(v));
-  if (real.length === 0) return null; // sentinels only → nothing is narrowing
-  if (real.some((v) => allowed.has(v))) return null; // ≥1 survivor → keep the LOT
-  const next = inactive; // nothing survives → this filter's "no narrowing" shape
-  const same = next.length === cur.length && next.every((v, i) => v === cur[i]);
-  return same ? null : next;
-}
 
 /**
  * Live summary label for a position dropdown's toggle button. Up to three
@@ -634,12 +608,18 @@ function mountTokenMultiSelect(container, store, onChange, { field, options, any
 // The stored array is [allValue] for All, else the specific tokens (in `options`
 // order). Returns `{ sync }`.
 //
-// DEAD PICKS: with the all-or-nothing reconcile a stored value can outlive its
-// own option list (Stage = {Final, Semi-Final} while a venue narrows the list to
-// Final alone). Such a value is rendered as a muted, still-un-tickable box at the
-// top of the list rather than vanishing — see the reconcilePicks header.
-// `optionsReady` lets an async picker (Stage) say "my vocabulary hasn't loaded
-// yet", so a slow load doesn't paint every pick dead for a moment.
+// DEAD PICKS: a stored value can outlive its own option list (Stage =
+// {Final, Semi-Final} while a venue narrows the list to Final alone) — and, per
+// the owner's ruling, is never deleted for it. Such a value renders as a muted,
+// still-un-tickable box at the top of the list rather than vanishing — see the
+// "A PICK IS NEVER REWRITTEN" header. `optionsReady` lets an async picker (Stage)
+// say "my vocabulary hasn't loaded yet", so a slow load doesn't paint every pick
+// dead for a moment.
+//
+// PINNED SELECTION: ticked specifics render as a block directly under the dead
+// picks, above the untouched rest of the list. Like the searchSelect widget's
+// `pinSelected`, the block is a snapshot frozen while the dropdown is open (see
+// pinnedSet below), so no box moves under the cursor as you tick.
 function mountAllMultiSelect(
   container,
   store,
@@ -659,6 +639,26 @@ function mountAllMultiSelect(
   };
   /** Canonical value order for a write: dead picks (shown first) then options. */
   const valueOrder = () => [...deadSpecifics(), ...getOptions().map((o) => String(o.value))];
+  /** Is EVERY picked specific currently impossible? (feeds drawer.js's in-popup
+   * "this will come back empty" notice; null while the vocabulary is unknown.) */
+  const deadReport = (labelText) => {
+    if (optionsReady && !optionsReady()) return null;
+    const sp = specifics().map(String);
+    if (sp.length === 0) return null;
+    const dead = deadSpecifics();
+    return dead.length === sp.length ? { label: labelText, values: dead } : null;
+  };
+  /** Ticked specifics pinned to the top of the list — a snapshot taken when the
+   * dropdown opens (and when the vocabulary reloads), then frozen while it stays
+   * open so ticking never reorders the boxes under the pointer. */
+  let pinnedSnapshot = null;
+  const invalidatePinned = () => {
+    pinnedSnapshot = null;
+  };
+  const pinnedSet = () => {
+    if (pinnedSnapshot === null) pinnedSnapshot = new Set(specifics().map(String));
+    return pinnedSnapshot;
+  };
 
   container.innerHTML = `
     <div class="filter-group filter-group--positions${nested ? " nested-pick" : ""}" data-role="mc-group">
@@ -694,7 +694,16 @@ function mountAllMultiSelect(
         : `${sp.length} selected`;
   };
 
-  const dropdown = wirePortalDropdown(els.toggle, els.panel);
+  // Re-assert the pinned block on every open, and re-render so it takes effect
+  // before the panel is on screen (then re-place it — the row order can change
+  // the panel's height).
+  const dropdown = wirePortalDropdown(els.toggle, els.panel, {
+    onOpen: () => {
+      invalidatePinned();
+      renderList();
+      dropdown.reposition();
+    },
+  });
 
   function renderList() {
     const all = isAll();
@@ -704,26 +713,32 @@ function mountAllMultiSelect(
       <input type="checkbox" data-mc-all ${all ? "checked disabled" : ""} />
       <span>${escHtml(allLabel)}</span>
     </label>`;
-    // Picks the current filter combination has made impossible: ticked, muted,
-    // annotated — and fully clickable, so un-ticking one removes it for good.
-    const deadBoxes = deadSpecifics()
-      .map(
-        (v) => `<label class="dropdown__item dropdown__item--dead">
-        <input type="checkbox" data-mc-value="${escAttr(v)}" checked />
-        <span>${escHtml(v)}</span>
+    // Row order under the "All" box: the dead picks (ticked, muted, annotated —
+    // and fully clickable, so un-ticking one removes it for good), then the ticked
+    // live options (pinned block), then everything else in its own order. One
+    // hairline closes the block, unless the block IS the whole list.
+    const pin = pinnedSet();
+    const dead = deadSpecifics().map((v) => ({ value: v, label: v, dead: true }));
+    const pinned = opts.filter((o) => pin.has(String(o.value)));
+    const rest = opts.filter((o) => !pin.has(String(o.value)));
+    const blockLen = rest.length > 0 ? dead.length + pinned.length : 0;
+    const rows = [...dead, ...pinned, ...rest]
+      .map((o, i) => {
+        const edge = blockLen > 0 && i === blockLen - 1 ? " is-pin-last" : "";
+        if (o.dead) {
+          return `<label class="dropdown__item dropdown__item--dead${edge}">
+        <input type="checkbox" data-mc-value="${escAttr(o.value)}" checked />
+        <span>${escHtml(o.label)}</span>
         <span class="dropdown__item-note">${escHtml(DEAD_PICK_NOTE)}</span>
-      </label>`
-      )
-      .join("");
-    const specBoxes = opts
-      .map(
-        (o) => `<label class="dropdown__item">
+      </label>`;
+        }
+        return `<label class="dropdown__item${edge}">
         <input type="checkbox" data-mc-value="${escAttr(String(o.value))}" ${sel.has(String(o.value)) ? "checked" : ""} />
         <span>${escHtml(o.label)}</span>
-      </label>`
-      )
+      </label>`;
+      })
       .join("");
-    els.list.innerHTML = allBox + deadBoxes + specBoxes;
+    els.list.innerHTML = allBox + rows;
     els.list.querySelectorAll("input[type=checkbox]").forEach((cb) => {
       cb.addEventListener("change", () => {
         if (cb.hasAttribute("data-mc-all")) {
@@ -775,7 +790,7 @@ function mountAllMultiSelect(
   }
 
   sync();
-  return { sync };
+  return { sync, deadReport, invalidatePinned };
 }
 
 // Result outcome options / Result Condition options WITHOUT their leading "All"
@@ -958,8 +973,10 @@ function isKnockoutStage(stage) {
  * as Result uses); this wrapper owns the async option vocabulary — loading the
  * in-scope stages, cross-filtering them by the selected Event(s), deciding whether
  * "No Stage" applies, and hiding the control when there is nothing to choose.
- * Returns `{ sync }`. */
-export function mountStage(container, store, onChange, { embedded = false } = {}) {
+ * `onOptionsLoaded` fires after each successful vocabulary load so the caller can
+ * refresh anything derived from it (drawer.js's in-popup empty-result notice).
+ * Returns `{ sync, deadReport }`. */
+export function mountStage(container, store, onChange, { embedded = false, onOptionsLoaded = null } = {}) {
   let namedOptions = null; // canonical stage labels in scope; null until loaded
   let hasNoStage = false; // does the scope contain matches with NO round name?
   let loadedScope = null; // scope key of the last successful load
@@ -1015,10 +1032,12 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
     // Hide only when there is genuinely nothing to SHOW: nothing to choose AND
     // no pick of our own on screen. The ≤1-option hide rule is about not
     // offering a one-item list; it must never swallow a control that is
-    // actively filtering (a surviving pick, or a dead one the user still has to
-    // be able to un-tick). While the vocabulary is still loading, keep the old
-    // hide behaviour so a slow load doesn't flash an empty dropdown.
-    hiddenWhen: () => nothingToChoose() && (!namedOptions || !hasStagePick()),
+    // actively filtering — and now that a pick is never rewritten (see the
+    // header), a hidden control holding one would be a permanent, unreachable
+    // filter. So the pick wins even while the vocabulary is still loading: the
+    // dropdown shows, briefly listing only "All stages", and fills in when the
+    // load lands. That is the invisible-pick guarantee.
+    hiddenWhen: () => nothingToChoose() && !hasStagePick(),
     hiddenNote: "No tournament stages to choose in this scope.",
     optionsReady: () => namedOptions !== null,
   });
@@ -1054,31 +1073,13 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
     hasNoStage = Boolean(res.hasNoStage);
     loadedScope = key;
     loadingScope = null;
-    // Same currency guard as the other lists: only reconcile against a vocabulary
-    // that still matches the live state (see mountScopedMultiSelect's ensureLoaded).
-    if (key === scopeKey()) reconcileSelection();
+    // The vocabulary — and therefore which picks are dead, and the list's order —
+    // just changed. NOTHING is written to state.stage (a pick is never rewritten,
+    // see the header); the fresh list only changes what is DISPLAYED: re-pin the
+    // ticked stages to the top and tell the caller so it can refresh the notice.
+    picker.invalidatePinned();
     picker.sync();
-  }
-
-  /** Keep state.stage honest against the vocabulary NOW in scope, via the SHARED
-   * all-or-nothing reconcilePicks() above: while at least one picked stage still
-   * exists here the selection is left alone (a pick that has gone dead is shown
-   * as a muted row rather than deleted); when none survives it snaps back to
-   * "All". Only writes when something actually changed, so it converges.
-   *
-   * Stage's own additions are its two sentinels: STAGE_ALL is vocabulary-less
-   * (kept, but never a survivor) and it is also this filter's inactive shape.
-   * `allowed` is the real option list — NOT gated on nothingToChoose() any more:
-   * a one-option list still contains its option, so a pick that matches it must
-   * survive (the control stays visible for it, see hiddenWhen above). */
-  function reconcileSelection() {
-    if (!namedOptions) return; // never reconcile against a vocabulary we don't have
-    const allowed = new Set(optionList().map((o) => o.value));
-    const next = reconcilePicks(store.get().stage || [], allowed, {
-      sentinels: [STAGE_ALL],
-      inactive: [STAGE_ALL],
-    });
-    if (next) store.set({ stage: next });
+    if (onOptionsLoaded) onOptionsLoaded();
   }
 
   function sync() {
@@ -1093,7 +1094,7 @@ export function mountStage(container, store, onChange, { embedded = false } = {}
   }
 
   sync();
-  return { sync };
+  return { sync, deadReport: () => picker.deadReport("Stage") };
 }
 
 // Game-count meta label (ROUND 3, task 4): "1,013 games" — localized thousands
@@ -1116,8 +1117,8 @@ function gamesMeta(o) {
  *
  * `config`:
  *   { get(state)->string[], set(store,arr), loader(gender,teamType)->Promise<rows>,
- *     emptyLabel, singular, plural, ariaLabel, searchPlaceholder,
- *     showGames?:bool, siblingExclude?:string[], onReconciled?():void,
+ *     emptyLabel, singular, plural, ariaLabel, searchPlaceholder, deadLabel,
+ *     showGames?:bool, siblingExclude?:string[], onOptionsLoaded?():void,
  *     disabledWhen?(state)->bool, disabledNote?:string }
  * (the loader closes over `store` to read the format/date scope AND to pass the
  * live selection through as the cascading `sel`; the wrapper still calls it with
@@ -1129,8 +1130,8 @@ function gamesMeta(o) {
  * date) OR any sibling selection this list cross-filters by (see cacheKey).
  * filters.js clears the selection on a gender OR team-type change, so a stale
  * pick never survives those; a format/date/sibling change reloads the list but
- * does NOT clear the selection (see the final report's CONCERNS).
- * Returns `{ sync }`. */
+ * NEVER touches the selection (owner ruling — see the header).
+ * Returns `{ sync, deadReport }`. */
 function mountScopedMultiSelect(container, store, onChange, config) {
   container.innerHTML = `
     <div class="filter-group filter-group--ms" data-role="ms-group">
@@ -1158,11 +1159,14 @@ function mountScopedMultiSelect(container, store, onChange, config) {
     filterPlaceholder: config.searchPlaceholder,
     summarize,
     ariaLabel: config.ariaLabel,
-    // A pick the all-or-nothing reconcile keeps alive can be absent from the
-    // narrowed option list. It must stay VISIBLE and un-tickable rather than
-    // disappear from its own dropdown while still filtering the table.
+    // A pick is never rewritten (see the header), so it can outlive the narrowed
+    // option list. It must stay VISIBLE and un-tickable rather than disappear from
+    // its own dropdown while still filtering the table.
     keepMissingSelected: true,
     missingNote: DEAD_PICK_NOTE,
+    // Ticked values sit in a block at the top of the list, so a pick stops
+    // drifting as the games-count ordering re-shuffles around it (owner fix).
+    pinSelected: true,
     renderRow: (o) => {
       const meta = config.showGames ? gamesMeta(o) : "";
       return (
@@ -1214,39 +1218,28 @@ function mountScopedMultiSelect(container, store, onChange, config) {
     loadingKey = null;
     optionsCache = rows || [];
     loadedKey = key;
+    // A fresh list NEVER touches the selection (owner ruling — see the header):
+    // setOptions keeps unknown picks (keepMissingSelected) and re-pins the ticked
+    // ones to the top; setValues then re-reflects the selection so the toggle
+    // summary and the ticks are honest against the new list.
     handle.setOptions(optionsCache);
-    // Drop any pick this scope + sibling combination can no longer satisfy, BEFORE
-    // reflecting the selection below, so the toggle shows the reconciled truth.
-    // ONLY against a list that still describes the CURRENT state: another picker's
-    // own reconcile can land between this load being issued and its reply, and
-    // reconciling a selection against options loaded for a superseded state could
-    // drop a pick that is valid again. When that happens sync() reloads for the new
-    // key (loadedKey then differs from cacheKey) and reconciles from THAT reply.
-    if (key === cacheKey()) reconcileSelection();
-    // Reflect the current selection against the fresh options (keeps the toggle
-    // summary + checks honest; setOptions on its own would drop unknown values).
     handle.setValues(config.get(store.get()));
+    // Which picks are dead may have changed — let the caller refresh anything
+    // derived from that (drawer.js's in-popup empty-result notice).
+    if (config.onOptionsLoaded) config.onOptionsLoaded();
   }
 
-  /** Keep this picker's selection honest against the vocabulary NOW available —
-   * the same rule mountStage applies to state.stage, via the shared
-   * all-or-nothing reconcilePicks() (see its header for why keeping a dead pick
-   * cannot move a number, and why the reconcile → reload cycle converges). While
-   * ANY picked value is still offered the selection is left exactly as it is;
-   * the ones that are currently impossible show up as muted rows in the dropdown
-   * (keepMissingSelected above). Runs ONLY after a successful load, so a failed
-   * query never wipes a selection. This filter's inactive shape is the EMPTY
-   * ARRAY (no narrowing) — there is no "All" sentinel on this side. A reconcile
-   * that empties the selection therefore leaves exactly the state a user gets by
-   * clearing the filter by hand. */
-  function reconcileSelection() {
-    const next = reconcilePicks(config.get(store.get()), new Set(optionsCache.map((o) => o.value)), { inactive: [] });
-    if (!next) return;
-    config.set(store, next); // SAME state field the picker itself writes
-    // Callers with dependent state (mountEvent's per-event season narrowing) get
-    // the same follow-up they run after a user edit, so a reconciled-away value
-    // can't leave orphan state behind.
-    if (config.onReconciled) config.onReconciled();
+  /** Is EVERY picked value currently impossible? Then this filter alone
+   * guarantees an empty result set, which drawer.js turns into the in-popup
+   * notice. Answered only from a list that describes the CURRENT state — a stale
+   * or not-yet-loaded list must never accuse a perfectly good pick. */
+  function deadReport() {
+    if (loadedKey === null || loadedKey !== cacheKey()) return null;
+    const picks = config.get(store.get()) || [];
+    if (picks.length === 0) return null;
+    const known = new Set(optionsCache.map((o) => o.value));
+    const dead = picks.filter((v) => !known.has(v));
+    return dead.length === picks.length ? { label: config.deadLabel, values: dead } : null;
   }
 
   // Lazy-load fallback: first interaction with the toggle (before it opens).
@@ -1292,18 +1285,20 @@ function mountScopedMultiSelect(container, store, onChange, config) {
   }
 
   sync();
-  return { sync };
+  return { sync, deadReport };
 }
 
 /** "Played for" — single gender + team-type-scoped team picker (state.teams).
  * Cascading: narrowed by every other picked match filter INCLUDING Opposition
  * (so with Opposition = Australia this lists the teams that actually played
  * Australia), but never by state.teams itself — hence role: "teams". */
-export function mountTeam(container, store, onChange) {
+export function mountTeam(container, store, onChange, { onOptionsLoaded = null } = {}) {
   return mountScopedMultiSelect(container, store, onChange, {
     get: (s) => s.teams || [],
     set: (st, arr) => st.set({ teams: arr }),
     siblingExclude: ["teams"],
+    deadLabel: "Team",
+    onOptionsLoaded,
     loader: (gender, teamType) => {
       const s = store.get(); // A9: scope the Team list to the full Search Conditions
       return searchTeams("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s, role: "teams" });
@@ -1340,11 +1335,11 @@ export function mountTeam(container, store, onChange) {
 // guards (All disabled while checked; sole season undeselectable) are gone with it.
 //
 // An event with ≤1 in-scope season renders NO dropdown at all (owner ruling): a
-// one-option list is nothing to choose from. The one exception — required by the
-// all-or-nothing reconcile — is an event that IS narrowed right now: its
-// dropdown stays on screen (showing the surviving and the dead picks) so the
-// narrowing can be seen and undone, because hiding a control that is actively
-// filtering would be the invisible-filter problem the ≤1 rule exists to avoid.
+// one-option list is nothing to choose from. The one exception — the
+// invisible-pick guarantee, see the header — is an event that IS narrowed right
+// now: its dropdown stays on screen (showing the surviving and the dead picks) so
+// the narrowing can be seen and undone, because a pick is never rewritten and
+// hiding a control that is actively filtering would strand it forever.
 // If no selected event has more than one season and none is narrowed, the whole
 // child row is hidden.
 //
@@ -1355,11 +1350,15 @@ export function mountTeam(container, store, onChange) {
 // filters.js) and — with it — state.eventSeasons, so in practice the season list
 // is re-derived by RE-PICKING the event under the new window. See the report's
 // CONCERNS for the interaction with that standing decision.
-function mountEventSeasons(container, store, onChange) {
+function mountEventSeasons(container, store, onChange, { onOptionsLoaded = null } = {}) {
   let optionsByEvent = {}; // { [event_name]: [{ event, season, syr, games }] } for loadedKey
   let loadedKey = null;
   let loadToken = 0;
   let loadingKey = null;
+  // Per-event pinned block: the seasons ticked when that dropdown was opened (or
+  // when the season lists last reloaded), frozen while it stays open — the same
+  // rule the other pickers use, so nothing moves under the pointer as you tick.
+  const pinnedByEvent = new Map(); // event -> Set<string>|null
   // One persistent dropdown per event label, created lazily and REUSED. The nodes
   // must outlive a render: wirePortalDropdown registers document-level listeners
   // and remembers the panel's home slot, so rebuilding the markup each render
@@ -1385,13 +1384,27 @@ function mountEventSeasons(container, store, onChange) {
     const cur = getES()[eventName];
     return Array.isArray(cur) && cur.length > 0;
   };
-  /** Picked seasons this event no longer offers — kept by the all-or-nothing
-   * reconcile, so they must stay visible (and un-tickable) in the dropdown. */
+  /** Picked seasons this event no longer offers — never deleted (a pick is never
+   * rewritten), so they must stay visible (and un-tickable) in the dropdown. */
   const deadSeasons = (eventName) => {
     const cur = getES()[eventName];
     if (!Array.isArray(cur)) return [];
     const inScope = new Set(inScopeSeasons(eventName));
     return cur.filter((sn) => !inScope.has(sn));
+  };
+  /** Any event whose season narrowing is ENTIRELY out of scope — that alone
+   * guarantees an empty result set (drawer.js's in-popup notice). Answered only
+   * from season lists that describe the CURRENT state. */
+  const deadReport = () => {
+    if (loadedKey === null || loadedKey !== dataKey()) return null;
+    const values = [];
+    for (const e of store.get().event || []) {
+      const cur = getES()[e];
+      if (!Array.isArray(cur) || cur.length === 0) continue;
+      const dead = deadSeasons(e);
+      if (dead.length === cur.length) values.push(...dead);
+    }
+    return values.length ? { label: "Season", values } : null;
   };
   /** The selected events that get a dropdown: those with MORE THAN ONE in-scope
    * season (owner ruling — one option is nothing to choose), PLUS any event that
@@ -1453,50 +1466,15 @@ function mountEventSeasons(container, store, onChange) {
     for (const r of rows) (grouped[r.event] = grouped[r.event] || []).push(r);
     optionsByEvent = grouped;
     loadedKey = key;
-    // Keep any narrowing honest against the freshly-loaded seasons — but only when
-    // this reply still describes the live state (same currency guard as the other
-    // lists; sync() reloads and reconciles again otherwise).
-    if (key === dataKey()) reconcileNarrowing();
+    // A fresh season list NEVER touches state.eventSeasons (owner ruling — see the
+    // header). Seasons that have dropped out of scope stay in the narrowing and
+    // render as muted rows (deadSeasons above): they are dead disjuncts in the
+    // `season IN (…)` list, so keeping them moves no number, and keeping them is
+    // what lets the season come back to life when the other filters widen again.
+    // The list order changed, so re-pin; then tell the caller (notice refresh).
+    pinnedByEvent.clear();
     render();
-  }
-
-  /** After a fresh load (scope, event selection, OR any sibling filter changed —
-   * dataKey carries all three), reconcile each event's season narrowing against
-   * the seasons NOW in scope, to the SAME all-or-nothing standard the other
-   * pickers use (see the reconcilePicks header), applied PER EVENT:
-   *
-   *   ≥1 picked season still in scope → leave that event's narrowing exactly as
-   *     it is. Seasons that have gone out of scope are kept and rendered as
-   *     muted rows (deadSeasons above) — they are dead disjuncts in the
-   *     `season IN (…)` list, so keeping them cannot move a number, and keeping
-   *     them is what makes the picker order-independent (widen the other filters
-   *     again and the season comes back to life, rather than being gone).
-   *   none survives → drop the key for THAT event only, back to "All seasons",
-   *     so results widen instead of stranding a zero-row filter. This is what
-   *     keeps the picker honest when the date window shrinks while an event
-   *     stays selected (e.g. narrowed to 2024, then a TOOLBAR date change to a
-   *     2026-only window — the toolbar date, unlike the popup date, does NOT
-   *     clear the event).
-   *
-   * An event whose seasons collapse to ≤1 no longer has its narrowing deleted:
-   * visibleEvents() keeps a narrowed event's dropdown on screen, so there is no
-   * invisible filter to guard against. Only writes when something changed, so it
-   * converges (no store-churn loop). */
-  function reconcileNarrowing() {
-    const es = getES();
-    const events = store.get().event || [];
-    const next = { ...es };
-    let changed = false;
-    for (const e of events) {
-      const cur = es[e];
-      if (!Array.isArray(cur)) continue; // already "All"
-      if (cur.length === 0) continue; // the owner's empty selection — honest, no narrowing
-      const inScope = new Set(inScopeSeasons(e));
-      if (cur.some((sn) => inScope.has(sn))) continue; // ≥1 survivor → keep the LOT
-      delete next[e];
-      changed = true;
-    }
-    if (changed) store.set({ eventSeasons: next });
+    if (onOptionsLoaded) onOptionsLoaded();
   }
 
   /** Toggle summary for one event's season dropdown. Reads out what is ACTUALLY
@@ -1534,7 +1512,15 @@ function mountEventSeasons(container, store, onChange) {
       panel: el.querySelector('[data-role="es-panel"]'),
       list: el.querySelector('[data-role="es-list"]'),
     };
-    g.dropdown = wirePortalDropdown(g.toggle, g.panel);
+    // Re-assert this event's pinned block on every open, then re-place the panel
+    // (the row order can change its height).
+    g.dropdown = wirePortalDropdown(g.toggle, g.panel, {
+      onOpen: () => {
+        pinnedByEvent.delete(eventName);
+        renderGroup(eventName);
+        g.dropdown.reposition();
+      },
+    });
     g.panel.addEventListener("change", (ev) => {
       const input = ev.target;
       if (!(input instanceof HTMLInputElement)) return;
@@ -1584,26 +1570,35 @@ function mountEventSeasons(container, store, onChange) {
       <input type="checkbox" data-all ${onAll ? "checked" : ""} />
       <span>All seasons</span>
     </label>`;
-    // Picked seasons this event no longer has in scope: ticked, muted,
-    // annotated — clickable, so un-ticking one removes it for good.
-    const deadBoxes = deadSeasons(eventName)
-      .map(
-        (sn) => `<label class="dropdown__item dropdown__item--dead">
+    // Row order under the "All seasons" box: the picks this event no longer has in
+    // scope (ticked, muted, annotated — clickable, so un-ticking one removes it
+    // for good), then the ticked in-scope seasons (pinned block), then the rest in
+    // season_year_start desc. One hairline closes the block.
+    if (!pinnedByEvent.has(eventName)) pinnedByEvent.set(eventName, new Set(sel));
+    const pin = pinnedByEvent.get(eventName);
+    const dead = deadSeasons(eventName);
+    const pinned = all.filter((sn) => pin.has(sn));
+    const rest = all.filter((sn) => !pin.has(sn));
+    const blockLen = rest.length > 0 ? dead.length + pinned.length : 0;
+    // Dead seasons are by definition absent from `all`, so the first dead.length
+    // rows are exactly the dead ones.
+    const rows = [...dead, ...pinned, ...rest]
+      .map((sn, i) => {
+        const edge = blockLen > 0 && i === blockLen - 1 ? " is-pin-last" : "";
+        if (i < dead.length) {
+          return `<label class="dropdown__item dropdown__item--dead${edge}">
           <input type="checkbox" data-season="${escAttr(sn)}" checked />
           <span>${escHtml(sn)}</span>
           <span class="dropdown__item-note">${escHtml(DEAD_PICK_NOTE)}</span>
-        </label>`
-      )
-      .join("");
-    const seasonBoxes = all
-      .map(
-        (sn) => `<label class="dropdown__item">
+        </label>`;
+        }
+        return `<label class="dropdown__item${edge}">
           <input type="checkbox" data-season="${escAttr(sn)}" ${sel.has(sn) ? "checked" : ""} />
           <span>${escHtml(sn)}</span>
-        </label>`
-      )
+        </label>`;
+      })
       .join("");
-    g.list.innerHTML = allBox + deadBoxes + seasonBoxes;
+    g.list.innerHTML = allBox + rows;
   }
 
   function render() {
@@ -1645,12 +1640,12 @@ function mountEventSeasons(container, store, onChange) {
   }
 
   sync();
-  return { sync };
+  return { sync, deadReport };
 }
 
 /** "Event" — gender + team-type-scoped competition/series picker (state.event),
  * extended (Wave 6 pt2) with a nested season sub-picker below it. */
-export function mountEvent(container, store, onChange) {
+export function mountEvent(container, store, onChange, { onOptionsLoaded = null } = {}) {
   container.innerHTML = `
     <div class="filter-group filter-group--event" data-role="event-wrap">
       <div data-role="event-ms"></div>
@@ -1659,7 +1654,7 @@ export function mountEvent(container, store, onChange) {
   const msHost = container.querySelector('[data-role="event-ms"]');
   const seasonsHost = container.querySelector('[data-role="event-seasons"]');
 
-  const seasons = mountEventSeasons(seasonsHost, store, onChange);
+  const seasons = mountEventSeasons(seasonsHost, store, onChange, { onOptionsLoaded });
 
   /** Drop eventSeasons narrowing for events no longer selected — so a
    * de-selected + re-selected event returns on "All" and the state keeps no
@@ -1693,13 +1688,8 @@ export function mountEvent(container, store, onChange) {
       // decision, but NEVER by the event selection itself (self-exclusion — the
       // list must stay the full in-scope vocabulary while one event is picked).
       siblingExclude: ["event"],
-      // A reconcile that drops an impossible event must clean up after itself
-      // exactly like a hand de-select does: drop that event's orphan season
-      // narrowing, then re-render the season groups.
-      onReconciled: () => {
-        pruneOrphans();
-        seasons.sync();
-      },
+      deadLabel: "Event",
+      onOptionsLoaded,
       loader: (gender, teamType) => {
         const s = store.get(); // A9: scope the Event list to the full Search Conditions
         return searchEvents("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s });
@@ -1718,17 +1708,22 @@ export function mountEvent(container, store, onChange) {
       msController.sync();
       seasons.sync();
     },
+    // Both halves of the Event row can go dead on their own: the event itself, or
+    // (event still fine) its season narrowing. Report whichever applies.
+    deadReport: () => msController.deadReport() || seasons.deadReport(),
   };
 }
 
 /** "Venue" — gender + team-type-scoped ground picker (state.venue). Cascading:
  * with Event = County Championship this lists ONLY county grounds; never narrowed
  * by state.venue itself (self-exclusion). */
-export function mountVenue(container, store, onChange) {
+export function mountVenue(container, store, onChange, { onOptionsLoaded = null } = {}) {
   return mountScopedMultiSelect(container, store, onChange, {
     get: (s) => s.venue || [],
     set: (st, arr) => st.set({ venue: arr }),
     siblingExclude: ["venue"],
+    deadLabel: "Venue",
+    onOptionsLoaded,
     loader: (gender, teamType) => {
       const s = store.get(); // A9: scope the Venue list to the full Search Conditions
       return searchVenues("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s });
@@ -1754,11 +1749,13 @@ export function mountVenue(container, store, onChange) {
  * type label already names it) but unused — the wrapper never renders its own
  * label.
  */
-export function mountOpposition(container, store, onChange, { embedded = false } = {}) {
+export function mountOpposition(container, store, onChange, { embedded = false, onOptionsLoaded = null } = {}) {
   void embedded;
   return mountScopedMultiSelect(container, store, onChange, {
     get: (s) => s.opposition || [],
     set: (st, arr) => st.set({ opposition: arr }),
+    deadLabel: "Opposition",
+    onOptionsLoaded,
     // Cascading: narrowed by "Played for" (with Team = India this lists exactly
     // the teams India faced) but never by state.opposition itself — role:
     // "opposition" is what tells the shared loader which half is self.

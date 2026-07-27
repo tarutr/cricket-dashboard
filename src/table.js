@@ -2334,13 +2334,18 @@ export function mountTable(
     // preset) and, with conditions now per-discipline (#7), nothing is ever inert,
     // so the "N of M" note is moot. No note element remains.
 
-    // Body hint (empty-state guidance inside the table area).
+    // Body hint (empty-state guidance inside the table area). A zero-row search is
+    // now a legitimate outcome — a pick the rest of the filters have made
+    // impossible is kept and greyed rather than reset (owner ruling) — so the
+    // empty case explains itself here rather than leaving a blank table. Owner
+    // ruling: TEXT where the table would be, never a popup, for this case.
     if (bodyHintEl) {
       if (!results) {
         bodyHintEl.textContent = "Set your filters, then press Search.";
         bodyHintEl.hidden = false;
       } else if (lastRows.length === 0) {
-        bodyHintEl.textContent = "No players match these filters.";
+        bodyHintEl.textContent =
+          "No players match these filters. Nothing in the data meets all of your filters and conditions at the same time — open Filters and remove or loosen one, or widen the date range.";
         bodyHintEl.hidden = false;
       } else {
         bodyHintEl.hidden = true;
