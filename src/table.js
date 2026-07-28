@@ -1504,6 +1504,16 @@ export function mountTable(
   let columnsBtnEl = null;
   let clearBtnEl = null;
   let bodyHintEl = null;
+  let blockedNoteEl = null;
+  // Owner-approved, display-only (polish-b1-mechanical, item 2): tracks the
+  // false→true transition of "a player is picked but a date is missing" so
+  // the ONE-TIME date-field pulse (item 2a) fires exactly on that edge, never
+  // on every syncToolbar pass (which runs on every store change). Separately,
+  // `blockedHintVisible` (item 2b) is set true by a click on the greyed
+  // Search button and cleared the moment the block resolves (both dates set,
+  // or the player pick is cleared) — recomputed fresh in syncToolbar.
+  let prevDatesNeedInput = false;
+  let blockedHintVisible = false;
   // Manifest date bounds (min/max "YYYY-MM-DD"), stashed via setDateBounds so a
   // skeleton rebuild (Clear/error→Search) can re-apply them to the fresh date
   // inputs. The toolbar dates bind the SAME state.dateFrom/dateTo as the popup's.
@@ -1591,11 +1601,12 @@ export function mountTable(
         </div>
         <div class="table-toolbar__right">
           <div class="table-toolbar__row-count" data-role="row-count"></div>
-          <button type="button" class="btn btn--primary table-toolbar__search-btn" data-role="toolbar-search" disabled>Search</button>
+          <button type="button" class="btn btn--primary table-toolbar__search-btn is-blocked" data-role="toolbar-search" aria-disabled="true">Search</button>
           <button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>
           <button type="button" class="btn btn--ghost table-toolbar__clear-btn" data-role="toolbar-clear-btn">Clear</button>
         </div>
       </div>
+      <p class="table-toolbar__blocked-note" data-role="toolbar-blocked-note" hidden></p>
       <div class="table-pills-host" data-role="table-pills-host"></div>
       <div class="table-body-wrap" data-role="table-body-wrap">
         <div class="table-loading-overlay" aria-live="polite" hidden>Running query…</div>
@@ -1619,6 +1630,7 @@ export function mountTable(
     showMoreBtnEl = container.querySelector('[data-role="show-more-btn"]');
     showTop50BtnEl = container.querySelector('[data-role="show-top50-btn"]');
     bodyHintEl = container.querySelector('[data-role="table-body-hint"]');
+    blockedNoteEl = container.querySelector('[data-role="toolbar-blocked-note"]');
     dateFromEl = container.querySelector('[data-role="toolbar-date-from"]');
     dateToEl = container.querySelector('[data-role="toolbar-date-to"]');
     presetSelectEl = container.querySelector('[data-role="preset-select"]');
@@ -1720,10 +1732,36 @@ export function mountTable(
 
     // SEARCH button (R3.2): replaces the old toolbar "Graph" button and is the
     // ONE query trigger from the toolbar — main.js's runSearch commits pending
-    // → applied and loads. syncToolbar gates its enabled/dirty state.
+    // → applied and loads. syncToolbar gates its enabled/blocked state.
+    //
+    // Owner-approved, display-only (polish-b1-mechanical, item 2b): the button
+    // is no longer natively `disabled` while blocked (aria-disabled="true" +
+    // the .is-blocked look instead — see syncToolbar) specifically so THIS
+    // click still fires when blocked: a natively-disabled button emits no
+    // click event at all, which would make the red hint below undetectable.
     if (searchBtnEl) {
       searchBtnEl.addEventListener("click", () => {
-        if (searchBtnEl.disabled) return;
+        if (searchBtnEl.getAttribute("aria-disabled") === "true") {
+          // Blocked. Two distinct reasons share this same look:
+          //   • dates missing — Search literally cannot run yet. This is the
+          //     "you must pick a date" block item 2b targets: show the red
+          //     hint + one pulse, honest in every case since the dates truly
+          //     are missing regardless of anything else.
+          //   • dates are fine but nothing has changed since the last Search
+          //     ("up to date" — no player/filter edit pending). Silently a
+          //     no-op, exactly like the native `disabled` button did before
+          //     this change — showing a "pick a date" hint here would be
+          //     false (the dates ARE set).
+          const live = store.get();
+          const searchable = Boolean(live.dateFrom && live.dateTo);
+          if (!searchable) {
+            blockedHintVisible = true;
+            syncToolbar();
+            pulseDateFields();
+          }
+          return;
+        }
+        // Active: behaves exactly as before.
         if (onSearch) onSearch();
       });
     }
@@ -1770,6 +1808,7 @@ export function mountTable(
     showMoreBtnEl = null;
     showTop50BtnEl = null;
     bodyHintEl = null;
+    blockedNoteEl = null;
     dateFromEl = null;
     dateToEl = null;
     presetSelectEl = null;
@@ -1780,6 +1819,10 @@ export function mountTable(
     columnsBtnEl = null;
     clearBtnEl = null;
     presetOptionsDiscipline = null;
+    // A fresh skeleton starts with no pulse/blocked-hint history — the next
+    // syncToolbar() pass re-derives both from the live store from scratch.
+    prevDatesNeedInput = false;
+    blockedHintVisible = false;
   }
 
   /**
@@ -2241,6 +2284,24 @@ export function mountTable(
 
   const setNeedsInput = (el, on) => { if (el) el.classList.toggle("needs-input", !!on); };
 
+  /** Owner-approved, display-only (polish-b1-mechanical, item 2a/2b): fire the
+   * ONE red pulse (styles.css's .date-pulse / toolbar-date-pulse keyframe) on
+   * whichever date field(s) currently carry the static .needs-input outline
+   * (i.e., are actually empty while a player is picked) — never a field that's
+   * already filled in. Removing then re-adding the class (with a forced
+   * reflow in between) restarts the animation on every call, including a
+   * second call before the first pulse has finished. `prefers-reduced-motion`
+   * is handled entirely in CSS (the animation is simply suppressed there; the
+   * static outline is untouched either way). */
+  function pulseDateFields() {
+    for (const el of [dateFromEl, dateToEl]) {
+      if (!el || !el.classList.contains("needs-input")) continue;
+      el.classList.remove("date-pulse");
+      void el.offsetWidth; // eslint-disable-line no-void -- force reflow to restart the animation
+      el.classList.add("date-pulse");
+    }
+  }
+
   /** (Re)build the preset <select>'s option list for a discipline (batting and
    * bowling have different preset vocabularies). A hidden, disabled "Custom"
    * option is included so syncToolbar can display "Custom" whenever the current
@@ -2293,6 +2354,15 @@ export function mountTable(
       dateToEl.value = live.dateTo || "";
       setNeedsInput(dateToEl, playerPicked && !live.dateTo);
     }
+    // Owner-approved, display-only (item 2a): ONE red pulse, fired only on the
+    // false→true EDGE into "a player is picked but a date is missing" — this
+    // function runs on every store change (main.js's subscribe hook), so a
+    // plain "pulse whenever the condition is true" would spam the animation on
+    // every keystroke. Tracking the previous value and pulsing only on the
+    // transition keeps it to exactly one pop, then rest as the static outline.
+    const datesNeedInput = playerPicked && (!live.dateFrom || !live.dateTo);
+    if (datesNeedInput && !prevDatesNeedInput) pulseDateFields();
+    prevDatesNeedInput = datesNeedInput;
 
     // Preset dropdown (pending) — options per-discipline; Phases disabled when
     // the format selection doesn't permit it; whole control greyed in matchup
@@ -2326,14 +2396,25 @@ export function mountTable(
 
     // Search button — dirty iff pending ≠ applied; enabled iff dirty AND
     // searchable (both dates present). Mirrors the graph's Update-chart button:
-    // accent-filled + enabled when there's something to apply, muted+disabled
-    // when the displayed table is already up to date.
+    // accent-filled + enabled when there's something to apply, muted+"blocked"
+    // when the displayed table is already up to date or a date is missing.
+    //
+    // Owner-approved, display-only (item 2b): blocked is no longer the native
+    // `disabled` attribute — a natively-disabled button emits no click event,
+    // so the blocked-click hint below could never detect the click. It's now
+    // `aria-disabled="true"` + the `.is-blocked` class (styles.css reproduces
+    // the exact same muted look `.btn:disabled` gives every other disabled
+    // button). The enabled path (active === true) is byte-for-byte unchanged.
+    let searchable = false;
     if (searchBtnEl) {
       const dirty = serializeQueryState(live) !== serializeQueryState(applied);
-      const searchable = Boolean(live.dateFrom && live.dateTo);
+      searchable = Boolean(live.dateFrom && live.dateTo);
       const active = dirty && searchable;
-      searchBtnEl.disabled = !active;
       searchBtnEl.classList.toggle("is-dirty", active);
+      searchBtnEl.classList.toggle("is-blocked", !active);
+      searchBtnEl.setAttribute("aria-disabled", active ? "false" : "true");
+    } else {
+      searchable = Boolean(live.dateFrom && live.dateTo);
     }
 
     // R5-A #1: the toolbar honesty note ("Matchup mode" / "N of M stat conditions
@@ -2341,22 +2422,51 @@ export function mountTable(
     // preset) and, with conditions now per-discipline (#7), nothing is ever inert,
     // so the "N of M" note is moot. No note element remains.
 
+    // Owner-approved, display-only (item 2b): a click on the blocked Search
+    // button (see the click handler above) sets blockedHintVisible = true.
+    // It's cleared the moment the block actually resolves — both dates set,
+    // or the player pick that made the date matter is gone — recomputed
+    // fresh here on every pass so a fix anywhere clears the hint as soon as
+    // it takes effect (it never has to be dismissed by hand).
+    if (blockedHintVisible && (searchable || !playerPicked)) blockedHintVisible = false;
+
     // Body hint (empty-state guidance inside the table area). A zero-row search is
     // now a legitimate outcome — a pick the rest of the filters have made
     // impossible is kept and greyed rather than reset (owner ruling) — so the
     // empty case explains itself here rather than leaving a blank table. Owner
     // ruling: TEXT where the table would be, never a popup, for this case.
+    //
+    // Item 2b adds ONE more case, layered on top without changing the others:
+    // while blockedHintVisible and no table is displayed yet (!results), this
+    // SAME element carries the red "pick a date" hint instead of the usual
+    // prompt — never a second element, never overwriting a displayed table.
     if (bodyHintEl) {
-      if (!results) {
+      if (blockedHintVisible && !results) {
+        bodyHintEl.textContent = "Pick a start and end date to search.";
+        bodyHintEl.classList.add("table-body-hint--blocked");
+        bodyHintEl.hidden = false;
+      } else if (!results) {
         bodyHintEl.textContent = "Set your filters, then press Search.";
+        bodyHintEl.classList.remove("table-body-hint--blocked");
         bodyHintEl.hidden = false;
       } else if (lastRows.length === 0) {
         bodyHintEl.textContent =
           "No players match these filters. Nothing in the data meets all of your filters and conditions at the same time — open Filters and remove or loosen one, or widen the date range.";
+        bodyHintEl.classList.remove("table-body-hint--blocked");
         bodyHintEl.hidden = false;
       } else {
+        bodyHintEl.classList.remove("table-body-hint--blocked");
         bodyHintEl.hidden = true;
       }
+    }
+
+    // Item 2b's rare "a table is already displayed" case (dirty + date
+    // cleared): the table itself is never touched — this separate line under
+    // the toolbar carries the red hint instead, non-destructively.
+    if (blockedNoteEl) {
+      const showNote = blockedHintVisible && results;
+      blockedNoteEl.hidden = !showNote;
+      blockedNoteEl.textContent = showNote ? "Pick a start and end date to search." : "";
     }
   }
 

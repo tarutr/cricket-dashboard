@@ -1213,8 +1213,14 @@ a { color: var(--color-accent); }
 /* SEARCH button dirty state (item: pending cue) — mirrors the graph's
    Update-chart button. Enabled ⟺ there's something to apply (pending ≠ applied
    AND both dates set): it lifts into the editorial red accent. Otherwise the
-   button is `disabled` and falls back to the muted .btn:disabled at-rest look
-   ("nothing to search"). */
+   button reads the SAME muted "nothing to search" look the shared
+   `.btn:disabled` rule gives every other disabled button in the app — but
+   (owner-approved, polish-b1-mechanical, item 2b) it is no longer natively
+   `disabled` while blocked, so it can still receive a click (needed to show
+   the date-required hint below). `.is-blocked` reproduces `.btn:disabled`'s
+   exact look by hand, including its hover state (a native-disabled button
+   never fires :hover; this one can, since it's a real enabled control, so the
+   hover override below keeps it visually at rest). */
 .table-toolbar__search-btn.is-dirty {
   background: var(--color-accent);
   border-color: var(--color-accent);
@@ -1223,6 +1229,14 @@ a { color: var(--color-accent); }
 .table-toolbar__search-btn.is-dirty:hover {
   background: var(--color-accent-strong);
   border-color: var(--color-accent-strong);
+  opacity: 1;
+}
+.table-toolbar__search-btn.is-blocked,
+.table-toolbar__search-btn.is-blocked:hover {
+  cursor: not-allowed;
+  background: var(--color-panel);
+  color: var(--color-muted);
+  border-color: var(--color-line);
   opacity: 1;
 }
 
@@ -1250,6 +1264,45 @@ a { color: var(--color-accent); }
   outline: 2px solid var(--color-bad);
   outline-offset: -1px;
 }
+
+/* Owner-approved, display-only (polish-b1-mechanical, item 2a/2b): ONE red
+   pulse on an empty, needs-input date field — fired on the false→true
+   transition into "a player is picked but a date is missing" (table.js's
+   syncToolbar), and again on a click of the blocked Search button. A single,
+   non-repeating ring flash that settles back into the existing static
+   .needs-input outline above — never a looping/attention-grabbing animation.
+   rgba(156,43,43,…) is --color-bad's fixed-light hex (same precedent as the
+   graph's own .needs-input box-shadow further down this file). */
+@keyframes toolbar-date-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(156, 43, 43, 0.55); }
+  70% { box-shadow: 0 0 0 8px rgba(156, 43, 43, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(156, 43, 43, 0); }
+}
+.table-toolbar__date.date-pulse {
+  animation: toolbar-date-pulse 0.6s ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .table-toolbar__date.date-pulse { animation: none; }
+}
+
+/* Owner-approved, display-only (polish-b1-mechanical, item 2b): the red
+   "pick a date" hint shown when the greyed Search button is clicked while a
+   date is missing. Two placements, both display-only and never touching what
+   the table shows:
+     • .table-body-hint--blocked recolors the EXISTING empty-state hint (the
+       "Set your filters, then press Search" copy) red — used whenever no
+       table is displayed yet, so nothing is overwritten, only recolored.
+     • .table-toolbar__blocked-note is a SEPARATE small line directly under
+       the toolbar, used only in the rare case a table is already on screen
+       (dirty + date cleared) — the table itself is never touched. */
+.table-body-hint--blocked { color: var(--color-bad); }
+.table-toolbar__blocked-note {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-2);
+  color: var(--color-bad);
+  font-size: var(--text-sm2);
+}
+.table-toolbar__blocked-note[hidden] { display: none; }
 
 /* ── Pills host, between the toolbar and the table (F2 task 5) ──────────────
    Relocated from the page-level #pills-bar (a sibling of #table-area) to
@@ -2926,6 +2979,26 @@ a { color: var(--color-accent); }
 }
 .graph-roster-item__remove { flex: 0 0 auto; }
 .graph-roster-item.is-disabled .graph-roster-item__name { color: var(--color-muted); }
+
+/* Owner-approved, display-only (polish-b1-mechanical, item 1): mark a Stats
+   pin in the Graph's player roster dropdown — a faint red row tint + a small
+   pin icon — so a pinned player can't be mistaken for one that just passed
+   the filters. Same accent colours the Stats pin toggle already uses. Never
+   changes which players are charted or any value; the row keeps its own
+   checked/disabled/margin rules exactly as before. */
+.graph-roster-item.is-pinned { background: var(--color-accent-tint); }
+.graph-roster-item__pin-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-accent);
+}
+.graph-roster-item__pin-icon svg {
+  width: 0.85em;
+  height: 0.85em;
+  fill: currentColor;
+  display: block;
+}
 
 /* R6 #9 (R6b refinement): usability badge — a small pill on the right of each
    roster row saying whether the player has the data the CURRENT chart type

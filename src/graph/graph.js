@@ -159,6 +159,17 @@ function metricConditionKeys(state) {
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+// Owner-approved, display-only (polish-b1-mechanical, item 1): the roster
+// dropdown marks any player who is a Stats pin (state.pinnedPlayers) so a
+// pinned player can't be mistaken for one that simply passed the filters.
+// Same pushpin glyph as table.js's PIN_GLYPH (not exported there, so
+// duplicated here — same precedent as this file's own wireDropdown()/
+// positionFixedPanel() copies of filters.js/searchSelect.js internals: this
+// batch's ownership is src/graph/*.js only). Colour comes entirely from CSS
+// (.graph-roster-item__pin-icon / .graph-roster-item.is-pinned), never JS.
+const ROSTER_PIN_GLYPH =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg>';
+
 // R7 Wave 2 (item 16): the graph-local scope clone is gone — the Graph Builder
 // now SHARES the Stats filter store (see mountGraph's `store`). Wave B made the
 // sharing complete: the graph HONOURS matchup ("Vs") mode too (matchup metrics
@@ -2055,6 +2066,28 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     });
   }
 
+  /** The current Stats pin ids (state.pinnedPlayers, [{id,name}]) as a Set of
+   * strings, for the roster pin-marker below. Opt-in / read-only: this never
+   * writes to pinnedPlayers, only reads it. */
+  function pinnedIdSet() {
+    return new Set((store.get().pinnedPlayers || []).filter((p) => p && p.id != null).map((p) => String(p.id)));
+  }
+
+  /** Paint the pin marker (icon + row tint) on every rendered roster row IN
+   * PLACE — same "patch, don't rebuild" pattern as paintBadges() above, so a
+   * pin toggled elsewhere never disturbs the roster's scroll/focus/typed
+   * filter. Display only: never touches selection.* / checked state. */
+  function paintPinnedRows() {
+    if (!els.rosterList) return;
+    const pinned = pinnedIdSet();
+    els.rosterList.querySelectorAll(".graph-roster-item").forEach((row) => {
+      const isPinned = pinned.has(String(row.dataset.id));
+      row.classList.toggle("is-pinned", isPinned);
+      const icon = row.querySelector('[data-role="roster-pin-icon"]');
+      if (icon) icon.hidden = !isPinned;
+    });
+  }
+
   function renderPlayerList() {
     const checkedCount = selection.checkedCount();
     const candidates = selection.getFull();
@@ -2138,6 +2171,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
               : "Add to graph";
           return `<div class="dropdown__item graph-roster-item${atCap ? " is-disabled" : ""}" data-id="${escAttr(p.id)}">
               <input type="checkbox" data-role="roster-check" data-id="${escAttr(p.id)}" ${checked ? "checked" : ""} ${atCap ? "disabled" : ""} title="${escAttr(title)}" />
+              <span class="graph-roster-item__pin-icon" data-role="roster-pin-icon" hidden aria-hidden="true" title="Pinned in Stats">${ROSTER_PIN_GLYPH}</span>
               <span class="graph-roster-item__name">${escHtml(p.name)}</span>
               <span class="graph-roster-item__badge" data-role="roster-badge" hidden></span>
               <button type="button" class="icon-btn graph-roster-item__remove" data-role="remove-candidate" data-id="${escAttr(p.id)}" title="Remove from list">&times;</button>
@@ -2183,9 +2217,23 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // players already resolved for the current chart configuration.
     paintBadges();
     scheduleBadgeRefresh();
+    paintPinnedRows();
   }
 
   wireDropdown(els.rosterToggle, els.rosterPanel);
+
+  // Owner-approved, display-only (item 1): keep the roster's pin markers in
+  // sync with the shared Stats store even when the panel isn't otherwise
+  // re-rendering (e.g. the list stays open across an unrelated state change).
+  // Guarded by a signature compare so the ~1 store notify/keystroke on other
+  // controls doesn't do wasted DOM work; only an actual pin add/remove repaints.
+  let lastPinSignature = [...pinnedIdSet()].sort().join(",");
+  store.subscribe(() => {
+    const sig = [...pinnedIdSet()].sort().join(",");
+    if (sig === lastPinSignature) return;
+    lastPinSignature = sig;
+    paintPinnedRows();
+  });
 
   // Owner point 13: filter-as-you-type over the (full) pool. The input lives in
   // the static panel markup (not rebuilt by renderPlayerList), so typing keeps
