@@ -84,6 +84,14 @@ EXPORT_FILES = {
     "bowling_innings.parquet": ["match_id", "innings_number", "bowler_id"],
     "player_matches.parquet": ["match_id", "player_id"],
     "player_profiles.parquet": ["player_id"],
+    # FIELDING REBUILD (Wave-3 redo at finer grain): ONE row per (wicket,
+    # credited fielder) — re-derived STANDALONE from raw wicket_fielders/wickets/
+    # deliveries. The synthetic fielder_index=0 c&b (bowler-catch) rows carry no
+    # wicket_fielders row (0 of 9,920 verified), so this 6-col key is unique.
+    "fielding_events.parquet": [
+        "match_id", "innings_number", "over_number", "ball_index",
+        "wicket_index", "fielder_index",
+    ],
     # D4 matchup files (men-only in practice; unmapped opponents bucketed as
     # '(unmapped)' so the browser can compute an honest N-of-M denominator).
     "matchup_batting.parquet": ["match_id", "innings_number", "batter_id", "bowling_type"],
@@ -99,6 +107,7 @@ CONTENT_TYPES = {
     "bowling_innings.parquet": "application/vnd.apache.parquet",
     "player_matches.parquet": "application/vnd.apache.parquet",
     "player_profiles.parquet": "application/vnd.apache.parquet",
+    "fielding_events.parquet": "application/vnd.apache.parquet",
     "matchup_batting.parquet": "application/vnd.apache.parquet",
     "matchup_bowling.parquet": "application/vnd.apache.parquet",
     "manifest.json": "application/json",
@@ -338,7 +347,29 @@ def sql_matches():
     # matches list all matches; super-over exclusion applies to stats rows.
     # The spec sorts by match_date then match_id; a match always has ordinary
     # innings, so keep all matches.
-    return """
+    #
+    # Wave 6 (match context, owner-approved design .orchestrator/wave6-design.md):
+    # ADDITIVE — the 14 pre-existing columns above stay byte-identical; the block
+    # below is appended so the browser can filter on match context (result / toss /
+    # innings order / stage / method) and, in a later task, the Event -> Season
+    # picker. Three DERIVED columns:
+    #   team_batting_first = the innings_number=0 batting_team for the match (the
+    #     authoritative "who batted first"). LEFT JOIN to innings (exactly one
+    #     innings-0 row per match; verified 0 duplicates, 0 super-over at innings 0;
+    #     1 match has no innings 0 -> NULL there, which is correct).
+    #   match_winner = winner (regulation) ELSE the parsed 'tie (X)' team (super
+    #     over) ELSE NULL (true tie / draw / no result). VERIFIED: `winner` and
+    #     `result_type` are mutually exclusive; all 108 'tie (X)' rows parse to a
+    #     team that is exactly team_1 or team_2. So a super-over WIN counts as a Win.
+    #   is_super_over = (result_type LIKE 'tie (%)') -> BOOLEAN (the 108 super overs).
+    #     WRAPPED IN COALESCE(..., false) — DEFECT FIX (Wave 6 polish item 1): the
+    #     bare LIKE returns NULL whenever result_type is NULL, which it is for every
+    #     ordinary win (20,527 of 22,229 rows). Truthy filters were unaffected (NULL
+    #     is not TRUE), but ANY negation (NOT is_super_over) silently dropped those
+    #     20,527 rows instead of keeping them. COALESCE makes the column a true
+    #     BOOLEAN: exactly the same 108 TRUE rows, the other 22,121 now FALSE rather
+    #     than NULL/FALSE. Verified against the live DB: 108 before == 108 after.
+    return r"""
     SELECT
         m.match_id,
         m.match_type,
@@ -353,8 +384,33 @@ def sql_matches():
         m.team_1,
         m.team_2,
         m.winner,
-        m.result_type
+        m.result_type,
+        -- Wave 6 (ADDITIVE): raw match-context columns straight off `matches`.
+        m.toss_winner,
+        m.toss_decision,
+        m.result_margin,
+        m.result_margin_type,
+        m.method,
+        m.event_stage,
+        m.event_group,
+        m.event_match_number,
+        m.season,
+        m.season_year_start,
+        -- Wave 6 (ADDITIVE): derived columns (see the block comment above).
+        ibf.team_batting_first AS team_batting_first,
+        CASE
+            WHEN m.winner IS NOT NULL THEN m.winner
+            WHEN m.result_type LIKE 'tie (%)'
+                 THEN regexp_extract(m.result_type, '^tie \((.*)\)$', 1)
+            ELSE NULL
+        END AS match_winner,
+        COALESCE(m.result_type LIKE 'tie (%)', false) AS is_super_over
     FROM matches m
+    LEFT JOIN (
+        SELECT match_id, batting_team AS team_batting_first
+        FROM innings
+        WHERE innings_number = 0
+    ) ibf ON ibf.match_id = m.match_id
     ORDER BY m.match_date_1, m.match_id
     """
 
@@ -443,6 +499,24 @@ def sql_batting():
             SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS dots,
             SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS fours_hit,
             SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS sixes_hit,
+            -- Batting composition / rotation counts (Wave 1, ADDITIVE). Faithful
+            -- to reference/ingest.py build_batters (faced ball = wides IS NULL;
+            -- no-balls count as faced). ones/twos/threes/fives are faced balls
+            -- scored for exactly 1/2/3/5. nb_fours/nb_sixes are RAN fours/sixes
+            -- (runs_batter 4/6 AND is_not_boundary IS TRUE) -- the complement of
+            -- the boundary fours_hit/sixes_hit (is_not_boundary IS NOT TRUE), so
+            -- fours_hit + nb_fours = all 4-run balls, likewise for sixes.
+            -- non_boundary_runs = runs off the bat NOT from boundary 4s/6s, i.e.
+            -- SUM(runs_batter) - 4*fours_hit - 6*sixes_hit (source `nbr`).
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 1 THEN 1 ELSE 0 END) AS ones,
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 2 THEN 1 ELSE 0 END) AS twos,
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 3 THEN 1 ELSE 0 END) AS threes,
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 5 THEN 1 ELSE 0 END) AS fives,
+            SUM(CASE WHEN d.runs_batter = 4 AND d.is_not_boundary IS TRUE THEN 1 ELSE 0 END) AS nb_fours,
+            SUM(CASE WHEN d.runs_batter = 6 AND d.is_not_boundary IS TRUE THEN 1 ELSE 0 END) AS nb_sixes,
+            SUM(d.runs_batter)
+                - 4 * SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END)
+                - 6 * SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS non_boundary_runs,
             -- T20-family phase components (batter legality = faced)
             SUM(CASE WHEN {t20_phase_expr()} = 'pp'    THEN d.runs_batter ELSE 0 END) AS pp_runs,
             SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {FACED_BATTER} THEN 1 ELSE 0 END) AS pp_balls,
@@ -555,6 +629,31 @@ def sql_batting():
             SUM(CASE WHEN wides IS NULL AND faced_num >= 21             THEN 1 ELSE 0 END)           AS fb21p_balls
         FROM faced_seq
         GROUP BY match_id, innings_number, batter_id
+    ),
+    -- Whole batting side's faced balls per innings (all batters; wides IS NULL,
+    -- no-balls count as faced) -- source `team_stats(...)['balls']` (= `tib`),
+    -- the denominator for balls-faced share. One row per (match, innings);
+    -- joined onto every crease row (incl. 0-ball diamond ducks) below.
+    --
+    -- Team-relative batting (Wave 2, ADDITIVE). This CTE now also carries the
+    -- WHOLE side's aggregate batting components per innings -- EXACTLY the
+    -- source's team_stats() over all deliveries in the innings (skip wides;
+    -- no-balls counted as faced): team_runs = SUM(runs_batter) on faced balls,
+    -- team_dots, team_fours/team_sixes = boundary 4s/6s off the bat. team_runs
+    -- is gated on FACED_BATTER to mirror team_stats() (runs_batter is 0 on wides
+    -- in kept innings anyway, so the gate is a faithful no-op). team_inns_balls
+    -- is left byte-identical -- adding SELECT columns cannot change it. The
+    -- side's rates (team_sr / team_dot_pct / team_bpb / team_non_boundary_sr)
+    -- and the batter-minus-team differentials are computed in the final SELECT.
+    team_inns AS (
+        SELECT match_id, innings_number,
+               SUM(CASE WHEN {FACED_BATTER} THEN 1 ELSE 0 END) AS team_inns_balls,
+               SUM(CASE WHEN {FACED_BATTER} THEN d.runs_batter ELSE 0 END) AS team_runs,
+               SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS team_dots,
+               SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS team_fours,
+               SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS team_sixes
+        FROM d
+        GROUP BY match_id, innings_number
     )
     SELECT
         cd.match_id,
@@ -629,7 +728,48 @@ def sql_batting():
         CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_death_dots, 0)      END AS odi_death_dots,
         CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_death_fours, 0)     END AS odi_death_fours,
         CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(ba.odi_death_sixes, 0)     END AS odi_death_sixes,
-        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(dp.odi_death_dismissals, 0) END AS odi_death_dismissals
+        CASE WHEN COALESCE(ba.is_hundred, CASE WHEN mm.balls_per_over=5 THEN 1 ELSE 0 END)=1 THEN NULL ELSE COALESCE(dp.odi_death_dismissals, 0) END AS odi_death_dismissals,
+        -- Batting composition / rotation columns (Wave 1, ADDITIVE). See bat_agg
+        -- for the faithful definitions; 0-ball crease rows (ba NULL) default to 0.
+        COALESCE(ba.ones, 0)              AS ones,
+        COALESCE(ba.twos, 0)              AS twos,
+        COALESCE(ba.threes, 0)            AS threes,
+        COALESCE(ba.fives, 0)             AS fives,
+        COALESCE(ba.nb_fours, 0)          AS nb_fours,
+        COALESCE(ba.nb_sixes, 0)          AS nb_sixes,
+        COALESCE(ba.non_boundary_runs, 0) AS non_boundary_runs,
+        -- Balls-faced-share denominator: whole side's faced balls this innings.
+        COALESCE(ti.team_inns_balls, 0)   AS team_inns_balls,
+        -- Team-relative batting differentials (Wave 2, ADDITIVE; FLOAT). Per
+        -- innings: the batter's own rate MINUS the whole side's rate that
+        -- innings, faithful to reference/ingest.py build_batters (tr_sr/tr_dpt/
+        -- tr_bpb/tr_nb). Each rate uses the divide-by-zero -> NULL rule; a
+        -- differential is NULL when either the batter's or the side's rate is
+        -- NULL (SQL arithmetic with NULL already yields NULL). 0-ball crease
+        -- rows (ba NULL -> 0 balls faced) therefore carry NULL differentials.
+        --   batter: sr=runs/bf*100, dot%=dots/bf*100, bpb=bf/(4s+6s),
+        --           nbsr=non_boundary_runs/(bf-4s-6s)*100
+        --   team  : same over the whole side (team_* from team_inns)
+        CAST(
+            (COALESCE(ba.runs, 0) / NULLIF(COALESCE(ba.balls_faced, 0), 0) * 100.0)
+            - (ti.team_runs / NULLIF(ti.team_inns_balls, 0) * 100.0)
+            AS FLOAT
+        ) AS team_rel_sr,
+        CAST(
+            (COALESCE(ba.dots, 0) / NULLIF(COALESCE(ba.balls_faced, 0), 0) * 100.0)
+            - (ti.team_dots / NULLIF(ti.team_inns_balls, 0) * 100.0)
+            AS FLOAT
+        ) AS team_rel_dot_pct,
+        CAST(
+            (COALESCE(ba.balls_faced, 0) / NULLIF(COALESCE(ba.fours_hit, 0) + COALESCE(ba.sixes_hit, 0), 0))
+            - (ti.team_inns_balls / NULLIF(ti.team_fours + ti.team_sixes, 0))
+            AS FLOAT
+        ) AS team_rel_bpb,
+        CAST(
+            (COALESCE(ba.non_boundary_runs, 0) / NULLIF(COALESCE(ba.balls_faced, 0) - COALESCE(ba.fours_hit, 0) - COALESCE(ba.sixes_hit, 0), 0) * 100.0)
+            - ((ti.team_runs - 4 * ti.team_fours - 6 * ti.team_sixes) / NULLIF(ti.team_inns_balls - ti.team_fours - ti.team_sixes, 0) * 100.0)
+            AS FLOAT
+        ) AS team_rel_nbsr
     FROM crease_dedup cd
     JOIN kept_innings ki
       ON cd.match_id = ki.match_id AND cd.innings_number = ki.innings_number
@@ -644,6 +784,8 @@ def sql_batting():
       ON cd.match_id = dp.match_id AND cd.innings_number = dp.innings_number AND cd.batter_id = dp.pid
     LEFT JOIN prog_agg pg
       ON cd.match_id = pg.match_id AND cd.innings_number = pg.innings_number AND cd.batter_id = pg.batter_id
+    LEFT JOIN team_inns ti
+      ON cd.match_id = ti.match_id AND cd.innings_number = ti.innings_number
     ORDER BY match_date, cd.match_id, cd.innings_number, cd.batter_id
     """
 
@@ -723,6 +865,143 @@ def sql_bowling():
         SELECT match_id, innings_number, bowler_id,
                SUM(CASE WHEN legal_balls = bpo AND conceded = 0 THEN 1 ELSE 0 END) AS maidens
         FROM over_sets
+        GROUP BY match_id, innings_number, bowler_id
+    ),
+    -- Team-relative bowling (Wave 2, ADDITIVE). ------------------------------
+    -- The bowler's own economy in reference/ingest.py build_bowlers uses
+    -- CRICKET overs as the divisor (rc / compute_overs_bowled), NOT balls/6.
+    --   compute_overs_bowled parses the string  complete + '.' + incomplete
+    --   as a float, where complete = number of overs in which the bowler bowled
+    --   exactly 6 legal balls and incomplete = SUM of legal balls in overs with
+    --   fewer than 6 legal balls (overs with more than 6 legal balls contribute
+    --   to neither -- faithfully reproduced).
+    -- Reconstructed here from over_sets (per (match,inn,over,bowler) legal ball
+    -- counts, threshold hard-coded 6 exactly as the source, incl. the Hundred).
+    -- ov is rebuilt by the identical string->float route: CAST('c.i' AS DOUBLE).
+    -- This asymmetry (bowler econ = rc/cricket_overs; team econ below =
+    -- t_runs/(t_balls/6)) is the source's own; it is what innings_bowlers'
+    -- team_relative_economy oracle encodes, so it is reproduced verbatim.
+    bowler_overs AS (
+        SELECT match_id, innings_number, bowler_id,
+               SUM(CASE WHEN legal_balls = 6 THEN 1 ELSE 0 END) AS complete_overs,
+               SUM(CASE WHEN legal_balls < 6 THEN legal_balls ELSE 0 END) AS incomplete_balls
+        FROM over_sets
+        GROUP BY match_id, innings_number, bowler_id
+    ),
+    -- Whole bowling side's aggregate per innings (all bowlers). Faithful to the
+    -- source team stats in build_bowlers: t_balls = legal balls, t_runs =
+    -- SUM(runs_batter+wides+noballs), t_dots = legal ball with 0 off the bat.
+    team_bowl AS (
+        SELECT match_id, innings_number,
+               SUM(CASE WHEN {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS t_balls,
+               SUM({BOWLER_RUNS}) AS t_runs,
+               SUM(CASE WHEN {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS t_dots
+        FROM d
+        GROUP BY match_id, innings_number
+    ),
+    -- Whole innings' bowler-credited wickets (t_wkts): SUM of the per-delivery
+    -- credited-wicket counts already built in wkt_by_ball (credited kinds only).
+    team_wkts AS (
+        SELECT match_id, innings_number, SUM(wkts) AS t_wkts
+        FROM wkt_by_ball
+        GROUP BY match_id, innings_number
+    ),
+    -- Bowling spells (Wave 4, ADDITIVE). ------------------------------------
+    -- Faithful to reference/ingest.py identify_spells + the build_bowlers spell
+    -- loop. Per (match,inn,bowler) take the DISTINCT over-numbers the bowler
+    -- bowled in (ANY delivery, legal or not -- source uses `all_overs` = set of
+    -- over_number over ALL bdels), sorted ascending; a gap of >= 3 over-numbers
+    -- starts a NEW spell (a gap of 1 or 2 continues the spell). spell_number is
+    -- 1-based and contiguous, so MAX(spell_number) = the spell count.
+    spell_over_map AS (
+        SELECT match_id, innings_number, bowler_id, over_number,
+               1 + SUM(CASE WHEN prev_over IS NOT NULL
+                             AND over_number - prev_over >= 3 THEN 1 ELSE 0 END)
+                   OVER (PARTITION BY match_id, innings_number, bowler_id
+                         ORDER BY over_number
+                         ROWS UNBOUNDED PRECEDING) AS spell_number
+        FROM (
+            SELECT match_id, innings_number, bowler_id, over_number,
+                   LAG(over_number) OVER (
+                       PARTITION BY match_id, innings_number, bowler_id
+                       ORDER BY over_number) AS prev_over
+            FROM (
+                SELECT DISTINCT match_id, innings_number, bowler_id, over_number
+                FROM d
+                WHERE d.bowler_id IS NOT NULL
+            ) distinct_overs
+        ) lagged
+    ),
+    -- Every kept delivery tagged with its spell_number (join on the over it was
+    -- bowled in). The spell over-set spans ILLEGAL deliveries too, exactly as
+    -- the source's `sd = [d for d in bdels if over in sovs]`.
+    spell_deliveries AS (
+        SELECT d.match_id, d.innings_number, d.bowler_id, som.spell_number,
+               d.over_number, d.ball_index,
+               d.wides, d.noballs, d.runs_batter
+        FROM d
+        JOIN spell_over_map som
+          ON d.match_id = som.match_id AND d.innings_number = som.innings_number
+         AND d.bowler_id = som.bowler_id AND d.over_number = som.over_number
+        WHERE d.bowler_id IS NOT NULL
+    ),
+    -- Per-spell bowler-credited wickets (Wave-4 CONSISTENCY FIX): count credited
+    -- kinds on ALL of the bowler's spell deliveries — legal AND illegal — NOT
+    -- legal-only. The old legal-only filter (`sd.wides IS NULL AND sd.noballs IS
+    -- NULL`, mirroring the source's `swk` over `sl`) dropped credited wickets
+    -- that fall on an illegal delivery (e.g. a stumping off a wide), so the
+    -- spell-wicket components diverged from cricdb's own innings `wickets` /
+    -- `wkt_by_ball` (which are all-credited, illegality-agnostic) on ~158
+    -- innings. Counting on ALL spell deliveries makes them agree exactly:
+    -- for spell_count=1, best_spell_wkts == wickets (0 mismatches). This now
+    -- DIVERGES from the SOURCE `bowling_spells.wickets` (which is legal-only —
+    -- buggy) by ~539; that divergence is correct and intended (owner's Wave-2
+    -- ruling: match cricdb's own wickets, not the source's legal-only spell count).
+    spell_wkts AS (
+        SELECT sd.match_id, sd.innings_number, sd.bowler_id, sd.spell_number,
+               COUNT(*) AS s_wkts
+        FROM kept_wickets kw
+        JOIN spell_deliveries sd
+          ON kw.match_id = sd.match_id AND kw.innings_number = sd.innings_number
+         AND kw.over_number = sd.over_number AND kw.ball_index = sd.ball_index
+        GROUP BY sd.match_id, sd.innings_number, sd.bowler_id, sd.spell_number
+    ),
+    -- Per-spell balls / runs conceded. balls = legal deliveries; runs =
+    -- runs_batter+wides+noballs over ALL deliveries in the spell (source `src`).
+    -- (Per-spell dots dropped with the deleted opening/closing-spell columns.)
+    spell_agg AS (
+        SELECT match_id, innings_number, bowler_id, spell_number,
+               SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) AS s_balls,
+               SUM(runs_batter + COALESCE(noballs,0) + COALESCE(wides,0)) AS s_runs
+        FROM spell_deliveries
+        GROUP BY match_id, innings_number, bowler_id, spell_number
+    ),
+    -- One row per spell with balls / runs / wkts + the innings' spell count.
+    spell_full AS (
+        SELECT sa.match_id, sa.innings_number, sa.bowler_id, sa.spell_number,
+               sa.s_balls, sa.s_runs,
+               COALESCE(sw.s_wkts, 0) AS s_wkts,
+               MAX(sa.spell_number) OVER (
+                   PARTITION BY sa.match_id, sa.innings_number, sa.bowler_id) AS n_spells
+        FROM spell_agg sa
+        LEFT JOIN spell_wkts sw
+          ON sa.match_id = sw.match_id AND sa.innings_number = sw.innings_number
+         AND sa.bowler_id = sw.bowler_id AND sa.spell_number = sw.spell_number
+    ),
+    -- Collapse spells to one row per (match,inn,bowler): spell_count = number of
+    -- spells, longest = max legal balls in any spell, best = the innings' best
+    -- single spell (most wickets, ties -> fewest runs). The best-spell pick uses
+    -- the SAME peak rank the Best-Bowling metric uses: wkts*1000 - runs (more
+    -- wickets always wins; fewer runs breaks ties; runs < 1000 always in a spell).
+    -- (Opening/closing-spell columns were deleted per owner ruling: spells are
+    -- match-report-level, not leaderboard, and opening/closing was dropped.)
+    spell_innings AS (
+        SELECT match_id, innings_number, bowler_id,
+               MAX(n_spells) AS spell_count,
+               MAX(s_balls) AS longest_spell_balls,
+               arg_max(s_wkts, s_wkts * 1000 - s_runs) AS best_spell_wkts,
+               arg_max(s_runs, s_wkts * 1000 - s_runs) AS best_spell_runs
+        FROM spell_full
         GROUP BY match_id, innings_number, bowler_id
     ),
     -- Per-ball bowling aggregates keyed by (match,inn,bowler).
@@ -854,7 +1133,48 @@ def sql_bowling():
         CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_mid_sixes_conceded    END AS odi_mid_sixes_conceded,
         CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_death_dots            END AS odi_death_dots,
         CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_death_fours_conceded  END AS odi_death_fours_conceded,
-        CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_death_sixes_conceded  END AS odi_death_sixes_conceded
+        CASE WHEN b.is_hundred=1 THEN NULL ELSE b.odi_death_sixes_conceded  END AS odi_death_sixes_conceded,
+        -- Team-relative bowling differentials (Wave 2, ADDITIVE; FLOAT). Per
+        -- innings: the bowler's own rate MINUS the whole side's rate that
+        -- innings, faithful to reference/ingest.py build_bowlers (tre/trp/trd/
+        -- trs). Divide-by-zero -> NULL everywhere; a differential is NULL when
+        -- either the bowler's or the side's rate is NULL.
+        --   bowler: econ=rc/cricket_overs, pbe=rc/balls, dot%=dots/balls*100,
+        --           sr=balls/wkts
+        --   team  : econ=t_runs/(t_balls/6), pbe=t_runs/t_balls,
+        --           dot%=t_dots/t_balls*100, sr=t_balls/t_wkts
+        CAST(
+            (b.runs_conceded / NULLIF(CAST(CAST(bo.complete_overs AS VARCHAR) || '.' || CAST(bo.incomplete_balls AS VARCHAR) AS DOUBLE), 0))
+            - (tb.t_runs / NULLIF(tb.t_balls / 6.0, 0))
+            AS FLOAT
+        ) AS team_rel_econ,
+        CAST(
+            (b.runs_conceded / NULLIF(b.balls, 0))
+            - (tb.t_runs / NULLIF(tb.t_balls, 0))
+            AS FLOAT
+        ) AS team_rel_pbe,
+        CAST(
+            (b.dots / NULLIF(b.balls, 0) * 100.0)
+            - (tb.t_dots / NULLIF(tb.t_balls, 0) * 100.0)
+            AS FLOAT
+        ) AS team_rel_dot_pct,
+        CAST(
+            (b.balls / NULLIF(COALESCE(w.wickets, 0), 0))
+            - (tb.t_balls / NULLIF(tw.t_wkts, 0))
+            AS FLOAT
+        ) AS team_rel_sr,
+        -- Bowling-spell aggregate columns (match-report only; INT). Every bowler
+        -- in bowl_agg bowled >= 1 delivery -> >= 1 over -> >= 1 spell, so the
+        -- LEFT JOIN always matches and these are never NULL; COALESCE guards the
+        -- type only. spell_count = number of spells, longest = max legal balls in
+        -- any spell, best_ = the innings' best single spell (most wickets, ties ->
+        -- fewest runs). Stored for the future match report; NO leaderboard metric
+        -- references them (opening/closing-spell columns deleted per owner ruling).
+        -- See the spell_* CTEs above.
+        COALESCE(sp.spell_count, 0)         AS spell_count,
+        COALESCE(sp.longest_spell_balls, 0) AS longest_spell_balls,
+        COALESCE(sp.best_spell_wkts, 0)     AS best_spell_wkts,
+        COALESCE(sp.best_spell_runs, 0)     AS best_spell_runs
     FROM bowl_agg b
     LEFT JOIN wkt_agg w
       ON b.match_id = w.match_id AND b.innings_number = w.innings_number AND b.bowler_id = w.bowler_id
@@ -862,6 +1182,14 @@ def sql_bowling():
       ON b.match_id = mn.match_id AND b.innings_number = mn.innings_number AND b.bowler_id = mn.bowler_id
     LEFT JOIN wkt_kind_agg wk
       ON b.match_id = wk.match_id AND b.innings_number = wk.innings_number AND b.bowler_id = wk.bowler_id
+    LEFT JOIN bowler_overs bo
+      ON b.match_id = bo.match_id AND b.innings_number = bo.innings_number AND b.bowler_id = bo.bowler_id
+    LEFT JOIN team_bowl tb
+      ON b.match_id = tb.match_id AND b.innings_number = tb.innings_number
+    LEFT JOIN team_wkts tw
+      ON b.match_id = tw.match_id AND b.innings_number = tw.innings_number
+    LEFT JOIN spell_innings sp
+      ON b.match_id = sp.match_id AND b.innings_number = sp.innings_number AND b.bowler_id = sp.bowler_id
     ORDER BY b.match_date, b.match_id, b.innings_number, b.bowler_id
     """
 
@@ -1057,6 +1385,19 @@ def sql_matchup_batting():
             SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS dots,
             SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS fours_hit,
             SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS sixes_hit,
+            -- Batting composition / rotation counts (Wave 1, ADDITIVE), at the
+            -- matchup grain (per bowling_type). Identical definitions to
+            -- sql_batting()'s bat_agg -- see that comment. Summed over all
+            -- bowling_types they reconcile to batting_innings per (match,inn,batter).
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 1 THEN 1 ELSE 0 END) AS ones,
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 2 THEN 1 ELSE 0 END) AS twos,
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 3 THEN 1 ELSE 0 END) AS threes,
+            SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 5 THEN 1 ELSE 0 END) AS fives,
+            SUM(CASE WHEN d.runs_batter = 4 AND d.is_not_boundary IS TRUE THEN 1 ELSE 0 END) AS nb_fours,
+            SUM(CASE WHEN d.runs_batter = 6 AND d.is_not_boundary IS TRUE THEN 1 ELSE 0 END) AS nb_sixes,
+            SUM(d.runs_batter)
+                - 4 * SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END)
+                - 6 * SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS non_boundary_runs,
             SUM(COALESCE(cwkt.wkts, 0)) AS dismissals,
             MAX(CASE WHEN d.balls_per_over = 5 THEN 1 ELSE 0 END) AS is_hundred,
             SUM(CASE WHEN {t20_phase_expr()} = 'pp'    THEN d.runs_batter ELSE 0 END) AS pp_runs,
@@ -1111,6 +1452,26 @@ def sql_matchup_batting():
         GROUP BY d.match_id, d.innings_number, d.batter_id,
                  COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)'),
                  COALESCE(pp.bowling_group, '(unmapped)')
+    ),
+    -- Team-relative batting at matchup grain (Wave 2, ADDITIVE). "team vs that
+    -- type" = the WHOLE side's aggregate against that bowling_type this innings
+    -- (all batters), keyed identically to mb.bowling_type (same COALESCE + same
+    -- pp join). The differential (final SELECT) is batter-vs-type MINUS
+    -- team-vs-type, mirroring the plain batting_innings team-relative logic at
+    -- this narrower grain ("did he handle this type better than his side did").
+    team_type_agg AS (
+        SELECT d.match_id, d.innings_number,
+               COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)') AS bowling_type,
+               SUM(CASE WHEN {FACED_BATTER} THEN 1 ELSE 0 END) AS t_balls,
+               SUM(CASE WHEN {FACED_BATTER} THEN d.runs_batter ELSE 0 END) AS t_runs,
+               SUM(CASE WHEN {FACED_BATTER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS t_dots,
+               SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS t_fours,
+               SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS t_sixes
+        FROM d
+        LEFT JOIN player_profiles pp ON d.bowler_id = pp.player_id
+        WHERE d.batter_id IS NOT NULL
+        GROUP BY d.match_id, d.innings_number,
+                 COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)')
     )
     SELECT
         mb.match_id, mb.innings_number, mb.batter_id, mb.bowling_type, mb.bowling_group,
@@ -1146,7 +1507,32 @@ def sql_matchup_batting():
         CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_fours      END AS odi_death_fours,
         CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_sixes      END AS odi_death_sixes,
         CASE WHEN mb.is_hundred=1 THEN NULL ELSE mb.odi_death_dismissals END AS odi_death_dismissals,
-        pos.batting_position AS batting_position
+        pos.batting_position AS batting_position,
+        -- Batting composition / rotation columns (Wave 1, ADDITIVE), matchup grain.
+        mb.ones, mb.twos, mb.threes, mb.fives, mb.nb_fours, mb.nb_sixes, mb.non_boundary_runs,
+        -- Team-relative batting differentials at matchup grain (Wave 2, ADDITIVE;
+        -- FLOAT). batter-vs-type MINUS team-vs-type; same four rates and the same
+        -- divide-by-zero -> NULL rule as batting_innings.parquet.
+        CAST(
+            (mb.runs / NULLIF(mb.balls_faced, 0) * 100.0)
+            - (tt.t_runs / NULLIF(tt.t_balls, 0) * 100.0)
+            AS FLOAT
+        ) AS team_rel_sr,
+        CAST(
+            (mb.dots / NULLIF(mb.balls_faced, 0) * 100.0)
+            - (tt.t_dots / NULLIF(tt.t_balls, 0) * 100.0)
+            AS FLOAT
+        ) AS team_rel_dot_pct,
+        CAST(
+            (mb.balls_faced / NULLIF(mb.fours_hit + mb.sixes_hit, 0))
+            - (tt.t_balls / NULLIF(tt.t_fours + tt.t_sixes, 0))
+            AS FLOAT
+        ) AS team_rel_bpb,
+        CAST(
+            (mb.non_boundary_runs / NULLIF(mb.balls_faced - mb.fours_hit - mb.sixes_hit, 0) * 100.0)
+            - ((tt.t_runs - 4 * tt.t_fours - 6 * tt.t_sixes) / NULLIF(tt.t_balls - tt.t_fours - tt.t_sixes, 0) * 100.0)
+            AS FLOAT
+        ) AS team_rel_nbsr
     FROM mb
     LEFT JOIN dis_kind dk
       ON mb.match_id = dk.match_id AND mb.innings_number = dk.innings_number
@@ -1154,6 +1540,9 @@ def sql_matchup_batting():
     LEFT JOIN positions pos
       ON mb.match_id = pos.match_id AND mb.innings_number = pos.innings_number
      AND mb.batter_id = pos.pid
+    LEFT JOIN team_type_agg tt
+      ON mb.match_id = tt.match_id AND mb.innings_number = tt.innings_number
+     AND mb.bowling_type = tt.bowling_type
     ORDER BY mb.match_date, mb.match_id, mb.innings_number, mb.batter_id, mb.bowling_type
     """
 
@@ -1321,6 +1710,43 @@ def sql_matchup_bowling():
         GROUP BY d.match_id, d.innings_number, d.bowler_id,
                  COALESCE(pp.batting_style, '(unmapped)'),
                  pos.batting_position
+    ),
+    -- Team-relative bowling at matchup grain (Wave 2, ADDITIVE). "team" = the
+    -- WHOLE bowling side's aggregate against that (batting_hand, batting_position)
+    -- this innings (all bowlers), keyed identically to mbowl (same batting_style
+    -- COALESCE, same striker-position join, same credited-wicket join). Mirrors
+    -- mbowl minus the bowler_id grouping. The differential (final SELECT) is
+    -- bowler-vs-(hand,position) MINUS team-vs-(hand,position).
+    --
+    -- ECONOMY NOTE: unlike bowling_innings.parquet (which reproduces the source's
+    -- cricket-over divisor to satisfy the innings_bowlers oracle), the matchup
+    -- economy here uses DECIMAL overs (balls/6) for BOTH the bowler and the team.
+    -- There is no source oracle at this grain, and cricket-overs is meaningless
+    -- per (hand, position) bucket -- a bowler almost never bowls a whole 6-legal-
+    -- ball over to one hand at one position, so the cricket-over count would be a
+    -- near-zero fractional divisor producing absurd economies. Decimal overs is
+    -- the only internally consistent, meaningful definition for the differential.
+    team_hp_agg AS (
+        SELECT d.match_id, d.innings_number,
+               COALESCE(pp.batting_style, '(unmapped)') AS batting_hand,
+               pos.batting_position,
+               SUM(CASE WHEN {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS t_balls,
+               SUM({BOWLER_RUNS}) AS t_runs,
+               SUM(CASE WHEN {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS t_dots,
+               SUM(COALESCE(cwkt.wkts, 0)) AS t_wkts
+        FROM d
+        LEFT JOIN player_profiles pp ON d.batter_id = pp.player_id
+        LEFT JOIN positions pos
+          ON d.match_id = pos.match_id AND d.innings_number = pos.innings_number
+         AND d.batter_id = pos.pid
+        LEFT JOIN cwkt
+          ON d.match_id = cwkt.match_id AND d.innings_number = cwkt.innings_number
+         AND d.over_number = cwkt.over_number AND d.ball_index = cwkt.ball_index
+         AND d.batter_id = cwkt.batter_id AND d.bowler_id = cwkt.bowler_id
+        WHERE d.bowler_id IS NOT NULL
+        GROUP BY d.match_id, d.innings_number,
+                 COALESCE(pp.batting_style, '(unmapped)'),
+                 pos.batting_position
     )
     SELECT
         mbowl.match_id, mbowl.innings_number, mbowl.bowler_id, mbowl.batting_hand,
@@ -1359,12 +1785,41 @@ def sql_matchup_bowling():
         CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_mid_sixes_conceded END AS odi_mid_sixes_conceded,
         CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_death_dots            END AS odi_death_dots,
         CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_death_fours_conceded  END AS odi_death_fours_conceded,
-        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_death_sixes_conceded  END AS odi_death_sixes_conceded
+        CASE WHEN mbowl.is_hundred=1 THEN NULL ELSE mbowl.odi_death_sixes_conceded  END AS odi_death_sixes_conceded,
+        -- Team-relative bowling differentials at matchup grain (Wave 2, ADDITIVE;
+        -- FLOAT). bowler-vs-(hand,position) MINUS team-vs-(hand,position). Economy
+        -- uses DECIMAL overs for both sides (see team_hp_agg note); the other
+        -- three rates are ball-/wicket-count based, identical in shape to
+        -- bowling_innings.parquet. Divide-by-zero -> NULL throughout.
+        CAST(
+            (mbowl.runs_conceded / NULLIF(mbowl.balls / 6.0, 0))
+            - (thp.t_runs / NULLIF(thp.t_balls / 6.0, 0))
+            AS FLOAT
+        ) AS team_rel_econ,
+        CAST(
+            (mbowl.runs_conceded / NULLIF(mbowl.balls, 0))
+            - (thp.t_runs / NULLIF(thp.t_balls, 0))
+            AS FLOAT
+        ) AS team_rel_pbe,
+        CAST(
+            (mbowl.dots / NULLIF(mbowl.balls, 0) * 100.0)
+            - (thp.t_dots / NULLIF(thp.t_balls, 0) * 100.0)
+            AS FLOAT
+        ) AS team_rel_dot_pct,
+        CAST(
+            (mbowl.balls / NULLIF(mbowl.wickets, 0))
+            - (thp.t_balls / NULLIF(thp.t_wkts, 0))
+            AS FLOAT
+        ) AS team_rel_sr
     FROM mbowl
     LEFT JOIN wkt_agg wk
       ON mbowl.match_id = wk.match_id AND mbowl.innings_number = wk.innings_number
      AND mbowl.bowler_id = wk.bowler_id AND mbowl.batting_hand = wk.batting_hand
      AND mbowl.batting_position = wk.batting_position
+    LEFT JOIN team_hp_agg thp
+      ON mbowl.match_id = thp.match_id AND mbowl.innings_number = thp.innings_number
+     AND mbowl.batting_hand = thp.batting_hand
+     AND mbowl.batting_position = thp.batting_position
     ORDER BY mbowl.match_date, mbowl.match_id, mbowl.innings_number, mbowl.bowler_id,
              mbowl.batting_hand, mbowl.batting_position
     """
@@ -1475,6 +1930,19 @@ def sql_player_matches():
         SELECT match_id, player_id, player_name,
                COALESCE(team_bat, team_any) AS team
         FROM extra
+    ),
+    -- Player of the Match: a per-MATCH award (not innings-scoped, so no
+    -- super-over concern). DISTINCT collapses the 9 known files with duplicate
+    -- player_of_match entries (reference/db_reference.md).
+    --
+    -- FIELDING REBUILD: the coarse per-(match,player) catches/stumpings/run_outs
+    -- that Wave 3 put here have been REMOVED — fielding now lives at event grain
+    -- in fielding_events.parquet (sql_fielding_events). player_of_match STAYS
+    -- here: it is genuinely per-match, not a fielding event.
+    pom AS (
+        SELECT DISTINCT match_id, player_id
+        FROM match_player_of_match
+        WHERE player_id IS NOT NULL
     )
     SELECT
         c.match_id,
@@ -1486,10 +1954,176 @@ def sql_player_matches():
         mc.team_type,
         mc.match_date,
         mc.year,
-        mc.month
+        mc.month,
+        -- Impact: Player-of-the-Match award (0/1). The LEFT JOIN is keyed on
+        -- (match, player) and pom is one row per (match, player) (DISTINCT), so
+        -- it never multiplies `combined`; the PK (match_id, player_id) is preserved.
+        CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END AS player_of_match
     FROM combined c
     JOIN m_ctx mc ON c.match_id = mc.match_id
+    LEFT JOIN pom
+      ON pom.match_id = c.match_id AND pom.player_id = c.player_id
     ORDER BY mc.match_date, c.match_id, c.player_id
+    """
+
+
+def sql_fielding_events():
+    """
+    FIELDING REBUILD — ONE ROW PER (wicket, credited fielder).
+
+    Re-derived STANDALONE from raw `wicket_fielders` ⋈ `wickets` ⋈ `deliveries`
+    (+ `matches`, `player_profiles`, and the SAME batting-position logic
+    sql_batting uses). Super-over innings are excluded EVERYWHERE (kept_innings).
+
+    This supersedes Wave-3's coarse per-(match,player) catches/stumpings/run_outs
+    on player_matches: EVERY dimension is carried so fielding is sliceable by
+    anything (opposition, venue, event, dismissed-batter position/hand/role,
+    bowler style, phase, dismissal kind, ...).
+
+    CREDIT RULES (owner-ruled, unchanged from Wave 3):
+      * 'caught'            -> EACH listed fielder (one row per wicket_fielders row)
+      * 'caught and bowled' -> the delivery's BOWLER (c&b carries NO
+                               wicket_fielders row here — verified 0 of 9,920 —
+                               so the bowler is read off `deliveries`; synthetic
+                               fielder_index = 0, substitute = FALSE)
+      * 'run out'           -> ALL listed fielders (a relay throw lists several)
+      * 'stumped'           -> the listed keeper
+
+    SUBSTITUTES: substitute-fielder rows ARE carried (with substitute = TRUE) —
+    NOT dropped. Metrics exclude them by default; the data stays available.
+
+    Credited fielders with a NULL fielder_id (431 caught / 4 stumped / 13 run-out
+    wicket_fielders rows) are DROPPED — an unidentifiable fielder cannot be
+    attributed to any player and would only pollute a NULL group; this matches
+    Wave 3's `fielder_id IS NOT NULL` and keeps the grand-total reconciliation
+    exact (SUM over non-substitute rows == Wave-3 player_matches totals).
+    """
+    cte = build_delivery_cte(hundred_only=None)
+    # Single resolved phase per format: ODI/ODM -> ODI over-ranges; T20/IT20 and
+    # the Hundred (balls_per_over=5) -> T20 family (t20_phase_expr, Hundred-aware);
+    # Test/MDM (no phase concept) -> NULL. The Hundred branch is FIRST so a
+    # balls_per_over=5 match can never fall through to the ODI branch.
+    phase_expr = f"""
+        CASE
+            WHEN d.balls_per_over = 5              THEN ({t20_phase_expr()})
+            WHEN d.match_type IN ('ODI','ODM')     THEN ({ODI_PHASE_OVER})
+            WHEN d.match_type IN ('T20','IT20')    THEN ({t20_phase_expr()})
+            ELSE NULL
+        END"""
+    return f"""
+    WITH {cte},
+    -- All wickets in kept innings (every kind) — the batting-position logic below
+    -- needs the full set so it reproduces sql_batting's positions EXACTLY.
+    kw_all AS (
+        SELECT w.*
+        FROM wickets w
+        JOIN kept_innings ki
+          ON w.match_id = ki.match_id AND w.innings_number = ki.innings_number
+    ),
+    -- Batting position, byte-identical to sql_batting: rank of first crease
+    -- appearance (striker role_rank 0, non-striker 1, wicket-only 2+wicket_index),
+    -- ordered by first (over, ball, role_rank).
+    appearances AS (
+        SELECT match_id, innings_number, batter_id AS pid,
+               over_number, ball_index, 0 AS role_rank
+        FROM d
+        UNION ALL
+        SELECT match_id, innings_number, non_striker_id AS pid,
+               over_number, ball_index, 1 AS role_rank
+        FROM d
+        UNION ALL
+        SELECT match_id, innings_number, player_out_id AS pid,
+               over_number, ball_index, 2 + wicket_index AS role_rank
+        FROM kw_all
+    ),
+    first_app AS (
+        SELECT match_id, innings_number, pid,
+               MIN(ROW(over_number, ball_index, role_rank)) AS first_key
+        FROM appearances
+        GROUP BY match_id, innings_number, pid
+    ),
+    positions AS (
+        SELECT match_id, innings_number, pid,
+               ROW_NUMBER() OVER (
+                   PARTITION BY match_id, innings_number
+                   ORDER BY first_key
+               ) AS batting_position
+        FROM first_app
+    ),
+    -- One row per (wicket, credited fielder). caught/stumped/run out come from
+    -- wicket_fielders (fielder_id NOT NULL); caught and bowled from the delivery
+    -- bowler with a synthetic fielder_index = 0.
+    credited AS (
+        SELECT w.match_id, w.innings_number, w.over_number, w.ball_index,
+               w.wicket_index, wf.fielder_index,
+               wf.fielder_id, wf.fielder_name,
+               w.kind, w.player_out_id AS out_batter_id, w.player_out AS out_batter_name,
+               (wf.substitute IS TRUE) AS substitute
+        FROM kw_all w
+        JOIN wicket_fielders wf
+          ON wf.match_id = w.match_id AND wf.innings_number = w.innings_number
+         AND wf.over_number = w.over_number AND wf.ball_index = w.ball_index
+         AND wf.wicket_index = w.wicket_index
+        WHERE w.kind IN ('caught', 'stumped', 'run out')
+          AND wf.fielder_id IS NOT NULL
+
+        UNION ALL
+        SELECT w.match_id, w.innings_number, w.over_number, w.ball_index,
+               w.wicket_index, 0 AS fielder_index,
+               dv.bowler_id AS fielder_id, dv.bowler AS fielder_name,
+               w.kind, w.player_out_id AS out_batter_id, w.player_out AS out_batter_name,
+               FALSE AS substitute
+        FROM kw_all w
+        JOIN deliveries dv
+          ON dv.match_id = w.match_id AND dv.innings_number = w.innings_number
+         AND dv.over_number = w.over_number AND dv.ball_index = w.ball_index
+        WHERE w.kind = 'caught and bowled' AND dv.bowler_id IS NOT NULL
+    )
+    SELECT
+        c.match_id,
+        c.innings_number,
+        c.over_number,
+        c.ball_index,
+        c.wicket_index,
+        c.fielder_index,
+        c.fielder_id,
+        c.fielder_name,
+        d.match_type,
+        d.gender,
+        d.team_type,
+        d.match_date,
+        d.year,
+        d.month,
+        mm.venue,
+        mm.city,
+        mm.event_name,
+        -- fielding_team = the bowling side of the innings (the OTHER team);
+        -- opposition = the batting side being dismissed (the innings' batting_team).
+        CASE WHEN d.team_1 = d.batting_team THEN d.team_2 ELSE d.team_1 END AS fielding_team,
+        d.batting_team AS opposition,
+        c.kind,
+        c.out_batter_id,
+        c.out_batter_name,
+        pos.batting_position AS out_batting_position,
+        bp.batting_style AS out_hand,
+        bp.playing_role  AS out_role,
+        d.bowler_id,
+        d.bowler AS bowler_name,
+        wp.bowling_style AS bowler_style,
+        {phase_expr} AS phase,
+        c.substitute
+    FROM credited c
+    JOIN d
+      ON d.match_id = c.match_id AND d.innings_number = c.innings_number
+     AND d.over_number = c.over_number AND d.ball_index = c.ball_index
+    JOIN matches mm ON mm.match_id = c.match_id
+    LEFT JOIN positions pos
+      ON pos.match_id = c.match_id AND pos.innings_number = c.innings_number
+     AND pos.pid = c.out_batter_id
+    LEFT JOIN player_profiles bp ON bp.player_id = c.out_batter_id
+    LEFT JOIN player_profiles wp ON wp.player_id = d.bowler_id
+    ORDER BY d.match_date, c.match_id, c.innings_number, c.over_number,
+             c.ball_index, c.wicket_index, c.fielder_index
     """
 
 
@@ -1913,6 +2547,110 @@ def run_gates(con, out_dir):
     gate(bowl_missing == 0, "player_matches covers all bowling (match,bowler)",
          f"{bowl_missing} bowling (match,bowler) pairs missing from player_matches")
 
+    # --- FIELDING REBUILD ORACLE: catches/stumpings/run_outs are re-derived
+    # STANDALONE from raw wickets/wicket_fielders/deliveries into fielding_events
+    # (event grain); player_of_match stays on player_matches. There is no
+    # precomputed column to diff against, so independently recompute the grand
+    # totals (non-super-over) here and assert the exported SUMs match EXACTLY —
+    # fielding_events (SUBSTITUTES EXCLUDED, by kind) for catches/stumpings/
+    # run_outs, player_matches for player_of_match. An exact grand-total match
+    # proves the derivation is correct AND that no credit was orphaned.
+    fld_p = paths["fielding_events.parquet"]
+    ki = "(SELECT match_id, innings_number FROM innings WHERE super_over IS NOT TRUE)"
+    ref_catches = q(
+        f"""SELECT
+          (SELECT COUNT(*) FROM wickets w JOIN {ki} k
+             ON w.match_id=k.match_id AND w.innings_number=k.innings_number
+             JOIN wicket_fielders wf
+             ON wf.match_id=w.match_id AND wf.innings_number=w.innings_number
+            AND wf.over_number=w.over_number AND wf.ball_index=w.ball_index
+            AND wf.wicket_index=w.wicket_index
+            WHERE w.kind='caught' AND wf.substitute IS NOT TRUE AND wf.fielder_id IS NOT NULL)
+        + (SELECT COUNT(*) FROM wickets w JOIN {ki} k
+             ON w.match_id=k.match_id AND w.innings_number=k.innings_number
+             JOIN deliveries dv
+             ON dv.match_id=w.match_id AND dv.innings_number=w.innings_number
+            AND dv.over_number=w.over_number AND dv.ball_index=w.ball_index
+            WHERE w.kind='caught and bowled' AND dv.bowler_id IS NOT NULL)"""
+    )
+    ref_stump = q(
+        f"""SELECT COUNT(*) FROM wickets w JOIN {ki} k
+             ON w.match_id=k.match_id AND w.innings_number=k.innings_number
+             JOIN wicket_fielders wf
+             ON wf.match_id=w.match_id AND wf.innings_number=w.innings_number
+            AND wf.over_number=w.over_number AND wf.ball_index=w.ball_index
+            AND wf.wicket_index=w.wicket_index
+            WHERE w.kind='stumped' AND wf.substitute IS NOT TRUE AND wf.fielder_id IS NOT NULL"""
+    )
+    ref_runout = q(
+        f"""SELECT COUNT(*) FROM wickets w JOIN {ki} k
+             ON w.match_id=k.match_id AND w.innings_number=k.innings_number
+             JOIN wicket_fielders wf
+             ON wf.match_id=w.match_id AND wf.innings_number=w.innings_number
+            AND wf.over_number=w.over_number AND wf.ball_index=w.ball_index
+            AND wf.wicket_index=w.wicket_index
+            WHERE w.kind='run out' AND wf.substitute IS NOT TRUE AND wf.fielder_id IS NOT NULL"""
+    )
+    ref_pom = q(
+        "SELECT COUNT(*) FROM (SELECT DISTINCT match_id, player_id "
+        "FROM match_player_of_match WHERE player_id IS NOT NULL)"
+    )
+    # catches/stumpings/run_outs from fielding_events, substitutes EXCLUDED, by
+    # kind (caught+c&b = catches). fielder_id NULL rows are never emitted, so the
+    # non-substitute SUM here must equal the raw recompute above exactly.
+    pq_c = q(
+        f"SELECT COUNT(*) FROM read_parquet('{fld_p}') "
+        f"WHERE substitute IS NOT TRUE AND kind IN ('caught','caught and bowled')"
+    )
+    pq_s = q(
+        f"SELECT COUNT(*) FROM read_parquet('{fld_p}') "
+        f"WHERE substitute IS NOT TRUE AND kind = 'stumped'"
+    )
+    pq_r = q(
+        f"SELECT COUNT(*) FROM read_parquet('{fld_p}') "
+        f"WHERE substitute IS NOT TRUE AND kind = 'run out'"
+    )
+    pq_p = q(f"SELECT COALESCE(SUM(player_of_match),0) FROM read_parquet('{pm_p}')")
+    gate(pq_c == ref_catches, "fielding oracle: catches total (fielding_events, excl subs)",
+         f"parquet {pq_c} != raw recompute {ref_catches}")
+    gate(pq_s == ref_stump, "fielding oracle: stumpings total (fielding_events, excl subs)",
+         f"parquet {pq_s} != raw recompute {ref_stump}")
+    gate(pq_r == ref_runout, "fielding oracle: run_outs total (fielding_events, excl subs)",
+         f"parquet {pq_r} != raw recompute {ref_runout}")
+    gate(pq_p == ref_pom, "fielding oracle: player_of_match total (player_matches)",
+         f"parquet {pq_p} != raw recompute {ref_pom}")
+
+    # fielding_events: every emitted fielder_id is non-null (unattributable
+    # credits dropped by design) and no super-over event leaks in.
+    fld_null_fid = q(f"SELECT COUNT(*) FROM read_parquet('{fld_p}') WHERE fielder_id IS NULL")
+    gate(fld_null_fid == 0, "fielding_events: no NULL fielder_id", f"{fld_null_fid} rows")
+    fld_super = q(
+        f"SELECT COUNT(*) FROM read_parquet('{fld_p}') fe WHERE fe.match_id || ':' || "
+        f"CAST(fe.innings_number AS VARCHAR) IN (SELECT match_id || ':' || CAST(innings_number AS VARCHAR) "
+        f"FROM innings WHERE super_over IS TRUE)"
+    )
+    gate(fld_super == 0, "fielding_events: no super-over rows", f"{fld_super} rows")
+    # kind is exactly the four credited-fielder kinds.
+    fld_kinds = q(
+        f"SELECT COUNT(*) FROM read_parquet('{fld_p}') "
+        f"WHERE kind NOT IN ('caught','caught and bowled','stumped','run out')"
+    )
+    gate(fld_kinds == 0, "fielding_events: kind in {caught,c&b,stumped,run out}", f"{fld_kinds} rows")
+
+    # --- PART B spell-wicket consistency: for spell_count=1 the single spell
+    # spans all the bowler's deliveries, so best_spell_wkts (that lone spell's
+    # wickets) must equal the innings `wickets` total exactly (0 mismatches). This
+    # is the Wave-4 fix — spell wickets now count ALL spell deliveries (not
+    # legal-only), matching cricdb's own wickets / wkt_by_ball. (Formerly checked
+    # via open_spell_wkts, deleted with the opening/closing-spell columns.)
+    spell1_mismatch = q(
+        f"SELECT COUNT(*) FROM read_parquet('{bowl_p}') "
+        f"WHERE spell_count = 1 AND best_spell_wkts <> wickets"
+    )
+    gate(spell1_mismatch == 0,
+         "spell fix: spell_count=1 => best_spell_wkts == wickets",
+         f"{spell1_mismatch} mismatched innings")
+
     # Gate 2 (XI sanity): count (match, team) groups where a team has != 11 rows
     # with a non-null team. Historical data legitimately has XII / substitutes,
     # so this is a WARNING, never a hard failure.
@@ -2326,6 +3064,57 @@ def run_gates(con, out_dir):
     log(f"  INFO  batting phase-dismissal shortfall vs dismissed flag: "
         f"T20/IT20={bat_dis_resid_t20}, ODI/ODM={bat_dis_resid_odi}")
 
+    # --- Wave 6: matches match-context columns (data oracle) ---
+    # These assert the additive columns + three derived columns in matches.parquet
+    # against an INDEPENDENT recompute over the source `matches` / `innings` tables
+    # (never the export's own SELECT shape).
+    m_p = paths["matches.parquet"]
+
+    # (a) is_super_over: exactly the 108 'tie (X)' rows, agreeing with the DB.
+    so_parquet = q(f"SELECT COUNT(*) FROM read_parquet('{m_p}') WHERE is_super_over")
+    so_db = q("SELECT COUNT(*) FROM matches WHERE result_type LIKE 'tie (%)'")
+    gate(so_parquet == so_db, "matches is_super_over count == source",
+         f"parquet {so_parquet} vs db {so_db}")
+
+    # (b) match_winner derivation:
+    #  - a regulation win (winner set) => match_winner == winner
+    reg_mismatch = q(
+        f"SELECT COUNT(*) FROM read_parquet('{m_p}') "
+        f"WHERE winner IS NOT NULL AND match_winner IS DISTINCT FROM winner"
+    )
+    gate(reg_mismatch == 0, "matches match_winner == winner for regulation results",
+         f"{reg_mismatch} mismatched rows")
+    #  - a super over => match_winner is a real team (∈ {team_1, team_2}), non-NULL
+    so_bad = q(
+        f"SELECT COUNT(*) FROM read_parquet('{m_p}') "
+        f"WHERE is_super_over AND (match_winner IS NULL OR match_winner NOT IN (team_1, team_2))"
+    )
+    gate(so_bad == 0, "matches match_winner ∈ teams for super overs",
+         f"{so_bad} super-over rows with a bad match_winner")
+    #  - a true tie / draw / no result => match_winner IS NULL
+    tie_bad = q(
+        f"SELECT COUNT(*) FROM read_parquet('{m_p}') "
+        f"WHERE result_type IN ('tie','draw','no result') AND match_winner IS NOT NULL"
+    )
+    gate(tie_bad == 0, "matches match_winner NULL for true tie/draw/no-result",
+         f"{tie_bad} rows with a non-NULL match_winner")
+
+    # (c) team_batting_first == the innings_number=0 batting_team (independent).
+    tbf_mismatch = q(
+        f"""SELECT COUNT(*) FROM read_parquet('{m_p}') p
+            LEFT JOIN (SELECT match_id, batting_team FROM innings WHERE innings_number = 0) i
+              ON i.match_id = p.match_id
+            WHERE p.team_batting_first IS DISTINCT FROM i.batting_team"""
+    )
+    gate(tbf_mismatch == 0, "matches team_batting_first == innings-0 batting_team",
+         f"{tbf_mismatch} mismatched rows")
+
+    # (d) season present + queryable (for the later Event -> Season picker).
+    season_nulls = q(f"SELECT COUNT(*) FROM read_parquet('{m_p}') WHERE season IS NULL")
+    season_db_nulls = q("SELECT COUNT(*) FROM matches WHERE season IS NULL")
+    gate(season_nulls == season_db_nulls, "matches season NULL count == source",
+         f"parquet {season_nulls} vs db {season_db_nulls}")
+
     log("All structural / cross-check gates passed.")
 
 
@@ -2649,6 +3438,9 @@ def main():
 
     log("Writing player_profiles.parquet ...")
     write_parquet(con, sql_player_profiles(), os.path.join(args.out, "player_profiles.parquet"))
+
+    log("Writing fielding_events.parquet ...")
+    write_parquet(con, sql_fielding_events(), os.path.join(args.out, "fielding_events.parquet"))
 
     log("Writing matchup_batting.parquet ...")
     write_parquet(con, sql_matchup_batting(), os.path.join(args.out, "matchup_batting.parquet"))
