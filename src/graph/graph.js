@@ -1029,11 +1029,16 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     return !!metric && metric.higherIsBetter !== null;
   }
 
-  /** Explanatory tooltip for a blocked Best/Worst button — two distinct,
-   * plain-English reasons depending on WHY it's blocked (only called when
+  /** Explanatory tooltip for a blocked Best/Worst button — plain-English
+   * reasons depending on WHY it's blocked (only called when
    * bestWorstAvailable() is false). */
   function bestWorstDisabledReason() {
     if (chartType === "bar") {
+      // Two distinct bar sub-cases: no metric picked yet (a transient state
+      // before you choose one) vs a chosen metric with no better/worse
+      // direction (Matches et al.).
+      const metric = rankMetricForActiveType(store.get());
+      if (!metric) return "Pick a metric first — Best/Worst rank by it.";
       return "No 'best' for a metric with no better/worse direction.";
     }
     return "Best/Worst rank by a single metric — not available on this chart.";
