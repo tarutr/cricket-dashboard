@@ -10,3 +10,7 @@ __pycache__/
 .claude/settings.local.json
 scratchpad/
 .obsidian/
+# Owner's reference copy (from the upstream project) — read-only reference, never a repo file
+reference/ingest.py
+# Personal article drafts — unrelated to the dashboard, kept out of the app repo
+article_ideas/

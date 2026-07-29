@@ -1,0 +1,159 @@
+{
+ "event_merges": {
+  "ICC Men's Cricket World Cup": [
+   "ICC World Cup",
+   "ICC Cricket World Cup",
+   "World Cup"
+  ],
+  "ICC Men's T20 World Cup": [
+   "ICC World Twenty20",
+   "World T20",
+   "ICC Men's T20 World Cup"
+  ],
+  "ICC Women's T20 World Cup": [
+   "ICC Women's World Twenty20",
+   "Women's World T20",
+   "ICC Women's T20 World Cup"
+  ],
+  "County Championship": [
+   "LV= County Championship",
+   "Specsavers County Championship",
+   "County Championship"
+  ],
+  "Vitality Blast": [
+   "NatWest T20 Blast",
+   "Vitality Blast",
+   "Vitality Blast Men"
+  ],
+  "One-Day Cup": [
+   "Royal London One-Day Cup",
+   "One-Day Cup"
+  ],
+  "CSA T20 Challenge": [
+   "MiWAY T20 Challenge",
+   "Ram Slam T20 Challenge",
+   "CSA T20 Challenge"
+  ],
+  "ICC Men's Cricket World Cup Qualifier": [
+   "ICC Cricket World Cup Qualifier (ICC Trophy)",
+   "ICC World Cup Qualifiers",
+   "ICC Cricket World Cup Qualifier Play-off",
+   "ICC Cricket World Cup Qualifier"
+  ],
+  "ICC Men's T20 World Cup — Africa Qualifier": [
+   "ICC World Twenty20 Africa Region Qualifier B",
+   "ICC Men's T20 World Cup Sub Regional Africa Qualifier Group C",
+   "ICC Men's T20 World Cup Sub Regional Africa Qualifier",
+   "ICC Men's T20 World Cup Sub Regional Africa Qualifier Group A & B",
+   "ICC World Twenty20 Africa Region Qualifier C",
+   "ICC World Twenty20 Africa Region Qualifier A",
+   "ICC Men's T20 World Cup Africa Region Final",
+   "ICC Men's T20 World Cup Africa Region Qualifier",
+   "ICC Men's T20 World Cup Africa Sub Regional Qualifier B"
+  ],
+  "ICC Men's T20 World Cup — Americas Qualifier": [
+   "ICC World Twenty20 Americas Sub Regional Qualifier A",
+   "ICC Men's T20 World Cup Americas Region Qualifier",
+   "ICC Men's T20 World Cup Sub Regional Americas Qualifier B",
+   "ICC Men's T20 World Cup Sub Regional Americas Qualifier",
+   "ICC Men's T20 World Cup Americas Region Final"
+  ],
+  "ICC Women's T20 World Cup Qualifier": [
+   "ICC Women's T20 World Cup Qualifier",
+   "ICC Women's World Twenty20 Qualifier",
+   "ICC Women's T20 Qualifier",
+   "Women's T20 World Cup Qualifier"
+  ],
+  "ICC Men's T20 World Cup — Europe Qualifier": [
+   "ICC Men's T20 World Cup Europe Region Qualifier",
+   "ICC Men's T20 World Cup Sub Regional Europe Qualifier Group C",
+   "ICC Men's T20 World Cup Sub Regional Europe Qualifier A",
+   "ICC World Twenty20 Europe Region Qualifier A",
+   "ICC World Twenty20 Europe Region Qualifier C",
+   "ICC Men's T20 World Cup Europe Region Final",
+   "ICC Men's T20 World Cup Sub Regional Europe Qualifier",
+   "ICC World Twenty20 Europe Region Qualifier B"
+  ],
+  "ICC Men's T20 World Cup — East Asia-Pacific Qualifier": [
+   "ICC Men's T20 World Cup East Asia-Pacific Region Qualifier B",
+   "ICC World Twenty20 East Asia-Pacific Region Qualifier A",
+   "ICC Men's T20 World Cup East Asia-Pacific Region Qualifier A",
+   "ICC World Twenty20 East Asia-Pacific Region Qualifier B",
+   "ICC World Twenty20 East Asia-Pacific Region Final",
+   "ICC Men's T20 World Cup East Asia-Pacific Qualifier"
+  ],
+  "ICC Women's T20 World Cup — Africa Qualifier": [
+   "ICC Women's World Twenty20 Qualifying Series Africa Region",
+   "ICC Women's T20 World Cup Africa Region Qualifier",
+   "ICC Women's T20 World Cup Africa Region Division Two Qualifier",
+   "ICC Women's T20 World Cup Africa Region Division One Qualifier"
+  ],
+  "ICC Women's T20 World Cup — East Asia-Pacific Qualifier": [
+   "ICC Women's T20 World Cup East Asia-Pacific Region Qualifier",
+   "ICC Women's World Twenty20 Qualifying Series East Asia-Pacific Region",
+   "ICC Women's T20 World Cup East Asia Pacific Qualifier"
+  ],
+  "ICC Women's Cricket World Cup Qualifier": [
+   "ICC Women's World Cup Qualifying Series",
+   "ICC Women's World Cup Qualifier",
+   "ICC Women's World Cup Qualifying Series Europe Region",
+   "ICC Women's Cricket World Cup Qualifier"
+  ],
+  "ICC Women's T20 World Cup — Asia Qualifier": [
+   "ICC Women's T20 World Cup Asia Region Qualifier",
+   "ICC Women's World Twenty20 Qualifying Series Asia Region"
+  ],
+  "ICC Men's T20 World Cup Qualifier": [
+   "ICC Men's T20 World Cup Qualifier A",
+   "ICC Men's T20 World Cup Qualifier",
+   "ICC Men’s T20 World Cup Qualifier A",
+   "ICC World Twenty20 Qualifier"
+  ],
+  "ICC Men's T20 World Cup — Asia Qualifier": [
+   "ICC Men's T20 World Cup Sub Regional Asia Qualifier A",
+   "ICC Men’s T20 World Cup Asia Qualifier Final",
+   "ICC Men's T20 World Cup Asia Qualifier Final",
+   "ICC Men's T20 World Cup Asia Qualifier A",
+   "ICC Men's T20 World Cup Asia Qualifier B",
+   "ICC World Twenty20 Asia Region Qualifier A",
+   "ICC World Twenty20 Asia Region Qualifier B",
+   "ICC Men's T20 World Cup Asia A Qualifier",
+   "ICC Men's T20 World Cup Asia B Qualifier",
+   "ICC Men's T20 World Cup Asia Region Final"
+  ],
+  "ICC Women's T20 World Cup — Europe Qualifier": [
+   "ICC Women's T20 World Cup Europe Division 1 Qualifier",
+   "ICC Women's T20 World Cup Europe Division 2 Qualifier",
+   "ICC Women's T20 World Cup Europe Region Qualifier"
+  ],
+  "ICC Women's T20 World Cup — Americas Qualifier": [
+   "ICC Women's T20 World Cup Americas Region Qualifier"
+  ]
+ },
+ "stage_merges": {
+  "Semi-Final": [
+   "Semi Final",
+   "Semi-Final",
+   "Semi-final"
+  ],
+  "Quarter-Final": [
+   "Quarter Final",
+   "Quarter-Final",
+   "Quarter-final"
+  ],
+  "3rd Place Play-Off": [
+   "3rd Place Play-Off",
+   "3rd Place Play-off"
+  ],
+  "Play-Off": [
+   "Play-off",
+   "Play-Off"
+  ],
+  "Preliminary Quarter Final": [
+   "Preliminary Quarter Final",
+   "Preliminary quarter-final"
+  ]
+ },
+ "typography_rule": "normalize curly apostrophe U+2019 -> straight, collapse whitespace",
+ "note": "Part-1 normalization only (display-collapse). Tri-series renaming + categories deferred to backlog #5."
+}
