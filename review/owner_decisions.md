@@ -828,3 +828,59 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       errors. Deployed as a single UI push (no pipeline needed).
     - **Known nuance (left as-is, owner-ruled titles)**: when usable < cap, the card title can read "N most-capped
       players" where N is the usable count — i.e. the N most-capped *usable* players. Flagged, not reworded.
+
+65. **POLISH PHASE — filter/graph overhaul rulings (owner 2026-07-24→29; all on `polish-b1-mechanical`; per-wave
+    detail in `.orchestrator/progress/`).** Numbers-sacred held throughout (query builders byte-identical unless
+    a ruling below is a deliberate, additive scope change; anchors 2,813 / Karanbir 2,454 / SA Yadav 60·1,544 held).
+    - **Wave-6 match context** = filter-level (narrows scope): Result (Won/Lost/Drawn/**Tied**/No result — owner
+      ruled Tied and Drawn stay SEPARATE), Toss result, Toss decision, Innings order, Stage, and the Event→Season
+      nested picker. Super-over winner extracted from `result_type 'tie (Team)'` (108/108 exact).
+    - **Result Condition** (owner redesign): a picker NESTED under Result; both default to **"All"** (adding the
+      condition is byte-identical until you narrow). Options All/Normal/Super Over/D/L (Rain)/VJD (Rain)/Awarded/
+      Fewer Wickets. **Super Over MOVED out of Result into Result Condition** (it's a facet of how the result
+      arrived, not mutually exclusive with Won/Lost). "Normal" = `method IS NULL AND NOT super-over`. **Defect
+      fixed**: `is_super_over` was NULL for 95% of rows → wrapped `COALESCE(...,false)` in export + app so
+      negation (Normal) doesn't drop everyone.
+    - **Event + stage NAME NORMALIZATION** (owner: "collapse names that mean the same thing"): DISPLAY-COLLAPSE
+      via an app-side canonical alias map (`src/canonicalNames.js`) — dropdown shows one canonical, the filter
+      expands it to all raw aliases (MORE complete + cleaner; byte-identical when nothing selected; no data
+      rewrite). Owner-vetted map (`.orchestrator/event_canonical_map.json`): World Cups, County Championship,
+      Vitality Blast, One-Day Cup, **CSA T20 Challenge** (MiWAY+Ram Slam+CSA — owner verified no dup matches, the
+      year-overlap was a season-label artifact), the regional-qualifier fold (global + 5 regions per gender), and
+      all stage spelling variants. Stage moved under Event; "No Stage" = `event_stage IS NULL`; hide the control
+      only when there's truly nothing to choose (No Stage counts as a choice). **Tri-series NOT merged** — ruled
+      each is distinct and should be named by teams per season-instance ("2008 Tri-Series (Australia, India, Sri
+      Lanka)"); that + the Tournaments/Bi-Laterals/Tri-Series category groupings deferred to backlog #5.
+    - **Cascading (cross-filtered) option lists**: every DB-derived dropdown narrows by the other active picks
+      (self-exclusion; Team↔Opposition narrow each other; cache keys carry siblings). **A pick that becomes
+      impossible is KEPT and GREYED, never silently reset** (owner reversed the earlier auto-reset); shown ticked
+      + muted + "no matches with your current filters", still clickable to untick. Rule mirrors the offer test
+      (OR across picks) so pick-order no longer matters. When the whole selection is impossible → an in-popup
+      **zero-results notice** (naming the culprit, never blocking Search) + explanatory table-area empty-state.
+    - **PIN RULE (owner, verbatim): "a pin changes WHO is listed, never WHAT their numbers mean."** The pin
+      exemption was positional (any clause appended later silently became bypassable) → made EXPLICIT
+      (`bypassableClause` in filters.js). Pins BYPASS who-to-list filters (team, profile, R.Pos, name search,
+      stat conditions); pins OBEY everything defining the numbers (core scope + opposition, matchup striker
+      position, event(+seasons), venue, stage, result, result-condition, toss, innings-order). A pinned player
+      with no in-scope rows shows a "—" row. Graph selection given the SAME exemption as the Stats table.
+    - **Best/Worst roster modes** available ONLY on a Bar chart with a DIRECTIONAL metric (`higherIsBetter !=
+      null`); greyed (with tooltip) on neutral-metric Bar, Scatter (dual-metric — no single "best"), and
+      Radar/Slope/Dumbbell/Benchmark. **Owner-found bug**: the ranking treated `higherIsBetter===null` as
+      "lower is better", so "Best Matches" picked the FEWEST — greying replaces it. Scatter default never X==Y.
+    - **No dark mode**: removed all dark-theme references from docs/comments/agent brief — there is no dark theme
+      and none is planned (kept only the styles.css header's illustrative `[data-theme]` example, per owner).
+    - **Read-only logic audit before deploy** (owner-requested cadence: light fresh-eyes audit of the
+      selection/display layer that byte-identical checks don't cover, at the end of a big wave): confirmed clean
+      bills of health on pins / cascading / normalization / toolbar; found + fixed the Best/Worst direction bug,
+      a stale-async selection clobber, and a latent canonical round-trip asymmetry (hardened + a tripwire).
+
+66. **POLISH PHASE SHIPPED + DEPLOYED to production (owner "Go for it", 2026-07-29).** Staged **data-first** to
+    avoid a broken-column window (schema is additive, so the live UI keeps working while R2 rebuilds): pushed
+    `export_parquet.py` ALONE to `main` → **owner ran the "Data pipeline" workflow** (workflow_dispatch; no gh CLI)
+    → verified new columns live on R2 by DuckDB `DESCRIBE` over https (**schema parity across all 9 parquets**,
+    `is_super_over` clean 0-null, `fielding_events` present) → THEN pushed the UI. `main` = `ea79f3f`; app live at
+    cricdb.vercel.app; data at `data.the-cordon.com`. Verified end-to-end ON the production site: 2,813 players /
+    Karanbir Singh 2,454 / SA Yadav 60·1,544, SKY Result-Condition=D/L 2/82, 0 console errors; CORS OK from the
+    Vercel origin. **Anchor note**: the app count = distinct (batter_id, batter_name), ~3 above a raw
+    distinct-batter_id (name-variant quirk) — a false "2,813→2,810 drift" scare that was a counting-method
+    mismatch, not real drift. **NEXT**: backlog #4 (column-group metric defs) or #5 (dropdown taxonomy).

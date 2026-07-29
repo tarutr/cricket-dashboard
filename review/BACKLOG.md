@@ -16,8 +16,11 @@ Men / T20 International, **2023-07-01 → 2026-07-02**:
 ## 1. Auto-add vs Keep-Columns — **DONE** (no change needed)
 [data] / [app] · Already implemented as additive; user-controlled via "Keep Selected Columns" checkbox.
 
-## 2. Docs sync — **IN PROGRESS** (this session)
-[docs] · `reference/CHART_SYSTEM.md` (chart system overhaul), `review/BACKLOG.md` (this list), owner_decisions log.
+## 2. Docs sync — **DONE** (2026-07-29)
+[docs] · `reference/CHART_SYSTEM.md`, this list, and `owner_decisions.md` (through #66) are current as of the
+polish-phase ship. Note: the **polish phase is SHIPPED + DEPLOYED** (decisions 65–66) — waves 0–6 + the
+filter/graph overhaul (match-context filters, name normalization, cascading option lists, pin "WHO not WHAT"
+rule, Best/Worst gating) are live on `main`/cricdb.vercel.app.
 
 ## 3. Phase-component columns — **DONE + DEPLOYED** (2026-07-23, decision 63)
 [data] · Added `{phase}_dots/_fours/_sixes/_dismissals` (batting + matchup_batting) and `{phase}_dots/

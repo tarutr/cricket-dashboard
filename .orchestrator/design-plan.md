@@ -1,5 +1,11 @@
 # Design phase plan — dashboard UX changes (7 owner items)
 
+> **STATUS 2026-07-29 — SHIPPED.** The polish phase (this plan + the full-build waves 0–6 + the
+> filter/graph overhaul + audit fixes) is DEPLOYED to production: `main` = `ea79f3f`, app at
+> cricdb.vercel.app, data on R2. Rulings logged as decisions 65–66 in `review/owner_decisions.md`;
+> per-wave detail in `.orchestrator/progress/`; shipped-state summary in memory `polish-phase-shipped`.
+> This file below is the pre-ship planning narrative, kept for history. NEXT = backlog #4 / #5.
+
 > **Rules live elsewhere:** contract = `CLAUDE.md` (repo root, auto-loaded); orchestration
 > (models/effort/briefs/gates/resume) = `.orchestrator/ORCHESTRATION.md`; decisions =
 > `review/owner_decisions.md` (the ONLY decision log — this file tracks wave status and
