@@ -32,13 +32,22 @@ per phase (owner). Size note: matchup pair grew ~30% (feeds load-speed #13).
 format-sensitive AND multi-format-sensitive (T20/50-Over/Red Ball mix handling). Needs a detailed spec
 before build.
 
-## 5. Team/opposition categories + Afghanistan demarcation — **owner-requested (owner 2026-07-24; do AFTER the current full-build data program)**
-[app] · Two parts:
-- **Category groupings in Team/Opposition dropdowns EVERYWHERE** (Stats drawer, matchup Vs picker, graph
-  filters, player-popup filters): add selectable categories alongside individual teams —
-  **Big Three** (India, Australia, England), **Test Nations**, **Associate Nations**.
+## 5. Dropdown taxonomy — team + event categories, name normalization, Afghanistan footer — **owner-requested (owner 2026-07-24; do AFTER the current full-build data program — "we'll do it all together")**
+[app] · One coherent "clean up the dropdowns" batch. Four parts:
+- **Team/Opposition category groupings EVERYWHERE** (Stats drawer, matchup Vs picker, graph filters,
+  player-popup filters): selectable categories alongside individual teams — **Big Three** (India,
+  Australia, England), **Test Nations**, **Associate Nations**.
+- **Event category groupings EVERYWHERE** the event filter appears: selectable categories alongside
+  individual events — **Tournaments** (multi-team leagues/cups), **Bi-Laterals** (two-team series),
+  **Tri-Series** (three-plus-team round-robins). Same UX pattern as the team categories.
+- **Event + stage name normalization** (display-collapse via canonical alias map — app-side, no
+  pipeline, byte-identical when nothing selected; anchors safe). Full design + confirmed merges in
+  `.orchestrator/event-normalization-plan.md`: tournament merges (World Cups, County Championship,
+  Vitality Blast, One-Day Cup, CSA T20 Challenge, apostrophe twins), regional-qualifier fold (global +
+  5 regions per gender), stage-spelling collapse, and tri-series renamed per season-instance
+  (`2008 Tri-Series (Australia, India, Sri Lanka)`). Underpins the event categories.
 - **Afghanistan demarcation footer:** the data excludes ALL games involving Afghanistan (Cricsheet gap,
-  SPEC §4.1). Show a clear note stating this, on the **same row as the "Data as of [date]" footer** but
+  SPEC §4.1). Show a clear note, on the **same row as the "Data as of [date]" footer** but
   **right-aligned** (right side of the page).
 Relates to #7 (team-name normalization — canonical team names would underpin the category membership lists).
 
@@ -50,7 +59,15 @@ and will add those files to the folder to fold in.
 [data] · Canonical alias map (RCB Bangalore/Bengaluru, India/India Men, St/Saint Lucia). **Owner note:**
 owner will build this in an outside project ("team registry") and add it in, like the player registry.
 
-## 8. Per-over data layer — **pending owner decision**
+## 8. Normalization drift alert — **owner-requested (owner 2026-07-24; do AFTER #7 team normalization)**
+[data] [pipeline] · Event / player-name / team normalization is app-side (canonical maps; raw data
+untouched), so a new ingestion can introduce raw entries not yet in the maps. Add a post-ingestion pipeline
+check that detects **unmapped new entries** across events, player names, and teams and **emails the owner**
+to rule on their canonicalization (map then updated). Depends on the three maps existing (event #5, team #7,
+player #6). Owner: "a trigger that sends me an email if a new ingestion has entries that need me to rule on
+their normalisation."
+
+## 9. Per-over data layer — **pending owner decision**
 [data] · Lazy-loaded per-over parquet + a per-over Line X-axis (over 1→20). Absorbs the old R5-E.
 Add per-over aggregates in `export_parquet.py` (source `deliveries` has `over_number`; 11.3 M ball rows),
 expose **per-over** as a Line X-dimension (Y aggregated per over). **SIZE CONCERN:** a full per-over parquet
@@ -60,26 +77,26 @@ picked**. Owner rule: "measure the real size before committing." Test-first/gate
 decision 36's phase/matchup extension); publishes to R2 via CI → needs owner's explicit go for the
 pipeline run.
 
-## 9. Graphs on mobile — **pending spec**
+## 10. Graphs on mobile — **pending spec**
 [app] · Determine how each chart type behaves at phone widths (375px). Dense-label charts drop value
 labels; sidebar controls stack full-width. Needs per-chart-type sizing rules.
 
-## 10. ~375px mobile one-screen fit — **pending CSS audit**
+## 11. ~375px mobile one-screen fit — **pending CSS audit**
 [app] · Final CSS tightening to fit the left-column + chart on one viewport at 375px width. Known residual:
 outer horizontal scroll not yet eliminated (owner deferred Wave 1).
 
-## 11. Player pop-up — full determination — **pending spec**
+## 12. Player pop-up — full determination — **pending spec**
 [app] · Decide the player pop-up in full (owner 2026-07-23): which GRAPHS go into it and HOW they're shown,
 plus a review of the stat blocks it currently shows. The popup's stat blocks are to be **linked to the Stats
 table's column-group dropdown (Core / Boundaries / Dismissals / Phases / Progression) BY FORMAT**, so the two
 stay consistent. Depends on #4 (the column-group metric definitions). Note: the Donut chart is retained
 specifically for the popup, so its role here is part of this spec.
 
-## 12. Full design re-do with incoming brand kit — **comes LAST**
+## 13. Full design re-do with incoming brand kit — **comes LAST**
 [design] · Aesthetic layer only; all functional rules already shipped. Once the brand kit arrives (colors,
 typefaces, spacing), apply to the entire UI + export card per §1 (CHART_SYSTEM.md). Lowest priority.
 
-## 13. Load-speed Tiers 2–4 — **pending discussion**
+## 14. Load-speed Tiers 2–4 — **pending discussion**
 [data] [app] · **Tier 1 DONE** (Cloudflare custom domain + immutable caching). Remaining (in bang-for-buck order):
 - **Tier 2 — shrink the bytes** (pipeline-only; `export_parquet.py`): **ZSTD is already applied** (since
   Phase 0 — not a to-do). Remaining: sort rows to match the default query order (biggest win for the 23 MB
@@ -93,7 +110,7 @@ typefaces, spacing), apply to the entire UI + export card per §1 (CHART_SYSTEM.
 
 **Owner note:** needs a discussion of how the system works to decide tweaks vs a complete overhaul.
 
-## 14. File-split — **pending discussion**
+## 15. File-split — **pending discussion**
 [app] · Split the 5 oversized files (graph.js ~3,960 lines, table.js ~2,750, metrics.js ~1,820,
 charts.js ~1,120, styles.css ~4,570) per FILE_SPLIT_PLAN.md. Staged split, no rush. **Owner note:** needs a
 discussion of how the system works to decide tweaks vs a complete overhaul.
