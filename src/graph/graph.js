@@ -1006,36 +1006,56 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     return null;
   }
 
-  /** FIX 1: true iff the chart's ACTIVE rank metric exists and has no
-   * better/worse direction (higherIsBetter === null — e.g. Matches, Innings,
-   * Balls Faced, Not-Out %, the %-runs / balls-faced-share splits, the
-   * dismissal-% set). Ranking Best/Worst by such a metric is meaningless (and,
-   * because null is falsy, the old code silently ranked it ASCENDING), so the
-   * two buttons are disabled and those modes coerce to Top Names. NOTE this is
-   * NOT the same as "no rank metric": chart types that return null from
-   * rankMetricForActiveType (radar/slope/dumbbell/benchmark) are not "neutral"
-   * here — they keep their existing seed-order Best/Worst fallback untouched. */
-  function activeRankMetricIsNeutral() {
+  /** FIX 2 (generalises FIX 1): true iff Best/Worst has a single, meaningful
+   * ranking to offer for the CURRENT chart. Only a Bar chart whose displayed
+   * metric has a real better/worse direction qualifies:
+   *   • Bar with a directional metric (higherIsBetter true/false) — the one
+   *     case that's enabled.
+   *   • Bar with a direction-neutral metric (higherIsBetter === null — e.g.
+   *     Matches, Innings, Balls Faced, Not-Out %, the %-runs / balls-faced-
+   *     share splits, the dismissal-% set) — FIX 1's original case: ranking by
+   *     it is meaningless (and, because null is falsy, the old code silently
+   *     ranked it ASCENDING).
+   *   • Scatter — dual-metric (X and Y axes); "Best" was silently ranking by
+   *     the Y axis only, which isn't a real single "best".
+   *   • Radar/Slope/Dumbbell/Benchmark — no single rankable metric at all
+   *     (rankMetricForActiveType returns null for these); Best/Worst would
+   *     just reshuffle by seed order, which reads as meaningless motion.
+   * Top Names and Manual are unaffected by any of this — they always stay
+   * available on every chart type. */
+  function bestWorstAvailable() {
+    if (chartType !== "bar") return false;
     const metric = rankMetricForActiveType(store.get());
-    return !!metric && metric.higherIsBetter === null;
+    return !!metric && metric.higherIsBetter !== null;
   }
 
-  /** FIX 1: reflect Best/Worst availability on the roster-mode segmented
-   * control. When the active rank metric is direction-neutral, Best and Worst
-   * are blocked (aria-disabled + .is-disabled + an explanatory tooltip); Top
-   * Names and Manual always stay live. Also (re)applies the .is-active marker
-   * for the current mode. Called from renderPlayerList() AND syncChartTypeButtons()
+  /** Explanatory tooltip for a blocked Best/Worst button — two distinct,
+   * plain-English reasons depending on WHY it's blocked (only called when
+   * bestWorstAvailable() is false). */
+  function bestWorstDisabledReason() {
+    if (chartType === "bar") {
+      return "No 'best' for a metric with no better/worse direction.";
+    }
+    return "Best/Worst rank by a single metric — not available on this chart.";
+  }
+
+  /** FIX 1/2: reflect Best/Worst availability on the roster-mode segmented
+   * control. When bestWorstAvailable() is false, Best and Worst are blocked
+   * (aria-disabled + .is-disabled + an explanatory tooltip); Top Names and
+   * Manual always stay live. Also (re)applies the .is-active marker for the
+   * current mode. Called from renderPlayerList() AND syncChartTypeButtons()
    * so the buttons enable/disable live as the metric/type changes — even in
    * "manual" mode, where no re-derive re-renders the roster. */
   function syncRosterModeButtons() {
     const mode = selection.getMode();
-    const neutral = activeRankMetricIsNeutral();
+    const available = bestWorstAvailable();
+    const reason = available ? "" : bestWorstDisabledReason();
     els.rosterMode.querySelectorAll(".segmented__btn").forEach((btn) => {
       const val = btn.dataset.value;
-      const blocked = (val === "best" || val === "worst") && neutral;
+      const blocked = (val === "best" || val === "worst") && !available;
       btn.classList.toggle("is-disabled", blocked);
       btn.setAttribute("aria-disabled", blocked ? "true" : "false");
-      btn.title = blocked ? "No 'best' for a metric with no better/worse direction." : "";
+      btn.title = blocked ? reason : "";
       btn.classList.toggle("is-active", val === mode);
     });
   }
@@ -1071,18 +1091,20 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * real chart render still gets its own retry via renderChart()'s try/catch.
    */
   async function deriveChecked(newMode) {
-    // FIX 1: a direction-neutral rank metric (higherIsBetter === null) has no
-    // "best" end — ranking by it is meaningless and, since null is falsy, the
-    // old code silently ranked ASCENDING (so "Best" picked the LOWEST values).
-    // Whenever Best/Worst is asked for under such a metric — including the case
-    // where the metric changes UNDER a live Best/Worst (its buttons are also
-    // disabled by syncRosterModeButtons, but a config change can still arrive
-    // here in that mode) — coerce to Top Names and re-derive from there, rather
-    // than leaving a stale backwards ranking on screen. Covers every entry
-    // point (mode click, config-change reselect, type switch, reseed). Chart
-    // types with no single rank metric are NOT neutral, so their seed-order
-    // Best/Worst fallback is unaffected.
-    if ((newMode === "best" || newMode === "worst") && activeRankMetricIsNeutral()) {
+    // FIX 1/2: Best/Worst only has a real ranking on a Bar chart with a
+    // directional metric (see bestWorstAvailable()) — a direction-neutral bar
+    // metric (higherIsBetter === null) has no "best" end (and, since null is
+    // falsy, the old code silently ranked it ASCENDING); Scatter is dual-metric
+    // (no single "best"); Radar/Slope/Dumbbell/Benchmark have no single rank
+    // metric at all (their old seed-order Best/Worst fallback was a meaningless
+    // reshuffle). Whenever Best/Worst is asked for in any of these cases —
+    // including the chart type or metric changing UNDER a live Best/Worst (its
+    // buttons are also disabled by syncRosterModeButtons, but a config change
+    // can still arrive here in that mode) — coerce to Top Names and re-derive
+    // from there, rather than leaving a stale/backwards ranking on screen.
+    // Covers every entry point (mode click, config-change reselect, type
+    // switch, reseed).
+    if ((newMode === "best" || newMode === "worst") && !bestWorstAvailable()) {
       newMode = "topnames";
     }
     selection.setMode(newMode);
