@@ -235,7 +235,32 @@ function canonicalize(raw, index) {
 function aliasesFor(canonical, merges) {
   if (canonical == null) return [];
   const arr = merges[canonical];
-  return arr ? arr.slice() : [canonical]; // unlisted -> matches only itself
+  if (!arr) return [canonical]; // unlisted -> matches only itself
+  // SYMMETRIC EXPANSION (round-trip fix). canonicalize() folds a raw value via
+  // the exact alias map OR a typography-normalised fallback (curly->straight
+  // apostrophe, collapsed whitespace); this reverse expansion must therefore
+  // ALSO cover the normalised form of every listed alias — otherwise a future
+  // typography variant of a KNOWN alias would DISPLAY under this canonical yet
+  // be DROPPED from the event_name/event_stage IN(...) filter (a silent
+  // under-count). Emit each literal alias FIRST in its original order, then any
+  // normalised form not already present. On ALL CURRENT data every alias's
+  // normalised form is already itself a literal alias (the two curly-apostrophe
+  // aliases carry their straight-apostrophe twin explicitly), so nothing new is
+  // appended and the IN-list is byte-identical; this only hardens against
+  // future spellings. (The unlisted/identity case above can't be made symmetric
+  // — there is no reverse map for an arbitrary raw value — so the round-trip
+  // guard is the honest safety net there; see FIX 3(b).)
+  const out = [];
+  const seen = new Set();
+  const push = (v) => {
+    if (!seen.has(v)) {
+      seen.add(v);
+      out.push(v);
+    }
+  };
+  for (const alias of arr) push(alias); // literals first, original order
+  for (const alias of arr) push(typographyNormalize(alias)); // then any new normalised variant
+  return out;
 }
 
 /** Canonical display label for a raw event_name (or the raw, typography-

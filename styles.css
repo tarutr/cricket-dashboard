@@ -2940,6 +2940,19 @@ a { color: var(--color-accent); }
   line-height: 1.25;
 }
 
+/* FIX 1: Best/Worst have no meaning when the chart's active rank metric has no
+   better/worse direction (higherIsBetter === null) — they're aria-disabled and
+   greyed, with a tooltip explaining why. Unlike the chart-type tiles (which stay
+   clickable to explain themselves), a blocked mode button is a true no-op, so it
+   also carries cursor:not-allowed. Class-based (not the :disabled attribute) so
+   the tooltip still shows on hover. */
+.graph-roster-mode .segmented__btn.is-disabled {
+  cursor: not-allowed;
+  background: var(--color-panel);
+  color: var(--color-muted);
+  border-color: var(--color-line);
+}
+
 /* Owner point 13: filter-as-you-type box + "type to narrow" note for the
    full-filtered-set pool (up to ~2,800 players). */
 .graph-roster-filter { margin-bottom: var(--space-2); }

@@ -1006,6 +1006,40 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     return null;
   }
 
+  /** FIX 1: true iff the chart's ACTIVE rank metric exists and has no
+   * better/worse direction (higherIsBetter === null — e.g. Matches, Innings,
+   * Balls Faced, Not-Out %, the %-runs / balls-faced-share splits, the
+   * dismissal-% set). Ranking Best/Worst by such a metric is meaningless (and,
+   * because null is falsy, the old code silently ranked it ASCENDING), so the
+   * two buttons are disabled and those modes coerce to Top Names. NOTE this is
+   * NOT the same as "no rank metric": chart types that return null from
+   * rankMetricForActiveType (radar/slope/dumbbell/benchmark) are not "neutral"
+   * here — they keep their existing seed-order Best/Worst fallback untouched. */
+  function activeRankMetricIsNeutral() {
+    const metric = rankMetricForActiveType(store.get());
+    return !!metric && metric.higherIsBetter === null;
+  }
+
+  /** FIX 1: reflect Best/Worst availability on the roster-mode segmented
+   * control. When the active rank metric is direction-neutral, Best and Worst
+   * are blocked (aria-disabled + .is-disabled + an explanatory tooltip); Top
+   * Names and Manual always stay live. Also (re)applies the .is-active marker
+   * for the current mode. Called from renderPlayerList() AND syncChartTypeButtons()
+   * so the buttons enable/disable live as the metric/type changes — even in
+   * "manual" mode, where no re-derive re-renders the roster. */
+  function syncRosterModeButtons() {
+    const mode = selection.getMode();
+    const neutral = activeRankMetricIsNeutral();
+    els.rosterMode.querySelectorAll(".segmented__btn").forEach((btn) => {
+      const val = btn.dataset.value;
+      const blocked = (val === "best" || val === "worst") && neutral;
+      btn.classList.toggle("is-disabled", blocked);
+      btn.setAttribute("aria-disabled", blocked ? "true" : "false");
+      btn.title = blocked ? "No 'best' for a metric with no better/worse direction." : "";
+      btn.classList.toggle("is-active", val === mode);
+    });
+  }
+
   // Guards a rank fetch that's been superseded by a newer one (mode/metric/type
   // changed again before the first fetch returned) — same "ignore stale async
   // result" idiom renderChart() already uses via loadToken.
@@ -1037,6 +1071,20 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    * real chart render still gets its own retry via renderChart()'s try/catch.
    */
   async function deriveChecked(newMode) {
+    // FIX 1: a direction-neutral rank metric (higherIsBetter === null) has no
+    // "best" end — ranking by it is meaningless and, since null is falsy, the
+    // old code silently ranked ASCENDING (so "Best" picked the LOWEST values).
+    // Whenever Best/Worst is asked for under such a metric — including the case
+    // where the metric changes UNDER a live Best/Worst (its buttons are also
+    // disabled by syncRosterModeButtons, but a config change can still arrive
+    // here in that mode) — coerce to Top Names and re-derive from there, rather
+    // than leaving a stale backwards ranking on screen. Covers every entry
+    // point (mode click, config-change reselect, type switch, reseed). Chart
+    // types with no single rank metric are NOT neutral, so their seed-order
+    // Best/Worst fallback is unaffected.
+    if ((newMode === "best" || newMode === "worst") && activeRankMetricIsNeutral()) {
+      newMode = "topnames";
+    }
     selection.setMode(newMode);
     if (newMode === "manual") {
       renderPlayerList();
@@ -1109,7 +1157,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       } else {
         ranked = usablePool.slice();
       }
-      if (token !== rankDeriveToken) return;
+      // Discard if superseded by a later derive OR by a manual roster edit that
+      // switched to "manual" while this fetch was in flight (FIX: race — a stale
+      // auto-derive must never clobber a hand-pick; see the manual actions'
+      // rankDeriveToken bumps).
+      if (token !== rankDeriveToken || selection.getMode() === "manual") return;
       selection.setChecked(ranked.slice(0, cap).map((p) => p.id), { dirty: false });
       lastRankMetricKey = null;
       lastRankMetricDiscipline = null;
@@ -1158,7 +1210,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       metric = null; // seed-order fallback — no per-type metric actually ranked this
       ranked = newMode === "worst" ? usablePool.slice().reverse() : usablePool.slice();
     }
-    if (token !== rankDeriveToken) return;
+    // Discard if superseded by a later derive OR by a manual roster edit that
+    // switched to "manual" while this fetch was in flight (FIX: race — see the
+    // manual actions' rankDeriveToken bumps).
+    if (token !== rankDeriveToken || selection.getMode() === "manual") return;
     selection.setChecked(ranked.slice(0, cap).map((p) => p.id), { dirty: false });
     lastRankMetricKey = metric ? metric.key : null;
     // Track the EFFECTIVE namespace (matchup_* under Vs) so resolveSeedMetric()
@@ -2114,11 +2169,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // (`cap` is retained below for the per-row checkbox at-cap disabling.)
     const showModeSwitch = total > 0;
     els.rosterModeRow.hidden = !showModeSwitch;
-    if (showModeSwitch) {
-      els.rosterMode.querySelectorAll(".segmented__btn").forEach((btn) => {
-        btn.classList.toggle("is-active", btn.dataset.value === mode);
-      });
-    }
+    if (showModeSwitch) syncRosterModeButtons(); // is-active + FIX 1 Best/Worst blocked state
 
     // The filter box only appears when there are more candidates than we
     // render at once — a short pool needs no filtering.
@@ -2189,6 +2240,9 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         // any manual tick means the mode segmented should already read
         // "Manual" by the time toggleChecked's own onChange (below) re-renders
         // the panel, not one render-pass later.
+        // FIX (race): invalidate any auto-derive whose DB fetch is still in
+        // flight, so it can't resolve after this hand-pick and overwrite it.
+        rankDeriveToken++;
         selection.setMode("manual");
         const result = selection.toggleChecked(id);
         if (!result.ok && result.reason === "cap") {
@@ -2250,9 +2304,17 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
   els.rosterMode.addEventListener("click", (e) => {
     const btn = e.target.closest(".segmented__btn");
     if (!btn) return;
+    // FIX 1: Best/Worst are blocked (aria-disabled + .is-disabled) whenever the
+    // chart's active rank metric has no better/worse direction — clicking a
+    // blocked button is a no-op (the tooltip explains why). Top Names/Manual
+    // are never blocked, so they fall through.
+    if (btn.getAttribute("aria-disabled") === "true") return;
     const newMode = btn.dataset.value;
     if (newMode === selection.getMode()) return;
     if (newMode === "manual") {
+      // FIX (race): invalidate any in-flight auto-derive before taking manual
+      // control, so its late fetch can't overwrite the user's mode switch.
+      rankDeriveToken++;
       selection.setMode("manual");
       renderPlayerList();
     } else {
@@ -2297,6 +2359,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
               // a dead end. Freeze auto-recompute first, same as the roster
               // checkbox does, since this is a deliberate manual pick.
               if (!selection.isChecked(id)) {
+                rankDeriveToken++; // FIX (race): discard any in-flight auto-derive before this hand-pick
                 selection.setMode("manual");
                 const res = selection.toggleChecked(id);
                 if (!res.ok && res.reason === "cap") {
@@ -2311,6 +2374,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
               // A brand-new candidate (e.g. from a wider search than the
               // current pool) — the pool is never truncated; `checked` is
               // false only if the active chart type is already at cap.
+              rankDeriveToken++; // FIX (race): a manual search-add supersedes any in-flight auto-derive
               const result = selection.addCandidate({ id, name });
               if (result.ok && !result.checked) {
                 showCapNote(`Added to your list, but ${capSubjectLabel()} is capped at ${activeMaxCap()} players — untick one to plot them instead.`);
@@ -2456,6 +2520,11 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     // item #19: every picker/type/roster change routes through here, so this is
     // the shared point to refresh the empty-required-control outlines.
     syncNeedsInput();
+    // FIX 1: the ranking metric (bar's metric / scatter's Y) may have just
+    // changed to/from a direction-neutral one — re-evaluate Best/Worst
+    // availability so the buttons enable/disable live (this fires even in
+    // "manual" mode, where the roster itself doesn't re-render).
+    syncRosterModeButtons();
   }
 
   // "Bars ⇄ Dots" style toggle — bar chart only (lollipop rendering, same
@@ -3987,8 +4056,18 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
         return single(graphMetrics(discipline, formats).filter((m) => m.kind === "rate" || m.kind === "percent"));
       case "scatter": {
         const metrics = graphMetrics(discipline, formats);
+        // A scatter maps two DIFFERENT metrics against each other. With fewer
+        // than two eligible metrics there is no valid pair — the old
+        // `metrics[1] || metrics[0]` default put the SAME metric on both axes (a
+        // meaningless X==Y diagonal). Don't offer axes in that case; prompt
+        // instead (the Builder itself already excludes each axis's metric from
+        // the other, so it can't produce X==Y either). With >=2, default X and Y
+        // to two DISTINCT metrics.
+        if (metrics.length < 2) {
+          return { kind: "none", note: "A scatter needs two different metrics — this scope only has one to plot. Pick another chart type, or widen the scope." };
+        }
         const options = metrics.map((m) => ({ key: m.key, label: m.label }));
-        return { kind: "xy", xOptions: options, yOptions: options, defaultX: metrics[0]?.key ?? null, defaultY: (metrics[1] || metrics[0])?.key ?? null };
+        return { kind: "xy", xOptions: options, yOptions: options, defaultX: metrics[0].key, defaultY: metrics[1].key };
       }
       case "radar":
         return { kind: "none", note: "Radar compares several metrics at once — pick them in the Graph Builder." };
