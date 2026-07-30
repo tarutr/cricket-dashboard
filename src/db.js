@@ -8,6 +8,7 @@
 
 import { DATA_BASE_URL, PARQUET_FILES, VENDOR_DUCKDB, ballEngineEnabled } from "./config.js";
 import { buildInningsViewSql, DELIVERY_FILES } from "./ballEngine.js";
+import { buildMatchupViewSql } from "./ballEngineMatchup.js";
 import { neededViewColumns, coversColumns, unionColumns, columnsArePlayerLocal } from "./ballColumns.js";
 
 // View name -> parquet file name.
@@ -25,23 +26,34 @@ const VIEWS = {
   matchup_bowling: "matchup_bowling.parquet",
 };
 
-// ── Ball engine (Wave 2a, owner decision 67) ────────────────────────────────
+// ── Ball engine (Wave 2a + 2b, owner decision 67) ───────────────────────────
 // When ballEngineEnabled() (the ?engine=ball flag) is on, the `batting` /
 // `bowling` views are RECONSTRUCTED from the six delivery files by
-// src/ballEngine.js instead of reading batting_innings.parquet /
-// bowling_innings.parquet. matchup_batting / matchup_bowling STAY on the innings
-// parquet (that swap is Wave 2b). Every downstream query is byte-identical
-// because the reconstruction is proven cell-for-cell identical to the export.
+// src/ballEngine.js (Wave 2a), and — Wave 2b — the `matchup_batting` /
+// `matchup_bowling` views are RECONSTRUCTED from the same delivery files joined
+// to the `profiles` view by src/ballEngineMatchup.js, instead of reading their
+// respective parquets. Every downstream query is byte-identical because each
+// reconstruction is proven cell-for-cell identical to its export.
 //
 // The reconstruction re-aggregates raw balls, so — unlike the pre-aggregated
-// innings parquet — it is only usable when scoped to the gender+format file(s)
-// the query actually asks for (measured: all-6 = 21s vs one file = ~3s warm; the
-// scope filter does not prune through the ANY_VALUE aggregation). So the two
-// views are (re)created SCOPED — file subset + a pushed-down core-scope predicate
-// derived from the query's own literals (scopeForQuery) — lazily, only when that
-// scope signature changes.
-const engineViews = ["batting", "bowling"];
+// parquets — it is only usable when scoped to the gender+format file(s) the
+// query actually asks for (measured: all-6 = 21s vs one file = ~3s warm; the
+// scope filter does not prune through the ANY_VALUE aggregation). So every
+// engine view is (re)created SCOPED — file subset + a pushed-down core-scope
+// predicate derived from the query's own literals (scopeForQuery) — lazily, only
+// when that scope + column signature changes. The matchup views share the same
+// machinery (scopeForQuery lifts the same gender/match_type/team_type/match_date
+// literals buildMatchupQuery's WHERE carries, and pruning/caching key on the
+// view name as their "discipline").
+const engineViews = ["batting", "bowling", "matchup_batting", "matchup_bowling"];
 let engineOn = false; // set in registerData from ballEngineEnabled()
+
+/** Generate the reconstruction SELECT for an engine view, dispatching to the
+ * plain (ballEngine.js) or matchup (ballEngineMatchup.js) generator by name. */
+function engineViewSql(discipline, opts) {
+  if (discipline === "batting" || discipline === "bowling") return buildInningsViewSql(discipline, opts);
+  return buildMatchupViewSql(discipline, opts);
+}
 
 /** Seed the `batting` / `bowling` views as plain (unmaterialised) reconstruction
  * VIEWs over `files`. Metadata-only — the heavy per-ball aggregation runs when a
@@ -52,7 +64,7 @@ async function createEngineViews(connection, files, scopePredicate) {
   for (const discipline of engineViews) {
     try {
       await connection.query(
-        `CREATE OR REPLACE VIEW ${discipline} AS ${buildInningsViewSql(discipline, { files, scopePredicate })}`
+        `CREATE OR REPLACE VIEW ${discipline} AS ${engineViewSql(discipline, { files, scopePredicate })}`
       );
     } catch (e) {
       throw makeError(
@@ -91,7 +103,7 @@ const MAX_MATERIALIZED = 4;
 const engineCache = new Map();
 /** discipline -> the materialised table its view currently reads (null = the
  * unmaterialised boot seed). */
-const viewBackedBy = { batting: null, bowling: null };
+const viewBackedBy = { batting: null, bowling: null, matchup_batting: null, matchup_bowling: null };
 let engineTableSeq = 0;
 let engineClock = 0;
 /** Reasons we have already warned about, so a `SELECT *` graph dimension warns
@@ -137,7 +149,7 @@ async function evictMaterialized() {
 async function materialize(discipline, key, files, scopePredicate, playerPredicate, columns) {
   const previous = engineCache.get(key);
   const table = `__ball_${discipline}_${++engineTableSeq}`;
-  const sql = buildInningsViewSql(discipline, { files, scopePredicate, playerPredicate, columns });
+  const sql = engineViewSql(discipline, { files, scopePredicate, playerPredicate, columns });
   try {
     await conn.query(`CREATE TABLE ${table} AS ${sql}`);
   } catch (e) {
@@ -258,7 +270,14 @@ export function scopeForQuery(sql) {
 // (flat player_out OR a wickets_extra overflow entry), so X's own view row is
 // COMPLETE; the base may still emit partial rows for OTHER players (as X's
 // non-strikers etc.), which the caller's own `batter_id = 'X'` discards.
-const PLAYER_ID_COL = { batting: "batter_id", bowling: "bowler_id" };
+const PLAYER_ID_COL = {
+  batting: "batter_id",
+  bowling: "bowler_id",
+  // Matchup popup sections (playerData.js) filter matchup_batting by the STRIKER
+  // (batter_id = 'X') and matchup_bowling by the BOWLER (bowler_id = 'X').
+  matchup_batting: "batter_id",
+  matchup_bowling: "bowler_id",
+};
 
 /** The single player id a query is scoped to (a bare `<idCol> = 'X'` equality on
  * the discipline's id column), or null. Requires EXACTLY ONE distinct id value:
@@ -280,7 +299,14 @@ function singlePlayerId(discipline, sql) {
  * or a 2nd-and-later dismissal in the wickets_extra overflow. */
 function playerBasePredicate(discipline, idLiteral) {
   const lit = `'${idLiteral}'`;
-  if (discipline === "bowling") return `bowler_id = ${lit}`;
+  // Bowling (plain + matchup): the bowler's own deliveries.
+  if (discipline === "bowling" || discipline === "matchup_bowling") return `bowler_id = ${lit}`;
+  // Matchup batting: only the STRIKER's faced balls create a matchup_batting row
+  // (no zero-ball crease recovery at the matchup grain), so the striker equality
+  // alone captures every one of X's matchup rows.
+  if (discipline === "matchup_batting") return `batter_id = ${lit}`;
+  // Plain batting: striker OR non-striker OR the flat/overflow dismissed batter
+  // (recovers the zero-ball crease appearances).
   return (
     `(batter_id = ${lit} OR non_striker_id = ${lit} OR player_out_id = ${lit}` +
     ` OR len(list_filter(wickets_extra, w -> w.player_out_id = ${lit})) > 0)`
@@ -334,9 +360,14 @@ function widenForPendingQueries(need, discipline, sql, files, scopePredicate, pl
 
 /** Which engine views a query actually reads. `\bbatting\b` / `\bbowling\b`
  * deliberately does NOT match batting_team / bowling_group / matchup_batting,
- * where the token is glued to a word char. */
+ * where the token is glued to a word char (the leading `matchup_` / trailing
+ * `_team` kills the word boundary) — so the matchup views need their own tokens.
+ * A query only ever touches ONE family (buildQuery scans the plain views,
+ * buildMatchupQuery the matchup views), but all four are checked for safety. */
 function enginePlanDisciplines(sql) {
   const out = [];
+  if (/\bmatchup_batting\b/.test(sql)) out.push("matchup_batting");
+  if (/\bmatchup_bowling\b/.test(sql)) out.push("matchup_bowling");
   if (/\bbatting\b/.test(sql)) out.push("batting");
   if (/\bbowling\b/.test(sql)) out.push("bowling");
   return out;

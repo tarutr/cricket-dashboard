@@ -194,6 +194,173 @@ export const BOWLING_VIEW_COLUMNS = [
 export const BATTING_ALWAYS_COLUMNS = BATTING_VIEW_COLUMNS.slice(0, 12);
 export const BOWLING_ALWAYS_COLUMNS = BOWLING_VIEW_COLUMNS.slice(0, 12);
 
+// ── Matchup view vocabularies (Wave 2b, owner decision 67) ───────────────────
+// matchup_batting.parquet / matchup_bowling.parquet column lists, in export
+// order (source of truth: export_parquet.py sql_matchup_batting/bowling final
+// SELECTs — confirmed cell-for-cell against the shipped parquet schemas). The
+// ball engine's matchup reconstruction (src/ballEngineMatchup.js) is pruned
+// against these exactly as the plain views are against the two lists above.
+
+/** matchup_batting.parquet's column list, in export order. Grain: one row per
+ * (match_id, innings_number, batter_id, bowling_type) — keyed by the BOWLER's
+ * mapped style. bowling_group is functionally determined by bowling_type. */
+export const MATCHUP_BATTING_VIEW_COLUMNS = [
+  "match_id",
+  "innings_number",
+  "batter_id",
+  "bowling_type",
+  "bowling_group",
+  "batter_name",
+  "batting_team",
+  "bowling_team",
+  "match_type",
+  "gender",
+  "team_type",
+  "match_date",
+  "year",
+  "month",
+  "runs",
+  "balls_faced",
+  "dots",
+  "fours_hit",
+  "sixes_hit",
+  "dismissals",
+  "dis_bowled",
+  "dis_lbw",
+  "dis_caught",
+  "dis_caught_and_bowled",
+  "dis_stumped",
+  "dis_hit_wicket",
+  "pp_runs",
+  "pp_balls",
+  "mid_runs",
+  "mid_balls",
+  "death_runs",
+  "death_balls",
+  "odi_pp_runs",
+  "odi_pp_balls",
+  "odi_mid_runs",
+  "odi_mid_balls",
+  "odi_death_runs",
+  "odi_death_balls",
+  "pp_dots",
+  "pp_fours",
+  "pp_sixes",
+  "pp_dismissals",
+  "mid_dots",
+  "mid_fours",
+  "mid_sixes",
+  "mid_dismissals",
+  "death_dots",
+  "death_fours",
+  "death_sixes",
+  "death_dismissals",
+  "odi_pp_dots",
+  "odi_pp_fours",
+  "odi_pp_sixes",
+  "odi_pp_dismissals",
+  "odi_mid_dots",
+  "odi_mid_fours",
+  "odi_mid_sixes",
+  "odi_mid_dismissals",
+  "odi_death_dots",
+  "odi_death_fours",
+  "odi_death_sixes",
+  "odi_death_dismissals",
+  "batting_position",
+  "ones",
+  "twos",
+  "threes",
+  "fives",
+  "nb_fours",
+  "nb_sixes",
+  "non_boundary_runs",
+  "team_rel_sr",
+  "team_rel_dot_pct",
+  "team_rel_bpb",
+  "team_rel_nbsr",
+];
+
+/** matchup_bowling.parquet's column list, in export order. Grain: one row per
+ * (match_id, innings_number, bowler_id, batting_hand, batting_position) —
+ * batting_position (the STRIKER's position faced) is part of the primary key. */
+export const MATCHUP_BOWLING_VIEW_COLUMNS = [
+  "match_id",
+  "innings_number",
+  "bowler_id",
+  "batting_hand",
+  "batting_position",
+  "bowler_name",
+  "batting_team",
+  "bowling_team",
+  "match_type",
+  "gender",
+  "team_type",
+  "match_date",
+  "year",
+  "month",
+  "balls",
+  "runs_conceded",
+  "wickets",
+  "dots",
+  "fours_conceded",
+  "sixes_conceded",
+  "wkt_bowled",
+  "wkt_lbw",
+  "wkt_caught",
+  "wkt_caught_and_bowled",
+  "wkt_stumped",
+  "wkt_hit_wicket",
+  "pp_balls",
+  "pp_runs_conceded",
+  "pp_wickets",
+  "mid_balls",
+  "mid_runs_conceded",
+  "mid_wickets",
+  "death_balls",
+  "death_runs_conceded",
+  "death_wickets",
+  "odi_pp_balls",
+  "odi_pp_runs_conceded",
+  "odi_pp_wickets",
+  "odi_mid_balls",
+  "odi_mid_runs_conceded",
+  "odi_mid_wickets",
+  "odi_death_balls",
+  "odi_death_runs_conceded",
+  "odi_death_wickets",
+  "pp_dots",
+  "pp_fours_conceded",
+  "pp_sixes_conceded",
+  "mid_dots",
+  "mid_fours_conceded",
+  "mid_sixes_conceded",
+  "death_dots",
+  "death_fours_conceded",
+  "death_sixes_conceded",
+  "odi_pp_dots",
+  "odi_pp_fours_conceded",
+  "odi_pp_sixes_conceded",
+  "odi_mid_dots",
+  "odi_mid_fours_conceded",
+  "odi_mid_sixes_conceded",
+  "odi_death_dots",
+  "odi_death_fours_conceded",
+  "odi_death_sixes_conceded",
+  "team_rel_econ",
+  "team_rel_pbe",
+  "team_rel_dot_pct",
+  "team_rel_sr",
+];
+
+/** Keys + denormalised scope/context — ALWAYS emitted. For the matchup views
+ * these are the leading 14 columns: the primary-key columns (incl. the derived
+ * style key bowling_type/batting_hand and, for bowling, the striker
+ * batting_position) plus bowling_group and every denormalised scope column the
+ * outer query's WHERE reads (gender / match_type / team_type / match_date …). */
+export const MATCHUP_BATTING_ALWAYS_COLUMNS = MATCHUP_BATTING_VIEW_COLUMNS.slice(0, 14);
+export const MATCHUP_BOWLING_ALWAYS_COLUMNS = MATCHUP_BOWLING_VIEW_COLUMNS.slice(0, 14);
+
 // ── Player-local vs whole-innings split (Wave 2s2 FIX 1) ─────────────────────
 // A reconstructed innings column is "player-LOCAL" when its value depends only
 // on that player's OWN deliveries (their striker/appearance balls for batting,
@@ -222,11 +389,29 @@ export const BOWLING_WHOLE_INNINGS_COLUMNS = [
   "team_rel_dot_pct",
   "team_rel_sr",
 ];
+// Matchup team-relative differentials are whole-innings too: each needs the
+// WHOLE side's aggregate against that bowling_type (batting) / (batting_hand,
+// batting_position) (bowling) this innings — every batter/bowler in it — so a
+// player-scoped base ball set (one player's balls) would compute them wrong.
+export const MATCHUP_BATTING_WHOLE_INNINGS_COLUMNS = [
+  "team_rel_sr",
+  "team_rel_dot_pct",
+  "team_rel_bpb",
+  "team_rel_nbsr",
+];
+export const MATCHUP_BOWLING_WHOLE_INNINGS_COLUMNS = [
+  "team_rel_econ",
+  "team_rel_pbe",
+  "team_rel_dot_pct",
+  "team_rel_sr",
+];
 
 /** The whole-innings (NOT player-local) column list for a discipline. */
 export function wholeInningsColumnsFor(discipline) {
   if (discipline === "batting") return BATTING_WHOLE_INNINGS_COLUMNS;
   if (discipline === "bowling") return BOWLING_WHOLE_INNINGS_COLUMNS;
+  if (discipline === "matchup_batting") return MATCHUP_BATTING_WHOLE_INNINGS_COLUMNS;
+  if (discipline === "matchup_bowling") return MATCHUP_BOWLING_WHOLE_INNINGS_COLUMNS;
   throw new Error(`ballColumns: unknown discipline "${discipline}"`);
 }
 
@@ -291,12 +476,16 @@ export const DELIVERY_COLUMNS = [
 export function viewColumnsFor(discipline) {
   if (discipline === "batting") return BATTING_VIEW_COLUMNS;
   if (discipline === "bowling") return BOWLING_VIEW_COLUMNS;
+  if (discipline === "matchup_batting") return MATCHUP_BATTING_VIEW_COLUMNS;
+  if (discipline === "matchup_bowling") return MATCHUP_BOWLING_VIEW_COLUMNS;
   throw new Error(`ballColumns: unknown discipline "${discipline}"`);
 }
 
 export function alwaysColumnsFor(discipline) {
   if (discipline === "batting") return BATTING_ALWAYS_COLUMNS;
   if (discipline === "bowling") return BOWLING_ALWAYS_COLUMNS;
+  if (discipline === "matchup_batting") return MATCHUP_BATTING_ALWAYS_COLUMNS;
+  if (discipline === "matchup_bowling") return MATCHUP_BOWLING_ALWAYS_COLUMNS;
   throw new Error(`ballColumns: unknown discipline "${discipline}"`);
 }
 
