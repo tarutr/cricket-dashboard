@@ -8,6 +8,7 @@
 
 import { DATA_BASE_URL, PARQUET_FILES, VENDOR_DUCKDB, ballEngineEnabled } from "./config.js";
 import { buildInningsViewSql, DELIVERY_FILES } from "./ballEngine.js";
+import { neededViewColumns, coversColumns, unionColumns } from "./ballColumns.js";
 
 // View name -> parquet file name.
 const VIEWS = {
@@ -41,12 +42,12 @@ const VIEWS = {
 // scope signature changes.
 const engineViews = ["batting", "bowling"];
 let engineOn = false; // set in registerData from ballEngineEnabled()
-let engineScopeKey = null; // signature of the scope the views are currently built for
 
-/** Re-create the `batting` / `bowling` views from the ball engine, reading only
- * `files` and pushing `scopePredicate` into the base ball CTE. CREATE OR REPLACE
- * VIEW is metadata-only — the heavy per-ball aggregation runs when a query
- * executes against the view, not here — so re-scoping is cheap. */
+/** Seed the `batting` / `bowling` views as plain (unmaterialised) reconstruction
+ * VIEWs over `files`. Metadata-only — the heavy per-ball aggregation runs when a
+ * query executes against the view, not here. Used once at boot so the views
+ * EXIST with a correct (if slow) definition; every real query then goes through
+ * ensureEngineScope, which materialises a query-shaped table instead. */
 async function createEngineViews(connection, files, scopePredicate) {
   for (const discipline of engineViews) {
     try {
@@ -59,8 +60,102 @@ async function createEngineViews(connection, files, scopePredicate) {
         `Could not create the ball-engine "${discipline}" view. The delivery Parquet files may be missing/unreadable, or the ballEngine SQL is malformed.`
       );
     }
+    viewBackedBy[discipline] = null;
   }
-  engineScopeKey = `${files.join("|")}::${scopePredicate}`;
+}
+
+// ── Wave 2s Layer 2: scope-keyed materialisation cache ──────────────────────
+// Wave 2a re-ran the whole per-ball reconstruction for EVERY query — so a search
+// paid it once, then the "Matches" secondary query, each graph fetch, each popup
+// section and every column add paid it again. Layer 2 pays it ONCE per
+// (discipline, files, scopePredicate, windowPredicate, columnSet) signature:
+// the reconstruction is materialised into a small table (the whole innings grain
+// is only ~422k rows across ALL genders/formats, and a query-shaped one carries
+// ~10–20 columns) and the view is re-pointed at that table. Everything that
+// follows under the same scope is a plain table scan.
+//
+//   REUSE (superset rule): a cached table answers a query whose signature
+//   matches AND whose needed columns are a SUBSET of the table's — so sorts,
+//   graph fetches and popup sections that add no new column are free. When a
+//   query under a known signature needs a column the table lacks, the table is
+//   rebuilt for the UNION of the two sets, so alternating between two column
+//   sets converges instead of thrashing.
+//   INVALIDATION: scope changes produce a different signature, so they simply
+//   miss. Tables are capped (MAX_MATERIALIZED, least-recently-used evicted and
+//   DROPped) — which bounds memory and lets the common "leaderboard scope ⇄
+//   popup scope" alternation stay warm instead of recomputing each way.
+//   DEGRADATION: a miss is always a (now-fast) recompute, never a wrong answer —
+//   a signature is only ever reused when it matches exactly.
+const MAX_MATERIALIZED = 4;
+/** signature -> { table, discipline, columns, used } */
+const engineCache = new Map();
+/** discipline -> the materialised table its view currently reads (null = the
+ * unmaterialised boot seed). */
+const viewBackedBy = { batting: null, bowling: null };
+let engineTableSeq = 0;
+let engineClock = 0;
+/** Reasons we have already warned about, so a `SELECT *` graph dimension warns
+ * once instead of on every fetch. */
+const warnedFullSet = new Set();
+
+function engineSignature(discipline, files, scopePredicate, windowPredicate) {
+  return `${discipline}::${files.join("|")}::${scopePredicate}::${windowPredicate || ""}`;
+}
+
+/** Point `discipline`'s view at a materialised table (cheap DDL, skipped when it
+ * already reads that table). */
+async function pointViewAt(discipline, table) {
+  if (viewBackedBy[discipline] === table) return;
+  await conn.query(`CREATE OR REPLACE VIEW ${discipline} AS SELECT * FROM ${table}`);
+  viewBackedBy[discipline] = table;
+}
+
+/** Drop least-recently-used materialised tables until at most MAX_MATERIALIZED
+ * remain. Never evicts a table a view currently reads. */
+async function evictMaterialized() {
+  while (engineCache.size > MAX_MATERIALIZED) {
+    let victimKey = null;
+    let victim = null;
+    for (const [key, entry] of engineCache) {
+      if (viewBackedBy[entry.discipline] === entry.table) continue;
+      if (!victim || entry.used < victim.used) {
+        victim = entry;
+        victimKey = key;
+      }
+    }
+    if (!victim) return;
+    engineCache.delete(victimKey);
+    try {
+      await conn.query(`DROP TABLE IF EXISTS ${victim.table}`);
+    } catch {
+      /* a failed DROP costs memory, never correctness — keep going */
+    }
+  }
+}
+
+/** Materialise `discipline` for one signature and point its view at the result. */
+async function materialize(discipline, key, files, scopePredicate, columns) {
+  const previous = engineCache.get(key);
+  const table = `__ball_${discipline}_${++engineTableSeq}`;
+  const sql = buildInningsViewSql(discipline, { files, scopePredicate, columns });
+  try {
+    await conn.query(`CREATE TABLE ${table} AS ${sql}`);
+  } catch (e) {
+    throw makeError(
+      e,
+      `Could not build the ball-engine "${discipline}" table for this scope. The delivery Parquet files may be missing/unreadable, or the ballEngine SQL is malformed.`
+    );
+  }
+  engineCache.set(key, { table, discipline, columns, used: ++engineClock });
+  await pointViewAt(discipline, table);
+  if (previous) {
+    try {
+      await conn.query(`DROP TABLE IF EXISTS ${previous.table}`);
+    } catch {
+      /* see evictMaterialized */
+    }
+  }
+  await evictMaterialized();
 }
 
 /**
@@ -138,19 +233,74 @@ export function scopeForQuery(sql) {
   return { files, scopePredicate };
 }
 
-/** Before a ball-engine query runs, ensure `batting`/`bowling` are scoped to it.
- * No-op unless the ball engine is on AND the SQL actually references one of the
- * two engine views (`\bbatting\b` / `\bbowling\b` — deliberately NOT matching
- * batting_team / bowling_group / matchup_batting, where the token is glued to a
- * word char). Only re-creates when the scope signature changed, so repeated
- * same-scope searches pay nothing. */
+/** Which engine views a query actually reads. `\bbatting\b` / `\bbowling\b`
+ * deliberately does NOT match batting_team / bowling_group / matchup_batting,
+ * where the token is glued to a word char. */
+function enginePlanDisciplines(sql) {
+  const out = [];
+  if (/\bbatting\b/.test(sql)) out.push("batting");
+  if (/\bbowling\b/.test(sql)) out.push("bowling");
+  return out;
+}
+
+/**
+ * Before a ball-engine query runs, make sure each engine view it reads is backed
+ * by a materialised table built for THIS query's scope and column needs. No-op
+ * unless the flag is on and the SQL touches `batting`/`bowling`.
+ *
+ * Column derivation (Layer 1) is `neededViewColumns` in src/ballColumns.js:
+ * token-scan the SQL against the fixed innings-column vocabulary; a star
+ * expansion (or any other construct that can read an unnamed column) falls back
+ * to the FULL set with a console.warn naming it. Over-inclusion costs a little
+ * speed; under-inclusion is caught by runWithColumnRetry below, never silently.
+ *
+ * @returns {{discipline: string, key: string, files: string[], scopePredicate: string, pruned: boolean}[]}
+ *   the plan, so a binder error can rebuild exactly these views with everything.
+ */
 async function ensureEngineScope(sql) {
-  if (!engineOn) return;
-  if (!/\b(?:batting|bowling)\b/.test(sql)) return;
+  if (!engineOn) return [];
+  const disciplines = enginePlanDisciplines(sql);
+  if (disciplines.length === 0) return [];
   const { files, scopePredicate } = scopeForQuery(sql);
-  const key = `${files.join("|")}::${scopePredicate}`;
-  if (key === engineScopeKey) return;
-  await createEngineViews(conn, files, scopePredicate);
+  const plan = [];
+  for (const discipline of disciplines) {
+    const need = neededViewColumns(discipline, sql);
+    if (need.full) {
+      const tag = `${discipline}:${need.reason}`;
+      if (!warnedFullSet.has(tag)) {
+        warnedFullSet.add(tag);
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[cricdb] ball engine: cannot prune the "${discipline}" reconstruction for this query — ${need.reason}. ` +
+            `Rebuilding all columns (slower, still correct).`
+        );
+      }
+    }
+    const key = engineSignature(discipline, files, scopePredicate, "");
+    plan.push({ discipline, key, files, scopePredicate, pruned: !need.full });
+    const entry = engineCache.get(key);
+    if (entry && coversColumns(entry.columns, need.columns)) {
+      entry.used = ++engineClock;
+      await pointViewAt(discipline, entry.table);
+      continue;
+    }
+    const columns = entry ? unionColumns(entry.columns, need.columns) : need.columns;
+    await materialize(discipline, key, files, scopePredicate, columns);
+  }
+  return plan;
+}
+
+// A pruned reconstruction that is missing a column the query reads produces a
+// DuckDB *Binder* error ("column X not found"), never a wrong number — SQL
+// cannot read a column it did not name. This is the loud auto-recovery: rebuild
+// the planned views with EVERY column, warn with the failing message, retry once.
+const BINDER_ERROR_RE = /binder error|catalog error|not found in from clause|referenced column|does not have a column/i;
+
+async function rebuildEngineFull(plan) {
+  for (const step of plan) {
+    if (!step.pruned) continue;
+    await materialize(step.discipline, step.key, step.files, step.scopePredicate, null);
+  }
 }
 
 let initPromise = null;
@@ -365,16 +515,55 @@ export async function query(sql) {
       "The database is not ready yet. Please wait for initialization to finish and try again."
     );
   }
-  // Ball engine (Wave 2a): scope the batting/bowling views to this query's
-  // gender+format before it runs. No-op when the flag is off or the query does
-  // not touch those views.
-  await ensureEngineScope(sql);
+  // Flag OFF: byte-untouched — straight to the connection, no queue, no engine.
+  if (!engineOn) return runQuery(sql);
+  // Flag ON: the batting/bowling VIEWS are re-pointed per query (at that query's
+  // scope + column set), so two queries must never be in flight at once — the
+  // second would run against the first's view definition. One shared connection
+  // is serialised by the DuckDB worker anyway, so this costs nothing and it also
+  // means concurrent same-scope callers (the popup's section battery, a graph's
+  // parallel fetches) collapse onto ONE materialisation.
+  return serializeEngineQuery(() => runQuery(sql));
+}
+
+let engineChain = Promise.resolve();
+
+function serializeEngineQuery(fn) {
+  const run = engineChain.then(fn, fn);
+  engineChain = run.then(
+    () => {},
+    () => {}
+  );
+  return run;
+}
+
+async function runQuery(sql) {
   const start = performance.now();
+  // Ball engine: point the batting/bowling views at a table materialised for
+  // this query's scope AND column needs before it runs. No-op when the flag is
+  // off or the query does not touch those views. Inside the timer on purpose —
+  // with the flag on, the reconstruction IS the query's cost.
+  const plan = await ensureEngineScope(sql);
   let table;
   try {
     table = await conn.query(sql);
   } catch (e) {
-    throw makeError(e, `Query failed: ${e.message ?? "unknown error"}`);
+    const message = String(e?.message ?? e);
+    if (plan.some((p) => p.pruned) && BINDER_ERROR_RE.test(message)) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[cricdb] ball engine: the query-shaped reconstruction was missing a column this query needs — ` +
+          `rebuilding every column and retrying once. Original error: ${message}`
+      );
+      await rebuildEngineFull(plan);
+      try {
+        table = await conn.query(sql);
+      } catch (e2) {
+        throw makeError(e2, `Query failed: ${e2.message ?? "unknown error"}`);
+      }
+    } else {
+      throw makeError(e, `Query failed: ${e.message ?? "unknown error"}`);
+    }
   }
   const ms = performance.now() - start;
 
