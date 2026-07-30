@@ -114,6 +114,40 @@ CONTENT_TYPES = {
 }
 
 # ---------------------------------------------------------------------------
+# Ball-grain ("ball layer") export — Wave 1 (owner decision 67, 2026-07-30).
+# ---------------------------------------------------------------------------
+# SIX files, one per gender x format bucket, at the Step-0-proven schema v1
+# (41 columns). PURELY ADDITIVE: the nine files above are untouched. These are
+# built by sql_deliveries() and reconciled back to every existing innings/matchup
+# export by run_ball_layer_gates() (THE oracle), which runs on every pipeline
+# build exactly like the other reconciliation gates.
+#
+# Bucketing mirrors the browser scope strip's expandFormats() EXACTLY:
+#   T20  bucket = T20 + IT20 (The Hundred is match_type='T20', balls_per_over=5,
+#                so it lands here natively — there is NO separate Hundred type),
+#   50 Over    = ODI + ODM,
+#   Red Ball   = Test + MDM.
+# These six buckets partition all six match_types, so every delivery lands in
+# exactly one file.
+DELIVERY_BUCKETS = {
+    "t20": ("T20", "IT20"),
+    "odi": ("ODI", "ODM"),
+    "red": ("Test", "MDM"),
+}
+DELIVERY_GENDERS = {"m": "male", "f": "female"}
+DELIVERY_FILES = [
+    f"deliveries_{g}_{b}.parquet"
+    for g in ("m", "f")
+    for b in ("t20", "odi", "red")
+]
+# A ball file's primary key. Super-over innings are their own (match_id,
+# innings_number) partitions, so this stays unique across the whole file.
+DELIVERY_PK = ["match_id", "innings_number", "over_number", "ball_index"]
+
+for _f in DELIVERY_FILES:
+    CONTENT_TYPES[_f] = "application/vnd.apache.parquet"
+
+# ---------------------------------------------------------------------------
 # SPOT_CHECKS — owner-verified career lines, asserted on every run.
 # Add dicts of the shape below once the owner confirms them at Phase 1.
 #   {
@@ -2125,6 +2159,272 @@ def sql_fielding_events():
     ORDER BY d.match_date, c.match_id, c.innings_number, c.over_number,
              c.ball_index, c.wicket_index, c.fielder_index
     """
+
+
+# ---------------------------------------------------------------------------
+# Ball-grain ("ball layer") export builder — Wave 1 (owner decision 67).
+# ---------------------------------------------------------------------------
+#
+# Ported byte-for-byte from the Step-0 prototype (.orchestrator/step0/
+# build_ball_layer.py), which reconciles to every shipped export and reproduces
+# every standing anchor FROM BALLS. Do NOT reinvent the ordinal / wicket-overflow
+# / non-striker / super-over logic here — it was proven in Step 0.
+#
+# The three clocks (team_ball / bat_ball / bowl_ball) implement the owner's
+# extras-attribution ruling (decision 67): an extra rides into the UPCOMING legal
+# ball's slot on every clock that does not count it — team_ball + bowl_ball advance
+# on legal deliveries only (wides AND no-balls do not advance them); bat_ball
+# advances on faced deliveries (wides excluded; a no-ball IS a faced ball and
+# occupies its own slot). This is byte-identical to build_delivery_cte()'s
+# `legal_ordinal`, so window totals attribute boundary-adjacent extras exactly as
+# the shipped phase columns do — the oracle gate enforces it.
+#
+# Phases below mirror t20_phase_expr() / ODI_PHASE_OVER exactly; NULL for red ball
+# and NULL for super-over rows (a super over is outside any phase, decision 67).
+# NOTE: preserve_insertion_order is deliberately LEFT AT ITS DEFAULT (ON) — Step 0
+# proved that turning it off silently corrupts the physical sort and kills
+# date-range row-group pruning. Do NOT set PRAGMA preserve_insertion_order=false.
+
+_BALL_PHASE_T20 = """
+    CASE
+        WHEN s.is_super_over THEN NULL
+        WHEN s.balls_per_over = 5 THEN
+            CASE
+                WHEN s.team_ball BETWEEN 1 AND 25  THEN 'pp'
+                WHEN s.team_ball BETWEEN 26 AND 75 THEN 'mid'
+                WHEN s.team_ball >= 76             THEN 'death'
+                ELSE NULL
+            END
+        ELSE
+            CASE
+                WHEN s.over_number BETWEEN 0 AND 5  THEN 'pp'
+                WHEN s.over_number BETWEEN 6 AND 14 THEN 'mid'
+                WHEN s.over_number BETWEEN 15 AND 19 THEN 'death'
+                ELSE NULL
+            END
+    END
+"""
+
+_BALL_PHASE_ODI = """
+    CASE
+        WHEN s.is_super_over THEN NULL
+        WHEN s.balls_per_over = 5 THEN NULL
+        WHEN s.over_number BETWEEN 0 AND 9   THEN 'pp'
+        WHEN s.over_number BETWEEN 10 AND 39 THEN 'mid'
+        WHEN s.over_number BETWEEN 40 AND 49 THEN 'death'
+        ELSE NULL
+    END
+"""
+
+_BALL_PHASE_RED = "CAST(NULL AS VARCHAR)"
+
+_BALL_PHASE_BY_BUCKET = {
+    "t20": _BALL_PHASE_T20,
+    "odi": _BALL_PHASE_ODI,
+    "red": _BALL_PHASE_RED,
+}
+
+
+def sql_deliveries(gender, bucket):
+    """
+    One row per delivery (schema v1, 41 cols) for one gender x format bucket.
+    `gender` is 'male'/'female'; `bucket` is 't20'/'odi'/'red'. Super-over rows
+    are INCLUDED and flagged `is_super_over`; every player stat EXCLUDES them at
+    query time (the oracle/anchor gates enforce this, never the export).
+    """
+    match_types = ", ".join(f"'{t}'" for t in DELIVERY_BUCKETS[bucket])
+    phase_expr = _BALL_PHASE_BY_BUCKET[bucket]
+    return f"""
+WITH mm AS (
+    SELECT m.match_id, m.match_type, m.gender, m.team_type,
+           m.match_date_1 AS match_date,
+           CAST(EXTRACT(year  FROM m.match_date_1) AS USMALLINT) AS year,
+           CAST(EXTRACT(month FROM m.match_date_1) AS UTINYINT)  AS month,
+           m.balls_per_over, m.team_1, m.team_2
+    FROM matches m
+    WHERE m.gender = '{gender}' AND m.match_type IN ({match_types})
+),
+inn AS (
+    SELECT i.match_id, i.innings_number, i.batting_team,
+           (i.super_over IS TRUE) AS is_super_over
+    FROM innings i
+    JOIN mm ON mm.match_id = i.match_id
+),
+d0 AS (
+    SELECT
+        dv.match_id, dv.innings_number, dv.over_number, dv.ball_index,
+        dv.batter, dv.batter_id, dv.non_striker, dv.non_striker_id,
+        dv.bowler, dv.bowler_id,
+        dv.runs_batter, dv.wides, dv.noballs, dv.byes, dv.legbyes, dv.penalty,
+        dv.is_not_boundary, dv.wicket_kind, dv.player_out, dv.player_out_id,
+        mm.match_type, mm.gender, mm.team_type, mm.match_date, mm.year, mm.month,
+        mm.balls_per_over, mm.team_1, mm.team_2,
+        inn.batting_team, inn.is_super_over
+    FROM deliveries dv
+    JOIN mm  ON mm.match_id = dv.match_id
+    JOIN inn ON inn.match_id = dv.match_id AND inn.innings_number = dv.innings_number
+),
+-- batting_position: rank of first crease appearance, EXACTLY as sql_batting()'s
+-- appearances/first_app/positions CTEs -- striker (0) before non-striker (1) on
+-- the same ball; a player whose only trace is a wickets row slots in at that ball
+-- AFTER both crease players (role_rank 2 + wicket_index).
+appearances AS (
+    SELECT match_id, innings_number, batter_id AS pid, over_number, ball_index,
+           0 AS role_rank FROM d0
+    UNION ALL
+    SELECT match_id, innings_number, non_striker_id AS pid, over_number, ball_index,
+           1 AS role_rank FROM d0
+    UNION ALL
+    SELECT w.match_id, w.innings_number, w.player_out_id AS pid,
+           w.over_number, w.ball_index, 2 + w.wicket_index AS role_rank
+    FROM wickets w JOIN mm ON mm.match_id = w.match_id
+),
+first_app AS (
+    SELECT match_id, innings_number, pid,
+           MIN(ROW(over_number, ball_index, role_rank)) AS first_key
+    FROM appearances
+    GROUP BY match_id, innings_number, pid
+),
+positions AS (
+    SELECT match_id, innings_number, pid,
+           CAST(ROW_NUMBER() OVER (PARTITION BY match_id, innings_number
+                                   ORDER BY first_key) AS UTINYINT) AS batting_position
+    FROM first_app
+),
+-- Per-ball wicket overflow. A ball CAN carry >1 `wickets` row (14 such balls).
+-- deliveries.wicket_kind / player_out_id are FIRST-WICKET-ONLY convenience
+-- columns; every wicket_index=0 player_out is the striker or non-striker of that
+-- ball, so the flat columns + the two crease players cover index 0. wickets_extra
+-- therefore carries ONLY wicket_index >= 1 -- non-NULL on 14 of 11.3M rows --
+-- recovering the crease appearances / dismissals a flat carry would lose.
+-- bowler_credited_wkts counts ALL credited-kind wicket rows on the ball (index 0
+-- included) so the hot bowler-wickets path stays a plain SUM.
+wk AS (
+    SELECT w.match_id, w.innings_number, w.over_number, w.ball_index,
+           LIST({{'kind': w.kind,
+                 'player_out_id': w.player_out_id,
+                 'player_out_name': w.player_out,
+                 'batting_position': wp.batting_position}}
+                ORDER BY w.wicket_index) FILTER (WHERE w.wicket_index >= 1)
+               AS wickets_extra,
+           CAST(SUM(CASE WHEN w.kind IN ({_KINDS_IN}) THEN 1 ELSE 0 END)
+                AS UTINYINT) AS bowler_credited_wkts
+    FROM wickets w
+    JOIN mm ON mm.match_id = w.match_id
+    LEFT JOIN positions wp
+           ON wp.match_id = w.match_id AND wp.innings_number = w.innings_number
+          AND wp.pid = w.player_out_id
+    GROUP BY w.match_id, w.innings_number, w.over_number, w.ball_index
+),
+-- spell_number: reference/ingest.py identify_spells -- the bowler's DISTINCT over
+-- numbers in the innings, ascending; a gap of >= 3 over numbers starts a new spell.
+bo_overs AS (
+    SELECT DISTINCT match_id, innings_number, bowler_id, over_number FROM d0
+),
+bo_lag AS (
+    SELECT *, LAG(over_number) OVER (PARTITION BY match_id, innings_number, bowler_id
+                                     ORDER BY over_number) AS prev_over
+    FROM bo_overs
+),
+spells AS (
+    SELECT match_id, innings_number, bowler_id, over_number,
+           CAST(1 + SUM(CASE WHEN prev_over IS NOT NULL
+                              AND over_number - prev_over >= 3 THEN 1 ELSE 0 END)
+                    OVER (PARTITION BY match_id, innings_number, bowler_id
+                          ORDER BY over_number ROWS UNBOUNDED PRECEDING)
+                AS UTINYINT) AS spell_number
+    FROM bo_lag
+),
+-- The three clocks. Cumulative window frames INCLUDE the current row, so on an
+-- illegal delivery the running count equals the count strictly before it and the
+-- "+1" lands it in the slot of the ball about to be (re)bowled.
+seq AS (
+    SELECT
+        d0.*,
+        CAST(CASE WHEN d0.wides IS NULL AND d0.noballs IS NULL
+                  THEN legal_cum ELSE legal_cum + 1 END AS USMALLINT) AS team_ball,
+        CAST(CASE WHEN d0.wides IS NULL
+                  THEN faced_cum ELSE faced_cum + 1 END AS USMALLINT) AS bat_ball,
+        CAST(CASE WHEN d0.wides IS NULL AND d0.noballs IS NULL
+                  THEN bowl_cum ELSE bowl_cum + 1 END AS USMALLINT) AS bowl_ball,
+        faced_tot, bowl_tot
+    FROM (
+        SELECT d0.*,
+            SUM(CASE WHEN d0.wides IS NULL AND d0.noballs IS NULL THEN 1 ELSE 0 END) OVER (
+                PARTITION BY d0.match_id, d0.innings_number
+                ORDER BY d0.over_number, d0.ball_index ROWS UNBOUNDED PRECEDING) AS legal_cum,
+            SUM(CASE WHEN d0.wides IS NULL THEN 1 ELSE 0 END) OVER (
+                PARTITION BY d0.match_id, d0.innings_number, d0.batter_id
+                ORDER BY d0.over_number, d0.ball_index ROWS UNBOUNDED PRECEDING) AS faced_cum,
+            SUM(CASE WHEN d0.wides IS NULL THEN 1 ELSE 0 END) OVER (
+                PARTITION BY d0.match_id, d0.innings_number, d0.batter_id) AS faced_tot,
+            SUM(CASE WHEN d0.wides IS NULL AND d0.noballs IS NULL THEN 1 ELSE 0 END) OVER (
+                PARTITION BY d0.match_id, d0.innings_number, d0.bowler_id
+                ORDER BY d0.over_number, d0.ball_index ROWS UNBOUNDED PRECEDING) AS bowl_cum,
+            SUM(CASE WHEN d0.wides IS NULL AND d0.noballs IS NULL THEN 1 ELSE 0 END) OVER (
+                PARTITION BY d0.match_id, d0.innings_number, d0.bowler_id) AS bowl_tot
+        FROM d0
+    ) AS d0
+)
+SELECT
+    -- keys / clock ---------------------------------------------------------
+    s.match_id,
+    CAST(s.innings_number AS UTINYINT) AS innings_number,
+    CAST(s.over_number    AS USMALLINT) AS over_number,
+    CAST(s.ball_index     AS UTINYINT)  AS ball_index,
+    s.team_ball,
+    s.is_super_over,
+    -- denormalized core scope ---------------------------------------------
+    s.match_type, s.gender, s.team_type, s.match_date, s.year, s.month,
+    s.batting_team,
+    CASE WHEN s.team_1 = s.batting_team THEN s.team_2 ELSE s.team_1 END AS bowling_team,
+    CAST(s.balls_per_over AS UTINYINT) AS balls_per_over,
+    -- ball facts -----------------------------------------------------------
+    CAST(s.runs_batter AS UTINYINT) AS runs_batter,
+    CAST(s.wides    AS UTINYINT) AS wides,
+    CAST(s.noballs  AS UTINYINT) AS noballs,
+    CAST(s.byes     AS UTINYINT) AS byes,
+    CAST(s.legbyes  AS UTINYINT) AS legbyes,
+    CAST(s.penalty  AS UTINYINT) AS penalty,
+    s.is_not_boundary,
+    s.wicket_kind,
+    s.player_out_id,
+    (s.wicket_kind IN ({_KINDS_IN})) AS bowler_credited,
+    -- batter context -------------------------------------------------------
+    s.batter_id,
+    s.batter AS batter_name,
+    s.non_striker_id,
+    pos.batting_position,
+    s.bat_ball,
+    CAST(s.faced_tot - s.bat_ball + 1 AS USMALLINT) AS bat_ball_rev,
+    -- bowler context -------------------------------------------------------
+    s.bowler_id,
+    s.bowler AS bowler_name,
+    s.bowl_ball,
+    CAST(s.bowl_tot - s.bowl_ball + 1 AS USMALLINT) AS bowl_ball_rev,
+    sp.spell_number,
+    -- derived --------------------------------------------------------------
+    ({phase_expr}) AS phase,
+    -- v1 additions ---------------------------------------------------------
+    s.non_striker AS non_striker_name,
+    nspos.batting_position AS non_striker_position,
+    COALESCE(wk.bowler_credited_wkts, CAST(0 AS UTINYINT)) AS bowler_credited_wkts,
+    wk.wickets_extra
+FROM seq s
+LEFT JOIN positions pos
+       ON pos.match_id = s.match_id AND pos.innings_number = s.innings_number
+      AND pos.pid = s.batter_id
+LEFT JOIN positions nspos
+       ON nspos.match_id = s.match_id AND nspos.innings_number = s.innings_number
+      AND nspos.pid = s.non_striker_id
+LEFT JOIN spells sp
+       ON sp.match_id = s.match_id AND sp.innings_number = s.innings_number
+      AND sp.bowler_id = s.bowler_id AND sp.over_number = s.over_number
+LEFT JOIN wk
+       ON wk.match_id = s.match_id AND wk.innings_number = s.innings_number
+      AND wk.over_number = s.over_number AND wk.ball_index = s.ball_index
+ORDER BY s.match_date, s.match_id, s.innings_number, s.over_number, s.ball_index
+"""
 
 
 # ---------------------------------------------------------------------------
