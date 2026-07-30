@@ -63,16 +63,23 @@
 // against DELIVERY_COLUMNS (over-inclusion is harmless, under-inclusion is
 // impossible — none of the generated SQL uses a star expansion).
 //
-//   ROW-SET RULE: pruning removes COLUMNS ONLY. The matchup grain (mb / mbowl
-//   GROUP BY) and the base WHERE (super overs excluded, striker/bowler NOT NULL)
-//   are built identically whatever is pruned, so no COUNT(*) ever moves.
+//   ROW-SET RULE: COLUMN PRUNING removes COLUMNS ONLY. The matchup grain (mb /
+//   mbowl GROUP BY) and the base WHERE (super overs excluded, striker/bowler NOT
+//   NULL) are built identically whatever is pruned, so no COUNT(*) ever moves.
+//   THE WINDOW is the deliberate exception (Wave 3, decision 67): windowPredicate
+//   AND-composes into the base ball WHERE, so the matchup grain is built over the
+//   IN-WINDOW balls — exactly the (batter × style) / (bowler × hand × position)
+//   rows with ≥1 in-window ball, and their in-window runs/balls/wickets/coverage.
 //
 // ── windowPredicate / playerPredicate (hooks) ───────────────────────────────
-// windowPredicate is the Wave-3 delivery-window seam — EMPTY in Wave 2b.
-// playerPredicate is db.js's popup single-player base filter (batter_id/bowler_id
-// equality), byte-identical only for player-LOCAL matchup columns (db.js gates
-// it on ballColumns' whole-innings rule — never emitted when a team_rel_* column
-// is needed). Both AND into the base ball WHERE and need no projection entry.
+// windowPredicate is the Wave-3 delivery-window filter (src/deliveryWindow.js) —
+// LIVE: db.js pushes it in from the active state.deliveryWindow (batting views get
+// the bat_ball clock, bowling views the bowl_ball clock). "" when no window ⇒
+// byte-identical to today. playerPredicate is db.js's popup single-player base
+// filter (batter_id/bowler_id equality), byte-identical only for player-LOCAL
+// matchup columns (db.js gates it on ballColumns' whole-innings rule — never
+// emitted when a team_rel_* column is needed). Both AND into the base ball WHERE
+// and read SOURCE columns, so neither needs a projection entry.
 
 import { DELIVERY_COLUMNS, sqlIdentifierTokens, viewColumnsFor, alwaysColumnsFor } from "./ballColumns.js";
 
@@ -147,7 +154,10 @@ function quoteIdent(name) {
  *     balls by them keeps every ball of every in-scope innings and drops only
  *     whole out-of-scope innings the outer WHERE discards anyway. The memory +
  *     row-group/file pruning lever.
- *   windowPredicate — Wave-3 delivery-window filter. EMPTY in Wave 2b.
+ *   windowPredicate — Wave-3 delivery-window filter (src/deliveryWindow.js),
+ *     pushed by db.js from the active state.deliveryWindow. "" when no window
+ *     (byte-identical); when present it restricts the base to the in-window balls
+ *     (decision 67 — the intended row-set change; see the ROW-SET RULE header).
  *   playerPredicate — db.js's popup single-player base filter. EMPTY for every
  *     whole-scope query; byte-identical only for player-LOCAL columns (gated by
  *     db.js on ballColumns' whole-innings rule). */
@@ -548,7 +558,9 @@ function matchupBowlingViewSql(files, scopePredicate, windowPredicate, playerPre
  *   fine — db.js passes only the in-scope gender+format files).
  * @param {string} [opts.scopePredicate]  the query's core-scope ball filter,
  *   pushed into the base CTE (byte-identical; see baseWhere). EMPTY = whole file(s).
- * @param {string} [opts.windowPredicate]  Wave-3 delivery-window predicate; EMPTY here.
+ * @param {string} [opts.windowPredicate]  Wave-3 delivery-window predicate
+ *   (src/deliveryWindow.js), pushed by db.js from state.deliveryWindow. "" = no
+ *   window (byte-identical); when present it restricts the base to in-window balls.
  * @param {string} [opts.playerPredicate]  db.js popup single-player base filter;
  *   EMPTY for every whole-scope query (byte-identical only for player-local cols).
  * @param {string[]|null} [opts.columns]  the matchup-grain output columns to emit

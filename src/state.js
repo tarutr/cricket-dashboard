@@ -602,6 +602,14 @@ export function createInitialState(maxMonth) {
                        // Empty until the Result condition is added, then defaults to
                        // [RESULT_CONDITION_ALL]; else the specific tokens (normal/super_over/dl/vjd/
                        // awarded/fewer). See RESULT_CONDITION_OPTIONS + resultConditionMethod.
+    deliveryWindow: null, // Delivery-window filter (ball-grain rebuild Wave 3, owner decision 67).
+                   // null = no window = every number byte-identical to today (the critical invariant).
+                   // When set, a plain-object spec (see src/deliveryWindow.js): a TEAM clock
+                   // ({mode:'phase'|'overs'|'balls', …}) and/or a PLAYER clock ({edge:'first'|'last', n}),
+                   // composing with AND. db.js reads it via setDeliveryWindow() and pushes the generated
+                   // ball predicate into the ball-engine base CTE for ALL four views (windows define the
+                   // numbers → pins obey them; innings under a window = innings with ≥1 in-window ball).
+                   // The drawer UI that sets this comes in a later wave (engine half only for now).
     matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)
     pinnedPlayers: [], // [{id, name}] — owner decision 46 task 3b: players ADDED to the table's
                    // result set regardless of the PLAYER-SHORTLISTING filters (team/profile/

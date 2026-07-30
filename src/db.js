@@ -10,6 +10,7 @@ import { DATA_BASE_URL, PARQUET_FILES, VENDOR_DUCKDB, ballEngineEnabled } from "
 import { buildInningsViewSql, DELIVERY_FILES } from "./ballEngine.js";
 import { buildMatchupViewSql } from "./ballEngineMatchup.js";
 import { neededViewColumns, coversColumns, unionColumns, columnsArePlayerLocal } from "./ballColumns.js";
+import { deliveryWindowPredicate } from "./deliveryWindow.js";
 
 // View name -> parquet file name.
 const VIEWS = {
@@ -47,6 +48,32 @@ const VIEWS = {
 // view name as their "discipline").
 const engineViews = ["batting", "bowling", "matchup_batting", "matchup_bowling"];
 let engineOn = false; // set in registerData from ballEngineEnabled()
+
+// ── Delivery window (Wave 3, owner decision 67) ─────────────────────────────
+// The active delivery-window spec (null = no window). db.js is state-free (there
+// is no store singleton — main.js and the graph each own a store), so the UI wave
+// pushes the store's `state.deliveryWindow` here via setDeliveryWindow() whenever
+// it changes; the engine reads it at query time (ensureEngineScope) and pushes the
+// generated ball predicate into EVERY engine view a query reads, so pins obey the
+// window (WHO-not-WHAT) automatically. null ⇒ deliveryWindowPredicate() returns ""
+// ⇒ baseWhere AND-composes nothing ⇒ byte-identical to today (THE invariant).
+let activeDeliveryWindow = null;
+
+/** Set (or clear, with null) the active delivery-window spec. The UI wave calls
+ * this from a store subscription (`setDeliveryWindow(store.get().deliveryWindow)`);
+ * the seam's verification drives it directly. Spec shape: src/deliveryWindow.js.
+ * Takes effect on the NEXT query — ensureEngineScope recomputes the per-discipline
+ * predicate + cache signature every time, so a window change simply misses the
+ * cache (a now-fast recompute), never a wrong answer. */
+export function setDeliveryWindow(spec) {
+  activeDeliveryWindow = spec || null;
+}
+
+/** The active window's ball predicate for one engine discipline, or "" when no
+ * window is set. Discipline selects the player clock (bat_ball vs bowl_ball). */
+function windowPredicateFor(discipline) {
+  return deliveryWindowPredicate(activeDeliveryWindow, discipline);
+}
 
 /** Generate the reconstruction SELECT for an engine view, dispatching to the
  * plain (ballEngine.js) or matchup (ballEngineMatchup.js) generator by name. */
@@ -146,10 +173,10 @@ async function evictMaterialized() {
 }
 
 /** Materialise `discipline` for one signature and point its view at the result. */
-async function materialize(discipline, key, files, scopePredicate, playerPredicate, columns) {
+async function materialize(discipline, key, files, scopePredicate, windowPredicate, playerPredicate, columns) {
   const previous = engineCache.get(key);
   const table = `__ball_${discipline}_${++engineTableSeq}`;
-  const sql = engineViewSql(discipline, { files, scopePredicate, playerPredicate, columns });
+  const sql = engineViewSql(discipline, { files, scopePredicate, windowPredicate, playerPredicate, columns });
   try {
     await conn.query(`CREATE TABLE ${table} AS ${sql}`);
   } catch (e) {
@@ -334,9 +361,12 @@ const pendingEngineSqls = new Set();
  * same-player sections fold into ONE player-scoped table while a whole-scope
  * query is never mixed into a player-scoped one (or vice versa).
  */
-function widenForPendingQueries(need, discipline, sql, files, scopePredicate, playerPredicate) {
+function widenForPendingQueries(need, discipline, sql, files, scopePredicate, windowPredicate, playerPredicate) {
   if (pendingEngineSqls.size < 2) return need;
-  const signature = `${files.join("|")}::${scopePredicate}::${playerPredicate}`;
+  // The window is global + discipline-fixed (same activeDeliveryWindow for every
+  // query in flight), so including it in the signature never changes fold
+  // behaviour — but it keeps this signature in lock-step with the cache key.
+  const signature = `${files.join("|")}::${scopePredicate}::${windowPredicate}::${playerPredicate}`;
   let columns = need.columns;
   let full = need.full;
   let reason = need.reason;
@@ -346,7 +376,7 @@ function widenForPendingQueries(need, discipline, sql, files, scopePredicate, pl
     const otherScope = scopeForQuery(other);
     const otherNeed = neededViewColumns(discipline, other);
     const otherPlayer = playerScopeFor(discipline, other, otherNeed);
-    if (`${otherScope.files.join("|")}::${otherScope.scopePredicate}::${otherPlayer}` !== signature) continue;
+    if (`${otherScope.files.join("|")}::${otherScope.scopePredicate}::${windowPredicate}::${otherPlayer}` !== signature) continue;
     if (otherNeed.full) {
       full = true;
       columns = null;
@@ -400,13 +430,19 @@ async function ensureEngineScope(sql) {
     // wrong). Derived from this query's OWN needs, so it is stable per-SQL and
     // never flips as widening folds in same-player siblings.
     const playerPredicate = playerScopeFor(discipline, sql, ownNeed);
+    // Wave 3: the active delivery-window predicate for THIS discipline (bat vs
+    // bowl clock). "" when no window is set ⇒ everything below is byte-identical
+    // to today (the key gains "", the SQL adds nothing). When set it AND-composes
+    // into the base ball CTE, changing the row set to the in-window balls (and so
+    // the innings to those with ≥1 in-window ball — decision 67).
+    const windowPredicate = windowPredicateFor(discipline);
     // Queue-aware widening: the app fires bursts (a popup's section battery, a
     // graph's parallel fetches) whose members read the same scope but slightly
     // different columns. Serialised, that would materialise once per member.
     // So fold in what the OTHER queries already waiting in the queue need, if
     // they resolve to this same signature — one build instead of N. Widening
     // only ever adds columns, never rows, so it cannot change a number.
-    let need = widenForPendingQueries(ownNeed, discipline, sql, files, scopePredicate, playerPredicate);
+    let need = widenForPendingQueries(ownNeed, discipline, sql, files, scopePredicate, windowPredicate, playerPredicate);
     if (need.full) {
       const tag = `${discipline}:${need.reason}`;
       if (!warnedFullSet.has(tag)) {
@@ -418,8 +454,8 @@ async function ensureEngineScope(sql) {
         );
       }
     }
-    const key = engineSignature(discipline, files, scopePredicate, "", playerPredicate);
-    plan.push({ discipline, key, files, scopePredicate, playerPredicate, pruned: !need.full });
+    const key = engineSignature(discipline, files, scopePredicate, windowPredicate, playerPredicate);
+    plan.push({ discipline, key, files, scopePredicate, windowPredicate, playerPredicate, pruned: !need.full });
     const entry = engineCache.get(key);
     if (entry && coversColumns(entry.columns, need.columns)) {
       entry.used = ++engineClock;
@@ -427,7 +463,7 @@ async function ensureEngineScope(sql) {
       continue;
     }
     const columns = entry ? unionColumns(entry.columns, need.columns) : need.columns;
-    await materialize(discipline, key, files, scopePredicate, playerPredicate, columns);
+    await materialize(discipline, key, files, scopePredicate, windowPredicate, playerPredicate, columns);
   }
   return plan;
 }
@@ -443,8 +479,10 @@ async function rebuildEngineFull(plan) {
     if (!step.pruned) continue;
     // Drop BOTH the column pruning AND any player scoping — the whole-scope full
     // reconstruction is the proven byte-identical fallback (a player-scoped full
-    // set would carry non-player-local team_rel columns).
-    await materialize(step.discipline, step.key, step.files, step.scopePredicate, "", null);
+    // set would carry non-player-local team_rel columns). The delivery WINDOW is
+    // KEPT (step.windowPredicate): unlike pruning/player-scoping it DEFINES the
+    // numbers, so the fallback must reconstruct the same in-window row set.
+    await materialize(step.discipline, step.key, step.files, step.scopePredicate, step.windowPredicate, "", null);
   }
 }
 

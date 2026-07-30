@@ -57,12 +57,25 @@
 // exactly as Wave 2a emitted it. db.js derives the set from the SQL it is about
 // to run (src/ballColumns.js).
 //
-//   ROW-SET RULE (correctness-critical): pruning removes COLUMNS ONLY, never
-//   rows. Innings counts are COUNT(*) over view rows, so the batting `crease`
-//   CTE (the batter / non-striker / player-out / wickets_extra union that
-//   recovers the ~4,450 zero-ball appearances) and the bowling `bagg` grain are
-//   built IDENTICALLY whatever is pruned — every input they need stays in the
+//   ROW-SET RULE (correctness-critical): COLUMN PRUNING removes COLUMNS ONLY,
+//   never rows. Innings counts are COUNT(*) over view rows, so the batting
+//   `crease` CTE (the batter / non-striker / player-out / wickets_extra union
+//   that recovers the ~4,450 zero-ball appearances) and the bowling `bagg` grain
+//   are built IDENTICALLY whatever is pruned — every input they need stays in the
 //   base projection unconditionally.
+//
+//   THE WINDOW IS THE DELIBERATE EXCEPTION (Wave 3, decision 67): the
+//   `windowPredicate` is the ONE thing that is *meant* to change the row set. It
+//   AND-composes into the BASE ball CTE's WHERE (see baseWhere), so the crease
+//   union / `bagg` grain run over the IN-WINDOW balls — producing exactly the
+//   innings with ≥1 in-window ball (decision-67's innings rule), the batter's
+//   in-window runs/balls, an in-window dismissal only if the wicket ball is
+//   in-window, etc. This is correct BY the same base-filter mechanism the scope
+//   predicate uses, and column pruning cannot defeat it: pruning only drops OUTPUT
+//   columns, and the window reads SOURCE columns in the base WHERE (needs no
+//   projection entry), so the two are orthogonal. The reverse clocks (bat_ball_rev
+//   / bowl_ball_rev) and extras-attribution the window relies on are pre-stored on
+//   the ball rows (decision 67), so nothing here computes them.
 //
 // ── Wave 2s: LEAN BASE PROJECTION (Layer 2) ─────────────────────────────────
 // The base CTE `b` no longer does `SELECT *` over the delivery files: it
@@ -74,13 +87,16 @@
 // columns — including the `wickets_extra` LIST for bowling — and is the memory
 // fix for the ~3.1 GiB WASM ceiling Wave 2a hit.
 //
-// ── windowPredicate (Wave 3 hook) ───────────────────────────────────────────
-// buildInningsViewSql takes a `windowPredicate` that is EMPTY in Wave 2a/2s. It
-// is the seam Wave 3's delivery-window filter (phase / over range / ball range /
-// first-or-last-X faced|bowled) will use to restrict the base ball set BEFORE
-// the per-innings aggregation. Because it lands in the base WHERE (inside `b`),
-// it needs no projection entry; the extras-attribution + reverse clocks it needs
-// are already stored on the ball rows (decision 67). Present-but-unused here.
+// ── windowPredicate (Wave 3 — LIVE) ─────────────────────────────────────────
+// buildInningsViewSql takes a `windowPredicate` — src/deliveryWindow.js's
+// delivery-window filter (phase / over range / ball range / first-or-last-X
+// faced|bowled), generated per discipline and pushed in by db.js from the active
+// `state.deliveryWindow` (empty "" when no window is set ⇒ byte-identical to
+// today). It restricts the base ball set BEFORE the per-innings aggregation:
+// landing in the base WHERE (inside `b`), it needs no projection entry, and the
+// extras-attribution + reverse clocks it relies on are pre-stored on the ball rows
+// (decision 67). See the ROW-SET RULE above — this predicate is the deliberate
+// exception to "pruning never moves a row".
 
 import { DELIVERY_COLUMNS, sqlIdentifierTokens, viewColumnsFor, alwaysColumnsFor } from "./ballColumns.js";
 
@@ -146,7 +162,11 @@ function sourceExpr(files) {
  *     memory). db.js only ever passes clauses lifted verbatim from the query's own
  *     WHERE, so the base set can never be narrower than the innings the outer
  *     query keeps.
- *   windowPredicate — the Wave-3 delivery-window filter. EMPTY in Wave 2a/2s.
+ *   windowPredicate — the Wave-3 delivery-window filter (src/deliveryWindow.js),
+ *     pushed by db.js from the active state.deliveryWindow. "" when no window is
+ *     set (byte-identical to today). Unlike the scope predicate this is NOT
+ *     byte-identical when present — it is MEANT to restrict the row set to the
+ *     in-window balls (decision 67; see the ROW-SET RULE at the top).
  *   playerPredicate — the Wave-2s2 popup single-player filter (batter/bowler
  *     involvement), pushed by db.js so a one-player popup rebuilds ONLY that
  *     player's innings instead of every player's. BYTE-IDENTICAL only for
@@ -807,7 +827,10 @@ function bowlingViewSql(files, scopePredicate, windowPredicate, playerPredicate,
  *   baseWhere). db.js derives it from the query's own WHERE; EMPTY = reconstruct
  *   the whole file(s).
  * @param {string} [opts.windowPredicate]  Wave-3 delivery-window predicate over
- *   the raw ball columns; EMPTY in Wave 2a/2s (present-but-unused hook).
+ *   the raw ball columns (src/deliveryWindow.js), pushed by db.js from the active
+ *   state.deliveryWindow. "" = no window (byte-identical); when present it AND-
+ *   composes into the base ball WHERE, restricting the reconstruction to the
+ *   in-window balls (decision 67 — the intended row-set change).
  * @param {string} [opts.playerPredicate]  Wave-2s2 FIX 1: a single-player base
  *   ball filter (batter/bowler involvement) that restricts the reconstruction to
  *   ONE player's innings, for the popup. Byte-identical only for player-LOCAL
