@@ -6,7 +6,8 @@
 // instantiate AsyncDuckDB -> register each Parquet file's HTTP URL (cache-busted
 // with the manifest's per-file content hash) -> create SQL views over them.
 
-import { DATA_BASE_URL, PARQUET_FILES, VENDOR_DUCKDB } from "./config.js";
+import { DATA_BASE_URL, PARQUET_FILES, VENDOR_DUCKDB, ballEngineEnabled } from "./config.js";
+import { buildInningsViewSql, DELIVERY_FILES } from "./ballEngine.js";
 
 // View name -> parquet file name.
 const VIEWS = {
@@ -22,6 +23,135 @@ const VIEWS = {
   matchup_batting: "matchup_batting.parquet",
   matchup_bowling: "matchup_bowling.parquet",
 };
+
+// ── Ball engine (Wave 2a, owner decision 67) ────────────────────────────────
+// When ballEngineEnabled() (the ?engine=ball flag) is on, the `batting` /
+// `bowling` views are RECONSTRUCTED from the six delivery files by
+// src/ballEngine.js instead of reading batting_innings.parquet /
+// bowling_innings.parquet. matchup_batting / matchup_bowling STAY on the innings
+// parquet (that swap is Wave 2b). Every downstream query is byte-identical
+// because the reconstruction is proven cell-for-cell identical to the export.
+//
+// The reconstruction re-aggregates raw balls, so — unlike the pre-aggregated
+// innings parquet — it is only usable when scoped to the gender+format file(s)
+// the query actually asks for (measured: all-6 = 21s vs one file = ~3s warm; the
+// scope filter does not prune through the ANY_VALUE aggregation). So the two
+// views are (re)created SCOPED — file subset + a pushed-down core-scope predicate
+// derived from the query's own literals (scopeForQuery) — lazily, only when that
+// scope signature changes.
+const engineViews = ["batting", "bowling"];
+let engineOn = false; // set in registerData from ballEngineEnabled()
+let engineScopeKey = null; // signature of the scope the views are currently built for
+
+/** Re-create the `batting` / `bowling` views from the ball engine, reading only
+ * `files` and pushing `scopePredicate` into the base ball CTE. CREATE OR REPLACE
+ * VIEW is metadata-only — the heavy per-ball aggregation runs when a query
+ * executes against the view, not here — so re-scoping is cheap. */
+async function createEngineViews(connection, files, scopePredicate) {
+  for (const discipline of engineViews) {
+    try {
+      await connection.query(
+        `CREATE OR REPLACE VIEW ${discipline} AS ${buildInningsViewSql(discipline, { files, scopePredicate })}`
+      );
+    } catch (e) {
+      throw makeError(
+        e,
+        `Could not create the ball-engine "${discipline}" view. The delivery Parquet files may be missing/unreadable, or the ballEngine SQL is malformed.`
+      );
+    }
+  }
+  engineScopeKey = `${files.join("|")}::${scopePredicate}`;
+}
+
+/**
+ * Derive, from a query's OWN scope literals, (a) which delivery files the
+ * ball-engine views should read and (b) the core-scope predicate to push into
+ * the base ball CTE. Exported so the offline byte-identical harness scopes the
+ * views EXACTLY as the runtime does — the two can never diverge.
+ *
+ * FILES: UNION semantics over every `gender = '…'` / `match_type IN (…)` literal
+ * → always a SUPERSET of the files that can hold in-scope rows (never under-reads);
+ * any uncertainty (missing gender, unknown/absent match_type) widens to all files
+ * on that axis. Each delivery file is single-gender / single-format-bucket and
+ * every match lives entirely in one file, so reading only these files + the
+ * query's own WHERE yields exactly the rows reading all six would.
+ *
+ * SCOPE PREDICATE: the gender / match_type / team_type / match_date clauses lifted
+ * VERBATIM from the query (all four are raw ball columns, constant within a
+ * (match_id, innings_number)). Pushing them into the base filters balls to only
+ * in-scope innings BEFORE aggregation (the memory/speed lever + row-group/file
+ * pruning) and is byte-identical: it can only ever drop WHOLE out-of-scope
+ * innings, which the caller's outer WHERE discards anyway (see ballEngine
+ * baseWhere). Lifting the query's OWN clauses guarantees the base is never
+ * narrower than the innings the outer query keeps. Clauses that decide WHICH
+ * players/teams (team, opposition, position, event, venue, profile, match
+ * context) are deliberately NOT lifted — the view must stay at core-scope grain
+ * so an in-query sub-use like the R. Pos. CTE (modal position over the core scope)
+ * still sees every core-scope innings.
+ */
+export function scopeForQuery(sql) {
+  // --- files (superset-safe) ---
+  const genders = new Set();
+  for (const m of sql.matchAll(/gender\s*=\s*'(male|female)'/g)) {
+    genders.add(m[1] === "male" ? "m" : "f");
+  }
+  if (genders.size === 0) {
+    genders.add("m");
+    genders.add("f");
+  }
+  const buckets = new Set();
+  let sawMatchType = false;
+  let sawUnknown = false;
+  for (const m of sql.matchAll(/match_type\s+IN\s*\(([^)]*)\)/gi)) {
+    sawMatchType = true;
+    for (const t of m[1].matchAll(/'([^']*)'/g)) {
+      const ty = t[1];
+      if (ty === "T20" || ty === "IT20") buckets.add("t20");
+      else if (ty === "ODI" || ty === "ODM") buckets.add("odi");
+      else if (ty === "Test" || ty === "MDM") buckets.add("red");
+      else sawUnknown = true;
+    }
+  }
+  if (!sawMatchType || sawUnknown || buckets.size === 0) {
+    buckets.add("t20");
+    buckets.add("odi");
+    buckets.add("red");
+  }
+  const files = [];
+  for (const g of genders) for (const b of buckets) files.push(`deliveries_${g}_${b}.parquet`);
+  files.sort();
+
+  // --- scope predicate (verbatim clauses on raw ball columns) ---
+  const parts = [];
+  const g = sql.match(/gender\s*=\s*'(?:male|female)'/);
+  if (g) parts.push(g[0]);
+  const mt = sql.match(/match_type\s+IN\s*\([^)]*\)/i);
+  if (mt) parts.push(mt[0]);
+  const tt = sql.match(/team_type\s*=\s*'(?:international|club)'/);
+  if (tt) parts.push(tt[0]);
+  const dlo = sql.match(/match_date\s*>=\s*DATE\s*'[0-9-]+'/i);
+  if (dlo) parts.push(dlo[0]);
+  const dhi = sql.match(/match_date\s*<\s*DATE\s*'[0-9-]+'/i);
+  if (dhi) parts.push(dhi[0]);
+  const scopePredicate = parts.join(" AND ");
+
+  return { files, scopePredicate };
+}
+
+/** Before a ball-engine query runs, ensure `batting`/`bowling` are scoped to it.
+ * No-op unless the ball engine is on AND the SQL actually references one of the
+ * two engine views (`\bbatting\b` / `\bbowling\b` — deliberately NOT matching
+ * batting_team / bowling_group / matchup_batting, where the token is glued to a
+ * word char). Only re-creates when the scope signature changed, so repeated
+ * same-scope searches pay nothing. */
+async function ensureEngineScope(sql) {
+  if (!engineOn) return;
+  if (!/\b(?:batting|bowling)\b/.test(sql)) return;
+  const { files, scopePredicate } = scopeForQuery(sql);
+  const key = `${files.join("|")}::${scopePredicate}`;
+  if (key === engineScopeKey) return;
+  await createEngineViews(conn, files, scopePredicate);
+}
 
 let initPromise = null;
 let manifest = null;
@@ -154,8 +284,14 @@ async function registerData(duckdbMod, dbInstance, connection, manifestData, onP
   // handles concurrent queries on one connection fine (verified: concurrent
   // CREATE VIEW calls against the shared connection all completed correctly
   // during manual testing), so these also run in parallel.
+  //
+  // Ball engine (Wave 2a): when the flag is on, `batting`/`bowling` are created
+  // separately by createEngineViews (from the delivery files) — skip them here.
+  // matchup_batting / matchup_bowling and every other view are unchanged.
+  engineOn = ballEngineEnabled();
   await Promise.all(
     Object.entries(VIEWS).map(async ([viewName, fileName]) => {
+      if (engineOn && engineViews.includes(viewName)) return; // ball engine owns these
       try {
         await connection.query(
           `CREATE OR REPLACE VIEW ${viewName} AS SELECT * FROM read_parquet('${fileName}')`
@@ -168,6 +304,16 @@ async function registerData(duckdbMod, dbInstance, connection, manifestData, onP
       }
     })
   );
+
+  // Seed the ball-engine views over ALL six files, unscoped (a correct default so
+  // the views EXIST). Metadata-only; ensureEngineScope narrows BOTH the file set
+  // and the pushed-down scope predicate before any heavy aggregation runs, so the
+  // unscoped all-six definition is never actually executed.
+  if (engineOn) {
+    // eslint-disable-next-line no-console
+    console.info("[cricdb] ball engine ON (?engine=ball) — batting/bowling views reconstructed from delivery files");
+    await createEngineViews(connection, DELIVERY_FILES.slice(), "");
+  }
 }
 
 async function doInit(onProgress) {
@@ -219,6 +365,10 @@ export async function query(sql) {
       "The database is not ready yet. Please wait for initialization to finish and try again."
     );
   }
+  // Ball engine (Wave 2a): scope the batting/bowling views to this query's
+  // gender+format before it runs. No-op when the flag is off or the query does
+  // not touch those views.
+  await ensureEngineScope(sql);
   const start = performance.now();
   let table;
   try {
