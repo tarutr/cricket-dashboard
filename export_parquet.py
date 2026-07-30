@@ -3417,6 +3417,712 @@ def run_gates(con, out_dir):
 
     log("All structural / cross-check gates passed.")
 
+    # Ball-grain ("ball layer") gates — THE oracle + order + super-over +
+    # anchors. Wave 1 (decision 67). Runs on every pipeline build, exactly like
+    # the reconciliation gates above.
+    run_ball_layer_gates(con, out_dir)
+
+
+def run_ball_layer_gates(con, out_dir):
+    """
+    THE oracle: re-aggregate the six ball files back to innings/matchup grain and
+    prove they reproduce every existing export EXACTLY (build FAILS on any breach).
+    Plus: super-over structural gates, physical-order gates (row adjacency +
+    row-group match_date non-overlap), and the standing anchors FROM BALLS.
+
+    Decision-39 rule: this reconstructs the exports from the BALL columns with
+    hand-written SQL — it never reuses an sql_* export function's shape. The
+    reference side is the just-written export parquets (which run_gates has
+    already reconciled against independent deliveries/wickets sums). Super-over
+    rows are UNCONDITIONALLY excluded from every stat below (decision 67).
+    """
+    log("Running ball-layer (delivery) gates — oracle + order + anchors ...")
+
+    dv = os.path.join(out_dir, "deliveries_*.parquet")
+    # Join the SHIPPED profiles snapshot (sql_player_profiles = SELECT * FROM the
+    # DB player_profiles table, so this is byte-identical to what the matchup
+    # exports joined) rather than the DB table directly — the same file ships, and
+    # this stays correct even on a DB snapshot that has no player_profiles table.
+    prof = f"read_parquet('{os.path.join(out_dir, 'player_profiles.parquet')}')"
+    bat_ref = os.path.join(out_dir, "batting_innings.parquet")
+    bowl_ref = os.path.join(out_dir, "bowling_innings.parquet")
+    mbat_ref = os.path.join(out_dir, "matchup_batting.parquet")
+    mbowl_ref = os.path.join(out_dir, "matchup_bowling.parquet")
+
+    def q(sql):
+        return con.execute(sql).fetchone()[0]
+
+    # Ball-column calc fragments (SPEC §4.1). Bare column names resolve to the
+    # ball table `b`; player_profiles shares no column name with these.
+    FACED = "wides IS NULL"                                    # batter faced ball
+    LEGAL = "wides IS NULL AND noballs IS NULL"                # bowler legal ball
+    B4 = "runs_batter = 4 AND is_not_boundary IS NOT TRUE"     # hit four
+    B6 = "runs_batter = 6 AND is_not_boundary IS NOT TRUE"     # hit six
+    BRUNS = "runs_batter + COALESCE(noballs,0) + COALESCE(wides,0)"  # bowler runs
+    # Both phase families, over every ball regardless of file (the exports store
+    # both families for all formats). Hundred (balls_per_over=5) uses the legal
+    # ordinal = team_ball for the T20 family; the ODI family is NULL there.
+    T20P = ("CASE WHEN balls_per_over=5 THEN "
+            "CASE WHEN team_ball BETWEEN 1 AND 25 THEN 'pp' "
+            "WHEN team_ball BETWEEN 26 AND 75 THEN 'mid' "
+            "WHEN team_ball >= 76 THEN 'death' END "
+            "WHEN over_number BETWEEN 0 AND 5 THEN 'pp' "
+            "WHEN over_number BETWEEN 6 AND 14 THEN 'mid' "
+            "WHEN over_number BETWEEN 15 AND 19 THEN 'death' END")
+    ODIP = ("CASE WHEN balls_per_over=5 THEN NULL "
+            "WHEN over_number BETWEEN 0 AND 9 THEN 'pp' "
+            "WHEN over_number BETWEEN 10 AND 39 THEN 'mid' "
+            "WHEN over_number BETWEEN 40 AND 49 THEN 'death' END")
+
+    def kindct(kind):
+        """Per-ball count of a (credited) wicket `kind` across the flat
+        wicket_kind + the wickets_extra overflow list."""
+        k = kind.replace("'", "''")
+        return (f"((CASE WHEN wicket_kind = '{k}' THEN 1 ELSE 0 END)"
+                f" + COALESCE(len(list_filter(wickets_extra, x -> x.kind = '{k}')), 0))")
+
+    def bat_phase_cols(p, pref):
+        """Batting phase block (runs/balls/dots/fours/sixes) for one family."""
+        return ",\n".join(
+            f"SUM(CASE WHEN ({p})='{ph}' THEN runs_batter ELSE 0 END) AS {pref}{ph}_runs,\n"
+            f"SUM(CASE WHEN ({p})='{ph}' AND {FACED} THEN 1 ELSE 0 END) AS {pref}{ph}_balls,\n"
+            f"SUM(CASE WHEN ({p})='{ph}' AND {FACED} AND runs_batter=0 THEN 1 ELSE 0 END) AS {pref}{ph}_dots,\n"
+            f"SUM(CASE WHEN ({p})='{ph}' AND {B4} THEN 1 ELSE 0 END) AS {pref}{ph}_fours,\n"
+            f"SUM(CASE WHEN ({p})='{ph}' AND {B6} THEN 1 ELSE 0 END) AS {pref}{ph}_sixes"
+            for ph in ("pp", "mid", "death"))
+
+    def bowl_phase_cols(p, pref):
+        """Bowling phase block (balls/runs_conceded/wickets/dots/fours/sixes)."""
+        return ",\n".join(
+            f"SUM(CASE WHEN ({p})='{ph}' AND {LEGAL} THEN 1 ELSE 0 END) AS {pref}{ph}_balls,\n"
+            f"SUM(CASE WHEN ({p})='{ph}' THEN {BRUNS} ELSE 0 END) AS {pref}{ph}_runs_conceded,\n"
+            f"SUM(CASE WHEN ({p})='{ph}' THEN bowler_credited_wkts ELSE 0 END) AS {pref}{ph}_wickets,\n"
+            f"SUM(CASE WHEN ({p})='{ph}' AND {LEGAL} AND runs_batter=0 THEN 1 ELSE 0 END) AS {pref}{ph}_dots,\n"
+            f"SUM(CASE WHEN ({p})='{ph}' AND {B4} THEN 1 ELSE 0 END) AS {pref}{ph}_fours_conceded,\n"
+            f"SUM(CASE WHEN ({p})='{ph}' AND {B6} THEN 1 ELSE 0 END) AS {pref}{ph}_sixes_conceded"
+            for ph in ("pp", "mid", "death"))
+
+    def bat_phase_dis(p, pref, val):
+        """Phase-dismissal block. val is the per-ball dismissal count expression
+        (all-kinds for batting_innings, bowler_credited_wkts for matchups)."""
+        return ",\n".join(
+            f"SUM(CASE WHEN ({p})='{ph}' THEN {val} ELSE 0 END) AS {pref}{ph}_dismissals"
+            for ph in ("pp", "mid", "death"))
+
+    # ------------------------------------------------------------------
+    # Reconciliation driver: build orx table, prove row set + per-column.
+    # ------------------------------------------------------------------
+    def reconcile(label, orx, ref, keys, plain_cols, odi_cols, float_cols,
+                  expect_rows):
+        key_sql = ", ".join(keys)
+        n = q(f"SELECT COUNT(*) FROM {orx}")
+        gate(n == expect_rows, f"[oracle] {label} row count",
+             f"{n} vs expected {expect_rows}")
+        distinct_keys = q(f"SELECT COUNT(*) FROM (SELECT DISTINCT {key_sql} FROM {orx})")
+        gate(distinct_keys == n, f"[oracle] {label} no duplicate keys",
+             f"{n - distinct_keys} duplicated key groups")
+        ref_n = q(f"SELECT COUNT(*) FROM read_parquet('{ref}')")
+        gate(ref_n == n, f"[oracle] {label} row count == export", f"{n} vs {ref_n}")
+        missing = q(f"SELECT COUNT(*) FROM (SELECT {key_sql} FROM read_parquet('{ref}') "
+                    f"EXCEPT SELECT {key_sql} FROM {orx})")
+        invented = q(f"SELECT COUNT(*) FROM (SELECT {key_sql} FROM {orx} "
+                     f"EXCEPT SELECT {key_sql} FROM read_parquet('{ref}'))")
+        gate(missing == 0, f"[oracle] {label} rows the ball layer CANNOT see", f"{missing}")
+        gate(invented == 0, f"[oracle] {label} rows the ball layer INVENTS", f"{invented}")
+
+        for col in plain_cols + float_cols:
+            bad = q(f"SELECT COUNT(*) FROM {orx} m JOIN read_parquet('{ref}') r "
+                    f"USING ({key_sql}) WHERE m.{col} IS DISTINCT FROM r.{col}")
+            gate(bad == 0, f"[oracle] {label} {col}", f"{bad} mismatched rows")
+        for col in odi_cols:
+            bad = q(f"SELECT COUNT(*) FROM {orx} m JOIN read_parquet('{ref}') r "
+                    f"USING ({key_sql}) WHERE m.is_hundred=0 AND m.{col} IS DISTINCT FROM r.{col}")
+            gate(bad == 0, f"[oracle] {label} {col} (non-Hundred)", f"{bad} mismatched rows")
+        if odi_cols:
+            probe = odi_cols[0]
+            bad = q(f"SELECT COUNT(*) FROM {orx} m JOIN read_parquet('{ref}') r "
+                    f"USING ({key_sql}) WHERE m.is_hundred=1 AND r.{probe} IS NOT NULL")
+            gate(bad == 0, f"[oracle] {label} Hundred odi_* NULL", f"{bad} non-NULL rows")
+
+    # ================= ORACLE 1 — batting_innings =====================
+    con.execute(f"""
+    CREATE OR REPLACE TEMP TABLE orx_bat AS
+    WITH b AS (SELECT * FROM read_parquet('{dv}') WHERE NOT is_super_over),
+    app AS (
+        SELECT match_id, innings_number, batter_id AS pid, batter_name AS nm, batting_position AS pos FROM b
+        UNION ALL
+        SELECT match_id, innings_number, non_striker_id, non_striker_name, non_striker_position FROM b
+        UNION ALL
+        SELECT match_id, innings_number, player_out_id, CAST(NULL AS VARCHAR), CAST(NULL AS UTINYINT)
+        FROM b WHERE player_out_id IS NOT NULL
+        UNION ALL
+        SELECT match_id, innings_number, x.player_out_id, x.player_out_name, x.batting_position
+        FROM b, UNNEST(b.wickets_extra) AS t(x)
+    ),
+    crease AS (SELECT match_id, innings_number, pid AS batter_id, MIN(nm) AS any_name,
+                      MIN(pos) AS any_pos FROM app GROUP BY 1,2,3),
+    posx AS (SELECT DISTINCT match_id, innings_number, batter_id, batting_position FROM b),
+    ictx AS (SELECT match_id, innings_number,
+                    ANY_VALUE(batting_team) batting_team, ANY_VALUE(bowling_team) bowling_team,
+                    ANY_VALUE(match_type) match_type, ANY_VALUE(gender) gender,
+                    ANY_VALUE(team_type) team_type, ANY_VALUE(match_date) match_date,
+                    ANY_VALUE(year) AS "year", ANY_VALUE(month) AS "month",
+                    MAX(CASE WHEN balls_per_over=5 THEN 1 ELSE 0 END) is_hundred
+             FROM b GROUP BY 1,2),
+    dis AS (SELECT match_id, innings_number, pid,
+                   MAX(CASE WHEN kind NOT IN ({_NON_DIS_IN}) THEN 1 ELSE 0 END) dismissed
+            FROM (
+                SELECT match_id, innings_number, player_out_id AS pid, wicket_kind AS kind
+                FROM b WHERE player_out_id IS NOT NULL
+                UNION ALL
+                SELECT match_id, innings_number, x.player_out_id, x.kind
+                FROM b, UNNEST(b.wickets_extra) AS t(x)
+            ) GROUP BY 1,2,3),
+    disp AS (SELECT match_id, innings_number, pid,
+                    {bat_phase_dis(T20P, '', '1')},
+                    {bat_phase_dis(ODIP, 'odi_', '1')}
+             FROM (
+                SELECT match_id, innings_number, player_out_id AS pid, over_number, team_ball, balls_per_over
+                FROM b WHERE player_out_id IS NOT NULL AND wicket_kind NOT IN ({_NON_DIS_IN})
+                UNION ALL
+                SELECT b.match_id, b.innings_number, x.player_out_id, b.over_number, b.team_ball, b.balls_per_over
+                FROM b, UNNEST(b.wickets_extra) AS t(x) WHERE x.kind NOT IN ({_NON_DIS_IN})
+             ) GROUP BY 1,2,3),
+    bat AS (SELECT match_id, innings_number, batter_id,
+                   ANY_VALUE(batter_name) bat_name,
+                   SUM(runs_batter) runs,
+                   SUM(CASE WHEN {FACED} THEN 1 ELSE 0 END) balls_faced,
+                   SUM(CASE WHEN {FACED} AND runs_batter=0 THEN 1 ELSE 0 END) dots,
+                   SUM(CASE WHEN {B4} THEN 1 ELSE 0 END) fours_hit,
+                   SUM(CASE WHEN {B6} THEN 1 ELSE 0 END) sixes_hit,
+                   SUM(CASE WHEN {FACED} AND runs_batter=1 THEN 1 ELSE 0 END) ones,
+                   SUM(CASE WHEN {FACED} AND runs_batter=2 THEN 1 ELSE 0 END) twos,
+                   SUM(CASE WHEN {FACED} AND runs_batter=3 THEN 1 ELSE 0 END) threes,
+                   SUM(CASE WHEN {FACED} AND runs_batter=5 THEN 1 ELSE 0 END) fives,
+                   SUM(CASE WHEN runs_batter=4 AND is_not_boundary IS TRUE THEN 1 ELSE 0 END) nb_fours,
+                   SUM(CASE WHEN runs_batter=6 AND is_not_boundary IS TRUE THEN 1 ELSE 0 END) nb_sixes,
+                   SUM(runs_batter) - 4*SUM(CASE WHEN {B4} THEN 1 ELSE 0 END)
+                                    - 6*SUM(CASE WHEN {B6} THEN 1 ELSE 0 END) non_boundary_runs,
+                   SUM(CASE WHEN {FACED} AND bat_ball BETWEEN 1 AND 10 THEN runs_batter ELSE 0 END) fb1_10_runs,
+                   SUM(CASE WHEN {FACED} AND bat_ball BETWEEN 1 AND 10 THEN 1 ELSE 0 END) fb1_10_balls,
+                   SUM(CASE WHEN {FACED} AND bat_ball BETWEEN 11 AND 20 THEN runs_batter ELSE 0 END) fb11_20_runs,
+                   SUM(CASE WHEN {FACED} AND bat_ball BETWEEN 11 AND 20 THEN 1 ELSE 0 END) fb11_20_balls,
+                   SUM(CASE WHEN {FACED} AND bat_ball >= 21 THEN runs_batter ELSE 0 END) fb21p_runs,
+                   SUM(CASE WHEN {FACED} AND bat_ball >= 21 THEN 1 ELSE 0 END) fb21p_balls,
+                   {bat_phase_cols(T20P, '')},
+                   {bat_phase_cols(ODIP, 'odi_')}
+            FROM b WHERE batter_id IS NOT NULL GROUP BY 1,2,3),
+    tinn AS (SELECT match_id, innings_number,
+                    SUM(CASE WHEN {FACED} THEN 1 ELSE 0 END) team_inns_balls,
+                    SUM(CASE WHEN {FACED} THEN runs_batter ELSE 0 END) team_runs,
+                    SUM(CASE WHEN {FACED} AND runs_batter=0 THEN 1 ELSE 0 END) team_dots,
+                    SUM(CASE WHEN {B4} THEN 1 ELSE 0 END) team_fours,
+                    SUM(CASE WHEN {B6} THEN 1 ELSE 0 END) team_sixes
+             FROM b GROUP BY 1,2)
+    SELECT c.match_id, c.innings_number, c.batter_id,
+        COALESCE(bat.bat_name, c.any_name) AS batter_name,
+        ictx.batting_team, ictx.bowling_team, ictx.match_type, ictx.gender, ictx.team_type,
+        ictx.match_date, ictx.year, ictx.month, ictx.is_hundred,
+        COALESCE(bat.runs,0) runs, COALESCE(bat.balls_faced,0) balls_faced, COALESCE(bat.dots,0) dots,
+        COALESCE(bat.fours_hit,0) fours_hit, COALESCE(bat.sixes_hit,0) sixes_hit,
+        COALESCE(dis.dismissed,0) dismissed,
+        COALESCE(posx.batting_position, c.any_pos) batting_position,
+        COALESCE(bat.pp_runs,0) pp_runs, COALESCE(bat.pp_balls,0) pp_balls,
+        COALESCE(bat.mid_runs,0) mid_runs, COALESCE(bat.mid_balls,0) mid_balls,
+        COALESCE(bat.death_runs,0) death_runs, COALESCE(bat.death_balls,0) death_balls,
+        COALESCE(bat.odi_pp_runs,0) odi_pp_runs, COALESCE(bat.odi_pp_balls,0) odi_pp_balls,
+        COALESCE(bat.odi_mid_runs,0) odi_mid_runs, COALESCE(bat.odi_mid_balls,0) odi_mid_balls,
+        COALESCE(bat.odi_death_runs,0) odi_death_runs, COALESCE(bat.odi_death_balls,0) odi_death_balls,
+        COALESCE(bat.fb1_10_runs,0) fb1_10_runs, COALESCE(bat.fb1_10_balls,0) fb1_10_balls,
+        COALESCE(bat.fb11_20_runs,0) fb11_20_runs, COALESCE(bat.fb11_20_balls,0) fb11_20_balls,
+        COALESCE(bat.fb21p_runs,0) fb21p_runs, COALESCE(bat.fb21p_balls,0) fb21p_balls,
+        COALESCE(bat.pp_dots,0) pp_dots, COALESCE(bat.pp_fours,0) pp_fours, COALESCE(bat.pp_sixes,0) pp_sixes,
+        COALESCE(disp.pp_dismissals,0) pp_dismissals,
+        COALESCE(bat.mid_dots,0) mid_dots, COALESCE(bat.mid_fours,0) mid_fours, COALESCE(bat.mid_sixes,0) mid_sixes,
+        COALESCE(disp.mid_dismissals,0) mid_dismissals,
+        COALESCE(bat.death_dots,0) death_dots, COALESCE(bat.death_fours,0) death_fours, COALESCE(bat.death_sixes,0) death_sixes,
+        COALESCE(disp.death_dismissals,0) death_dismissals,
+        COALESCE(bat.odi_pp_dots,0) odi_pp_dots, COALESCE(bat.odi_pp_fours,0) odi_pp_fours, COALESCE(bat.odi_pp_sixes,0) odi_pp_sixes,
+        COALESCE(disp.odi_pp_dismissals,0) odi_pp_dismissals,
+        COALESCE(bat.odi_mid_dots,0) odi_mid_dots, COALESCE(bat.odi_mid_fours,0) odi_mid_fours, COALESCE(bat.odi_mid_sixes,0) odi_mid_sixes,
+        COALESCE(disp.odi_mid_dismissals,0) odi_mid_dismissals,
+        COALESCE(bat.odi_death_dots,0) odi_death_dots, COALESCE(bat.odi_death_fours,0) odi_death_fours, COALESCE(bat.odi_death_sixes,0) odi_death_sixes,
+        COALESCE(disp.odi_death_dismissals,0) odi_death_dismissals,
+        COALESCE(bat.ones,0) ones, COALESCE(bat.twos,0) twos, COALESCE(bat.threes,0) threes, COALESCE(bat.fives,0) fives,
+        COALESCE(bat.nb_fours,0) nb_fours, COALESCE(bat.nb_sixes,0) nb_sixes, COALESCE(bat.non_boundary_runs,0) non_boundary_runs,
+        COALESCE(tinn.team_inns_balls,0) team_inns_balls,
+        CAST((COALESCE(bat.runs,0) / NULLIF(COALESCE(bat.balls_faced,0),0) * 100.0)
+             - (tinn.team_runs / NULLIF(tinn.team_inns_balls,0) * 100.0) AS FLOAT) team_rel_sr,
+        CAST((COALESCE(bat.dots,0) / NULLIF(COALESCE(bat.balls_faced,0),0) * 100.0)
+             - (tinn.team_dots / NULLIF(tinn.team_inns_balls,0) * 100.0) AS FLOAT) team_rel_dot_pct,
+        CAST((COALESCE(bat.balls_faced,0) / NULLIF(COALESCE(bat.fours_hit,0)+COALESCE(bat.sixes_hit,0),0))
+             - (tinn.team_inns_balls / NULLIF(tinn.team_fours+tinn.team_sixes,0)) AS FLOAT) team_rel_bpb,
+        CAST((COALESCE(bat.non_boundary_runs,0) / NULLIF(COALESCE(bat.balls_faced,0)-COALESCE(bat.fours_hit,0)-COALESCE(bat.sixes_hit,0),0) * 100.0)
+             - ((tinn.team_runs-4*tinn.team_fours-6*tinn.team_sixes) / NULLIF(tinn.team_inns_balls-tinn.team_fours-tinn.team_sixes,0) * 100.0) AS FLOAT) team_rel_nbsr
+    FROM crease c
+    LEFT JOIN ictx ON ictx.match_id=c.match_id AND ictx.innings_number=c.innings_number
+    LEFT JOIN bat  ON bat.match_id=c.match_id AND bat.innings_number=c.innings_number AND bat.batter_id=c.batter_id
+    LEFT JOIN dis  ON dis.match_id=c.match_id AND dis.innings_number=c.innings_number AND dis.pid=c.batter_id
+    LEFT JOIN disp ON disp.match_id=c.match_id AND disp.innings_number=c.innings_number AND disp.pid=c.batter_id
+    LEFT JOIN posx ON posx.match_id=c.match_id AND posx.innings_number=c.innings_number AND posx.batter_id=c.batter_id
+    LEFT JOIN tinn ON tinn.match_id=c.match_id AND tinn.innings_number=c.innings_number
+    """)
+    bat_plain = ["batter_name", "batting_team", "bowling_team", "match_type", "gender",
+                 "team_type", "match_date", "year", "month", "runs", "balls_faced", "dots",
+                 "fours_hit", "sixes_hit", "dismissed", "batting_position",
+                 "pp_runs", "pp_balls", "mid_runs", "mid_balls", "death_runs", "death_balls",
+                 "fb1_10_runs", "fb1_10_balls", "fb11_20_runs", "fb11_20_balls", "fb21p_runs", "fb21p_balls",
+                 "pp_dots", "pp_fours", "pp_sixes", "pp_dismissals",
+                 "mid_dots", "mid_fours", "mid_sixes", "mid_dismissals",
+                 "death_dots", "death_fours", "death_sixes", "death_dismissals",
+                 "ones", "twos", "threes", "fives", "nb_fours", "nb_sixes", "non_boundary_runs",
+                 "team_inns_balls"]
+    bat_odi = ["odi_pp_runs", "odi_pp_balls", "odi_mid_runs", "odi_mid_balls", "odi_death_runs", "odi_death_balls",
+               "odi_pp_dots", "odi_pp_fours", "odi_pp_sixes", "odi_pp_dismissals",
+               "odi_mid_dots", "odi_mid_fours", "odi_mid_sixes", "odi_mid_dismissals",
+               "odi_death_dots", "odi_death_fours", "odi_death_sixes", "odi_death_dismissals"]
+    bat_float = ["team_rel_sr", "team_rel_dot_pct", "team_rel_bpb", "team_rel_nbsr"]
+    reconcile("batting_innings", "orx_bat", bat_ref,
+              ["match_id", "innings_number", "batter_id"],
+              bat_plain, bat_odi, bat_float, 421955)
+
+    # ================= ORACLE 2 — bowling_innings =====================
+    con.execute(f"""
+    CREATE OR REPLACE TEMP TABLE orx_bowl AS
+    WITH b AS (SELECT * FROM read_parquet('{dv}') WHERE NOT is_super_over),
+    os AS (SELECT match_id, innings_number, over_number, bowler_id,
+                  ANY_VALUE(balls_per_over) bpo,
+                  SUM(CASE WHEN {LEGAL} THEN 1 ELSE 0 END) legal_balls,
+                  SUM({BRUNS}) conceded
+           FROM b WHERE bowler_id IS NOT NULL GROUP BY 1,2,3,4),
+    maid AS (SELECT match_id, innings_number, bowler_id,
+                    SUM(CASE WHEN legal_balls=bpo AND conceded=0 THEN 1 ELSE 0 END) maidens
+             FROM os GROUP BY 1,2,3),
+    bo AS (SELECT match_id, innings_number, bowler_id,
+                  SUM(CASE WHEN legal_balls=6 THEN 1 ELSE 0 END) complete_overs,
+                  SUM(CASE WHEN legal_balls<6 THEN legal_balls ELSE 0 END) incomplete_balls
+           FROM os GROUP BY 1,2,3),
+    tb AS (SELECT match_id, innings_number,
+                  SUM(CASE WHEN {LEGAL} THEN 1 ELSE 0 END) t_balls,
+                  SUM({BRUNS}) t_runs,
+                  SUM(CASE WHEN {LEGAL} AND runs_batter=0 THEN 1 ELSE 0 END) t_dots
+           FROM b GROUP BY 1,2),
+    tw AS (SELECT match_id, innings_number, SUM(bowler_credited_wkts) t_wkts
+           FROM b WHERE bowler_id IS NOT NULL GROUP BY 1,2),
+    sp_agg AS (SELECT match_id, innings_number, bowler_id, spell_number,
+                      SUM(CASE WHEN {LEGAL} THEN 1 ELSE 0 END) s_balls,
+                      SUM({BRUNS}) s_runs,
+                      SUM(bowler_credited_wkts) s_wkts
+               FROM b WHERE bowler_id IS NOT NULL GROUP BY 1,2,3,4),
+    sp AS (SELECT match_id, innings_number, bowler_id,
+                  MAX(spell_number) spell_count, MAX(s_balls) longest_spell_balls,
+                  arg_max(s_wkts, s_wkts*1000 - s_runs) best_spell_wkts,
+                  arg_max(s_runs, s_wkts*1000 - s_runs) best_spell_runs
+           FROM sp_agg GROUP BY 1,2,3),
+    wkk AS (SELECT match_id, innings_number, bowler_id,
+                   SUM({kindct('bowled')}) wickets_bowled,
+                   SUM({kindct('lbw')}) wickets_lbw,
+                   SUM({kindct('caught')}) wickets_caught,
+                   SUM({kindct('caught and bowled')}) wickets_caught_and_bowled,
+                   SUM({kindct('stumped')}) wickets_stumped,
+                   SUM({kindct('hit wicket')}) wickets_hit_wicket
+            FROM b WHERE bowler_id IS NOT NULL GROUP BY 1,2,3),
+    bagg AS (SELECT match_id, innings_number, bowler_id,
+                    ANY_VALUE(bowler_name) bowler_name, ANY_VALUE(batting_team) batting_team,
+                    ANY_VALUE(bowling_team) bowling_team, ANY_VALUE(match_type) match_type,
+                    ANY_VALUE(gender) gender, ANY_VALUE(team_type) team_type,
+                    ANY_VALUE(match_date) match_date, ANY_VALUE(year) AS "year", ANY_VALUE(month) AS "month",
+                    MAX(CASE WHEN balls_per_over=5 THEN 1 ELSE 0 END) is_hundred,
+                    SUM(CASE WHEN {LEGAL} THEN 1 ELSE 0 END) balls,
+                    SUM({BRUNS}) runs_conceded,
+                    SUM(bowler_credited_wkts) wickets,
+                    SUM(CASE WHEN {LEGAL} AND runs_batter=0 THEN 1 ELSE 0 END) dots,
+                    SUM(CASE WHEN {B4} THEN 1 ELSE 0 END) fours_conceded,
+                    SUM(CASE WHEN {B6} THEN 1 ELSE 0 END) sixes_conceded,
+                    SUM(COALESCE(wides,0)) wides_runs, SUM(COALESCE(noballs,0)) noball_runs,
+                    {bowl_phase_cols(T20P, '')},
+                    {bowl_phase_cols(ODIP, 'odi_')}
+             FROM b WHERE bowler_id IS NOT NULL GROUP BY 1,2,3)
+    SELECT bagg.match_id, bagg.innings_number, bagg.bowler_id, bagg.bowler_name,
+        bagg.bowling_team, bagg.batting_team, bagg.match_type, bagg.gender, bagg.team_type,
+        bagg.match_date, bagg.year, bagg.month, bagg.is_hundred,
+        bagg.balls, bagg.runs_conceded, bagg.wickets, bagg.dots, bagg.fours_conceded, bagg.sixes_conceded,
+        COALESCE(maid.maidens,0) maidens, bagg.wides_runs, bagg.noball_runs,
+        wkk.wickets_bowled, wkk.wickets_lbw, wkk.wickets_caught, wkk.wickets_caught_and_bowled,
+        wkk.wickets_stumped, wkk.wickets_hit_wicket,
+        bagg.pp_balls, bagg.pp_runs_conceded, bagg.pp_wickets,
+        bagg.mid_balls, bagg.mid_runs_conceded, bagg.mid_wickets,
+        bagg.death_balls, bagg.death_runs_conceded, bagg.death_wickets,
+        bagg.odi_pp_balls, bagg.odi_pp_runs_conceded, bagg.odi_pp_wickets,
+        bagg.odi_mid_balls, bagg.odi_mid_runs_conceded, bagg.odi_mid_wickets,
+        bagg.odi_death_balls, bagg.odi_death_runs_conceded, bagg.odi_death_wickets,
+        bagg.pp_dots, bagg.pp_fours_conceded, bagg.pp_sixes_conceded,
+        bagg.mid_dots, bagg.mid_fours_conceded, bagg.mid_sixes_conceded,
+        bagg.death_dots, bagg.death_fours_conceded, bagg.death_sixes_conceded,
+        bagg.odi_pp_dots, bagg.odi_pp_fours_conceded, bagg.odi_pp_sixes_conceded,
+        bagg.odi_mid_dots, bagg.odi_mid_fours_conceded, bagg.odi_mid_sixes_conceded,
+        bagg.odi_death_dots, bagg.odi_death_fours_conceded, bagg.odi_death_sixes_conceded,
+        COALESCE(sp.spell_count,0) spell_count, COALESCE(sp.longest_spell_balls,0) longest_spell_balls,
+        COALESCE(sp.best_spell_wkts,0) best_spell_wkts, COALESCE(sp.best_spell_runs,0) best_spell_runs,
+        CAST((bagg.runs_conceded / NULLIF(CAST(CAST(bo.complete_overs AS VARCHAR) || '.' || CAST(bo.incomplete_balls AS VARCHAR) AS DOUBLE),0))
+             - (tb.t_runs / NULLIF(tb.t_balls / 6.0, 0)) AS FLOAT) team_rel_econ,
+        CAST((bagg.runs_conceded / NULLIF(bagg.balls,0)) - (tb.t_runs / NULLIF(tb.t_balls,0)) AS FLOAT) team_rel_pbe,
+        CAST((bagg.dots / NULLIF(bagg.balls,0) * 100.0) - (tb.t_dots / NULLIF(tb.t_balls,0) * 100.0) AS FLOAT) team_rel_dot_pct,
+        CAST((bagg.balls / NULLIF(bagg.wickets,0)) - (tb.t_balls / NULLIF(tw.t_wkts,0)) AS FLOAT) team_rel_sr
+    FROM bagg
+    LEFT JOIN maid ON maid.match_id=bagg.match_id AND maid.innings_number=bagg.innings_number AND maid.bowler_id=bagg.bowler_id
+    LEFT JOIN bo   ON bo.match_id=bagg.match_id AND bo.innings_number=bagg.innings_number AND bo.bowler_id=bagg.bowler_id
+    LEFT JOIN wkk  ON wkk.match_id=bagg.match_id AND wkk.innings_number=bagg.innings_number AND wkk.bowler_id=bagg.bowler_id
+    LEFT JOIN sp   ON sp.match_id=bagg.match_id AND sp.innings_number=bagg.innings_number AND sp.bowler_id=bagg.bowler_id
+    LEFT JOIN tb   ON tb.match_id=bagg.match_id AND tb.innings_number=bagg.innings_number
+    LEFT JOIN tw   ON tw.match_id=bagg.match_id AND tw.innings_number=bagg.innings_number
+    """)
+    bowl_plain = ["bowler_name", "bowling_team", "batting_team", "match_type", "gender",
+                  "team_type", "match_date", "year", "month", "balls", "runs_conceded", "wickets",
+                  "dots", "fours_conceded", "sixes_conceded", "maidens", "wides_runs", "noball_runs",
+                  "wickets_bowled", "wickets_lbw", "wickets_caught", "wickets_caught_and_bowled",
+                  "wickets_stumped", "wickets_hit_wicket",
+                  "pp_balls", "pp_runs_conceded", "pp_wickets", "mid_balls", "mid_runs_conceded", "mid_wickets",
+                  "death_balls", "death_runs_conceded", "death_wickets",
+                  "pp_dots", "pp_fours_conceded", "pp_sixes_conceded",
+                  "mid_dots", "mid_fours_conceded", "mid_sixes_conceded",
+                  "death_dots", "death_fours_conceded", "death_sixes_conceded",
+                  "spell_count", "longest_spell_balls", "best_spell_wkts", "best_spell_runs"]
+    bowl_odi = ["odi_pp_balls", "odi_pp_runs_conceded", "odi_pp_wickets",
+                "odi_mid_balls", "odi_mid_runs_conceded", "odi_mid_wickets",
+                "odi_death_balls", "odi_death_runs_conceded", "odi_death_wickets",
+                "odi_pp_dots", "odi_pp_fours_conceded", "odi_pp_sixes_conceded",
+                "odi_mid_dots", "odi_mid_fours_conceded", "odi_mid_sixes_conceded",
+                "odi_death_dots", "odi_death_fours_conceded", "odi_death_sixes_conceded"]
+    bowl_float = ["team_rel_econ", "team_rel_pbe", "team_rel_dot_pct", "team_rel_sr"]
+    reconcile("bowling_innings", "orx_bowl", bowl_ref,
+              ["match_id", "innings_number", "bowler_id"],
+              bowl_plain, bowl_odi, bowl_float, 291001)
+
+    # ================= ORACLE 3 — matchup_batting =====================
+    con.execute(f"""
+    CREATE OR REPLACE TEMP TABLE orx_mbat AS
+    WITH b AS (
+        SELECT b0.*,
+               COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)') AS bowling_type,
+               COALESCE(pp.bowling_group, '(unmapped)') AS bowling_group
+        FROM read_parquet('{dv}') b0
+        LEFT JOIN {prof} pp ON pp.player_id = b0.bowler_id
+        WHERE NOT b0.is_super_over AND b0.batter_id IS NOT NULL
+    ),
+    tta AS (SELECT match_id, innings_number, bowling_type,
+                   SUM(CASE WHEN {FACED} THEN 1 ELSE 0 END) t_balls,
+                   SUM(CASE WHEN {FACED} THEN runs_batter ELSE 0 END) t_runs,
+                   SUM(CASE WHEN {FACED} AND runs_batter=0 THEN 1 ELSE 0 END) t_dots,
+                   SUM(CASE WHEN {B4} THEN 1 ELSE 0 END) t_fours,
+                   SUM(CASE WHEN {B6} THEN 1 ELSE 0 END) t_sixes
+            FROM b GROUP BY 1,2,3),
+    mb AS (SELECT match_id, innings_number, batter_id, bowling_type,
+                  ANY_VALUE(bowling_group) bowling_group, ANY_VALUE(batter_name) batter_name,
+                  ANY_VALUE(batting_team) batting_team, ANY_VALUE(bowling_team) bowling_team,
+                  ANY_VALUE(match_type) match_type, ANY_VALUE(gender) gender, ANY_VALUE(team_type) team_type,
+                  ANY_VALUE(match_date) match_date, ANY_VALUE(year) AS "year", ANY_VALUE(month) AS "month",
+                  ANY_VALUE(batting_position) batting_position,
+                  MAX(CASE WHEN balls_per_over=5 THEN 1 ELSE 0 END) is_hundred,
+                  SUM(runs_batter) runs, SUM(CASE WHEN {FACED} THEN 1 ELSE 0 END) balls_faced,
+                  SUM(CASE WHEN {FACED} AND runs_batter=0 THEN 1 ELSE 0 END) dots,
+                  SUM(CASE WHEN {B4} THEN 1 ELSE 0 END) fours_hit,
+                  SUM(CASE WHEN {B6} THEN 1 ELSE 0 END) sixes_hit,
+                  SUM(bowler_credited_wkts) dismissals,
+                  SUM({kindct('bowled')}) dis_bowled, SUM({kindct('lbw')}) dis_lbw,
+                  SUM({kindct('caught')}) dis_caught, SUM({kindct('caught and bowled')}) dis_caught_and_bowled,
+                  SUM({kindct('stumped')}) dis_stumped, SUM({kindct('hit wicket')}) dis_hit_wicket,
+                  SUM(CASE WHEN {FACED} AND runs_batter=1 THEN 1 ELSE 0 END) ones,
+                  SUM(CASE WHEN {FACED} AND runs_batter=2 THEN 1 ELSE 0 END) twos,
+                  SUM(CASE WHEN {FACED} AND runs_batter=3 THEN 1 ELSE 0 END) threes,
+                  SUM(CASE WHEN {FACED} AND runs_batter=5 THEN 1 ELSE 0 END) fives,
+                  SUM(CASE WHEN runs_batter=4 AND is_not_boundary IS TRUE THEN 1 ELSE 0 END) nb_fours,
+                  SUM(CASE WHEN runs_batter=6 AND is_not_boundary IS TRUE THEN 1 ELSE 0 END) nb_sixes,
+                  SUM(runs_batter) - 4*SUM(CASE WHEN {B4} THEN 1 ELSE 0 END)
+                                   - 6*SUM(CASE WHEN {B6} THEN 1 ELSE 0 END) non_boundary_runs,
+                  {bat_phase_cols(T20P, '')},
+                  {bat_phase_cols(ODIP, 'odi_')},
+                  {bat_phase_dis(T20P, '', 'bowler_credited_wkts')},
+                  {bat_phase_dis(ODIP, 'odi_', 'bowler_credited_wkts')}
+           FROM b GROUP BY match_id, innings_number, batter_id, bowling_type)
+    SELECT mb.match_id, mb.innings_number, mb.batter_id, mb.bowling_type, mb.bowling_group,
+        mb.batter_name, mb.batting_team, mb.bowling_team, mb.match_type, mb.gender, mb.team_type,
+        mb.match_date, mb.year, mb.month, mb.is_hundred, mb.batting_position,
+        mb.runs, mb.balls_faced, mb.dots, mb.fours_hit, mb.sixes_hit, mb.dismissals,
+        mb.dis_bowled, mb.dis_lbw, mb.dis_caught, mb.dis_caught_and_bowled, mb.dis_stumped, mb.dis_hit_wicket,
+        mb.pp_runs, mb.pp_balls, mb.mid_runs, mb.mid_balls, mb.death_runs, mb.death_balls,
+        mb.odi_pp_runs, mb.odi_pp_balls, mb.odi_mid_runs, mb.odi_mid_balls, mb.odi_death_runs, mb.odi_death_balls,
+        mb.pp_dots, mb.pp_fours, mb.pp_sixes, mb.pp_dismissals,
+        mb.mid_dots, mb.mid_fours, mb.mid_sixes, mb.mid_dismissals,
+        mb.death_dots, mb.death_fours, mb.death_sixes, mb.death_dismissals,
+        mb.odi_pp_dots, mb.odi_pp_fours, mb.odi_pp_sixes, mb.odi_pp_dismissals,
+        mb.odi_mid_dots, mb.odi_mid_fours, mb.odi_mid_sixes, mb.odi_mid_dismissals,
+        mb.odi_death_dots, mb.odi_death_fours, mb.odi_death_sixes, mb.odi_death_dismissals,
+        mb.ones, mb.twos, mb.threes, mb.fives, mb.nb_fours, mb.nb_sixes, mb.non_boundary_runs,
+        CAST((mb.runs / NULLIF(mb.balls_faced,0) * 100.0) - (tta.t_runs / NULLIF(tta.t_balls,0) * 100.0) AS FLOAT) team_rel_sr,
+        CAST((mb.dots / NULLIF(mb.balls_faced,0) * 100.0) - (tta.t_dots / NULLIF(tta.t_balls,0) * 100.0) AS FLOAT) team_rel_dot_pct,
+        CAST((mb.balls_faced / NULLIF(mb.fours_hit+mb.sixes_hit,0)) - (tta.t_balls / NULLIF(tta.t_fours+tta.t_sixes,0)) AS FLOAT) team_rel_bpb,
+        CAST((mb.non_boundary_runs / NULLIF(mb.balls_faced-mb.fours_hit-mb.sixes_hit,0) * 100.0)
+             - ((tta.t_runs-4*tta.t_fours-6*tta.t_sixes) / NULLIF(tta.t_balls-tta.t_fours-tta.t_sixes,0) * 100.0) AS FLOAT) team_rel_nbsr
+    FROM mb LEFT JOIN tta ON tta.match_id=mb.match_id AND tta.innings_number=mb.innings_number AND tta.bowling_type=mb.bowling_type
+    """)
+    mbat_plain = ["bowling_group", "batter_name", "batting_team", "bowling_team", "match_type",
+                  "gender", "team_type", "match_date", "year", "month", "batting_position",
+                  "runs", "balls_faced", "dots", "fours_hit", "sixes_hit", "dismissals",
+                  "dis_bowled", "dis_lbw", "dis_caught", "dis_caught_and_bowled", "dis_stumped", "dis_hit_wicket",
+                  "pp_runs", "pp_balls", "mid_runs", "mid_balls", "death_runs", "death_balls",
+                  "pp_dots", "pp_fours", "pp_sixes", "pp_dismissals",
+                  "mid_dots", "mid_fours", "mid_sixes", "mid_dismissals",
+                  "death_dots", "death_fours", "death_sixes", "death_dismissals",
+                  "ones", "twos", "threes", "fives", "nb_fours", "nb_sixes", "non_boundary_runs"]
+    mbat_odi = ["odi_pp_runs", "odi_pp_balls", "odi_mid_runs", "odi_mid_balls", "odi_death_runs", "odi_death_balls",
+                "odi_pp_dots", "odi_pp_fours", "odi_pp_sixes", "odi_pp_dismissals",
+                "odi_mid_dots", "odi_mid_fours", "odi_mid_sixes", "odi_mid_dismissals",
+                "odi_death_dots", "odi_death_fours", "odi_death_sixes", "odi_death_dismissals"]
+    mbat_float = ["team_rel_sr", "team_rel_dot_pct", "team_rel_bpb", "team_rel_nbsr"]
+    reconcile("matchup_batting", "orx_mbat", mbat_ref,
+              ["match_id", "innings_number", "batter_id", "bowling_type"],
+              mbat_plain, mbat_odi, mbat_float, 964860)
+
+    # ================= ORACLE 4 — matchup_bowling =====================
+    con.execute(f"""
+    CREATE OR REPLACE TEMP TABLE orx_mbowl AS
+    WITH b AS (
+        SELECT b0.*, COALESCE(pp.batting_style, '(unmapped)') AS batting_hand
+        FROM read_parquet('{dv}') b0
+        LEFT JOIN {prof} pp ON pp.player_id = b0.batter_id
+        WHERE NOT b0.is_super_over AND b0.bowler_id IS NOT NULL
+    ),
+    thp AS (SELECT match_id, innings_number, batting_hand, batting_position,
+                   SUM(CASE WHEN {LEGAL} THEN 1 ELSE 0 END) t_balls,
+                   SUM({BRUNS}) t_runs,
+                   SUM(CASE WHEN {LEGAL} AND runs_batter=0 THEN 1 ELSE 0 END) t_dots,
+                   SUM(bowler_credited_wkts) t_wkts
+            FROM b GROUP BY 1,2,3,4),
+    mbowl AS (SELECT match_id, innings_number, bowler_id, batting_hand, batting_position,
+                     ANY_VALUE(bowler_name) bowler_name, ANY_VALUE(batting_team) batting_team,
+                     ANY_VALUE(bowling_team) bowling_team, ANY_VALUE(match_type) match_type,
+                     ANY_VALUE(gender) gender, ANY_VALUE(team_type) team_type,
+                     ANY_VALUE(match_date) match_date, ANY_VALUE(year) AS "year", ANY_VALUE(month) AS "month",
+                     MAX(CASE WHEN balls_per_over=5 THEN 1 ELSE 0 END) is_hundred,
+                     SUM(CASE WHEN {LEGAL} THEN 1 ELSE 0 END) balls,
+                     SUM({BRUNS}) runs_conceded,
+                     SUM(bowler_credited_wkts) wickets,
+                     SUM(CASE WHEN {LEGAL} AND runs_batter=0 THEN 1 ELSE 0 END) dots,
+                     SUM(CASE WHEN {B4} THEN 1 ELSE 0 END) fours_conceded,
+                     SUM(CASE WHEN {B6} THEN 1 ELSE 0 END) sixes_conceded,
+                     SUM({kindct('bowled')}) wkt_bowled, SUM({kindct('lbw')}) wkt_lbw,
+                     SUM({kindct('caught')}) wkt_caught, SUM({kindct('caught and bowled')}) wkt_caught_and_bowled,
+                     SUM({kindct('stumped')}) wkt_stumped, SUM({kindct('hit wicket')}) wkt_hit_wicket,
+                     {bowl_phase_cols(T20P, '')},
+                     {bowl_phase_cols(ODIP, 'odi_')}
+              FROM b GROUP BY match_id, innings_number, bowler_id, batting_hand, batting_position)
+    SELECT mbowl.match_id, mbowl.innings_number, mbowl.bowler_id, mbowl.batting_hand, mbowl.batting_position,
+        mbowl.bowler_name, mbowl.batting_team, mbowl.bowling_team, mbowl.match_type, mbowl.gender, mbowl.team_type,
+        mbowl.match_date, mbowl.year, mbowl.month, mbowl.is_hundred,
+        mbowl.balls, mbowl.runs_conceded, mbowl.wickets, mbowl.dots, mbowl.fours_conceded, mbowl.sixes_conceded,
+        mbowl.wkt_bowled, mbowl.wkt_lbw, mbowl.wkt_caught, mbowl.wkt_caught_and_bowled, mbowl.wkt_stumped, mbowl.wkt_hit_wicket,
+        mbowl.pp_balls, mbowl.pp_runs_conceded, mbowl.pp_wickets,
+        mbowl.mid_balls, mbowl.mid_runs_conceded, mbowl.mid_wickets,
+        mbowl.death_balls, mbowl.death_runs_conceded, mbowl.death_wickets,
+        mbowl.odi_pp_balls, mbowl.odi_pp_runs_conceded, mbowl.odi_pp_wickets,
+        mbowl.odi_mid_balls, mbowl.odi_mid_runs_conceded, mbowl.odi_mid_wickets,
+        mbowl.odi_death_balls, mbowl.odi_death_runs_conceded, mbowl.odi_death_wickets,
+        mbowl.pp_dots, mbowl.pp_fours_conceded, mbowl.pp_sixes_conceded,
+        mbowl.mid_dots, mbowl.mid_fours_conceded, mbowl.mid_sixes_conceded,
+        mbowl.death_dots, mbowl.death_fours_conceded, mbowl.death_sixes_conceded,
+        mbowl.odi_pp_dots, mbowl.odi_pp_fours_conceded, mbowl.odi_pp_sixes_conceded,
+        mbowl.odi_mid_dots, mbowl.odi_mid_fours_conceded, mbowl.odi_mid_sixes_conceded,
+        mbowl.odi_death_dots, mbowl.odi_death_fours_conceded, mbowl.odi_death_sixes_conceded,
+        CAST((mbowl.runs_conceded / NULLIF(mbowl.balls / 6.0, 0)) - (thp.t_runs / NULLIF(thp.t_balls / 6.0, 0)) AS FLOAT) team_rel_econ,
+        CAST((mbowl.runs_conceded / NULLIF(mbowl.balls,0)) - (thp.t_runs / NULLIF(thp.t_balls,0)) AS FLOAT) team_rel_pbe,
+        CAST((mbowl.dots / NULLIF(mbowl.balls,0) * 100.0) - (thp.t_dots / NULLIF(thp.t_balls,0) * 100.0) AS FLOAT) team_rel_dot_pct,
+        CAST((mbowl.balls / NULLIF(mbowl.wickets,0)) - (thp.t_balls / NULLIF(thp.t_wkts,0)) AS FLOAT) team_rel_sr
+    FROM mbowl LEFT JOIN thp ON thp.match_id=mbowl.match_id AND thp.innings_number=mbowl.innings_number
+                             AND thp.batting_hand=mbowl.batting_hand AND thp.batting_position=mbowl.batting_position
+    """)
+    mbowl_plain = ["bowler_name", "batting_team", "bowling_team", "match_type", "gender",
+                   "team_type", "match_date", "year", "month", "balls", "runs_conceded", "wickets",
+                   "dots", "fours_conceded", "sixes_conceded",
+                   "wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket",
+                   "pp_balls", "pp_runs_conceded", "pp_wickets", "mid_balls", "mid_runs_conceded", "mid_wickets",
+                   "death_balls", "death_runs_conceded", "death_wickets",
+                   "pp_dots", "pp_fours_conceded", "pp_sixes_conceded",
+                   "mid_dots", "mid_fours_conceded", "mid_sixes_conceded",
+                   "death_dots", "death_fours_conceded", "death_sixes_conceded"]
+    mbowl_odi = ["odi_pp_balls", "odi_pp_runs_conceded", "odi_pp_wickets",
+                 "odi_mid_balls", "odi_mid_runs_conceded", "odi_mid_wickets",
+                 "odi_death_balls", "odi_death_runs_conceded", "odi_death_wickets",
+                 "odi_pp_dots", "odi_pp_fours_conceded", "odi_pp_sixes_conceded",
+                 "odi_mid_dots", "odi_mid_fours_conceded", "odi_mid_sixes_conceded",
+                 "odi_death_dots", "odi_death_fours_conceded", "odi_death_sixes_conceded"]
+    mbowl_float = ["team_rel_econ", "team_rel_pbe", "team_rel_dot_pct", "team_rel_sr"]
+    reconcile("matchup_bowling", "orx_mbowl", mbowl_ref,
+              ["match_id", "innings_number", "bowler_id", "batting_hand", "batting_position"],
+              mbowl_plain, mbowl_odi, mbowl_float, 1354907)
+
+    # ================= STRUCTURAL + SUPER-OVER + ORDER ================
+    _ball_structural_gates(con, out_dir, q)
+
+    # ================= ANCHORS FROM BALLS ============================
+    _ball_anchor_gates(con, out_dir, q)
+
+    log("All ball-layer gates passed.")
+
+
+def _ball_structural_gates(con, out_dir, q):
+    """Per-file: row>0, PK unique, super-over present+flagged, phase NULL rules,
+    reverse-clock sanity, and the two physical-order gates."""
+    for fname in DELIVERY_FILES:
+        p = os.path.join(out_dir, fname)
+        n = q(f"SELECT COUNT(*) FROM read_parquet('{p}')")
+        gate(n > 0, f"[ball] row_count>0 [{fname}]", f"got {n}")
+        pk = ", ".join(DELIVERY_PK)
+        dups = q(f"SELECT COUNT(*) FROM (SELECT {pk} FROM read_parquet('{p}') "
+                 f"GROUP BY {pk} HAVING COUNT(*) > 1)")
+        gate(dups == 0, f"[ball] no_dup_pk [{fname}]", f"{dups} duplicated PK groups")
+
+        # Order gate A: physical rows are in the declared sort order.
+        ooo = q(f"""
+            SELECT COUNT(*) FROM (
+                SELECT LAG(ROW(match_date, match_id, innings_number, over_number, ball_index))
+                           OVER (ORDER BY file_row_number) AS prev,
+                       ROW(match_date, match_id, innings_number, over_number, ball_index) AS cur
+                FROM read_parquet('{p}', file_row_number=true)
+            ) WHERE prev IS NOT NULL AND cur < prev""")
+        gate(ooo == 0, f"[ball] rows in sort order [{fname}]", f"{ooo} out-of-order rows")
+
+        # Order gate B: consecutive row groups' match_date ranges do not overlap
+        # (max of group i <= min of group i+1) -> date-range pruning works.
+        overlap = q(f"""
+            WITH rg AS (
+                SELECT row_group_id,
+                       CAST(stats_min_value AS DATE) mn, CAST(stats_max_value AS DATE) mx
+                FROM parquet_metadata('{p}') WHERE path_in_schema = 'match_date'
+            )
+            SELECT COUNT(*) FROM (
+                SELECT mx, LEAD(mn) OVER (ORDER BY row_group_id) AS next_mn FROM rg
+            ) WHERE next_mn IS NOT NULL AND mx > next_mn""")
+        gate(overlap == 0, f"[ball] row-group match_date non-overlap [{fname}]",
+             f"{overlap} overlapping row-group boundaries")
+
+    dv = os.path.join(out_dir, "deliveries_*.parquet")
+    # Super overs are INCLUDED + flagged, and match the source innings.super_over.
+    so_balls = q(f"SELECT COUNT(*) FROM read_parquet('{dv}') WHERE is_super_over")
+    so_ref = q("""
+        SELECT COUNT(*) FROM deliveries dv JOIN innings i
+          ON i.match_id=dv.match_id AND i.innings_number=dv.innings_number
+        WHERE i.super_over IS TRUE""")
+    gate(so_balls == so_ref, "[ball] super-over rows included + flagged",
+         f"{so_balls} vs source {so_ref}")
+    # Phase is NULL for every super-over row (outside any phase, decision 67).
+    so_phase = q(f"SELECT COUNT(*) FROM read_parquet('{dv}') WHERE is_super_over AND phase IS NOT NULL")
+    gate(so_phase == 0, "[ball] super-over phase always NULL", f"{so_phase} rows")
+    # Red-ball files carry no phase; T20/ODI legal balls always do (non-super-over).
+    red_phase = q(f"""SELECT COUNT(*) FROM read_parquet('{os.path.join(out_dir, 'deliveries_*_red.parquet')}')
+                      WHERE phase IS NOT NULL""")
+    gate(red_phase == 0, "[ball] red-ball phase always NULL", f"{red_phase} rows")
+
+    # Reverse-clock sanity: bat_ball_rev/bowl_ball_rev are STORED (owner ruling).
+    # On a faced ball, bat_ball + bat_ball_rev = faced_total + 1; check the
+    # identity holds and rev is never negative (unsigned-edge guard).
+    bad_rev = q(f"""
+        SELECT COUNT(*) FROM read_parquet('{dv}')
+        WHERE bat_ball_rev IS NULL OR bowl_ball_rev IS NULL""")
+    gate(bad_rev == 0, "[ball] reverse clocks never NULL", f"{bad_rev} rows")
+
+
+def _ball_anchor_gates(con, out_dir, q):
+    """The standing anchors (CLAUDE.md), reproduced FROM BALLS with independent
+    SQL (decision-39). Scope: Men / T20 bucket / International, 2023-07-01 ..
+    2026-07-02 day-bounded; super overs excluded."""
+    mt20 = os.path.join(out_dir, "deliveries_m_t20.parquet")
+    prof = f"read_parquet('{os.path.join(out_dir, 'player_profiles.parquet')}')"
+    scope = ("NOT is_super_over AND gender='male' AND match_type IN ('T20','IT20') "
+             "AND team_type='international' "
+             "AND match_date >= DATE '2023-07-01' AND match_date < DATE '2026-07-03'")
+
+    # Rebuild the batting crease set for this scope (same shape as orx_bat).
+    con.execute(f"""
+    CREATE OR REPLACE TEMP TABLE anc_bat AS
+    WITH b AS (SELECT * FROM read_parquet('{mt20}') WHERE {scope}),
+    app AS (
+        SELECT match_id, innings_number, batter_id AS pid, batter_name AS nm FROM b
+        UNION ALL SELECT match_id, innings_number, non_striker_id, non_striker_name FROM b
+        UNION ALL SELECT match_id, innings_number, player_out_id, CAST(NULL AS VARCHAR)
+                  FROM b WHERE player_out_id IS NOT NULL
+        UNION ALL SELECT match_id, innings_number, x.player_out_id, x.player_out_name
+                  FROM b, UNNEST(b.wickets_extra) AS t(x)
+    ),
+    crease AS (SELECT match_id, innings_number, pid AS batter_id, MIN(nm) any_name FROM app GROUP BY 1,2,3),
+    bat AS (SELECT match_id, innings_number, batter_id, ANY_VALUE(batter_name) bat_name,
+                   SUM(runs_batter) runs, SUM(CASE WHEN wides IS NULL THEN 1 ELSE 0 END) bf
+            FROM b GROUP BY 1,2,3),
+    dis AS (SELECT match_id, innings_number, pid,
+                   MAX(CASE WHEN kind NOT IN ({_NON_DIS_IN}) THEN 1 ELSE 0 END) dismissed
+            FROM (
+                SELECT match_id, innings_number, player_out_id AS pid, wicket_kind AS kind FROM b WHERE player_out_id IS NOT NULL
+                UNION ALL SELECT match_id, innings_number, x.player_out_id, x.kind FROM b, UNNEST(b.wickets_extra) AS t(x)
+            ) GROUP BY 1,2,3)
+    SELECT c.match_id, c.innings_number, c.batter_id,
+           COALESCE(bat.bat_name, c.any_name) batter_name,
+           COALESCE(bat.runs,0) runs, COALESCE(bat.bf,0) balls_faced, COALESCE(dis.dismissed,0) dismissed
+    FROM crease c
+    LEFT JOIN bat ON bat.match_id=c.match_id AND bat.innings_number=c.innings_number AND bat.batter_id=c.batter_id
+    LEFT JOIN dis ON dis.match_id=c.match_id AND dis.innings_number=c.innings_number AND dis.pid=c.batter_id
+    """)
+    lb = q("SELECT COUNT(*) FROM (SELECT DISTINCT batter_id, batter_name FROM anc_bat)")
+    gate(lb == 2813, "[anchor] leaderboard distinct (batter_id, batter_name)", f"{lb} vs 2813")
+    top = con.execute("SELECT batter_name, SUM(runs) r FROM anc_bat GROUP BY batter_id, batter_name "
+                      "ORDER BY r DESC LIMIT 1").fetchone()
+    gate(top[0] == "Karanbir Singh" and int(top[1]) == 2454,
+         "[anchor] top row Karanbir Singh 2454", f"{top[0]} {top[1]}")
+    sky = con.execute("SELECT COUNT(*), SUM(runs), SUM(balls_faced), SUM(dismissed) "
+                      "FROM anc_bat WHERE batter_name='SA Yadav'").fetchone()
+    gate(sky[0] == 60, "[anchor] SA Yadav innings", f"{sky[0]} vs 60")
+    gate(int(sky[1]) == 1544, "[anchor] SA Yadav runs", f"{sky[1]} vs 1544")
+    gate(int(sky[2]) == 1027, "[anchor] SA Yadav balls faced", f"{sky[2]} vs 1027")
+    gate(int(sky[3]) == 53, "[anchor] SA Yadav dismissals (overflow -> 53)", f"{sky[3]} vs 53")
+    gate(round(float(sky[1]) / float(sky[3]), 2) == 29.13, "[anchor] SA Yadav average 29.13",
+         f"{round(float(sky[1]) / float(sky[3]), 2)}")
+    gate(round(100.0 * float(sky[1]) / float(sky[2]), 2) == 150.34, "[anchor] SA Yadav strike rate 150.34",
+         f"{round(100.0 * float(sky[1]) / float(sky[2]), 2)}")
+
+    # Matchup anchors: profiles joined at query time.
+    con.execute(f"""
+    CREATE OR REPLACE TEMP TABLE anc_mb AS
+    SELECT b.*,
+           COALESCE(pb.batting_style, '(unmapped)') AS striker_hand,
+           COALESCE(pw.bowling_group, '(unmapped)') AS bowler_group
+    FROM read_parquet('{mt20}') b
+    LEFT JOIN {prof} pb ON pb.player_id = b.batter_id
+    LEFT JOIN {prof} pw ON pw.player_id = b.bowler_id
+    WHERE {scope}""")
+    bum = con.execute("""
+        SELECT COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR)),
+               SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END),
+               SUM(bowler_credited_wkts)
+        FROM anc_mb WHERE bowler_name='JJ Bumrah' AND striker_hand='Right-hand bat'
+          AND batting_position IN (1,2)""").fetchone()
+    gate(bum[0] == 27 and int(bum[1]) == 177 and int(bum[2]) == 9,
+         "[anchor] Bumrah vs RHB pos 1-2 = 27 inns / 177 balls / 9 wkts",
+         f"{bum[0]}/{bum[1]}/{bum[2]}")
+    spin = con.execute("""
+        SELECT COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR)),
+               SUM(runs_batter), SUM(CASE WHEN wides IS NULL THEN 1 ELSE 0 END)
+        FROM anc_mb WHERE batter_name='SA Yadav' AND bowler_group='Spin'""").fetchone()
+    gate(spin[0] == 38, "[anchor] SA Yadav vs Spin innings", f"{spin[0]} vs 38")
+    gate(int(spin[1]) == 454, "[anchor] SA Yadav vs Spin runs", f"{spin[1]} vs 454")
+    gate(round(100.0 * float(spin[1]) / float(spin[2]), 2) == 140.99,
+         "[anchor] SA Yadav vs Spin strike rate 140.99",
+         f"{round(100.0 * float(spin[1]) / float(spin[2]), 2)}")
+    cov = con.execute("""
+        SELECT SUM(CASE WHEN wides IS NULL AND bowler_group <> '(unmapped)' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN wides IS NULL THEN 1 ELSE 0 END)
+        FROM anc_mb WHERE batter_name='SA Yadav'""").fetchone()
+    gate(int(cov[0]) == 913 and int(cov[1]) == 1027,
+         "[anchor] SA Yadav vs Spin coverage 913 of 1027", f"{cov[0]} of {cov[1]}")
+
 
 def run_spot_checks(con, out_dir):
     """Assert owner-verified career lines from SPOT_CHECKS against the exports."""
@@ -3522,7 +4228,9 @@ def sha256_12(path):
 
 def write_manifest(con, out_dir):
     files_meta = {}
-    for f in list(EXPORT_FILES):
+    # Ball-layer files (DELIVERY_FILES) are listed alongside the nine existing
+    # exports so a future pipeline run ships them (ADDITIVE, decision 67).
+    for f in list(EXPORT_FILES) + DELIVERY_FILES:
         p = os.path.join(out_dir, f)
         n = con.execute(f"SELECT COUNT(*) FROM read_parquet('{p}')").fetchone()[0]
         files_meta[f] = {
@@ -3659,7 +4367,9 @@ def r2_upload(out_dir):
     log(f"Uploading exports to s3://{R2_BUCKET}/{R2_EXPORT_PREFIX}")
     client = _r2_client()
 
-    data_files = list(EXPORT_FILES)
+    # Ball-layer files ship alongside the existing exports (ADDITIVE, decision
+    # 67); manifest.json still goes STRICTLY LAST (below).
+    data_files = list(EXPORT_FILES) + DELIVERY_FILES
     succeeded, failed = [], []
     for f in data_files:
         (succeeded if _upload_one(client, out_dir, f) else failed).append(f)
@@ -3747,6 +4457,17 @@ def main():
 
     log("Writing matchup_bowling.parquet ...")
     write_parquet(con, sql_matchup_bowling(), os.path.join(args.out, "matchup_bowling.parquet"))
+
+    # Ball-grain ("ball layer") files — Wave 1 (decision 67), ADDITIVE. Six
+    # files, one per gender x format bucket, at schema v1. Written before the
+    # gates so the oracle can reconcile them back to the innings/matchup exports.
+    log("Writing ball-layer delivery files ...")
+    for _g in ("m", "f"):
+        for _b in ("t20", "odi", "red"):
+            _fn = f"deliveries_{_g}_{_b}.parquet"
+            log(f"  Writing {_fn} ...")
+            write_parquet(con, sql_deliveries(DELIVERY_GENDERS[_g], _b),
+                          os.path.join(args.out, _fn))
 
     # Gates + spot checks (all before any upload).
     try:
