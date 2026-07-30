@@ -197,6 +197,35 @@ function cte(name, body) {
   return `${name} AS (${body})`;
 }
 
+/**
+ * The `wickets_extra` overflow rows, unnested ONCE.
+ *
+ * `wickets_extra` is the LIST of second-and-later wickets on a ball (14 rows in
+ * the whole dataset) and three batting CTEs read it — `app` (crease appearances),
+ * `dis` (dismissed / dismissal_kind) and `disp` (phase dismissals). Wave 2a
+ * unnested it inline in each, and MEASURED in DuckDB-WASM a bare
+ * `FROM b, UNNEST(b.wickets_extra)` over the 385k-ball anchor scope costs ~6.0 s
+ * EACH — ~12 s of a ~12.4 s reconstruction, for four output rows.
+ *
+ * Two changes, both exactly value-preserving:
+ *   1. Restrict to rows that HAVE an overflow before unnesting. UNNEST of an
+ *      empty list or of NULL yields zero rows, so dropping those rows first
+ *      cannot change the result — it just stops the operator walking every ball.
+ *   2. Do it ONCE in a shared CTE the three consumers read.
+ * `extraCols` are the ball columns `disp` needs alongside the struct; they are
+ * omitted when `disp` is not emitted so they stay out of the lean projection.
+ */
+function wicketExtrasCte(extraCols) {
+  const carried = ["match_id", "innings_number", ...extraCols];
+  return cte(
+    "wx",
+    `SELECT ${carried.map((c) => `z.${c}`).join(", ")}, x
+        FROM (SELECT ${carried.join(", ")}, wickets_extra FROM b
+              WHERE wickets_extra IS NOT NULL AND len(wickets_extra) > 0) z,
+             UNNEST(z.wickets_extra) AS t(x)`
+  );
+}
+
 /** `expr AS alias` select-list items from a {alias: expr} map, in map order,
  * restricted to `keys`. */
 function selectFrom(map, keys) {
@@ -377,15 +406,16 @@ function battingViewSql(files, scopePredicate, windowPredicate, columns) {
         "SELECT match_id, innings_number, batter_id AS pid, batter_name AS nm, batting_position AS pos FROM b",
         "SELECT match_id, innings_number, non_striker_id, non_striker_name, non_striker_position FROM b",
         "SELECT match_id, innings_number, player_out_id, CAST(NULL AS VARCHAR), CAST(NULL AS UTINYINT)\n    FROM b WHERE player_out_id IS NOT NULL",
-        "SELECT match_id, innings_number, x.player_out_id, x.player_out_name, x.batting_position\n    FROM b, UNNEST(b.wickets_extra) AS t(x)",
+        "SELECT match_id, innings_number, x.player_out_id, x.player_out_name, x.batting_position FROM wx",
       ]
     : [
         "SELECT match_id, innings_number, batter_id AS pid, batter_name AS nm FROM b",
         "SELECT match_id, innings_number, non_striker_id, non_striker_name FROM b",
         "SELECT match_id, innings_number, player_out_id, CAST(NULL AS VARCHAR)\n    FROM b WHERE player_out_id IS NOT NULL",
-        "SELECT match_id, innings_number, x.player_out_id, x.player_out_name\n    FROM b, UNNEST(b.wickets_extra) AS t(x)",
+        "SELECT match_id, innings_number, x.player_out_id, x.player_out_name FROM wx",
       ];
   const ctes = [
+    wicketExtrasCte(needDispT20 || needDispODI ? ["over_number", "team_ball", "balls_per_over"] : []),
     cte("app", `\n    ${appCols.join("\n    UNION ALL\n    ")}\n`),
     cte(
       "crease",
@@ -420,8 +450,7 @@ function battingViewSql(files, scopePredicate, windowPredicate, columns) {
             SELECT match_id, innings_number, player_out_id AS pid, wicket_kind AS kind
             FROM b WHERE player_out_id IS NOT NULL
             UNION ALL
-            SELECT match_id, innings_number, x.player_out_id, x.kind
-            FROM b, UNNEST(b.wickets_extra) AS t(x)
+            SELECT match_id, innings_number, x.player_out_id, x.kind FROM wx
         ) GROUP BY 1,2,3`
       )
     );
@@ -439,8 +468,8 @@ function battingViewSql(files, scopePredicate, windowPredicate, columns) {
             SELECT match_id, innings_number, player_out_id AS pid, over_number, team_ball, balls_per_over
             FROM b WHERE player_out_id IS NOT NULL AND wicket_kind NOT IN (${NON_DIS})
             UNION ALL
-            SELECT b.match_id, b.innings_number, x.player_out_id, b.over_number, b.team_ball, b.balls_per_over
-            FROM b, UNNEST(b.wickets_extra) AS t(x) WHERE x.kind NOT IN (${NON_DIS})
+            SELECT match_id, innings_number, x.player_out_id, over_number, team_ball, balls_per_over
+            FROM wx WHERE x.kind NOT IN (${NON_DIS})
          ) GROUP BY 1,2,3`
       )
     );

@@ -141,9 +141,17 @@ async function materialize(discipline, key, files, scopePredicate, columns) {
   try {
     await conn.query(`CREATE TABLE ${table} AS ${sql}`);
   } catch (e) {
+    // DuckDB-WASM has a hard ~3.1 GiB ceiling and no disk to spill to, so a
+    // reconstruction over an unscoped ball set (all six files, no date range)
+    // runs out of memory. Every real query carries gender + format + a date
+    // range, so scopePredicate is never empty in practice — say so plainly if
+    // it ever happens rather than surfacing a raw allocator message.
+    const outOfMemory = /out of memory/i.test(String(e?.message ?? e));
     throw makeError(
       e,
-      `Could not build the ball-engine "${discipline}" table for this scope. The delivery Parquet files may be missing/unreadable, or the ballEngine SQL is malformed.`
+      outOfMemory
+        ? `This scope is too broad for the in-browser database to rebuild from ball-by-ball data (it ran out of memory). Narrow the date range or pick a single format, then search again.`
+        : `Could not build the ball-engine "${discipline}" table for this scope. The delivery Parquet files may be missing/unreadable, or the ballEngine SQL is malformed.`
     );
   }
   engineCache.set(key, { table, discipline, columns, used: ++engineClock });
@@ -233,6 +241,38 @@ export function scopeForQuery(sql) {
   return { files, scopePredicate };
 }
 
+/** SQL strings currently queued or executing under the engine's serialiser —
+ * the look-ahead widening below reads it. */
+const pendingEngineSqls = new Set();
+
+/**
+ * Widen `need` with the column needs of the other queries already sitting in
+ * the queue, when they resolve to the SAME (files, scopePredicate) signature.
+ * Pure look-ahead — it changes only how many columns get materialised.
+ */
+function widenForPendingQueries(need, discipline, sql, files, scopePredicate) {
+  if (pendingEngineSqls.size < 2) return need;
+  const signature = `${files.join("|")}::${scopePredicate}`;
+  let columns = need.columns;
+  let full = need.full;
+  let reason = need.reason;
+  for (const other of pendingEngineSqls) {
+    if (other === sql || full) continue;
+    if (!enginePlanDisciplines(other).includes(discipline)) continue;
+    const otherScope = scopeForQuery(other);
+    if (`${otherScope.files.join("|")}::${otherScope.scopePredicate}` !== signature) continue;
+    const otherNeed = neededViewColumns(discipline, other);
+    if (otherNeed.full) {
+      full = true;
+      columns = null;
+      reason = otherNeed.reason;
+    } else {
+      columns = unionColumns(columns, otherNeed.columns);
+    }
+  }
+  return { columns, full, reason };
+}
+
 /** Which engine views a query actually reads. `\bbatting\b` / `\bbowling\b`
  * deliberately does NOT match batting_team / bowling_group / matchup_batting,
  * where the token is glued to a word char. */
@@ -264,7 +304,14 @@ async function ensureEngineScope(sql) {
   const { files, scopePredicate } = scopeForQuery(sql);
   const plan = [];
   for (const discipline of disciplines) {
-    const need = neededViewColumns(discipline, sql);
+    let need = neededViewColumns(discipline, sql);
+    // Queue-aware widening: the app fires bursts (a popup's section battery, a
+    // graph's parallel fetches) whose members read the same scope but slightly
+    // different columns. Serialised, that would materialise once per member.
+    // So fold in what the OTHER queries already waiting in the queue need, if
+    // they resolve to this same signature — one build instead of N. Widening
+    // only ever adds columns, never rows, so it cannot change a number.
+    need = widenForPendingQueries(need, discipline, sql, files, scopePredicate);
     if (need.full) {
       const tag = `${discipline}:${need.reason}`;
       if (!warnedFullSet.has(tag)) {
@@ -522,8 +569,11 @@ export async function query(sql) {
   // second would run against the first's view definition. One shared connection
   // is serialised by the DuckDB worker anyway, so this costs nothing and it also
   // means concurrent same-scope callers (the popup's section battery, a graph's
-  // parallel fetches) collapse onto ONE materialisation.
-  return serializeEngineQuery(() => runQuery(sql));
+  // parallel fetches) collapse onto ONE materialisation — see
+  // widenForPendingQueries, which reads this queue to build for all of them at
+  // once instead of once per member.
+  pendingEngineSqls.add(sql);
+  return serializeEngineQuery(() => runQuery(sql)).finally(() => pendingEngineSqls.delete(sql));
 }
 
 let engineChain = Promise.resolve();
