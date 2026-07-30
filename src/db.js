@@ -8,7 +8,7 @@
 
 import { DATA_BASE_URL, PARQUET_FILES, VENDOR_DUCKDB, ballEngineEnabled } from "./config.js";
 import { buildInningsViewSql, DELIVERY_FILES } from "./ballEngine.js";
-import { neededViewColumns, coversColumns, unionColumns } from "./ballColumns.js";
+import { neededViewColumns, coversColumns, unionColumns, columnsArePlayerLocal } from "./ballColumns.js";
 
 // View name -> parquet file name.
 const VIEWS = {
@@ -98,8 +98,8 @@ let engineClock = 0;
  * once instead of on every fetch. */
 const warnedFullSet = new Set();
 
-function engineSignature(discipline, files, scopePredicate, windowPredicate) {
-  return `${discipline}::${files.join("|")}::${scopePredicate}::${windowPredicate || ""}`;
+function engineSignature(discipline, files, scopePredicate, windowPredicate, playerPredicate) {
+  return `${discipline}::${files.join("|")}::${scopePredicate}::${windowPredicate || ""}::${playerPredicate || ""}`;
 }
 
 /** Point `discipline`'s view at a materialised table (cheap DDL, skipped when it
@@ -134,10 +134,10 @@ async function evictMaterialized() {
 }
 
 /** Materialise `discipline` for one signature and point its view at the result. */
-async function materialize(discipline, key, files, scopePredicate, columns) {
+async function materialize(discipline, key, files, scopePredicate, playerPredicate, columns) {
   const previous = engineCache.get(key);
   const table = `__ball_${discipline}_${++engineTableSeq}`;
-  const sql = buildInningsViewSql(discipline, { files, scopePredicate, columns });
+  const sql = buildInningsViewSql(discipline, { files, scopePredicate, playerPredicate, columns });
   try {
     await conn.query(`CREATE TABLE ${table} AS ${sql}`);
   } catch (e) {
@@ -241,18 +241,76 @@ export function scopeForQuery(sql) {
   return { files, scopePredicate };
 }
 
+// ── Wave 2s2 FIX 1: popup single-player base scoping ─────────────────────────
+// The player popup fires a battery of queries each shaped `… FROM batting WHERE
+// <scope> AND batter_id = 'X' …` (playerData.js) — one player. Wave 2s rebuilt
+// EVERY player's innings for the scope, then the outer WHERE threw all but X's
+// away (~5 s). Here db.js detects that single-player equality and pushes a
+// player-involvement predicate into the reconstruction's BASE ball set, so it
+// rebuilds ONLY X's innings.
+//
+// SAFETY: this is byte-identical ONLY for player-LOCAL columns (ballColumns.js:
+// the per-player CTEs still see every one of X's own balls, so their aggregates
+// are complete; the team-total CTEs would see a fraction of the innings). We
+// gate on columnsArePlayerLocal, so a query that needs team_inns_balls / any
+// team_rel_* falls back to the whole-scope reconstruction. The base predicate
+// keeps every ball where X is the striker OR non-striker OR the dismissed batter
+// (flat player_out OR a wickets_extra overflow entry), so X's own view row is
+// COMPLETE; the base may still emit partial rows for OTHER players (as X's
+// non-strikers etc.), which the caller's own `batter_id = 'X'` discards.
+const PLAYER_ID_COL = { batting: "batter_id", bowling: "bowler_id" };
+
+/** The single player id a query is scoped to (a bare `<idCol> = 'X'` equality on
+ * the discipline's id column), or null. Requires EXACTLY ONE distinct id value:
+ * the leaderboard's pin exemption uses `<idCol> IN (…)` (never `=`) and the
+ * R.Pos join uses `pos_batter_id = <col>` (a column, not a literal), so neither
+ * is matched. A star-safe literal capture keeps embedded quotes intact. */
+function singlePlayerId(discipline, sql) {
+  const idCol = PLAYER_ID_COL[discipline];
+  const re = new RegExp(`\\b${idCol}\\s*=\\s*'((?:[^']|'')*)'`, "g");
+  const ids = new Set();
+  for (const m of sql.matchAll(re)) ids.add(m[1]);
+  return ids.size === 1 ? [...ids][0] : null;
+}
+
+/** The base-ball WHERE predicate restricting the reconstruction to one player's
+ * innings. `idLiteral` is the already-SQL-escaped literal BODY captured from the
+ * query, re-wrapped verbatim (never re-escaped). Batting keeps every ball where
+ * the player is on strike, at the non-striker's end, the flat dismissed batter,
+ * or a 2nd-and-later dismissal in the wickets_extra overflow. */
+function playerBasePredicate(discipline, idLiteral) {
+  const lit = `'${idLiteral}'`;
+  if (discipline === "bowling") return `bowler_id = ${lit}`;
+  return (
+    `(batter_id = ${lit} OR non_striker_id = ${lit} OR player_out_id = ${lit}` +
+    ` OR len(list_filter(wickets_extra, w -> w.player_out_id = ${lit})) > 0)`
+  );
+}
+
+/** The player predicate for a query, or "" when it must NOT be player-scoped
+ * (no single-id equality, or a column needs the whole innings' balls). `need` is
+ * this query's neededViewColumns result. */
+function playerScopeFor(discipline, sql, need) {
+  if (!columnsArePlayerLocal(discipline, need)) return "";
+  const id = singlePlayerId(discipline, sql);
+  return id == null ? "" : playerBasePredicate(discipline, id);
+}
+
 /** SQL strings currently queued or executing under the engine's serialiser —
  * the look-ahead widening below reads it. */
 const pendingEngineSqls = new Set();
 
 /**
  * Widen `need` with the column needs of the other queries already sitting in
- * the queue, when they resolve to the SAME (files, scopePredicate) signature.
- * Pure look-ahead — it changes only how many columns get materialised.
+ * the queue, when they resolve to the SAME (files, scopePredicate, player scope)
+ * signature. Pure look-ahead — it changes only how many columns get
+ * materialised. The player-predicate must also match, so a popup battery's
+ * same-player sections fold into ONE player-scoped table while a whole-scope
+ * query is never mixed into a player-scoped one (or vice versa).
  */
-function widenForPendingQueries(need, discipline, sql, files, scopePredicate) {
+function widenForPendingQueries(need, discipline, sql, files, scopePredicate, playerPredicate) {
   if (pendingEngineSqls.size < 2) return need;
-  const signature = `${files.join("|")}::${scopePredicate}`;
+  const signature = `${files.join("|")}::${scopePredicate}::${playerPredicate}`;
   let columns = need.columns;
   let full = need.full;
   let reason = need.reason;
@@ -260,8 +318,9 @@ function widenForPendingQueries(need, discipline, sql, files, scopePredicate) {
     if (other === sql || full) continue;
     if (!enginePlanDisciplines(other).includes(discipline)) continue;
     const otherScope = scopeForQuery(other);
-    if (`${otherScope.files.join("|")}::${otherScope.scopePredicate}` !== signature) continue;
     const otherNeed = neededViewColumns(discipline, other);
+    const otherPlayer = playerScopeFor(discipline, other, otherNeed);
+    if (`${otherScope.files.join("|")}::${otherScope.scopePredicate}::${otherPlayer}` !== signature) continue;
     if (otherNeed.full) {
       full = true;
       columns = null;
@@ -304,14 +363,19 @@ async function ensureEngineScope(sql) {
   const { files, scopePredicate } = scopeForQuery(sql);
   const plan = [];
   for (const discipline of disciplines) {
-    let need = neededViewColumns(discipline, sql);
+    const ownNeed = neededViewColumns(discipline, sql);
+    // FIX 1: a single-player popup query rebuilds only that player's innings —
+    // but only when every column it needs is player-local (else team totals go
+    // wrong). Derived from this query's OWN needs, so it is stable per-SQL and
+    // never flips as widening folds in same-player siblings.
+    const playerPredicate = playerScopeFor(discipline, sql, ownNeed);
     // Queue-aware widening: the app fires bursts (a popup's section battery, a
     // graph's parallel fetches) whose members read the same scope but slightly
     // different columns. Serialised, that would materialise once per member.
     // So fold in what the OTHER queries already waiting in the queue need, if
     // they resolve to this same signature — one build instead of N. Widening
     // only ever adds columns, never rows, so it cannot change a number.
-    need = widenForPendingQueries(need, discipline, sql, files, scopePredicate);
+    let need = widenForPendingQueries(ownNeed, discipline, sql, files, scopePredicate, playerPredicate);
     if (need.full) {
       const tag = `${discipline}:${need.reason}`;
       if (!warnedFullSet.has(tag)) {
@@ -323,8 +387,8 @@ async function ensureEngineScope(sql) {
         );
       }
     }
-    const key = engineSignature(discipline, files, scopePredicate, "");
-    plan.push({ discipline, key, files, scopePredicate, pruned: !need.full });
+    const key = engineSignature(discipline, files, scopePredicate, "", playerPredicate);
+    plan.push({ discipline, key, files, scopePredicate, playerPredicate, pruned: !need.full });
     const entry = engineCache.get(key);
     if (entry && coversColumns(entry.columns, need.columns)) {
       entry.used = ++engineClock;
@@ -332,7 +396,7 @@ async function ensureEngineScope(sql) {
       continue;
     }
     const columns = entry ? unionColumns(entry.columns, need.columns) : need.columns;
-    await materialize(discipline, key, files, scopePredicate, columns);
+    await materialize(discipline, key, files, scopePredicate, playerPredicate, columns);
   }
   return plan;
 }
@@ -346,7 +410,10 @@ const BINDER_ERROR_RE = /binder error|catalog error|not found in from clause|ref
 async function rebuildEngineFull(plan) {
   for (const step of plan) {
     if (!step.pruned) continue;
-    await materialize(step.discipline, step.key, step.files, step.scopePredicate, null);
+    // Drop BOTH the column pruning AND any player scoping — the whole-scope full
+    // reconstruction is the proven byte-identical fallback (a player-scoped full
+    // set would carry non-player-local team_rel columns).
+    await materialize(step.discipline, step.key, step.files, step.scopePredicate, "", null);
   }
 }
 
@@ -650,4 +717,43 @@ function normalizeValue(value) {
 /** Returns the parsed manifest.json (or null if init hasn't completed yet). */
 export function getManifest() {
   return manifest;
+}
+
+let prewarmed = false;
+
+/**
+ * FIX 3 (Wave 2s2): after boot, pre-pay the NETWORK download of the default
+ * Men/T20 delivery file so the user's FIRST search doesn't also wait on the
+ * ~20 MB fetch (the dominant cold-search cost over R2). FLAG-ON ONLY — flag-OFF
+ * never reads the delivery files, so it stays byte-untouched with no eager fetch.
+ *
+ * HOW: a plain background `fetch()` of the SAME versioned URL db.js registered
+ * for deliveries_m_t20.parquet (the default gender+format bucket). This warms the
+ * browser HTTP cache / TCP+TLS path so DuckDB's later ranged reads for that file
+ * come off already-fetched bytes. Deliberately NOT a DuckDB query: it must not
+ * enter the serialised engine queue, or the user's first search would wait behind
+ * it (a pure-network prefetch has zero query-engine contention — the search still
+ * runs the instant it's issued, just off warm bytes). Non-blocking (not awaited)
+ * and best-effort: any failure (offline, file missing, engine off) is swallowed
+ * and the first search just fetches the file itself, exactly as before. Warming
+ * ONE file (the default) is the conservative choice; downloading it eagerly is
+ * the accepted flag-ON trade (owner decision 67, "SPEED PULLED FORWARD").
+ */
+export function prewarmBallEngine() {
+  if (!engineOn || prewarmed) return;
+  prewarmed = true;
+  const name = "deliveries_m_t20.parquet";
+  const version = manifest?.files?.[name]?.sha256_12 ?? "";
+  const url = `${DATA_BASE_URL}${name}${version ? `?v=${version}` : ""}`;
+  try {
+    // Fire-and-forget; drain the body so the whole file lands in the HTTP cache
+    // under the same URL DuckDB's ranged reads will use.
+    fetch(url)
+      .then((res) => (res.ok ? res.arrayBuffer() : null))
+      .catch(() => {
+        /* best-effort: the first search pays the fetch itself, as before */
+      });
+  } catch {
+    /* fetch unavailable / bad URL — ignore, first search fetches normally */
+  }
 }

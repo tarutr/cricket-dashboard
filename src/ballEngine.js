@@ -147,15 +147,23 @@ function sourceExpr(files) {
  *     WHERE, so the base set can never be narrower than the innings the outer
  *     query keeps.
  *   windowPredicate — the Wave-3 delivery-window filter. EMPTY in Wave 2a/2s.
+ *   playerPredicate — the Wave-2s2 popup single-player filter (batter/bowler
+ *     involvement), pushed by db.js so a one-player popup rebuilds ONLY that
+ *     player's innings instead of every player's. BYTE-IDENTICAL only for
+ *     player-LOCAL column sets — db.js gates it on ballColumns' player-local rule
+ *     (never emitted when a team-innings/team-relative column is needed). EMPTY
+ *     for every whole-scope (leaderboard / graph) query.
  *
- * Both AND into the base WHERE. With neither, exactly `WHERE NOT is_super_over`.
- * All three read the SOURCE rows, so they need no entry in the lean projection. */
-function baseWhere(scopePredicate, windowPredicate) {
+ * All AND into the base WHERE. With none, exactly `WHERE NOT is_super_over`.
+ * They read the SOURCE rows, so they need no entry in the lean projection. */
+function baseWhere(scopePredicate, windowPredicate, playerPredicate) {
   let sql = "WHERE NOT is_super_over";
   const sp = (scopePredicate || "").trim();
   if (sp) sql += ` AND (${sp})`;
   const wp = (windowPredicate || "").trim();
   if (wp) sql += ` AND (${wp})`;
+  const pp = (playerPredicate || "").trim();
+  if (pp) sql += ` AND (${pp})`;
   return sql;
 }
 
@@ -184,11 +192,11 @@ function wantedColumns(discipline, columns) {
  * built here uses a star expansion — so the projection can over-include (costing
  * a little I/O) but never under-include.
  */
-function assemble(files, scopePredicate, windowPredicate, cteSql, finalSql) {
+function assemble(files, scopePredicate, windowPredicate, playerPredicate, cteSql, finalSql) {
   const body = `${cteSql}\n${finalSql}`;
   const toks = sqlIdentifierTokens(body);
   const baseCols = DELIVERY_COLUMNS.filter((c) => toks.has(c));
-  const base = `b AS (SELECT ${baseCols.join(", ")} FROM ${sourceExpr(files)} ${baseWhere(scopePredicate, windowPredicate)})`;
+  const base = `b AS (SELECT ${baseCols.join(", ")} FROM ${sourceExpr(files)} ${baseWhere(scopePredicate, windowPredicate, playerPredicate)})`;
   return `\nWITH ${base},\n${cteSql}\n${finalSql}`;
 }
 
@@ -286,7 +294,7 @@ function battingTeamAggregates() {
   };
 }
 
-function battingViewSql(files, scopePredicate, windowPredicate, columns) {
+function battingViewSql(files, scopePredicate, windowPredicate, playerPredicate, columns) {
   const want = wantedColumns("batting", columns);
   const has = (c) => want.has(c);
   // NULL the odi_* aggregate for The Hundred, else COALESCE→0, typed DOUBLE.
@@ -518,7 +526,7 @@ function battingViewSql(files, scopePredicate, windowPredicate, columns) {
     joins.push("LEFT JOIN tinn ON tinn.match_id=c.match_id AND tinn.innings_number=c.innings_number");
   }
   const finalSql = `SELECT\n    ${selectList.join(",\n    ")}\n${joins.join("\n")}`;
-  return assemble(files, scopePredicate, windowPredicate, ctes.join(",\n"), finalSql);
+  return assemble(files, scopePredicate, windowPredicate, playerPredicate, ctes.join(",\n"), finalSql);
 }
 
 /** Batting phase-dismissal block (all-kinds count, phase-bucketed). */
@@ -572,7 +580,7 @@ const WICKET_KIND_COLUMNS = {
   wickets_hit_wicket: "hit wicket",
 };
 
-function bowlingViewSql(files, scopePredicate, windowPredicate, columns) {
+function bowlingViewSql(files, scopePredicate, windowPredicate, playerPredicate, columns) {
   const want = wantedColumns("bowling", columns);
   const has = (c) => want.has(c);
   const odi = (col) => `CAST(CASE WHEN bagg.is_hundred=1 THEN NULL ELSE ${col} END AS DOUBLE)`;
@@ -782,7 +790,7 @@ function bowlingViewSql(files, scopePredicate, windowPredicate, columns) {
     joins.push("LEFT JOIN tw   ON tw.match_id=bagg.match_id AND tw.innings_number=bagg.innings_number");
   }
   const finalSql = `SELECT ${selectList.join(",\n    ")}\n${joins.join("\n")}`;
-  return assemble(files, scopePredicate, windowPredicate, ctes.join(",\n"), finalSql);
+  return assemble(files, scopePredicate, windowPredicate, playerPredicate, ctes.join(",\n"), finalSql);
 }
 
 /**
@@ -800,6 +808,11 @@ function bowlingViewSql(files, scopePredicate, windowPredicate, columns) {
  *   the whole file(s).
  * @param {string} [opts.windowPredicate]  Wave-3 delivery-window predicate over
  *   the raw ball columns; EMPTY in Wave 2a/2s (present-but-unused hook).
+ * @param {string} [opts.playerPredicate]  Wave-2s2 FIX 1: a single-player base
+ *   ball filter (batter/bowler involvement) that restricts the reconstruction to
+ *   ONE player's innings, for the popup. Byte-identical only for player-LOCAL
+ *   column sets — db.js gates it (ballColumns.columnsArePlayerLocal). EMPTY for
+ *   every whole-scope query.
  * @param {string[]|null} [opts.columns]  Wave 2s Layer 1: the innings-grain
  *   output columns to emit (keys + context are added automatically). Only the
  *   aggregates and CTEs those columns need are generated. OMIT or pass null for
@@ -809,13 +822,13 @@ function bowlingViewSql(files, scopePredicate, windowPredicate, columns) {
  */
 export function buildInningsViewSql(
   discipline,
-  { files, scopePredicate = "", windowPredicate = "", columns = null } = {}
+  { files, scopePredicate = "", windowPredicate = "", playerPredicate = "", columns = null } = {}
 ) {
   if (!Array.isArray(files) || files.length === 0) {
     throw new Error("ballEngine.buildInningsViewSql: files[] is required");
   }
-  if (discipline === "batting") return battingViewSql(files, scopePredicate, windowPredicate, columns);
-  if (discipline === "bowling") return bowlingViewSql(files, scopePredicate, windowPredicate, columns);
+  if (discipline === "batting") return battingViewSql(files, scopePredicate, windowPredicate, playerPredicate, columns);
+  if (discipline === "bowling") return bowlingViewSql(files, scopePredicate, windowPredicate, playerPredicate, columns);
   throw new Error(`ballEngine.buildInningsViewSql: unknown discipline "${discipline}"`);
 }
 

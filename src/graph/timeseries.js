@@ -47,6 +47,7 @@
 import { getMetric } from "../metrics.js";
 import { buildScopeClauses } from "../filters.js";
 import { query } from "../db.js";
+import { neededViewColumns } from "../ballColumns.js";
 import { escSql, matchupVsActive, effectiveNamespace, eligibleMetrics } from "../state.js";
 
 // Per-namespace column maps. table.js does not export its equivalents and this
@@ -441,6 +442,27 @@ function scopeFor(ns, state, playerIds, { forVsBowling = false } = {}) {
   return { cols, whereClauses };
 }
 
+/**
+ * FIX 2 (Wave 2s2): the projection list for a scoping CTE that used to do
+ * `SELECT * FROM <ns>`. A bare `*` forces the ball engine (flag-ON) to
+ * reconstruct ALL 74/71 innings columns; naming the columns the query actually
+ * reads lets it prune to the handful the Y-metric + X-dim need — the SAME pruning
+ * every other Line/leaderboard query already gets. Returns a comma-joined column
+ * list (in export order) for the plain batting/bowling views, or `"*"` for the
+ * matchup views (pre-aggregated parquet — no engine, and their schema is not the
+ * innings vocabulary, so `*` there is already cheap and correct). `fragments` is
+ * everything the OUTER query references off the CTE (metric expr, sample expr,
+ * WHERE, bucket/ord) — neededViewColumns intersects their tokens with the innings
+ * vocabulary and always adds the keys/context, so the projection is a safe
+ * superset of what the outer query names. Values are byte-identical either way —
+ * this only drops unread columns from a pass-through projection. */
+function baseProjection(ns, fragments) {
+  const discipline = ns === "batting" || ns === "bowling" ? ns : null;
+  if (!discipline) return "*"; // matchup views: parquet-backed, no engine to prune
+  const need = neededViewColumns(discipline, fragments.filter(Boolean).join("\n"));
+  return need.full || !need.columns ? "*" : need.columns.join(", ");
+}
+
 /** Build the SQL for one (xDim, metric) request in namespace `ns`. Returns the
  * SQL string. The metric's sqlExpression is interpolated verbatim (Rule 1). */
 function buildLineSql({ xDim, metric, ns, state, playerIds }) {
@@ -471,9 +493,10 @@ function buildLineSql({ xDim, metric, ns, state, playerIds }) {
   // ── window (innings index): PLAIN only. ROW_NUMBER per player over their own
   //    innings; each (player, index) group is exactly one innings. ───────────
   if (d.category === "window") {
+    const proj = baseProjection(ns, [metric.sqlExpression, cols.ballsExpr, ...whereClauses]);
     return [
       `WITH base AS (`,
-      `  SELECT *, ROW_NUMBER() OVER (PARTITION BY ${cols.id} ORDER BY match_date, innings_number, match_id) AS inns_idx`,
+      `  SELECT ${proj}, ROW_NUMBER() OVER (PARTITION BY ${cols.id} ORDER BY match_date, innings_number, match_id) AS inns_idx`,
       `  FROM ${ns}`,
       `  WHERE ${whereClauses.join(" AND ")}`,
       `)`,
@@ -519,9 +542,10 @@ function buildLineSql({ xDim, metric, ns, state, playerIds }) {
       // chronological categorical: first appearance across the player's rows.
       ordExpr = `MIN(base.match_date) - DATE '1970-01-01'`;
     }
+    const proj = baseProjection(ns, [metric.sqlExpression, cols.ballsExpr, bucketExpr, ordExpr, ...whereClauses]);
     return [
       `WITH base AS (`,
-      `  SELECT * FROM ${ns}`,
+      `  SELECT ${proj} FROM ${ns}`,
       `  WHERE ${whereClauses.join(" AND ")}`,
       `)`,
       `SELECT base.${cols.id} AS player_id,`,

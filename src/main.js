@@ -4,7 +4,7 @@
 // with Retry (never a blank page), then wire up state/filters/advanced/table
 // and do the initial render.
 
-import { initDB, getManifest } from "./db.js";
+import { initDB, getManifest, prewarmBallEngine } from "./db.js";
 import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, effectiveNamespace } from "./state.js";
 import { isConditionComplete } from "./advanced.js";
 import { mountFilters } from "./filters.js";
@@ -963,6 +963,12 @@ function boot() {
       // builds the skeleton + toolbar with an empty table body (no "Open
       // filters" card); the query still runs only from a Search.
       tableController.showPrompt();
+
+      // Wave 2s2 FIX 3: with the ball engine ON, pre-pay the default Men/T20
+      // delivery-file download in the background so the first Search isn't also
+      // waiting on the ~20 MB fetch. No-op flag-OFF (byte-untouched), non-blocking
+      // (not awaited) and best-effort (swallows failures). See prewarmBallEngine.
+      prewarmBallEngine();
     })
     .catch((err) => {
       renderInitError(err, boot);

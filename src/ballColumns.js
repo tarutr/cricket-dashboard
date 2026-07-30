@@ -194,6 +194,53 @@ export const BOWLING_VIEW_COLUMNS = [
 export const BATTING_ALWAYS_COLUMNS = BATTING_VIEW_COLUMNS.slice(0, 12);
 export const BOWLING_ALWAYS_COLUMNS = BOWLING_VIEW_COLUMNS.slice(0, 12);
 
+// ── Player-local vs whole-innings split (Wave 2s2 FIX 1) ─────────────────────
+// A reconstructed innings column is "player-LOCAL" when its value depends only
+// on that player's OWN deliveries (their striker/appearance balls for batting,
+// their bowled balls for bowling) — runs, balls, dots, boundaries, phase splits,
+// dismissals, wicket types, spells, etc. It is "WHOLE-INNINGS" when it needs the
+// team's ENTIRE innings' balls: the team-innings ball total and every
+// team-relative differential (the player's rate MINUS the whole side's rate).
+//
+// This split is what makes db.js's popup player-scoping (restricting the base
+// ball set to one player's involvement) BYTE-IDENTICAL: with a player-scoped
+// base the per-player CTEs (`bat`/`bagg`/`dis`/`wkk`/…) still see every one of
+// that player's own balls, so their aggregates are complete; but the team-total
+// CTEs (`tinn`/`tb`/`tw`) would see only a fraction of the innings and go wrong.
+// Rule: player-scope the reconstruction ONLY when NONE of these columns is
+// needed; otherwise fall back to the whole-scope (team-complete) reconstruction.
+export const BATTING_WHOLE_INNINGS_COLUMNS = [
+  "team_inns_balls",
+  "team_rel_sr",
+  "team_rel_dot_pct",
+  "team_rel_bpb",
+  "team_rel_nbsr",
+];
+export const BOWLING_WHOLE_INNINGS_COLUMNS = [
+  "team_rel_econ",
+  "team_rel_pbe",
+  "team_rel_dot_pct",
+  "team_rel_sr",
+];
+
+/** The whole-innings (NOT player-local) column list for a discipline. */
+export function wholeInningsColumnsFor(discipline) {
+  if (discipline === "batting") return BATTING_WHOLE_INNINGS_COLUMNS;
+  if (discipline === "bowling") return BOWLING_WHOLE_INNINGS_COLUMNS;
+  throw new Error(`ballColumns: unknown discipline "${discipline}"`);
+}
+
+/** True when every column a query needs is player-LOCAL — i.e. the base ball set
+ * may safely be restricted to a single player without moving any number. `need`
+ * is a neededViewColumns() result. The FULL set (null columns) is NEVER
+ * player-local: it includes the whole-innings team-relative columns. */
+export function columnsArePlayerLocal(discipline, need) {
+  if (!need || need.full || !need.columns) return false;
+  const whole = new Set(wholeInningsColumnsFor(discipline));
+  for (const c of need.columns) if (whole.has(c)) return false;
+  return true;
+}
+
 /** The ball-row (delivery parquet) schema v1 — the vocabulary ballEngine.js
  * scans its own generated SQL against to build the LEAN base projection
  * (Layer 2). Order matches the exporter's `sql_deliveries`. */
