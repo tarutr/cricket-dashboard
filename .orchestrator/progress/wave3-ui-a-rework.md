@@ -69,12 +69,43 @@ identical to the engine-verified clauses; `death ∧ first-10` ⇒
 the OLD spec produced, so engine case-(f) 25/14/178.57 reproduces byte-for-byte;
 null/{}/empty-phase ⇒ "".
 
-## VERIFICATION — pending browser (flag-ON localhost:8000)
-- [ ] Four entries appear (grouped "Delivery"), correct format gating; Red Ball =
-      Over range + Player balls only.
-- [ ] Each windowed number on screen + independent hand DuckDB check.
-- [ ] Composition (Phase=Death ∧ Player First-10 = 25/14/178.57; Powerplay+Overs
-      15–20 = empty), pills independently removable.
-- [ ] Pins obey. No-window byte-identical (2,813 / Karanbir 2,454 / SKY 60·1,544·
-      29.13·150.34) flag-ON; flag-OFF byte-untouched. Mobile 375px. 0 console errors.
-- node --check clean on all touched files.
+## VERIFICATION — DONE (flag-ON localhost:8000 via explorer→data/wave1_out + temp
+## DATA_BASE_URL override; BOTH reverted + symlink removed + server stopped after)
+- **Four entries + gating**: single-T20 dropdown shows all four under a "Delivery"
+  optgroup (Phase / Over range / Ball range / Player balls, leading the list).
+  **Red Ball** dropdown shows **Over range + Player balls ONLY** (Phase & Ball range
+  absent) — and switching format→Red Ball auto-PRUNED the set Phase (Death) piece
+  from the pending state (pruneDeliveryWindowForFormats, flat shape).
+- **Each windowed number — ON SCREEN == independent hand DuckDB check** (raw balls,
+  flat SUM/COUNT + running faced-ball count; different shape from the engine's
+  crease-union), SA Yadav Men/T20/Intl/2023-07-01→2026-07-02:
+  | window | on screen (inns/runs/SR) | independent (inns/runs/bf/SR) |
+  |---|---|---|
+  | Phase=Death | 13 / 185 / 192.71 | 13 / 185 / 96 / 192.71 |
+  | Player First 10 | 60 / 634 / 133.19 | 60 / 634 / 476 / 133.19 |
+  | Over range 1–6 | 41 / 465 / 137.98 | 41 / 465 / 337 / 137.98 |
+  | Ball range 1–36 | 41 / 465 / 137.98 (==overs 1–6) | 41 / 465 / 337 / 137.98 |
+  All 0 mismatch. Pill labels: "Death overs" / "first 10 faced" / "overs 1–6" /
+  "balls 1–36".
+- **Composition**: Phase=Death ∧ Player First-10 → on screen **25 runs / SR 178.57**
+  (== composed independent 25/14/178.57); **INNS 11** = the engine crease-union
+  (independent faced-based = 4) — the DEFERRED case-(f) rule that STANDS per
+  decision 67, unchanged by this UI rework. **TWO pills** shown, badge "2". Each pill
+  removable INDEPENDENTLY (removed "Death overs" → reverted to 60/634/133.19 with
+  "first 10 faced" preserved). Powerplay + Over range 15–20 → **honest empty** ("0
+  players", both pills shown, honest "No players match" message; no special-casing).
+- **Pins obey**: SA Yadav pinned + Death window → floated to top (true rank #93)
+  showing the **windowed** record 13 / 185 / 192.71, NOT full-scope 60/1,544/150.34.
+- **No-window byte-identical (flag-ON)**: 2,813 players / Karanbir Singh 2,454 /
+  SA Yadav 60·1,544·29.13·150.34. **Flag-OFF byte-untouched**: no Delivery entries /
+  optgroup in "+ Add condition"; same anchors (2,813 / 2,454 / SKY 60·1,544·29.13·
+  150.34). **Mobile 375px**: Phase (chips) + Player balls rows stack cleanly, each
+  with its own × remove; documentElement.scrollWidth == clientWidth == 375 (no
+  horizontal page scroll). **0 console errors** flag-ON (1280 + 375) and flag-OFF.
+- `node --check` clean on all touched files (deliveryWindow / drawer / drawerInnings /
+  pills / state / styles n/a). Pure-logic harness (node) confirmed single-piece SQL
+  byte-identical to the engine-verified clauses + null/{}/empty ⇒ "".
+- One verification-only workaround: the format-dropdown custom checkbox (portal-
+  rendered) didn't toggle from a synthetic pointer click (a browser-automation
+  quirk, NOT a code issue), so Red Ball was set by firing the checkbox's native
+  click (same event a user click dispatches) purely to drive the gating check.
