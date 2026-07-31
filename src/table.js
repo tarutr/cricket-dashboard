@@ -121,6 +121,10 @@ function serializeQueryState(state) {
     stage: state.stage,
     resultCondition: state.resultCondition,
     matchupVs: state.matchupVs,
+    // Delivery window (Wave 3): a numbers-defining filter (the ball-engine window) —
+    // a change must re-light Search + bust the render cache, exactly like matchupVs.
+    // This is change-detection only; buildQuery/buildScopeClauses are untouched.
+    deliveryWindow: state.deliveryWindow,
     pinnedPlayers: state.pinnedPlayers,
     search: state.search,
     // R4 Wave 4a (A1): `sort` is deliberately EXCLUDED. Clicking a column header
