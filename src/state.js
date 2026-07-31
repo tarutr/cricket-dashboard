@@ -28,6 +28,7 @@
 // Phase 2 brief's owner decision that Cricsheet mislabels internationals.
 
 import { metricsFor, matchupBucketLabel, getMetric, metricDisplayLabel } from "./metrics.js";
+import { describeDeliveryWindow, isEmptyDeliveryWindow } from "./deliveryWindow.js";
 
 /**
  * The three format buckets surfaced in the UI, and the match_type values each
@@ -850,6 +851,33 @@ export function pruneIneligibleState(store) {
   return true;
 }
 
+/**
+ * Delivery-window format gating (ball-grain rebuild, decision 67): the TEAM
+ * Phase / Balls clocks are offered only under a SINGLE T20 or SINGLE 50-over
+ * bucket; red ball and mixed formats allow Overs only. When the format selection
+ * changes so a currently-set Phase/Balls team clause is no longer permitted, drop
+ * that team clause (a phase window on red ball matches nothing — `phase IS NULL`
+ * there — so it would silently empty the board). The PLAYER clock and the Overs
+ * team clock apply in every format and are left untouched. This mirrors
+ * pruneIneligibleState's "a filter you can't see must not keep narrowing" honesty.
+ * A no-op unless a now-illegal team clause is set (so flag-OFF — where
+ * state.deliveryWindow is always null — it never fires). Returns true if it wrote.
+ */
+export function pruneDeliveryWindowForFormats(store) {
+  const s = store.get();
+  const w = s.deliveryWindow;
+  if (!w || !w.team) return false;
+  const fmts = s.formats || [];
+  const phaseBallsAllowed = fmts.length === 1 && (fmts[0] === "T20" || fmts[0] === "50 Over");
+  if ((w.team.mode === "phase" || w.team.mode === "balls") && !phaseBallsAllowed) {
+    const next = { ...w };
+    delete next.team;
+    store.set({ deliveryWindow: next.player ? next : null });
+    return true;
+  }
+  return false;
+}
+
 /** GENDER_LABELS / TEAM_TYPE_LABELS used by describeScope() and the filter bar. */
 export const GENDER_LABELS = { female: "Women's", male: "Men's" };
 export const TEAM_TYPE_LABELS = { international: "international", club: "domestic", both: null };
@@ -956,6 +984,15 @@ export function createStore(initial) {
     if (fromLbl && toLbl) parts.push(`${fromLbl} – ${toLbl}`);
     else if (toLbl) parts.push(`through ${toLbl}`);
     else if (fromLbl) parts.push(`from ${fromLbl}`);
+
+    // Delivery window (ball-grain rebuild, decision 67): the "which balls" scope
+    // — labelled from the ONE source (describeDeliveryWindow) so the pill and this
+    // scope sentence always agree. Only ever set when the ball engine is active
+    // (the drawer control renders only then), so no extra flag gate is needed.
+    if (!isEmptyDeliveryWindow(s.deliveryWindow)) {
+      const winLabel = describeDeliveryWindow(s.deliveryWindow, effectiveNamespace(s));
+      if (winLabel) parts.push(winLabel);
+    }
 
     if (s.teams && s.teams.length > 0) {
       // "Current team" mode (owner decision 46) — mirrors the pill's "Team: …".

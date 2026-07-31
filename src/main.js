@@ -4,8 +4,8 @@
 // with Retry (never a blank page), then wire up state/filters/advanced/table
 // and do the initial render.
 
-import { initDB, getManifest, prewarmBallEngine } from "./db.js";
-import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, effectiveNamespace } from "./state.js";
+import { initDB, getManifest, prewarmBallEngine, setDeliveryWindow } from "./db.js";
+import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, pruneDeliveryWindowForFormats, effectiveNamespace } from "./state.js";
 import { isConditionComplete } from "./advanced.js";
 import { mountFilters } from "./filters.js";
 import { mountFilterDrawer } from "./drawer.js";
@@ -161,6 +161,10 @@ export function clearAll({ returnToTable = true } = {}) {
   // so a player re-pinned post-Clear never shows "(no innings)" left over
   // from the previous (now-discarded) scope before a fresh load() corrects it.
   noInningsPinIds = new Set();
+  // Ball-grain rebuild (Wave 3, decision 67): Clear resets the delivery window to
+  // none — clear the engine's active window so a later windowless Search is
+  // byte-identical (createInitialState already sets deliveryWindow: null).
+  setDeliveryWindow(null);
   // Re-render every control from the fresh defaults (the store.subscribe hook
   // refreshes pills/badge; the controls need an explicit re-render).
   // filterController.render() re-syncs the Gender/Discipline selects.
@@ -289,6 +293,11 @@ function onFiltersChanged() {
   // Drop columns/conditions orphaned by the new scope BEFORE anything renders,
   // so the drawer, badge, pills, and query all agree (§8.4 honesty).
   pruneIneligibleState(store);
+  // Ball-grain rebuild (Wave 3, decision 67): drop a delivery-window Phase/Balls
+  // TEAM clause the new format no longer permits (red ball / mixed → Overs only),
+  // for the same honesty reason — a phase window on red ball would silently empty
+  // the board (phase IS NULL there). No-op flag-OFF (deliveryWindow is null).
+  pruneDeliveryWindowForFormats(store);
   // Sync the popup's filter content only while the popup is VISIBLE (Batch 3
   // fix 2): syncing hidden content is wasted work, and syncing while open used
   // to rebuild the advanced panel's innerHTML on each keystroke, killing focus.
@@ -764,6 +773,13 @@ function boot() {
         // follows scope live — but committing the snapshot keeps the pills/badge
         // correct for a later switch back to Stats.
         appliedState = snapshotAppliedState();
+        // Ball-grain rebuild (Wave 3, decision 67): commit the delivery window into
+        // the engine BEFORE the query runs. db.js reads this at query-build time and
+        // pushes the ball predicate into every engine view a query touches, so the
+        // leaderboard (and any pinned row — pins OBEY the window) recomputes over the
+        // in-window balls. null ⇒ predicate "" ⇒ byte-identical to today. This is the
+        // Search-gate: the window applies ONLY here, never on a pending drawer edit.
+        setDeliveryWindow(appliedState.deliveryWindow);
         // A4: this Search commits any soft-deleted (staged) pill removals — the
         // pending store already dropped their effects at × time, so clear the
         // staged display set before re-rendering so committed pills vanish.

@@ -16,6 +16,7 @@
 // queries the database.
 
 import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsOrderFilterActive, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS, INNINGS_ORDER_OPTIONS } from "./state.js";
+import { describeDeliveryWindow, isEmptyDeliveryWindow } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
@@ -168,6 +169,23 @@ export function mountPills(
           const cur = store.get().teams || [];
           if (!cur.includes(t)) store.set({ teams: [...cur, t] });
         },
+      });
+    }
+
+    // Delivery window (ball-grain rebuild Wave 3, owner decision 67): one removable
+    // pill for the applied window, labelled from the ONE source (describeDeliveryWindow)
+    // so pill + scope sentence agree. Derived from the APPLIED snapshot like every
+    // other filter pill, so a staged (not-yet-searched) window shows no pill until
+    // Search commits it; its ×/+ soft-deletes on the LIVE store and commits on the
+    // next Search, consistent with the other pending-delete pills. Only ever set
+    // while the ball engine is active (the control renders only then).
+    if (!isEmptyDeliveryWindow(s.deliveryWindow)) {
+      const captured = JSON.parse(JSON.stringify(s.deliveryWindow));
+      pills.push({
+        key: "deliveryWindow",
+        label: describeDeliveryWindow(s.deliveryWindow, effectiveNamespace(s)),
+        remove: () => store.set({ deliveryWindow: null }),
+        restore: () => store.set({ deliveryWindow: captured }),
       });
     }
 

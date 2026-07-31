@@ -43,6 +43,8 @@ import {
   effectiveNamespace,
   eligibleMetrics,
 } from "./state.js";
+import { isEmptyDeliveryWindow } from "./deliveryWindow.js";
+import { ballEngineEnabled } from "./config.js";
 import { getMetric, matchupBucketLabel, metricDisplayLabel } from "./metrics.js";
 import {
   OPERATORS,
@@ -71,6 +73,7 @@ import {
   mountTossDecision,
   mountInningsOrder,
   mountStage,
+  mountDeliveryWindow,
 } from "./drawerInnings.js";
 import { escHtml, escAttr } from "./html.js";
 
@@ -102,6 +105,13 @@ function orderBy(present, order) {
 // `group` field, which is now documentation only). This array's order drives the
 // applied-ROW render order in the singleton-rows container.
 const SINGLETON_TYPES = [
+  // "Delivery window" (ball-grain rebuild Wave 3, owner decision 67): the ONE
+  // combined delivery-window control (Team innings + This player). `ballOnly`
+  // means it exists ONLY while the ball engine is active (a window can't apply to
+  // the pre-summed innings parquet) — isPresent hard-gates it off flag-OFF and the
+  // add-dropdown omits it there, so with the flag OFF the app is byte-untouched.
+  // Leads the array so its applied row renders first among the singleton rows.
+  { key: "window", label: "Delivery window", group: "Delivery", menOnly: false, ballOnly: true },
   // "Matchup (Vs)" (R3.2; relabelled Wave A1 item 1; R5-A #5 moved it to the
   // FIRST entry INSIDE the "Advanced metrics" optgroup, directly above Dot Ball
   // %): the matchup opponent selector, mirroring the toolbar's bonded Vs control
@@ -462,6 +472,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const tossDecisionController = mountTossDecision(editorHosts.mc_toss_decision, store, onChange, { embedded: true });
   const inningsOrderController = mountInningsOrder(editorHosts.mc_innings_order, store, onChange, { embedded: true });
   const stageController = mountStage(editorHosts.mc_stage, store, onChange, { embedded: true, onOptionsLoaded: onCascadeOptionsLoaded });
+  // Delivery window (Wave 3, decision 67): the flagship window editor. Mounted
+  // unconditionally (its skeleton row is built like every singleton), but it only
+  // ever becomes VISIBLE / addable while the ball engine is active — see isPresent
+  // + addSelectOptionsHTML, both gated on ballEngineEnabled(). Flag-OFF it stays a
+  // hidden, inert row that never writes state.deliveryWindow.
+  const deliveryWindowController = mountDeliveryWindow(editorHosts.window, store, onChange, { embedded: true });
 
   // ── "This will come back empty" notice (owner ruling) ──────────────────────
   // Since a dead-end pick is now KEPT and greyed rather than reset, a search can
@@ -519,6 +535,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
 
   function hasValue(key, s) {
     switch (key) {
+      // Delivery window (Wave 3, decision 67): present when a window spec is set.
+      // Gated on the ball engine too — flag-OFF deliveryWindow is always null, so
+      // this is belt-and-suspenders against the row ever surfacing there.
+      case "window": return ballEngineEnabled() && !isEmptyDeliveryWindow(s.deliveryWindow);
       case "role": return Boolean(s.profile.roleGroup);
       // Batting hand is a batting-only concept (decision 54): a player's
       // batting hand isn't their bowling arm, so the row (and the value) never
@@ -565,6 +585,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
 
   function isPresent(t, s) {
     if (t.menOnly && s.gender === "female") return false;
+    // Delivery window (Wave 3): ball-engine-only — never shows, nor auto-appears,
+    // while the flag is OFF (a window can't apply to the pre-summed parquet path).
+    if (t.ballOnly && !ballEngineEnabled()) return false;
     // R5-A #8: the striker "Batting position" is matchup-only — it never shows
     // (nor auto-appears) outside matchup mode, even if a stale position value or a
     // session-add lingers. Inside matchup it follows the normal presence rule.
@@ -577,6 +600,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
 
   function clearSingleton(key) {
     switch (key) {
+      case "window": store.set({ deliveryWindow: null }); break;
       case "role": setProfile({ roleGroup: null, roleSub: null }); break;
       case "hand": setProfile({ battingHand: null }); break;
       case "bowling": setProfile({ bowlingType: null }); break;
@@ -713,6 +737,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     const matchCtxOpts = singletonOpts(MATCH_CONTEXT_ADD_ORDER);
     return `
       <option value="">+ Add condition…</option>
+      ${ballEngineEnabled() ? `<optgroup label="Delivery">${singletonOpt("window")}</optgroup>` : ""}
       <optgroup label="Player">${singletonOpts(PLAYER_ADD_ORDER)}</optgroup>
       <optgroup label="Match">${singletonOpts(MATCH_ADD_ORDER)}</optgroup>
       <optgroup label="Match context">${matchCtxOpts}</optgroup>
@@ -749,6 +774,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     tossDecisionController.sync();
     inningsOrderController.sync();
     stageController.sync();
+    deliveryWindowController.sync();
     renderProfileEditors();
   }
 
@@ -1047,6 +1073,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   function activeCount(stateOverride) {
     const s = stateOverride || store.get();
     let n = 0;
+    // Delivery window (Wave 3, decision 67): one when a window is set (flag-OFF it
+    // is always null, so this never counts there).
+    if (!isEmptyDeliveryWindow(s.deliveryWindow)) n++;
     if ((s.teams || []).length > 0) n++;
     if (s.gender !== "female") {
       const p = s.profile;
