@@ -865,37 +865,26 @@ a { color: var(--color-accent); }
 [data-cond="event"] .cond-row__type,
 [data-cond="mc_result"] .cond-row__type { padding-top: 0.4rem; }
 
-/* ── Delivery window (ball-grain rebuild Wave 3, decision 67) ────────────────
-   The "Delivery window" row's editor is a two-section stacked block (Team
-   innings + This player), so — like Event / Result — top-align the row's type
-   label beside it rather than letting it float into the gap between sections. */
-[data-cond="window"] .cond-row__main { align-items: flex-start; }
-[data-cond="window"] .cond-row__type { padding-top: 0.4rem; }
+/* ── Delivery window (ball-grain rebuild Wave 3, decision 67; UI-A REWORK) ────
+   FOUR separate singleton rows (Phase / Over range / Ball range / Player balls),
+   each a compact inline editor. Chips can wrap, so — like Event / Result —
+   top-align the row's type label beside them rather than letting it float. */
+[data-cond="win_phase"] .cond-row__main,
+[data-cond="win_overs"] .cond-row__main,
+[data-cond="win_balls"] .cond-row__main,
+[data-cond="win_player"] .cond-row__main { align-items: flex-start; }
+[data-cond="win_phase"] .cond-row__type,
+[data-cond="win_overs"] .cond-row__type,
+[data-cond="win_balls"] .cond-row__type,
+[data-cond="win_player"] .cond-row__type { padding-top: 0.4rem; }
 
-.dwin { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
-.dwin__section { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
-.dwin__sub {
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--color-muted);
-  flex: 0 0 auto;
-  min-width: 6rem;
-}
-.dwin__body,
-.dwin__range { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.dwin-piece,
+.dwin__range { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
 .dwin__chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .dwin__chip { min-height: 32px; padding: var(--space-1) var(--space-3); font-size: 0.85rem; }
 .dwin__num { width: 4.5rem; flex: 0 0 auto; }
 .dwin__to,
 .dwin__unit { color: var(--color-muted); font-size: 0.85rem; }
-
-/* At mobile widths the two sub-sections stack cleanly: the sub-label sits on its
-   own line above its controls so nothing overflows the popup at ~375px. */
-@media (max-width: 640px) {
-  .dwin__sub { min-width: 100%; }
-}
 
 .filter-group--event,
 .filter-group--result { display: flex; flex-direction: column; gap: var(--space-1); align-items: stretch; }

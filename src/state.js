@@ -28,7 +28,7 @@
 // Phase 2 brief's owner decision that Cricsheet mislabels internationals.
 
 import { metricsFor, matchupBucketLabel, getMetric, metricDisplayLabel } from "./metrics.js";
-import { describeDeliveryWindow, isEmptyDeliveryWindow } from "./deliveryWindow.js";
+import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 
 /**
  * The three format buckets surfaced in the UI, and the match_type values each
@@ -866,16 +866,19 @@ export function pruneIneligibleState(store) {
 export function pruneDeliveryWindowForFormats(store) {
   const s = store.get();
   const w = s.deliveryWindow;
-  if (!w || !w.team) return false;
+  if (!w) return false;
   const fmts = s.formats || [];
   const phaseBallsAllowed = fmts.length === 1 && (fmts[0] === "T20" || fmts[0] === "50 Over");
-  if ((w.team.mode === "phase" || w.team.mode === "balls") && !phaseBallsAllowed) {
-    const next = { ...w };
-    delete next.team;
-    store.set({ deliveryWindow: next.player ? next : null });
-    return true;
-  }
-  return false;
+  if (phaseBallsAllowed) return false;
+  // UI-A REWORK: the window is FOUR independent pieces; drop the now-illegal Phase
+  // and/or Ball-range pieces (a phase window on red ball matches nothing — phase IS
+  // NULL there), keeping the Over-range and Player-balls pieces untouched. A no-op
+  // unless a Phase/Ball-range piece is actually set.
+  const hasPhase = Array.isArray(w.phase) && w.phase.length > 0;
+  if (!hasPhase && !w.balls) return false;
+  const next = withDeliveryWindowPiece(withDeliveryWindowPiece(w, "phase", null), "balls", null);
+  store.set({ deliveryWindow: next });
+  return true;
 }
 
 /** GENDER_LABELS / TEAM_TYPE_LABELS used by describeScope() and the filter bar. */
@@ -985,13 +988,13 @@ export function createStore(initial) {
     else if (toLbl) parts.push(`through ${toLbl}`);
     else if (fromLbl) parts.push(`from ${fromLbl}`);
 
-    // Delivery window (ball-grain rebuild, decision 67): the "which balls" scope
-    // — labelled from the ONE source (describeDeliveryWindow) so the pill and this
-    // scope sentence always agree. Only ever set when the ball engine is active
-    // (the drawer control renders only then), so no extra flag gate is needed.
-    if (!isEmptyDeliveryWindow(s.deliveryWindow)) {
-      const winLabel = describeDeliveryWindow(s.deliveryWindow, effectiveNamespace(s));
-      if (winLabel) parts.push(winLabel);
+    // Delivery window (ball-grain rebuild, decision 67; UI-A REWORK): the "which
+    // balls" scope — ONE token per active window piece, labelled from the ONE source
+    // (deliveryWindowTokens) so the four pills and this scope sentence always agree.
+    // Only ever set when the ball engine is active (the drawer controls render only
+    // then), so no extra flag gate is needed.
+    for (const tok of deliveryWindowTokens(s.deliveryWindow, effectiveNamespace(s))) {
+      parts.push(tok.label);
     }
 
     if (s.teams && s.teams.length > 0) {

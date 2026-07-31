@@ -43,7 +43,7 @@ import {
   effectiveNamespace,
   eligibleMetrics,
 } from "./state.js";
-import { isEmptyDeliveryWindow } from "./deliveryWindow.js";
+import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { ballEngineEnabled } from "./config.js";
 import { getMetric, matchupBucketLabel, metricDisplayLabel } from "./metrics.js";
 import {
@@ -73,7 +73,11 @@ import {
   mountTossDecision,
   mountInningsOrder,
   mountStage,
-  mountDeliveryWindow,
+  mountWindowPhase,
+  mountWindowOvers,
+  mountWindowBalls,
+  mountWindowPlayer,
+  windowPhaseBallsAllowed,
 } from "./drawerInnings.js";
 import { escHtml, escAttr } from "./html.js";
 
@@ -105,13 +109,22 @@ function orderBy(present, order) {
 // `group` field, which is now documentation only). This array's order drives the
 // applied-ROW render order in the singleton-rows container.
 const SINGLETON_TYPES = [
-  // "Delivery window" (ball-grain rebuild Wave 3, owner decision 67): the ONE
-  // combined delivery-window control (Team innings + This player). `ballOnly`
-  // means it exists ONLY while the ball engine is active (a window can't apply to
-  // the pre-summed innings parquet) — isPresent hard-gates it off flag-OFF and the
-  // add-dropdown omits it there, so with the flag OFF the app is byte-untouched.
-  // Leads the array so its applied row renders first among the singleton rows.
-  { key: "window", label: "Delivery window", group: "Delivery", menOnly: false, ballOnly: true },
+  // Delivery window (ball-grain rebuild Wave 3, owner decision 67; UI-A REWORK
+  // 2026-07-31): FOUR separate, freely-composing "+ Add condition" entries — Phase,
+  // Over range, Ball range, Player balls — replacing the old single combined
+  // control (the owner ruled a Phase|Overs|Balls mode-TOGGLE a deprecated style
+  // that forces one mode). Each writes/reads its OWN piece of state.deliveryWindow
+  // and carries its own removable pill. `ballOnly` means each exists ONLY while the
+  // ball engine is active (a window can't apply to the pre-summed innings parquet)
+  // — isPresent hard-gates them off flag-OFF and the add-dropdown omits them there,
+  // so with the flag OFF the app is byte-untouched. Phase / Ball range are further
+  // gated to a single T20 / 50-over bucket (windowPhaseBallsAllowed); Over range +
+  // Player balls apply in every format. They lead the array so their applied rows
+  // render first among the singleton rows, grouped under the "Delivery" optgroup.
+  { key: "win_phase", label: "Phase", group: "Delivery", menOnly: false, ballOnly: true },
+  { key: "win_overs", label: "Over range", group: "Delivery", menOnly: false, ballOnly: true },
+  { key: "win_balls", label: "Ball range", group: "Delivery", menOnly: false, ballOnly: true },
+  { key: "win_player", label: "Player balls", group: "Delivery", menOnly: false, ballOnly: true },
   // "Matchup (Vs)" (R3.2; relabelled Wave A1 item 1; R5-A #5 moved it to the
   // FIRST entry INSIDE the "Advanced metrics" optgroup, directly above Dot Ball
   // %): the matchup opponent selector, mirroring the toolbar's bonded Vs control
@@ -472,12 +485,16 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const tossDecisionController = mountTossDecision(editorHosts.mc_toss_decision, store, onChange, { embedded: true });
   const inningsOrderController = mountInningsOrder(editorHosts.mc_innings_order, store, onChange, { embedded: true });
   const stageController = mountStage(editorHosts.mc_stage, store, onChange, { embedded: true, onOptionsLoaded: onCascadeOptionsLoaded });
-  // Delivery window (Wave 3, decision 67): the flagship window editor. Mounted
-  // unconditionally (its skeleton row is built like every singleton), but it only
-  // ever becomes VISIBLE / addable while the ball engine is active — see isPresent
-  // + addSelectOptionsHTML, both gated on ballEngineEnabled(). Flag-OFF it stays a
-  // hidden, inert row that never writes state.deliveryWindow.
-  const deliveryWindowController = mountDeliveryWindow(editorHosts.window, store, onChange, { embedded: true });
+  // Delivery window (Wave 3, decision 67; UI-A REWORK): the four separate window
+  // editors, each mounted into its own singleton row and writing its own piece of
+  // state.deliveryWindow. Mounted unconditionally (their skeleton rows are built
+  // like every singleton), but each only ever becomes VISIBLE / addable while the
+  // ball engine is active (+ its format gate) — see isPresent + addSelectOptionsHTML.
+  // Flag-OFF they stay hidden, inert rows that never write state.deliveryWindow.
+  const winPhaseController = mountWindowPhase(editorHosts.win_phase, store, onChange, { embedded: true });
+  const winOversController = mountWindowOvers(editorHosts.win_overs, store, onChange, { embedded: true });
+  const winBallsController = mountWindowBalls(editorHosts.win_balls, store, onChange, { embedded: true });
+  const winPlayerController = mountWindowPlayer(editorHosts.win_player, store, onChange, { embedded: true });
 
   // ── "This will come back empty" notice (owner ruling) ──────────────────────
   // Since a dead-end pick is now KEPT and greyed rather than reset, a search can
@@ -535,10 +552,15 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
 
   function hasValue(key, s) {
     switch (key) {
-      // Delivery window (Wave 3, decision 67): present when a window spec is set.
-      // Gated on the ball engine too — flag-OFF deliveryWindow is always null, so
-      // this is belt-and-suspenders against the row ever surfacing there.
-      case "window": return ballEngineEnabled() && !isEmptyDeliveryWindow(s.deliveryWindow);
+      // Delivery window (Wave 3, decision 67; UI-A REWORK): each of the four window
+      // filters is present when ITS OWN piece of state.deliveryWindow is set. Gated
+      // on the ball engine too — flag-OFF deliveryWindow is always null, so this is
+      // belt-and-suspenders against the rows ever surfacing there. (Phase/Ball-range
+      // additionally hide outside a single T20/50-over bucket — see isPresent.)
+      case "win_phase": return ballEngineEnabled() && Boolean(s.deliveryWindow && Array.isArray(s.deliveryWindow.phase) && s.deliveryWindow.phase.length > 0);
+      case "win_overs": return ballEngineEnabled() && Boolean(s.deliveryWindow && s.deliveryWindow.overs);
+      case "win_balls": return ballEngineEnabled() && Boolean(s.deliveryWindow && s.deliveryWindow.balls);
+      case "win_player": return ballEngineEnabled() && Boolean(s.deliveryWindow && s.deliveryWindow.player);
       case "role": return Boolean(s.profile.roleGroup);
       // Batting hand is a batting-only concept (decision 54): a player's
       // batting hand isn't their bowling arm, so the row (and the value) never
@@ -588,6 +610,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // Delivery window (Wave 3): ball-engine-only — never shows, nor auto-appears,
     // while the flag is OFF (a window can't apply to the pre-summed parquet path).
     if (t.ballOnly && !ballEngineEnabled()) return false;
+    // Phase / Ball range are gated to a single T20 / 50-over bucket (decision 67):
+    // never show, nor auto-appear, in red-ball or mixed formats, even if a stale
+    // piece or a session-add lingers (pruneDeliveryWindowForFormats already drops a
+    // now-illegal piece from the store; this keeps the ROW honest to match).
+    if ((t.key === "win_phase" || t.key === "win_balls") && !windowPhaseBallsAllowed(s)) return false;
     // R5-A #8: the striker "Batting position" is matchup-only — it never shows
     // (nor auto-appears) outside matchup mode, even if a stale position value or a
     // session-add lingers. Inside matchup it follows the normal presence rule.
@@ -600,7 +627,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
 
   function clearSingleton(key) {
     switch (key) {
-      case "window": store.set({ deliveryWindow: null }); break;
+      case "win_phase": store.set({ deliveryWindow: withDeliveryWindowPiece(store.get().deliveryWindow, "phase", null) }); break;
+      case "win_overs": store.set({ deliveryWindow: withDeliveryWindowPiece(store.get().deliveryWindow, "overs", null) }); break;
+      case "win_balls": store.set({ deliveryWindow: withDeliveryWindowPiece(store.get().deliveryWindow, "balls", null) }); break;
+      case "win_player": store.set({ deliveryWindow: withDeliveryWindowPiece(store.get().deliveryWindow, "player", null) }); break;
       case "role": setProfile({ roleGroup: null, roleSub: null }); break;
       case "hand": setProfile({ battingHand: null }); break;
       case "bowling": setProfile({ bowlingType: null }); break;
@@ -735,9 +765,18 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // Match context (Wave 6): the five categorical match-context filters. Both
     // genders, all views (no matchup gate) — offered unconditionally.
     const matchCtxOpts = singletonOpts(MATCH_CONTEXT_ADD_ORDER);
+    // Delivery optgroup (Wave 3, decision 67; UI-A REWORK): the four window entries,
+    // each gated in the dropdown per format — Phase / Ball range only under a single
+    // T20 / 50-over bucket (windowPhaseBallsAllowed); Over range + Player balls in
+    // every format (Over range is the only delivery filter offered on red ball). The
+    // whole group is ball-engine-only; singletonOpt disables an already-present entry.
+    const winPB = windowPhaseBallsAllowed(s);
+    const deliveryOpts = ballEngineEnabled()
+      ? `${winPB ? singletonOpt("win_phase") : ""}${singletonOpt("win_overs")}${winPB ? singletonOpt("win_balls") : ""}${singletonOpt("win_player")}`
+      : "";
     return `
       <option value="">+ Add condition…</option>
-      ${ballEngineEnabled() ? `<optgroup label="Delivery">${singletonOpt("window")}</optgroup>` : ""}
+      ${deliveryOpts ? `<optgroup label="Delivery">${deliveryOpts}</optgroup>` : ""}
       <optgroup label="Player">${singletonOpts(PLAYER_ADD_ORDER)}</optgroup>
       <optgroup label="Match">${singletonOpts(MATCH_ADD_ORDER)}</optgroup>
       <optgroup label="Match context">${matchCtxOpts}</optgroup>
@@ -774,7 +813,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     tossDecisionController.sync();
     inningsOrderController.sync();
     stageController.sync();
-    deliveryWindowController.sync();
+    winPhaseController.sync();
+    winOversController.sync();
+    winBallsController.sync();
+    winPlayerController.sync();
     renderProfileEditors();
   }
 
@@ -1073,9 +1115,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   function activeCount(stateOverride) {
     const s = stateOverride || store.get();
     let n = 0;
-    // Delivery window (Wave 3, decision 67): one when a window is set (flag-OFF it
-    // is always null, so this never counts there).
-    if (!isEmptyDeliveryWindow(s.deliveryWindow)) n++;
+    // Delivery window (Wave 3, decision 67; UI-A REWORK): one per ACTIVE window
+    // piece (Phase / Over range / Ball range / Player balls), matching the four
+    // separate pills (flag-OFF deliveryWindow is always null → zero pieces here).
+    n += deliveryWindowTokens(s.deliveryWindow).length;
     if ((s.teams || []).length > 0) n++;
     if (s.gender !== "female") {
       const p = s.profile;

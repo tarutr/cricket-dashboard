@@ -67,6 +67,7 @@ import {
   INNINGS_ORDER_OPTIONS,
 } from "./state.js";
 import { searchTeams, searchEvents, searchVenues, searchEventSeasons, searchStages } from "./playerData.js";
+import { withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { canonicalStage } from "./canonicalNames.js";
 import { query } from "./db.js";
 import { mountSearchMultiSelect } from "./searchSelect.js";
@@ -1097,285 +1098,266 @@ export function mountStage(container, store, onChange, { embedded = false, onOpt
   return { sync, deadReport: () => picker.deadReport("Stage") };
 }
 
-// ── Delivery window (ball-grain rebuild Wave 3, owner decision 67) ───────────
-// The flagship "Delivery window" control: ONE combined editor with two composing
-// sub-sections that AND together into state.deliveryWindow (a plain spec — see
-// src/deliveryWindow.js). db.js reads that spec via setDeliveryWindow() and pushes
-// the generated ball predicate into the ball-engine base CTE for every view a
-// query reads, so windows DEFINE the numbers (pins obey them) and empty ⇒ null ⇒
-// byte-identical to today.
+// ── Delivery window (ball-grain rebuild Wave 3, owner decision 67; UI-A REWORK) ─
+// The delivery window is FOUR independent "+ Add condition" filter entries, each
+// a normal singleton with its own row, editor and pill (owner, 2026-07-31: the old
+// combined Phase|Overs|Balls mode-TOGGLE is a deprecated style — it forces one mode
+// and breaks the uniform per-filter pattern). Each editor writes/reads its OWN
+// piece of state.deliveryWindow (see src/deliveryWindow.js's flat spec), preserving
+// the others via withDeliveryWindowPiece, so the four compose freely with AND:
+//   • Phase        — multi-select chips Powerplay / Middle / Death → spec.phase.
+//                    Offered only under a single T20 / 50-over bucket.
+//   • Over range   — Overs [from]–[to], format-capped → spec.overs. ALL formats
+//                    (the only delivery filter offered on red ball).
+//   • Ball range   — Balls [from]–[to] legal team balls, format-capped → spec.balls.
+//                    T20 & 50-over only.
+//   • Player balls — [First|Last] N balls faced (batting) / bowled (bowling) →
+//                    spec.player. ALL formats; on the leaderboard each row is that
+//                    player's own N.
+// db.js reads the whole spec via setDeliveryWindow() and pushes the generated ball
+// predicate into the ball-engine base CTE for every view a query reads, so windows
+// DEFINE the numbers (pins obey them) and an empty spec ⇒ null ⇒ byte-identical to
+// today. A contradictory combination (e.g. Phase=Powerplay + Over range 15–20)
+// yields an honest empty — never special-cased.
 //
-//   • Team innings — a mode toggle Phase | Overs | Balls.
-//       Phase → multi-select chips Powerplay / Middle / Death → {mode:'phase',phases}.
-//       Overs → from–to over numbers, format-capped → {mode:'overs',from,to}.
-//       Balls → from–to legal team balls, format-capped → {mode:'balls',from,to}.
-//     FORMAT GATING (decision 67): Phase & Balls appear ONLY under a single T20 or
-//     single 50-over bucket; red ball and mixed formats show Overs ONLY (state.js
-//     pruneDeliveryWindowForFormats drops a now-illegal team clause on a format
-//     change; this control hides the buttons + falls the mode back to Overs).
-//   • This player — First | Last N balls faced (batting) / bowled (bowling), all
-//     formats → {edge, n}. On the leaderboard each row is that player's own N.
-//
-// This editor keeps a LOCAL DRAFT (mode / chips / raw input strings) as the UI's
-// source of truth and DERIVES a clean, always-valid-or-null spec into the store on
-// every edit — so a half-typed range is simply INACTIVE (like an empty singleton),
-// never a malformed spec handed to the numbers-critical generator (which throws on
-// one). A `lastWritten` guard means sync() only re-reads the draft from the store
-// when the spec changed EXTERNALLY (Clear, a format prune) — so a store change
-// mid-keystroke never rewrites the input under the caret.
+// The range / player editors keep a LOCAL DRAFT (raw input strings + edge) as the
+// UI source of truth and DERIVE a clean, always-valid-or-null piece into the store
+// on every edit — so a half-typed range is simply INACTIVE (like an empty
+// singleton), never a malformed piece handed to the numbers-critical generator
+// (which throws on one). A `lastWritten` guard (the piece's own JSON) means sync()
+// only re-reads the draft when THIS piece changed EXTERNALLY (Clear, a format
+// prune) — so a store change from a sibling editor mid-keystroke never rewrites the
+// input under the caret. The Phase editor is chips only, so it reads state directly
+// (no caret to protect).
 
 /** The three phase chips, in canonical (pp→mid→death) order so the emitted
- * phases[] is byte-stable regardless of click order (matches deliveryWindow.js). */
+ * phase[] is byte-stable regardless of click order (matches deliveryWindow.js). */
 const WINDOW_PHASES = [
   { v: "pp", label: "Powerplay" },
   { v: "mid", label: "Middle" },
   { v: "death", label: "Death" },
 ];
 
-/** Mount the Delivery window editor. `embedded` suppresses the outer label (the
- * condition row already names it "Delivery window"). Returns `{ sync }`. */
-export function mountDeliveryWindow(container, store, onChange, { embedded = false } = {}) {
+/** Write ONE piece of state.deliveryWindow, preserving the others (or dropping the
+ * whole window when nothing is left) — ONE merge helper so all four editors, their
+ * pills and clearSingleton agree, and an all-empty result falls back to null (the
+ * byte-identical no-window invariant). */
+function setWindowPiece(store, key, value) {
+  store.set({ deliveryWindow: withDeliveryWindowPiece(store.get().deliveryWindow, key, value) });
+}
+
+/** Format gate (decision 67): Phase + Ball range are offered ONLY under a single
+ * T20 or single 50-over bucket. Exported so drawer.js gates the same dropdown
+ * entries + rows (Over range + the player clock apply in every format). */
+export function windowPhaseBallsAllowed(s) {
+  const f = s.formats || [];
+  return f.length === 1 && (f[0] === "T20" || f[0] === "50 Over");
+}
+
+/** Mount the Phase window editor (spec.phase) — multi-select chips. Chips read
+ * state directly (no text input to protect), so sync() just re-paints the active
+ * states. `embedded` is accepted for call-site parity (the row names it). */
+export function mountWindowPhase(container, store, onChange, { embedded = false } = {}) {
+  void embedded;
   container.innerHTML = `
-    <div class="dwin" data-role="dwin">
-      <div class="dwin__section">
-        <span class="dwin__sub">Team innings</span>
-        <div class="segmented segmented--small dwin__modes" data-role="dwin-modes">
-          <button type="button" class="segmented__btn" data-mode="phase" data-role="dwin-mode-phase">Phase</button>
-          <button type="button" class="segmented__btn" data-mode="overs">Overs</button>
-          <button type="button" class="segmented__btn" data-mode="balls" data-role="dwin-mode-balls">Balls</button>
-        </div>
-        <div class="dwin__body" data-role="dwin-phase-body" hidden>
-          <div class="dwin__chips">
-            ${WINDOW_PHASES.map(
-              (p) => `<button type="button" class="chip dwin__chip" data-phase="${p.v}">${escHtml(p.label)}</button>`
-            ).join("")}
-          </div>
-        </div>
-        <div class="dwin__body dwin__range" data-role="dwin-overs-body" hidden>
-          <input type="number" min="1" step="1" class="input dwin__num" data-role="dwin-overs-from" placeholder="from" aria-label="Over from" />
-          <span class="dwin__to">to</span>
-          <input type="number" min="1" step="1" class="input dwin__num" data-role="dwin-overs-to" placeholder="to" aria-label="Over to" />
-        </div>
-        <div class="dwin__body dwin__range" data-role="dwin-balls-body" hidden>
-          <input type="number" min="1" step="1" class="input dwin__num" data-role="dwin-balls-from" placeholder="from" aria-label="Ball from" />
-          <span class="dwin__to">to</span>
-          <input type="number" min="1" step="1" class="input dwin__num" data-role="dwin-balls-to" placeholder="to" aria-label="Ball to" />
-        </div>
-      </div>
-      <div class="dwin__section">
-        <span class="dwin__sub">This player</span>
-        <div class="dwin__range">
-          <div class="segmented segmented--small dwin__edge" data-role="dwin-edge">
-            <button type="button" class="segmented__btn" data-edge="first">First</button>
-            <button type="button" class="segmented__btn" data-edge="last">Last</button>
-          </div>
-          <input type="number" min="1" step="1" class="input dwin__num" data-role="dwin-player-n" placeholder="N" aria-label="Number of balls" />
-          <span class="dwin__unit" data-role="dwin-unit">balls faced</span>
-        </div>
+    <div class="dwin-piece" data-role="dwin-phase">
+      <div class="dwin__chips">
+        ${WINDOW_PHASES.map(
+          (p) => `<button type="button" class="chip dwin__chip" data-phase="${p.v}">${escHtml(p.label)}</button>`
+        ).join("")}
       </div>
     </div>`;
-  void embedded;
-
-  const els = {
-    modePhase: container.querySelector('[data-role="dwin-mode-phase"]'),
-    modeBalls: container.querySelector('[data-role="dwin-mode-balls"]'),
-    modeBtns: [...container.querySelectorAll('[data-role="dwin-modes"] .segmented__btn')],
-    phaseBody: container.querySelector('[data-role="dwin-phase-body"]'),
-    oversBody: container.querySelector('[data-role="dwin-overs-body"]'),
-    ballsBody: container.querySelector('[data-role="dwin-balls-body"]'),
-    chips: [...container.querySelectorAll(".dwin__chip")],
-    oversFrom: container.querySelector('[data-role="dwin-overs-from"]'),
-    oversTo: container.querySelector('[data-role="dwin-overs-to"]'),
-    ballsFrom: container.querySelector('[data-role="dwin-balls-from"]'),
-    ballsTo: container.querySelector('[data-role="dwin-balls-to"]'),
-    edgeBtns: [...container.querySelectorAll('[data-role="dwin-edge"] .segmented__btn')],
-    playerN: container.querySelector('[data-role="dwin-player-n"]'),
-    unit: container.querySelector('[data-role="dwin-unit"]'),
+  const chips = [...container.querySelectorAll(".dwin__chip")];
+  const currentPhases = () => {
+    const w = store.get().deliveryWindow;
+    return new Set(w && Array.isArray(w.phase) ? w.phase : []);
   };
-
-  // ── Local draft (UI source of truth) ────────────────────────────────────────
-  let teamMode = null; // 'phase' | 'overs' | 'balls' | null (default chosen by gating)
-  let phases = new Set(); // selected phase chips (pp/mid/death)
-  let oversFrom = "", oversTo = "", ballsFrom = "", ballsTo = "";
-  let edge = "first";
-  let playerN = "";
-  let lastWritten = null; // JSON of the spec this controller last wrote to the store
-
-  // ── Format gating (decision 67) ─────────────────────────────────────────────
-  function formatGate() {
-    const fmts = store.get().formats || [];
-    const singleT20 = fmts.length === 1 && fmts[0] === "T20";
-    const single50 = fmts.length === 1 && fmts[0] === "50 Over";
-    return {
-      phaseBalls: singleT20 || single50, // Phase & Balls only under a single T20/50-over bucket
-      oversCap: singleT20 ? 20 : single50 ? 50 : null, // null = uncapped (red ball / mixed)
-      ballsCap: singleT20 ? 120 : single50 ? 300 : null,
-    };
+  function renderChips() {
+    const cur = currentPhases();
+    chips.forEach((c) => c.classList.toggle("is-active", cur.has(c.dataset.phase)));
   }
+  chips.forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const cur = currentPhases();
+      const v = chip.dataset.phase;
+      if (cur.has(v)) cur.delete(v);
+      else cur.add(v);
+      // Canonical order so the stored phase[] (and its cache key) is byte-stable.
+      const canon = WINDOW_PHASES.map((p) => p.v).filter((x) => cur.has(x));
+      setWindowPiece(store, "phase", canon); // [] clears the piece → possibly null
+      renderChips();
+      onChange();
+    });
+  });
+  function sync() {
+    renderChips();
+  }
+  sync();
+  return { sync };
+}
 
-  // ── Spec derivation (draft → clean, always-valid-or-null spec) ───────────────
-  function parseRange(fromStr, toStr, cap) {
+/** Shared editor for the two team RANGE pieces (Over range / Ball range). `pieceKey`
+ * is "overs" | "balls"; the format cap follows `pieceKey` (Overs: T20 1–20 /
+ * 50-over 1–50 / else uncapped; Balls: 1–120 / 1–300). Keeps a local draft +
+ * `lastWritten` guard so a sibling editor's store write never stomps the caret. */
+function mountWindowRange(container, store, onChange, { pieceKey }) {
+  container.innerHTML = `
+    <div class="dwin-piece dwin__range" data-role="dwin-range">
+      <input type="number" min="1" step="1" class="input dwin__num" data-role="from" placeholder="from" aria-label="From" />
+      <span class="dwin__to">to</span>
+      <input type="number" min="1" step="1" class="input dwin__num" data-role="to" placeholder="to" aria-label="To" />
+    </div>`;
+  const fromEl = container.querySelector('[data-role="from"]');
+  const toEl = container.querySelector('[data-role="to"]');
+  let fromStr = "", toStr = "";
+  let lastWritten = "null";
+
+  /** Format cap for this piece (null = uncapped). */
+  function capOf() {
+    const f = store.get().formats || [];
+    const singleT20 = f.length === 1 && f[0] === "T20";
+    const single50 = f.length === 1 && f[0] === "50 Over";
+    if (pieceKey === "overs") return singleT20 ? 20 : single50 ? 50 : null;
+    return singleT20 ? 120 : single50 ? 300 : null;
+  }
+  /** Draft → a clean, capped {from,to}, or null when incomplete/invalid (inactive). */
+  function parseRange(cap) {
     const f = parseInt(fromStr, 10);
     const t = parseInt(toStr, 10);
     if (!Number.isInteger(f) || !Number.isInteger(t)) return null;
     let from = Math.max(1, f);
     let to = Math.max(1, t);
-    if (cap) { from = Math.min(from, cap); to = Math.min(to, cap); }
+    if (cap) {
+      from = Math.min(from, cap);
+      to = Math.min(to, cap);
+    }
     if (from > to) return null;
     return { from, to };
   }
-  function buildTeam() {
-    const gate = formatGate();
-    if (teamMode === "phase") {
-      if (!gate.phaseBalls) return undefined;
-      const chosen = WINDOW_PHASES.map((p) => p.v).filter((v) => phases.has(v));
-      return chosen.length ? { mode: "phase", phases: chosen } : undefined;
-    }
-    if (teamMode === "overs") {
-      const r = parseRange(oversFrom, oversTo, gate.oversCap);
-      return r ? { mode: "overs", from: r.from, to: r.to } : undefined;
-    }
-    if (teamMode === "balls") {
-      if (!gate.phaseBalls) return undefined;
-      const r = parseRange(ballsFrom, ballsTo, gate.ballsCap);
-      return r ? { mode: "balls", from: r.from, to: r.to } : undefined;
-    }
-    return undefined;
-  }
-  function buildPlayer() {
-    const n = parseInt(playerN, 10);
-    if (!Number.isInteger(n) || n < 1) return undefined;
-    return { edge, n };
-  }
-  function buildSpec() {
-    const team = buildTeam();
-    const player = buildPlayer();
-    if (!team && !player) return null;
-    const spec = {};
-    if (team) spec.team = team;
-    if (player) spec.player = player;
-    return spec;
-  }
-
-  /** Recompute the spec from the draft and commit it (set lastWritten BEFORE
+  /** Recompute the piece from the draft and commit it (set lastWritten BEFORE
    * store.set so the re-entrant sync() from the store notification recognises the
    * write as ours and doesn't stomp the input being typed into). */
   function commit() {
-    const spec = buildSpec();
-    lastWritten = JSON.stringify(spec);
-    store.set({ deliveryWindow: spec });
+    const val = parseRange(capOf());
+    lastWritten = JSON.stringify(val);
+    setWindowPiece(store, pieceKey, val);
     onChange();
   }
-
-  // ── Load the draft from an EXTERNALLY-set spec (Clear / format prune) ────────
-  function loadDraftFromSpec(w) {
-    phases = new Set();
-    oversFrom = oversTo = ballsFrom = ballsTo = "";
-    const t = w && w.team;
-    if (t && t.mode === "phase") { teamMode = "phase"; phases = new Set(t.phases || []); }
-    else if (t && t.mode === "overs") { teamMode = "overs"; oversFrom = String(t.from); oversTo = String(t.to); }
-    else if (t && t.mode === "balls") { teamMode = "balls"; ballsFrom = String(t.from); ballsTo = String(t.to); }
-    else { teamMode = null; }
-    const p = w && w.player;
-    if (p) { edge = p.edge === "last" ? "last" : "first"; playerN = String(p.n); }
-    else { edge = "first"; playerN = ""; }
-    // Rewrite the inputs from the draft — safe here (an external reset, never a
-    // live keystroke, so no input is focused with a competing value).
-    els.oversFrom.value = oversFrom;
-    els.oversTo.value = oversTo;
-    els.ballsFrom.value = ballsFrom;
-    els.ballsTo.value = ballsTo;
-    els.playerN.value = playerN;
+  function loadDraft(piece) {
+    fromStr = piece ? String(piece.from) : "";
+    toStr = piece ? String(piece.to) : "";
+    fromEl.value = fromStr;
+    toEl.value = toStr;
   }
-
-  // ── Wiring (bound once) ─────────────────────────────────────────────────────
-  els.modeBtns.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      teamMode = btn.dataset.mode;
-      renderTeamBody();
-      commit();
-    });
-  });
-  els.chips.forEach((chip) => {
-    chip.addEventListener("click", () => {
-      const v = chip.dataset.phase;
-      if (phases.has(v)) phases.delete(v);
-      else phases.add(v);
-      renderChips();
-      commit();
-    });
-  });
-  els.edgeBtns.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      edge = btn.dataset.edge;
-      renderEdge();
-      commit();
-    });
-  });
-  // Range inputs: live-update the draft on every keystroke (no re-render that
-  // would drop the caret — only the value string changes), and clamp to the
-  // format cap on blur (change) where rewriting the input is safe.
-  const bindRange = (el, get, set, capKey) => {
-    el.addEventListener("input", () => { set(el.value); commit(); });
+  fromEl.addEventListener("input", () => { fromStr = fromEl.value; commit(); });
+  toEl.addEventListener("input", () => { toStr = toEl.value; commit(); });
+  // Clamp to the format cap on blur (change), where rewriting the input is safe.
+  const clampOnBlur = (el, setStr) =>
     el.addEventListener("change", () => {
-      const cap = formatGate()[capKey];
+      const cap = capOf();
       const n = parseInt(el.value, 10);
-      if (Number.isInteger(n) && cap && n > cap) { el.value = String(cap); set(el.value); }
+      if (Number.isInteger(n) && cap && n > cap) {
+        el.value = String(cap);
+        setStr(el.value);
+      }
       commit();
     });
-  };
-  bindRange(els.oversFrom, () => oversFrom, (v) => { oversFrom = v; }, "oversCap");
-  bindRange(els.oversTo, () => oversTo, (v) => { oversTo = v; }, "oversCap");
-  bindRange(els.ballsFrom, () => ballsFrom, (v) => { ballsFrom = v; }, "ballsCap");
-  bindRange(els.ballsTo, () => ballsTo, (v) => { ballsTo = v; }, "ballsCap");
-  els.playerN.addEventListener("input", () => { playerN = els.playerN.value; commit(); });
-
-  // ── Render helpers (visual only — never touch a focused input's .value) ─────
-  function renderChips() {
-    els.chips.forEach((c) => c.classList.toggle("is-active", phases.has(c.dataset.phase)));
-  }
-  function renderEdge() {
-    els.edgeBtns.forEach((b) => b.classList.toggle("is-active", b.dataset.edge === edge));
-  }
-  function renderTeamBody() {
-    const gate = formatGate();
-    els.modeBtns.forEach((b) => b.classList.toggle("is-active", b.dataset.mode === teamMode));
-    els.phaseBody.hidden = teamMode !== "phase" || !gate.phaseBalls;
-    els.oversBody.hidden = teamMode !== "overs";
-    els.ballsBody.hidden = teamMode !== "balls" || !gate.phaseBalls;
-    renderChips();
-  }
+  clampOnBlur(fromEl, (v) => { fromStr = v; });
+  clampOnBlur(toEl, (v) => { toStr = v; });
 
   function sync() {
-    // Reconcile the draft from the store only when the spec changed externally —
-    // a Clear (→ null) or the format prune (state.js) — never on our own writes.
-    const specStr = JSON.stringify(store.get().deliveryWindow || null);
-    if (specStr !== lastWritten) {
-      loadDraftFromSpec(store.get().deliveryWindow || null);
-      lastWritten = specStr;
+    const w = store.get().deliveryWindow;
+    const piece = (w && w[pieceKey]) || null;
+    const pieceStr = JSON.stringify(piece);
+    // Reconcile the draft only when THIS piece changed externally (Clear / prune) —
+    // never on our own write (lastWritten was set before the store.set above).
+    if (pieceStr !== lastWritten) {
+      loadDraft(piece);
+      lastWritten = pieceStr;
     }
-    const gate = formatGate();
-    // Format gating: Phase & Balls buttons only under a single T20 / 50-over bucket.
-    els.modePhase.hidden = !gate.phaseBalls;
-    els.modeBalls.hidden = !gate.phaseBalls;
-    // Default / fall the mode back to Overs when none chosen yet, or the current
-    // mode is one the format no longer permits (a prune already dropped its clause
-    // from the store, so this is just the matching UI move).
-    if (teamMode == null || ((teamMode === "phase" || teamMode === "balls") && !gate.phaseBalls)) {
-      teamMode = gate.phaseBalls ? "phase" : "overs";
-    }
-    // Format caps on the number inputs (browser-enforced for the spinners).
-    const setMax = (el, cap) => { if (cap) el.max = String(cap); else el.removeAttribute("max"); };
-    setMax(els.oversFrom, gate.oversCap);
-    setMax(els.oversTo, gate.oversCap);
-    setMax(els.ballsFrom, gate.ballsCap);
-    setMax(els.ballsTo, gate.ballsCap);
-    // Player-clock unit follows the discipline (batting faces, bowling bowls).
-    els.unit.textContent = store.get().discipline === "bowling" ? "balls bowled" : "balls faced";
-    renderTeamBody();
+    const cap = capOf();
+    const setMax = (el) => { if (cap) el.max = String(cap); else el.removeAttribute("max"); };
+    setMax(fromEl);
+    setMax(toEl);
+  }
+  sync();
+  return { sync };
+}
+
+/** Mount the Over-range editor (spec.overs) — all formats, the only delivery
+ * filter offered on red ball. */
+export function mountWindowOvers(container, store, onChange, { embedded = false } = {}) {
+  void embedded;
+  return mountWindowRange(container, store, onChange, { pieceKey: "overs" });
+}
+
+/** Mount the Ball-range editor (spec.balls) — T20 & 50-over only (gated in the
+ * dropdown + rows by drawer.js). */
+export function mountWindowBalls(container, store, onChange, { embedded = false } = {}) {
+  void embedded;
+  return mountWindowRange(container, store, onChange, { pieceKey: "balls" });
+}
+
+/** Mount the Player-balls editor (spec.player) — [First|Last] N balls, all
+ * formats. Unit follows the discipline (faced / bowled). Local draft + lastWritten
+ * guard, same as the range editors. */
+export function mountWindowPlayer(container, store, onChange, { embedded = false } = {}) {
+  void embedded;
+  container.innerHTML = `
+    <div class="dwin-piece dwin__range" data-role="dwin-player">
+      <div class="segmented segmented--small dwin__edge" data-role="edge">
+        <button type="button" class="segmented__btn" data-edge="first">First</button>
+        <button type="button" class="segmented__btn" data-edge="last">Last</button>
+      </div>
+      <input type="number" min="1" step="1" class="input dwin__num" data-role="n" placeholder="N" aria-label="Number of balls" />
+      <span class="dwin__unit" data-role="unit">balls faced</span>
+    </div>`;
+  const edgeBtns = [...container.querySelectorAll('[data-role="edge"] .segmented__btn')];
+  const nEl = container.querySelector('[data-role="n"]');
+  const unitEl = container.querySelector('[data-role="unit"]');
+  let edge = "first", nStr = "";
+  let lastWritten = "null";
+
+  function buildPiece() {
+    const n = parseInt(nStr, 10);
+    if (!Number.isInteger(n) || n < 1) return null;
+    return { edge, n };
+  }
+  function commit() {
+    const val = buildPiece();
+    lastWritten = JSON.stringify(val);
+    setWindowPiece(store, "player", val);
+    onChange();
+  }
+  function loadDraft(piece) {
+    edge = piece && piece.edge === "last" ? "last" : "first";
+    nStr = piece ? String(piece.n) : "";
+    nEl.value = nStr;
     renderEdge();
   }
+  function renderEdge() {
+    edgeBtns.forEach((b) => b.classList.toggle("is-active", b.dataset.edge === edge));
+  }
+  edgeBtns.forEach((b) =>
+    b.addEventListener("click", () => {
+      edge = b.dataset.edge;
+      renderEdge();
+      commit();
+    })
+  );
+  nEl.addEventListener("input", () => { nStr = nEl.value; commit(); });
 
+  function sync() {
+    const w = store.get().deliveryWindow;
+    const piece = (w && w.player) || null;
+    const pieceStr = JSON.stringify(piece);
+    if (pieceStr !== lastWritten) {
+      loadDraft(piece);
+      lastWritten = pieceStr;
+    }
+    unitEl.textContent = store.get().discipline === "bowling" ? "balls bowled" : "balls faced";
+    renderEdge();
+  }
   sync();
   return { sync };
 }
