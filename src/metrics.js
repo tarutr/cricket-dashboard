@@ -1289,6 +1289,21 @@ const FIELDING_METRIC_SPECS = [
     sqlExpression: "MAX(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs)" },
   { key: "player_of_match", label: "Player of the Match", shortLabel: "PoM", section: "impact",
     source: "player_matches", sqlExpression: "MAX(pom_cte.player_of_match)" },
+  // PotM Count (filter-rejig Wave R2b): the FILTERABLE count of Player-of-the-Match
+  // awards, placed in the "+ Add condition" Player Profile group (the old
+  // player_of_match def above stays as a COLUMN but is no longer a filter). It reads
+  // the SAME per-player `pom_cte`, whose ONLY column `player_of_match` is ALREADY the
+  // per-player SUM of the 0/1 PotM flag (buildPomCteSql: `SUM(player_of_match)`), i.e.
+  // the award COUNT. So the metric's job is only to PROJECT that constant out of the
+  // batting/bowling GROUP BY — done with MAX() (the same functionally-dependent-join
+  // projection R. Pos. / fielding_cte / player_of_match all use). A literal outer
+  // SUM(pom_cte.player_of_match) would MULTIPLY the count by the batter's innings-row
+  // count (wrong), so the "SUM of the flag" the count needs is the one INSIDE the CTE,
+  // not the outer projection. Value == player_of_match exactly (SA Yadav = 5 PotM,
+  // independently verified). isPomMetric picks it up (source player_matches, key !=
+  // matches), so it drives HAVING via the pom_cte join with no query-builder change.
+  { key: "potm_count", label: "PotM Count", shortLabel: "PotM", section: "impact",
+    source: "player_matches", sqlExpression: "MAX(pom_cte.player_of_match)" },
 ];
 for (const disc of ["batting", "bowling"]) {
   for (const f of FIELDING_METRIC_SPECS) {

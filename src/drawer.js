@@ -807,9 +807,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
    * variants:[leaf…] }. Discipline-aware, gender/format/matchup gated exactly as
    * the old dropdown was. Metric leaves are drawn from the SAME source the old
    * dropdown used — partitionFilterMetrics(eligibleMetrics(ns)) minus the deletes —
-   * so no eligible metric is ever lost: anything not placed by the explicit spec
-   * structure is appended to the discipline's Detailed group (catch-all), which
-   * also covers the matchup namespaces' own metric sets.
+   * but the palette now shows EXACTLY the spec's target list: every leaf is placed
+   * by name (R2b removed the former "leftoverLeaves" catch-all that auto-appended
+   * any un-placed eligible metric to Detailed). Consequence, flagged for the owner:
+   * a handful of matchup-namespace metrics that were only reachable via that
+   * catch-all (Balls Faced / Dismissals in matchup_batting; Fours Conceded / Sixes
+   * Conceded in matchup_bowling) are no longer offered as filters in Vs mode.
    */
   function buildPaletteGroups(s, gi) {
     const ns = effectiveNamespace(s);
@@ -825,7 +828,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       .filter((m) => m.kind !== "position" && !isDeletedFilterMetric(m));
     const parts = partitionFilterMetrics(numericMetrics);
     const eligibleByKey = new Map(numericMetrics.map((m) => [m.key, m]));
-    const placed = new Set(); // metric keys already placed by the explicit structure
 
     const presentSingles = new Set(SINGLETON_TYPES.filter((t) => isPresent(t, s)).map((t) => t.key));
     const singlePresent = (key) => presentSingles.has(key);
@@ -834,7 +836,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     const leafMetric = (key, label) => {
       const m = eligibleByKey.get(key);
       if (!m) return null; // not eligible in this namespace/format — skip gracefully
-      placed.add(key);
       return { kind: "leaf", label: label ?? metricDisplayLabel(m, s.formats), run: () => pickMetric(gi, key) };
     };
     const leafSingle = (key, label, preselect = null) => ({
@@ -866,6 +867,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       !women && disc === "batting" ? leafSingle("hand", "Batting hand") : null,
       !women ? leafSingle("bowling", "Bowling style") : null,
       disc === "batting" ? leafSingle("rpos", "Regular batting position") : null,
+      // PotM Count (R2b): the filterable count of Player-of-the-Match awards
+      // (metrics.js `potm_count`), between Regular batting position and Team. The
+      // old `player_of_match` (Impact section) is no longer offered as a filter.
+      leafMetric("potm_count", "PotM Count"),
       leafSingle("team", "Team"),
     ]);
 
@@ -922,7 +927,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
           ["runs_4s_boundary_pct", "4s-boundary"], ["runs_4s_run_pct", "4s-run"],
           ["runs_5s_pct", "5s"], ["runs_6s_boundary_pct", "6s-boundary"], ["runs_6s_run_pct", "6s-run"],
         ]),
-        ...leftoverLeaves(parts, placed, gi, eligibleByKey, s),
       ]);
     } else {
       pushGroup("Bowling · Basic Stats", [
@@ -935,8 +939,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
         leafMetric("wickets", "Wickets"),
         metricFamily("Wicket Types", parts.dismissal.map((m) => [m.key, metricDisplayLabel(m, s.formats)])),
         leafMetric("best", "Best Bowling"),
-        leafMetric("four_wicket_hauls", "4-WI"),
-        leafMetric("five_wicket_hauls", "5-WI"),
+        // 4-WI / 5-WI removed (R2b): the fixed exactly-4 / 5-plus haul leaves are
+        // superseded by the parametrised Wicket Hauls ≥ N ▸ below. The metric defs
+        // (four_wicket_hauls / five_wicket_hauls) stay in metrics.js as columns.
         leafMetric("wicket_hauls_ge", "Wicket Hauls ≥ N"),
       ]);
       pushGroup("Bowling · Detailed Stats", [
@@ -946,7 +951,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
         metricFamily("Extras", [["extras_wides", "Wides"], ["extras_noballs", "No-balls"]]),
         leafMetric("dot_pct", "Dot %"),
         leafMetric("boundary_runs_pct", "Boundary Run %"),
-        ...leftoverLeaves(parts, placed, gi, eligibleByKey, s),
       ]);
     }
 
@@ -994,28 +998,22 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     }
 
     // 7 ── Fielding Stats (plain mode only — no matchup grain) ─────────────────────
+    // EXACTLY the two categorical ▸ slices (R2b / spec): Fielding Wicket Type and
+    // Wickets by Batting Position. The former standalone count leaves (Catches /
+    // Stumpings / Run-outs from parts.fielding, and Player of the Match from
+    // parts.impact) are NOT offered here — the spec makes Catches/Stumpings/Run-outs
+    // reachable as "Fielding Wicket Type ▸ (Caught/Run-out/Stumped) + count operator",
+    // and PotM now lives in Player Profile as PotM Count. (See report: the count-
+    // operator on Fielding Wicket Type is not yet wired, so "catches ≥ N" is not
+    // presently expressible — flagged for the owner.)
     if (!matchup) {
       pushGroup("Fielding Stats", [
         singleFamily("Fielding Wicket Type", "fld_kind", FIELDING_KIND_OPTIONS.map((o) => [o.label, preselectFielding("kinds", o.value)])),
         singleFamily("Wickets by Batting Position", "fld_pos", FIELDING_POSITIONS.map((n) => [`Position ${n}`, preselectFielding("positions", n)])),
-        ...parts.fielding.map((m) => leafMetric(m.key, metricDisplayLabel(m, s.formats))),
-        ...parts.impact.map((m) => leafMetric(m.key, metricDisplayLabel(m, s.formats))),
       ]);
     }
 
     return groups;
-  }
-
-  /** Any eligible metric NOT placed by the explicit spec structure (basic ∪
-   * advanced partitions) — appended to the discipline's Detailed group so nothing
-   * is ever lost, and the matchup namespaces' own metric sets still surface. */
-  function leftoverLeaves(parts, placed, gi, eligibleByKey, s) {
-    return [...parts.basic, ...parts.advanced]
-      .filter((m) => !placed.has(m.key))
-      .map((m) => {
-        placed.add(m.key);
-        return { kind: "leaf", label: metricDisplayLabel(m, s.formats), run: () => pickMetric(gi, m.key) };
-      });
   }
 
   // ── Palette component (portal + search + ▸ drill-down) ───────────────────────
