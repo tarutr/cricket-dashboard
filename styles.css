@@ -402,12 +402,6 @@ a { color: var(--color-accent); }
 .filter-bar .select,
 .filter-bar .input { font-size: var(--text-sm2); }
 
-/* R7 Wave B (item 1): Gender / Discipline selects hug their own short text
-   ("Men" / "Batting") instead of stretch-filling the flex column, so they read
-   as narrow boxes at the head of the row. */
-.filter-group--gender .select,
-.filter-group--discipline .select { align-self: flex-start; }
-
 .filter-group {
   display: flex;
   flex-direction: column;
