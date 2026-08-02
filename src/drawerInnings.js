@@ -52,7 +52,6 @@
 import { wirePortalDropdown } from "./filters.js";
 import {
   matchupVsActive,
-  FIELDING_KIND_OPTIONS,
   FIELDING_PHASE_OPTIONS,
   FIELDING_POSITIONS,
   RESULT_OPTIONS,
@@ -64,7 +63,6 @@ import {
   STAGE_NONE_LABEL,
   TOSS_RESULT_OPTIONS,
   TOSS_DECISION_OPTIONS,
-  INNINGS_ORDER_OPTIONS,
   inningsNumberOptions,
   inningsNumberLabel,
 } from "./state.js";
@@ -335,10 +333,10 @@ export function mountRegularPositions(container, store, onChange, { embedded = f
 }
 
 // ── Fielding SLICE pickers (fielding rebuild) ───────────────────────────────
-// Three multi-select checkbox dropdowns that narrow WHICH wicket-events the
+// Two multi-select checkbox dropdowns that narrow WHICH wicket-events the
 // Catches/Stumpings/Run-outs/Dismissals-Effected metrics count, by the event's
-// OWN dims — dismissed-batter position (state.fielding.positions), dismissal kind
-// (.kinds), phase (.phases). Same self-contained `{ sync }` shape and portal
+// OWN dims — dismissed-batter position (state.fielding.positions), phase
+// (.phases). Same self-contained `{ sync }` shape and portal
 // dropdown as mountBattingPosition above, so they slot into the condition
 // builder's singleton rows the same way. PLAIN mode only: the fielding metrics
 // live in the plain buildQuery (its fielding_cte join) — matchup Vs mode has no
@@ -346,8 +344,8 @@ export function mountRegularPositions(container, store, onChange, { embedded = f
 // inverted).
 
 /** Generic checkbox multi-select over one list on state.fielding. `field` is
- * "positions" | "kinds" | "phases"; `options` is [{value,label}] (value is the
- * literal written to state — number for positions, string for kind/phase);
+ * "positions" | "phases"; `options` is [{value,label}] (value is the
+ * literal written to state — number for positions, string for phase);
  * `summaryFn(selectedValues)` renders the toggle label. `embedded` suppresses the
  * outer filter-label (the condition row already names it). Returns `{ sync }`. */
 function mountFieldingSlicePicker(container, store, onChange, { field, options, anyLabel, summaryFn, embedded = false, label }) {
@@ -451,22 +449,6 @@ export function mountFieldingPosition(container, store, onChange, opts = {}) {
   });
 }
 
-/** Fielding: dismissal-kind slice (state.fielding.kinds). */
-export function mountFieldingKind(container, store, onChange, opts = {}) {
-  return mountFieldingSlicePicker(container, store, onChange, {
-    field: "kinds",
-    options: FIELDING_KIND_OPTIONS,
-    anyLabel: "Any dismissal",
-    summaryFn: (vals) => {
-      if (!vals || vals.length === 0) return "Any dismissal";
-      if (vals.length === 1) return FIELDING_KIND_OPTIONS.find((o) => o.value === vals[0])?.label || vals[0];
-      return `${vals.length} selected`;
-    },
-    label: "Dismissal kind",
-    ...opts,
-  });
-}
-
 /** Fielding: phase slice (state.fielding.phases). */
 export function mountFieldingPhase(container, store, onChange, opts = {}) {
   return mountFieldingSlicePicker(container, store, onChange, {
@@ -484,11 +466,11 @@ export function mountFieldingPhase(container, store, onChange, opts = {}) {
 }
 
 // ── Match-context pickers (Wave 6) ──────────────────────────────────────────
-// Five categorical filters keyed off the MATCH's context, available in batting,
+// Four categorical filters keyed off the MATCH's context, available in batting,
 // bowling AND matchup views (unlike the fielding slices, they have no matchup
-// gate). Four sit in the "Match context" group of the "+ Add condition…" picker;
+// gate). Three sit in the "Match context" group of the "+ Add condition…" picker;
 // Stage moved up into the "Match" group beside Event (polish item 3). Toss result /
-// toss decision / innings order are fixed-vocabulary checkbox multi-selects over a
+// toss decision are fixed-vocabulary checkbox multi-selects over a
 // TOP-LEVEL state array; Result (FIX A) is an "All + specifics" multi-select
 // carrying a NESTED Result Condition sub-picker (FIX B / polish item 4,
 // state.resultCondition) directly below it; Stage is the same "All + specifics"
@@ -507,7 +489,7 @@ function tokenSummary(vals, options, anyLabel) {
 }
 
 /** Generic checkbox multi-select over a TOP-LEVEL state array `field`
- * (result / tossResult / tossDecision / inningsOrder). `options` is
+ * (result / tossResult / tossDecision). `options` is
  * [{value,label}] with string values. `embedded` suppresses the outer label (the
  * condition row already names it). Returns `{ sync }`. */
 function mountTokenMultiSelect(container, store, onChange, { field, options, anyLabel, label, embedded = false }) {
@@ -852,13 +834,6 @@ export function mountTossDecision(container, store, onChange, opts = {}) {
     field: "tossDecision", options: TOSS_DECISION_OPTIONS, anyLabel: "Any toss decision", label: "Toss decision", ...opts,
   });
 }
-/** Innings-order filter (state.inningsOrder) — Batted first / Bowled first. */
-export function mountInningsOrder(container, store, onChange, opts = {}) {
-  return mountTokenMultiSelect(container, store, onChange, {
-    field: "inningsOrder", options: INNINGS_ORDER_OPTIONS, anyLabel: "Any innings order", label: "Innings order", ...opts,
-  });
-}
-
 // ── Innings Number picker (state.inningsNumber; filter-rejig Wave R2c) ─────────
 // A FORMAT-AWARE checkbox multi-select over the innings a player batted/bowled in
 // (1st/2nd for white-ball; up to 4th when Red Ball is in the format selection —

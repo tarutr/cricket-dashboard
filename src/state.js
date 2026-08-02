@@ -267,25 +267,17 @@ export function venueFilterActive(state) {
 export function fieldingPositionActive(state) {
   return Boolean(state.fielding && Array.isArray(state.fielding.positions) && state.fielding.positions.length > 0);
 }
-/** True if the fielding dismissal-kind slice is narrowing the events. */
-export function fieldingKindActive(state) {
-  return Boolean(state.fielding && Array.isArray(state.fielding.kinds) && state.fielding.kinds.length > 0);
-}
 /** True if the fielding phase slice is narrowing the events. */
 export function fieldingPhaseActive(state) {
   return Boolean(state.fielding && Array.isArray(state.fielding.phases) && state.fielding.phases.length > 0);
 }
 
-/** The credited-fielder dismissal kinds carried on fielding_events, and the three
- * phase buckets — the vocabulary the fielding SLICE conditions pick from. The
- * `value`s are the EXACT literals stored in fielding_events (kind / phase) and
- * filtered by table.js buildFieldingSliceClauses. */
-export const FIELDING_KIND_OPTIONS = [
-  { value: "caught", label: "Caught" },
-  { value: "caught and bowled", label: "Caught & bowled" },
-  { value: "stumped", label: "Stumped" },
-  { value: "run out", label: "Run out" },
-];
+/** The three fielding phase buckets — the vocabulary the fielding phase SLICE
+ * condition picks from. The `value`s are the EXACT literals stored in
+ * fielding_events (phase) and filtered by table.js buildFieldingSliceClauses.
+ * (The former dismissal-kind slice's FIELDING_KIND_OPTIONS vocabulary was
+ * removed with fld_kind, waveR2-cleanup — its "kind" literals still exist on
+ * fielding_events and are read by Fielding Wicket Type ▸'s count metrics.) */
 export const FIELDING_PHASE_OPTIONS = [
   { value: "pp", label: "Powerplay" },
   { value: "mid", label: "Middle" },
@@ -295,9 +287,11 @@ export const FIELDING_PHASE_OPTIONS = [
 export const FIELDING_POSITIONS = Array.from({ length: 11 }, (_, i) => i + 1);
 
 // ── Match-context filters (Wave 6, owner-approved design) ───────────────────
-// Five categorical WHERE filters that narrow the innings set by the MATCH's
-// context (result / toss / who batted first / tournament stage / rain-method),
-// grouped under "Match context" in the "+ Add condition…" picker and available
+// Categorical WHERE filters that narrow the innings set by the MATCH's
+// context (result / toss / tournament stage / rain-method) — "who batted
+// first" (mc_innings_order) was removed with its replacement, Innings Number ▸
+// (waveR2-cleanup) — grouped under "Match context" in the "+ Add condition…"
+// picker and available
 // in batting, bowling AND matchup views. They are player-RELATIVE where the
 // design calls for it: the innings row's OWN team (batting_team for a batting
 // row, bowling_team for a bowling row; matchup rows carry both) is compared to
@@ -341,10 +335,9 @@ export const TOSS_DECISION_OPTIONS = [
   { value: "bat", label: "Chose to bat" },
   { value: "field", label: "Chose to field" },
 ];
-export const INNINGS_ORDER_OPTIONS = [
-  { value: "first", label: "Batted first" },
-  { value: "second", label: "Bowled first" },
-];
+// INNINGS_ORDER_OPTIONS (batted first / bowled first) was removed with
+// mc_innings_order — the spec's replacement, Innings Number ▸, uses
+// inningsNumberOptions() below instead (waveR2-cleanup).
 
 // Result Condition (FIX B; RENAMED from "Result Type", Wave 6 polish item 4): a
 // NESTED sub-picker under Result (shown only while the Result condition is active
@@ -415,11 +408,6 @@ export function tossResultFilterActive(state) {
 export function tossDecisionFilterActive(state) {
   return Array.isArray(state.tossDecision) && state.tossDecision.length > 0;
 }
-/** True if the Innings-order filter (state.inningsOrder) is narrowing the set. */
-export function inningsOrderFilterActive(state) {
-  return Array.isArray(state.inningsOrder) && state.inningsOrder.length > 0;
-}
-
 // ── Innings Number (filter-rejig Wave R2c) ───────────────────────────────────
 // The REPLACEMENT for the old batted-first/chased "Innings order": narrows to
 // the innings the player batted / bowled in, by its 1-based DISPLAY number
@@ -465,14 +453,16 @@ export function resultConditionFilterActive(state) {
 }
 /** True if ANY match-context filter is active — the single gate table.js uses
  * to decide whether to LEFT JOIN `matches` and append the context clauses (and
- * whether "matches" must be counted innings-level for honesty). With all six
- * off, the query is byte-identical to before Wave 6. */
+ * whether "matches" must be counted innings-level for honesty). With all five
+ * off, the query is byte-identical to before Wave 6. (inningsOrderFilterActive's
+ * disjunct was dropped with mc_innings_order, waveR2-cleanup — it was always
+ * false, since that filter had been unreachable from the palette since Wave R2c,
+ * so this changes nothing this function returns for any state.) */
 export function matchContextActive(state) {
   return (
     resultFilterActive(state) ||
     tossResultFilterActive(state) ||
     tossDecisionFilterActive(state) ||
-    inningsOrderFilterActive(state) ||
     stageFilterActive(state) ||
     resultConditionFilterActive(state)
   );
@@ -605,16 +595,19 @@ export function createInitialState(maxMonth) {
                // narrowing = query byte-identical to the event-only filter. See seasonsForEvent()/
                // anyEventSeasonNarrowing() above and filters.js buildScopeClauses. Reset alongside
                // state.event on any scope change (gender/format/team-type/date) in filters.js.
-    fielding: { positions: [], kinds: [], phases: [] },
+    fielding: { positions: [], phases: [] },
                // Fielding SLICE conditions (fielding rebuild): refine WHAT the
                // Catches/Stumpings/Run-outs/Dismissals-Effected metrics count, by
                // the fielding event's OWN dims — dismissed-batter position
-               // (positions[], on out_batting_position), dismissal kind (kinds[]),
-               // and phase (phases[]). All multi-select lists (mirroring the app's
+               // (positions[], on out_batting_position) and phase (phases[]).
+               // All multi-select lists (mirroring the app's
                // position/opposition pickers). Applied inside table.js
                // buildFieldingSliceClauses -> fielding_cte WHERE. All empty = no
                // predicate (query byte-identical). Only bite when a fielding
-               // column/condition is present (nothing to slice otherwise).
+               // column/condition is present (nothing to slice otherwise). (The
+               // former dismissal-kind slice, `kinds[]`, was removed with fld_kind
+               // — waveR2-cleanup; table.js's buildFieldingSliceClauses still
+               // guards `Array.isArray(f.kinds)`, which is simply always false now.)
     // Match-context filters (Wave 6). Categorical WHERE filters; all empty =
     // no predicate = query byte-identical to before. See the block above the
     // RESULT_OPTIONS constants and filters.js buildMatchContextClauses.
@@ -623,7 +616,8 @@ export function createInitialState(maxMonth) {
                        // tokens (won/lost/drawn/tied/no_result). See RESULT_OPTIONS.
     tossResult: [],    // subset of {"won","lost"} — row team ==/<> toss_winner
     tossDecision: [],  // subset of {"bat","field"} — matches.toss_decision
-    inningsOrder: [],  // subset of {"first","second"} — row team ==/<> team_batting_first
+    // inningsOrder (batted first / bowled first) was removed with mc_innings_order
+    // (waveR2-cleanup) — see inningsNumber below, its replacement.
     inningsNumber: [], // Innings Number (filter-rejig Wave R2c): 1-based DISPLAY innings numbers
                        // (1–2 white-ball / 1–4 red-ball) the player batted/bowled in; [] = no
                        // predicate. filters.js buildScopeClauses maps each to the 0-based stored
@@ -1086,7 +1080,6 @@ export function createStore(initial) {
     }
     if (tossResultFilterActive(s)) parts.push(labelsFor(s.tossResult, TOSS_RESULT_OPTIONS).join(", "));
     if (tossDecisionFilterActive(s)) parts.push(labelsFor(s.tossDecision, TOSS_DECISION_OPTIONS).join(", "));
-    if (inningsOrderFilterActive(s)) parts.push(labelsFor(s.inningsOrder, INNINGS_ORDER_OPTIONS).join(", "));
     // Innings Number (Wave R2c): the 1-based innings the player batted/bowled in.
     if (inningsNumberFilterActive(s)) {
       const sorted = [...s.inningsNumber].sort((a, b) => a - b);

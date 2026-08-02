@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsOrderFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS, INNINGS_ORDER_OPTIONS } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingPhaseActive, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
@@ -306,12 +306,9 @@ export function mountPills(
       const captured = [...s.tossDecision];
       pills.push({ key: "mc_toss_decision", label: labelsFor(s.tossDecision, TOSS_DECISION_OPTIONS).join(", "), remove: () => store.set({ tossDecision: [] }), restore: () => store.set({ tossDecision: captured }) });
     }
-    if (inningsOrderFilterActive(s)) {
-      const captured = [...s.inningsOrder];
-      pills.push({ key: "mc_innings_order", label: labelsFor(s.inningsOrder, INNINGS_ORDER_OPTIONS).join(", "), remove: () => store.set({ inningsOrder: [] }), restore: () => store.set({ inningsOrder: captured }) });
-    }
-    // Innings Number (Wave R2c): removable chip, mirroring the Innings-order pill it
-    // replaces (label from inningsNumberLabel — format-independent ordinals).
+    // Innings Number (Wave R2c): removable chip, mirroring the old Innings-order
+    // pill it replaces (label from inningsNumberLabel — format-independent
+    // ordinals). Innings order's own pill was fully removed (waveR2-cleanup).
     if (inningsNumberFilterActive(s)) {
       const captured = [...s.inningsNumber];
       const sorted = [...s.inningsNumber].sort((a, b) => a - b);
@@ -358,16 +355,6 @@ export function mountPills(
           label: `Dismissed pos: ${sorted.join(", ")}`,
           remove: () => setFld({ positions: [] }),
           restore: () => setFld({ positions: captured }),
-        });
-      }
-      if (fieldingKindActive(s)) {
-        const captured = [...fld.kinds];
-        const labels = fld.kinds.map((k) => FIELDING_KIND_OPTIONS.find((o) => o.value === k)?.label || k);
-        pills.push({
-          key: "fld_kind",
-          label: `Dismissal: ${labels.join(", ")}`,
-          remove: () => setFld({ kinds: [] }),
-          restore: () => setFld({ kinds: captured }),
         });
       }
       if (fieldingPhaseActive(s)) {

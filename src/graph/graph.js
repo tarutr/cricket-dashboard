@@ -2850,14 +2850,14 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       resultCondition: buf.resultCondition,
       tossResult: buf.tossResult,
       tossDecision: buf.tossDecision,
-      inningsOrder: buf.inningsOrder,
       // Innings Number (Wave R2c): editable in this popup (shared drawer.js), so it
       // MUST be committed or the edit is silently discarded — same defect class as
       // the fields above. The graph fetch (charts.js) applies it via buildScopeClauses.
+      // (inningsOrder, the filter it replaced, was fully removed — waveR2-cleanup.)
       inningsNumber: buf.inningsNumber,
       stage: buf.stage,
-      // Fielding SLICE conditions (Dismissed position / Dismissal kind /
-      // Fielding phase) are mounted straight onto this same buffer store by
+      // Fielding SLICE conditions (Dismissed position / Fielding phase) are
+      // mounted straight onto this same buffer store by
       // drawer.js's shared mountFilterDrawer (fieldingPositionController etc.),
       // so they ARE editable from inside this popup exactly like `advanced` —
       // but were missing from this commit list, the same class of defect as
@@ -2968,10 +2968,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
    *     takes the matchup path at all (state.js's matchupVsActive).
    *   event, eventSeasons, venue — the match-level semi-joins in
    *     buildScopeClauses (the season narrowing rides on the event clause).
-   *   result, resultCondition, tossResult, tossDecision, inningsOrder, stage —
+   *   result, resultCondition, tossResult, tossDecision, stage —
    *     the match-context clauses (filters.js buildMatchContextClauses), which
    *     buildQuery/buildMatchupQuery AND the graph's own fetch all apply.
-   *   fielding — the fielding SLICE conditions (state.fielding.positions/kinds/
+   *     (inningsOrder was in this list; removed with mc_innings_order —
+   *     waveR2-cleanup.)
+   *   fielding — the fielding SLICE conditions (state.fielding.positions/
    *     phases), buildFieldingSliceClauses' fielding_cte WHERE.
    * Previously omitted positions/opposition/profile/matchupVs/search, so e.g.
    * narrowing to openers-only (a position filter) left a stale middle-order
@@ -2998,7 +3000,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       state.profile, state.matchupVs,
       state.event, state.eventSeasons, state.venue,
       state.result, state.resultCondition, state.tossResult, state.tossDecision,
-      state.inningsOrder, state.inningsNumber, state.stage, state.fielding,
+      state.inningsNumber, state.stage, state.fielding,
     ]);
   }
 

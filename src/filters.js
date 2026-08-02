@@ -308,7 +308,7 @@ export function tossDecisionPredicateSql(tossDecision, alias = "") {
 // matches), the matchup STRIKER POSITION (`state.positions` selects balls),
 // event (+ its per-event season narrowing), venue, and the whole Wave-6
 // match-context family (result, result condition, stage, toss result, toss
-// decision, innings order).
+// decision).
 //
 // WHY THIS EXISTS (the defect it fixes): whereWithPinExemption used to split the
 // clause list POSITIONALLY — `core AND (everything-after-core OR id IN pins)` via
@@ -404,7 +404,7 @@ export function buildScopeClausesTagged(
   // batted / bowled in. `innings_number` is a column on the batting/bowling
   // innings views (0-BASED: display "1st innings" = stored 0 — INNINGS_NUMBER_FILTER
   // owns that mapping), so this is a direct WHERE predicate, NOT a match-context
-  // join like Innings order. It is discipline-aware by construction (on the batting
+  // join like Result / Toss decision. It is discipline-aware by construction (on the batting
   // view it is the innings the batter batted in; on the bowling view the innings the
   // bowler bowled in). EMITTED ONLY for the innings-grain callers — those whose own
   // team column is `batting_team`/`bowling_team` (plain buildQuery, buildMatchupQuery
@@ -413,7 +413,7 @@ export function buildScopeClausesTagged(
   // have no innings_number column, so keying off the team column keeps the clause off
   // those queries. The R. Pos. modal-position inner scope passes no teamColumn, so it
   // is correctly excluded (modal position is derived over ALL innings). ALWAYS-APPLIES
-  // (it selects WHICH innings are measured, like opposition / innings order), so a
+  // (it selects WHICH innings are measured, like opposition), so a
   // pinned player obeys it. Empty selection ⇒ no clause ⇒ byte-identical.
   if (INNINGS_GRAIN_TEAM_COLS.has(teamColumn) && inningsNumberFilterActive(state)) {
     const stored = [...new Set(state.inningsNumber.map((n) => INNINGS_NUMBER_FILTER.toStored(n)))].filter(
@@ -593,14 +593,9 @@ export function buildMatchContextClauses(state, rowTeamCol) {
   const tossDecisionSql = tossDecisionPredicateSql(state.tossDecision, A);
   if (tossDecisionSql) clauses.push(tossDecisionSql);
 
-  // 4. Innings order (row team ==/<> team_batting_first).
-  const io = state.inningsOrder || [];
-  if (io.length) {
-    const parts = [];
-    if (io.includes("first")) parts.push(`${rowTeamCol} = ${A}.team_batting_first`);
-    if (io.includes("second")) parts.push(`${rowTeamCol} <> ${A}.team_batting_first`);
-    if (parts.length) clauses.push(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`);
-  }
+  // (Innings order — row team ==/<> team_batting_first — was removed with
+  // mc_innings_order; its replacement, Innings Number, is a scope filter
+  // handled by buildScopeClauses instead. waveR2-cleanup.)
 
   // 5a. Stage. state.stage holds CANONICAL stage labels (name normalization,
   //     backlog #5) — expand each to its raw event_stage spelling set so
@@ -666,7 +661,7 @@ export function buildMatchContextClauses(state, rowTeamCol) {
 // still applies to them: the core scope (gender / format / date window / team
 // type), opposition, the matchup striker position, event (+ seasons), venue, and
 // the match-context filters (result, result condition, stage, toss result, toss
-// decision, innings order).
+// decision).
 //
 // The bypass set is declared per-clause at the point each clause is BUILT (see the
 // clause-tagging block above buildScopeClausesTagged) — never inferred from clause

@@ -31,12 +31,10 @@ import {
   eventFilterActive,
   venueFilterActive,
   fieldingPositionActive,
-  fieldingKindActive,
   fieldingPhaseActive,
   resultFilterActive,
   tossResultFilterActive,
   tossDecisionFilterActive,
-  inningsOrderFilterActive,
   inningsNumberFilterActive,
   inningsNumberOptions,
   stageFilterActive,
@@ -69,12 +67,10 @@ import {
   mountEvent,
   mountVenue,
   mountFieldingPosition,
-  mountFieldingKind,
   mountFieldingPhase,
   mountResult,
   mountTossResult,
   mountTossDecision,
-  mountInningsOrder,
   mountInningsNumber,
   mountStage,
   mountWindowPhase,
@@ -172,20 +168,18 @@ const SINGLETON_TYPES = [
   // both genders. They sit in the "Fielding" dropdown optgroup, alongside the
   // fielding metric conditions.
   { key: "fld_pos", label: "Dismissed position", group: "Fielding", menOnly: false },
-  { key: "fld_kind", label: "Dismissal kind", group: "Fielding", menOnly: false },
   { key: "fld_phase", label: "Fielding phase", group: "Fielding", menOnly: false },
   // Match-context singletons (Wave 6): categorical WHERE filters keyed off the
   // MATCH's context. Both genders; work in batting, bowling AND matchup views
   // (no matchup gate), so — unlike the fielding slices — isPresent has no Vs
   // carve-out for them. They write their own top-level state key (result /
-  // tossResult / tossDecision / inningsOrder / stage). The former standalone
+  // tossResult / tossDecision / stage). The former standalone
   // "Rain-affected matches" (mc_method) is gone — its method logic now lives in
   // the Result Condition sub-picker NESTED inside Result (state.resultCondition,
   // FIX B / polish item 4). Stage has moved up into the "Match" group (see above).
   { key: "mc_result", label: "Result", group: "Match context", menOnly: false },
   { key: "mc_toss_result", label: "Toss result", group: "Match context", menOnly: false },
   { key: "mc_toss_decision", label: "Toss decision", group: "Match context", menOnly: false },
-  { key: "mc_innings_order", label: "Innings order", group: "Match context", menOnly: false },
 ];
 
 // (The old per-group option-ORDER arrays — PLAYER_ADD_ORDER / MATCH_ADD_ORDER /
@@ -541,13 +535,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const eventController = mountEvent(editorHosts.event, store, onChange, { onOptionsLoaded: onCascadeOptionsLoaded });
   const venueController = mountVenue(editorHosts.venue, store, onChange, { onOptionsLoaded: onCascadeOptionsLoaded });
   const fieldingPositionController = mountFieldingPosition(editorHosts.fld_pos, store, onChange, { embedded: true });
-  const fieldingKindController = mountFieldingKind(editorHosts.fld_kind, store, onChange, { embedded: true });
   const fieldingPhaseController = mountFieldingPhase(editorHosts.fld_phase, store, onChange, { embedded: true });
   // Match-context editors (Wave 6): each writes only its own state key.
   const resultController = mountResult(editorHosts.mc_result, store, onChange, { embedded: true });
   const tossResultController = mountTossResult(editorHosts.mc_toss_result, store, onChange, { embedded: true });
   const tossDecisionController = mountTossDecision(editorHosts.mc_toss_decision, store, onChange, { embedded: true });
-  const inningsOrderController = mountInningsOrder(editorHosts.mc_innings_order, store, onChange, { embedded: true });
   const inningsNumberController = mountInningsNumber(editorHosts.inn_num, store, onChange, { embedded: true });
   const stageController = mountStage(editorHosts.mc_stage, store, onChange, { embedded: true, onOptionsLoaded: onCascadeOptionsLoaded });
   // Delivery window (Wave 3, decision 67; UI-A REWORK): the four separate window
@@ -568,7 +560,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   // already has from its own option list, so this costs no extra query. Say so
   // plainly, name the control, and leave Search fully enabled: it informs, it
   // never blocks. Only these five report; the fixed-vocabulary pickers (Result,
-  // Toss…, Innings order) have no cross-filtered list and can't go dead this way.
+  // Toss…, Innings Number) have no cross-filtered list and can't go dead this way.
   const cascadeControllers = [venueController, eventController, teamController, oppositionController, stageController];
   const noticeMainEl = noticeEl ? noticeEl.querySelector('[data-role="fpop-notice-main"]') : null;
   const noticeHintEl = noticeEl ? noticeEl.querySelector('[data-role="fpop-notice-hint"]') : null;
@@ -655,7 +647,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "venue": return (s.venue || []).length > 0;
       // Fielding SLICE conditions: present when their list has a value.
       case "fld_pos": return Boolean(s.fielding && (s.fielding.positions || []).length > 0);
-      case "fld_kind": return Boolean(s.fielding && (s.fielding.kinds || []).length > 0);
       case "fld_phase": return Boolean(s.fielding && (s.fielding.phases || []).length > 0);
       // Match-context singletons (Wave 6): present when their value is set. Result
       // (FIX A) and Stage (polish item 3) are present once their condition is added
@@ -665,13 +656,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "mc_result": return (s.result || []).length > 0;
       case "mc_toss_result": return (s.tossResult || []).length > 0;
       case "mc_toss_decision": return (s.tossDecision || []).length > 0;
-      case "mc_innings_order": return (s.inningsOrder || []).length > 0;
       case "mc_stage": return (s.stage || []).length > 0;
       default: return false;
     }
   }
 
-  const FIELDING_SLICE_KEYS = new Set(["fld_pos", "fld_kind", "fld_phase"]);
+  const FIELDING_SLICE_KEYS = new Set(["fld_pos", "fld_phase"]);
 
   function isPresent(t, s) {
     if (t.menOnly && s.gender === "female") return false;
@@ -711,13 +701,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "event": store.set({ event: [], eventSeasons: {} }); break; // Wave 6 pt2: drop season narrowing too
       case "venue": store.set({ venue: [] }); break;
       case "fld_pos": store.set({ fielding: { ...(store.get().fielding || {}), positions: [] } }); break;
-      case "fld_kind": store.set({ fielding: { ...(store.get().fielding || {}), kinds: [] } }); break;
       case "fld_phase": store.set({ fielding: { ...(store.get().fielding || {}), phases: [] } }); break;
       // Removing Result also removes its nested Result Condition (FIX B).
       case "mc_result": store.set({ result: [], resultCondition: [] }); break;
       case "mc_toss_result": store.set({ tossResult: [] }); break;
       case "mc_toss_decision": store.set({ tossDecision: [] }); break;
-      case "mc_innings_order": store.set({ inningsOrder: [] }); break;
       case "mc_stage": store.set({ stage: [] }); break;
     }
   }
@@ -904,14 +892,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       leafSingle("event", "Event"),
       leafSingle("venue", "Venue"),
       leafSingle("mc_stage", "Stage"),
-      // "Innings order" (batted / bowled first) REMOVED from the palette (Wave R2c):
-      // the spec's replacement, Innings Number ▸, is now live in Batting & Bowling
-      // Basic Stats. No gap — the entry point moved, it didn't disappear. The
-      // mc_innings_order singleton row/editor/pill plumbing is retained but is no
-      // longer reachable from the palette (unaddable), so state.inningsOrder stays []
-      // and nothing downstream changes; a full teardown would touch non-owned files
-      // (pills.js / graph.js / filters.js buildMatchContextClauses) — flagged in the
-      // report as a follow-up.
+      // "Innings order" (batted / bowled first) was replaced by Innings Number ▸
+      // (Wave R2c), now live in Batting & Bowling Basic Stats. Its old plumbing
+      // (mc_innings_order singleton row/editor/pill/state/clause) was fully torn
+      // down in the waveR2-cleanup pass — no gap, the entry point moved.
       matchResultFamily,
     ]);
 
@@ -1320,12 +1304,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     eventController.sync();
     venueController.sync();
     fieldingPositionController.sync();
-    fieldingKindController.sync();
     fieldingPhaseController.sync();
     resultController.sync();
     tossResultController.sync();
     tossDecisionController.sync();
-    inningsOrderController.sync();
     inningsNumberController.sync();
     stageController.sync();
     winPhaseController.sync();
@@ -1658,14 +1640,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     if (resultFilterActive(s)) n++;
     if (tossResultFilterActive(s)) n++;
     if (tossDecisionFilterActive(s)) n++;
-    if (inningsOrderFilterActive(s)) n++;
     if (inningsNumberFilterActive(s)) n++;
     if (stageFilterActive(s)) n++;
     if (resultConditionFilterActive(s)) n++;
     // Fielding SLICE conditions — plain mode only (inert under a matchup Vs).
     if (!matchupVsActive(s)) {
       if (fieldingPositionActive(s)) n++;
-      if (fieldingKindActive(s)) n++;
       if (fieldingPhaseActive(s)) n++;
     }
     n += activeConditionCount(s.advanced);
