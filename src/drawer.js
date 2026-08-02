@@ -1070,20 +1070,15 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
         const variants = [];
         const caught = leafMetric("catches", "Caught");
         if (caught) variants.push(caught);
-        // Caught & bowled: NO distinct fielding count exists. In fielding_cte
-        // (buildFieldingCteSql, table.js — outside this wave's file ownership) a c&b
-        // is folded INTO `catches` (kind IN ('caught','caught and bowled')). Per the
-        // brief ("do NOT guess"), it is offered DISABLED with an honest note rather
-        // than mapped to `catches` (would mislead) or the bowling
-        // `wkt_caught_and_bowled` (different source, absent in batting mode). Kept
-        // VISIBLE so the owner's four kinds all show. FLAGGED — a real count needs a
-        // data-engineer fielding_cte column + metric def.
-        variants.push({
-          kind: "leaf", label: "Caught & bowled", disabled: true,
-          title:
-            "No separate fielding count yet — caught & bowled is counted within Caught. Needs a data change to filter on its own.",
-          run: () => {},
-        });
+        // Caught & bowled (Wave R2d): now a real, distinct fielding count. R2c had to
+        // disable it because `catches` folded c&b in; the data-engineer added a
+        // dedicated fielding_cte.caught_and_bowled column + the `caught_and_bowled`
+        // metric, so this variant maps to it and adds a NUMERIC condition ("Caught &
+        // bowled → at least → 3") exactly like the other kinds. `catches` (the Caught
+        // leaf) STILL includes c&b — unchanged — so Caught ≥ N and Caught & bowled ≥ N
+        // measure the documented, distinct things.
+        const cbowled = leafMetric("caught_and_bowled", "Caught & bowled");
+        if (cbowled) variants.push(cbowled);
         const runout = leafMetric("run_outs", "Run-out");
         if (runout) variants.push(runout);
         const stumped = leafMetric("stumpings", "Stumped");

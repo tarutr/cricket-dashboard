@@ -1280,6 +1280,13 @@ const BOWLING_METRICS = [
 const FIELDING_METRIC_SPECS = [
   { key: "catches", label: "Catches", shortLabel: "Ct", section: "fielding",
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.catches)" },
+  // Caught & bowled (Wave R2d): the c&b-only subset of `catches` (which still
+  // folds c&b in, unchanged). A distinct fielding count so "Fielding Wicket Type ▸
+  // Caught & bowled" can filter on c&b alone. Reads the new fielding_cte.
+  // caught_and_bowled column (buildFieldingCteSql), projected with MAX() like its
+  // three siblings. Additive: no existing catch/stumping/run-out number changes.
+  { key: "caught_and_bowled", label: "Caught & bowled", shortLabel: "C&B", section: "fielding",
+    source: "fielding_events", sqlExpression: "MAX(fielding_cte.caught_and_bowled)" },
   { key: "stumpings", label: "Stumpings", shortLabel: "St", section: "fielding",
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.stumpings)" },
   { key: "run_outs", label: "Run-outs", shortLabel: "RO", section: "fielding",

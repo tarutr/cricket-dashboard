@@ -804,6 +804,11 @@ export function buildFieldingCteSql(state) {
     "fielding_cte AS (",
     "  SELECT fielder_id AS fld_player_id,",
     "         SUM(CASE WHEN kind IN ('caught','caught and bowled') THEN 1 ELSE 0 END) AS catches,",
+    // Distinct caught-&-bowled count (Wave R2d): the c&b subset of `catches` above
+    // (which deliberately still folds c&b in — unchanged). Lets "Fielding Wicket
+    // Type ▸ Caught & bowled" filter on c&b alone. Purely additive: existing
+    // catches/stumpings/run_outs outputs are byte-identical.
+    "         SUM(CASE WHEN kind = 'caught and bowled' THEN 1 ELSE 0 END) AS caught_and_bowled,",
     "         SUM(CASE WHEN kind = 'stumped' THEN 1 ELSE 0 END) AS stumpings,",
     "         SUM(CASE WHEN kind = 'run out' THEN 1 ELSE 0 END) AS run_outs",
     "  FROM fielding",
