@@ -307,6 +307,31 @@ const BATTING_METRICS = [
     additive: true,
     kind: "total",
   },
+  // Innings Score >= N (filter-rejig Wave R1): count of the batter's innings whose
+  // per-innings runs meet a user-supplied threshold N — the batting analog of
+  // Wicket Hauls >= N. A PARAMETRISED threshold metric: the Wave R2 sub-filter
+  // supplies N, then a count operator + value on the resulting COUNT. Until R2
+  // wires the N input, `sqlExpression` carries the DEFAULT threshold (50) so the
+  // metric is valid + correct if interpolated verbatim — it then behaves as a
+  // fixed "50+ scores" count, exactly the shape of the fixed fifties/hundreds
+  // tallies above (note: runs >= 50 INCLUDES hundreds, unlike `fifties` which is
+  // 50-99). `paramTemplate` is the same aggregate with a `{N}` token;
+  // paramSqlExpression(metric, n) substitutes an integer N (see end of file).
+  // `param` describes the drawer's numeric input. Counting total.
+  {
+    key: "innings_score_ge",
+    label: "Innings Score ≥ N",
+    shortLabel: "Inns ≥ N",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(CASE WHEN runs >= 50 THEN 1 ELSE 0 END)",
+    paramTemplate: "SUM(CASE WHEN runs >= {N} THEN 1 ELSE 0 END)",
+    param: { token: "{N}", default: 50, min: 0, step: 1, label: "runs" },
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
   {
     key: "ducks",
     label: "Ducks",
@@ -513,6 +538,47 @@ const BATTING_METRICS = [
     discipline: "batting",
     source: "innings",
     sqlExpression: "(3 * SUM(threes)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  // % Runs in 4s (run) / 5s / 6s (run) (filter-rejig Wave R1): the ran-runs and
+  // all-run-fives extension of the existing % Runs in 1s/2s/3s family, read from
+  // the composition columns the batting_innings view carries. nb_fours / nb_sixes
+  // are the NON-boundary (ran) fours/sixes (is_not_boundary IS TRUE — the exact
+  // complement of the boundary fours_hit/sixes_hit); `fives` are all-run 5s (a 5
+  // off the bat is never a boundary). Descriptive style splits, so higherIsBetter
+  // null, matching the 1s/2s/3s siblings. (Numerator carries the run-value factor
+  // 4/5/6, like boundary_runs_pct; denominator SUM(runs) is NULLIF-guarded.)
+  {
+    key: "runs_4s_run_pct",
+    label: "% Runs in 4s (run)",
+    shortLabel: "4s-run%",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "(4 * SUM(nb_fours)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_5s_pct",
+    label: "% Runs in 5s",
+    shortLabel: "5s Run%",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "(5 * SUM(fives)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_6s_run_pct",
+    label: "% Runs in 6s (run)",
+    shortLabel: "6s-run%",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "(6 * SUM(nb_sixes)) * 100.0 / NULLIF(SUM(runs), 0)",
     higherIsBetter: null, format: "pct1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
@@ -782,6 +848,27 @@ const BOWLING_METRICS = [
     zeroIsData: false,
     kind: "percent",
   },
+  // Boundary Run % (filter-rejig Wave R1): share of RUNS CONCEDED that came in
+  // boundary 4s/6s off the bat — the bowling analog of the batting boundary_runs_
+  // pct, and the run-share complement of the balls-based Boundary % Conceded just
+  // above. Numerator uses the same fours_conceded/sixes_conceded columns (view
+  // already applies the is_not_boundary boundary rule); denominator is
+  // runs_conceded (runs_batter + noballs + wides, byes/leg-byes excluded), which
+  // already includes any off-bat boundary struck off a no-ball, so numerator and
+  // denominator stay consistent. Fewer boundary runs conceded is better, mirroring
+  // the existing Boundary % Conceded convention. (Display rename to "Boundary Run
+  // %" — batting + bowling together — is Wave R2, display-only; number unaffected.)
+  {
+    key: "boundary_runs_pct",
+    label: "% Runs from Boundaries",
+    shortLabel: "Bdry Run%",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "(4 * SUM(fours_conceded) + 6 * SUM(sixes_conceded)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
+    higherIsBetter: false, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
   {
     key: "maidens",
     label: "Maidens",
@@ -790,6 +877,39 @@ const BOWLING_METRICS = [
     source: "innings",
     sqlExpression: "SUM(maidens)",
     higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  // Extras conceded (filter-rejig Wave R1): wide-runs and no-ball-runs the bowler
+  // conceded, from the view's wides_runs / noball_runs columns (each a SUM of the
+  // per-delivery wides / noballs extra INCLUDING boundary wides and multi-run
+  // no-ball penalties — these are RUN totals, not delivery counts). Both are a
+  // component of runs_conceded. higherIsBetter null (neutral volume total, like
+  // runs_conceded/balls — an absolute extras count is confounded by how much the
+  // bowler bowled; see report note if the owner wants "fewer is better" ranking).
+  // The Wave R2 "Extras ▸ wides / no-balls" sub-filter keys off the `extras_`
+  // prefix. Counting totals.
+  {
+    key: "extras_wides",
+    label: "Wides",
+    shortLabel: "Wd",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(wides_runs)",
+    higherIsBetter: null, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  {
+    key: "extras_noballs",
+    label: "No-balls",
+    shortLabel: "Nb",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(noball_runs)",
+    higherIsBetter: null, format: "int",
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
     kind: "total",
@@ -819,6 +939,31 @@ const BOWLING_METRICS = [
     discipline: "bowling",
     source: "innings",
     sqlExpression: "SUM(CASE WHEN wickets >= 5 THEN 1 ELSE 0 END)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  // Wicket Hauls >= N (filter-rejig Wave R1): count of the bowler's innings with
+  // at least N bowler-credited wickets — the parametrised generalisation of the
+  // fixed exactly-4 (four_wicket_hauls) and 5-plus (five_wicket_hauls) tallies
+  // above, kept ALONGSIDE them (additive brief; any UI consolidation is later).
+  // `wickets` is already the SPEC §4.1 bowler-credited count (bowled/lbw/caught/
+  // c&b/stumped/hit-wicket only). Same PARAMETRISED contract as Innings Score >=
+  // N: DEFAULT threshold (4) baked into sqlExpression so verbatim interpolation
+  // stays valid + correct; `paramTemplate` + paramSqlExpression(metric, n) inject
+  // a user-supplied N in Wave R2. Note wickets >= 5 reproduces five_wicket_hauls,
+  // and wickets >= 4 = four_wicket_hauls + five_wicket_hauls (verified). Counting
+  // total.
+  {
+    key: "wicket_hauls_ge",
+    label: "Wicket Hauls ≥ N",
+    shortLabel: "Hauls ≥ N",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(CASE WHEN wickets >= 4 THEN 1 ELSE 0 END)",
+    paramTemplate: "SUM(CASE WHEN wickets >= {N} THEN 1 ELSE 0 END)",
+    param: { token: "{N}", default: 4, min: 1, step: 1, label: "wickets" },
     higherIsBetter: true, format: "int",
     isPhaseMetric: null, zeroIsData: true,
     additive: true,
@@ -2180,3 +2325,56 @@ export function metricDisplayLabel(metric, formats) {
   }
   return metric.label;
 }
+
+// ── Filter-rejig Wave R1 additions ────────────────────────────────────────────
+// A builder for the parametrised threshold metrics, plus the Innings Number
+// scope-filter descriptor. Both are consumed by Wave R2's filter UI (drawer.js /
+// filters.js); defined here so the number-critical logic lives with the catalogue
+// and R2 does display/wiring only (numbers sacred — R2 changes no aggregate).
+
+/**
+ * Concrete aggregate SQL for a PARAMETRISED threshold metric (Innings Score ≥ N,
+ * Wicket Hauls ≥ N) at a caller-supplied integer N. Such metrics carry a
+ * `paramTemplate` (the aggregate with a `{N}` token) and a `param` descriptor.
+ * This substitutes a VALIDATED integer (truncated, clamped to param.min), so the
+ * returned string is always a plain SQL aggregate with an integer literal — there
+ * is no injection surface. A non-integer / missing N, or a non-parametrised
+ * metric, falls back to the metric's own DEFAULT `sqlExpression`. Wave R2's filter
+ * code calls this to build the HAVING expression once the user picks N; until
+ * then table.js interpolates the default sqlExpression verbatim (a valid, correct
+ * fixed-N count — N = 50 for Innings Score, 4 for Wicket Hauls).
+ */
+export function paramSqlExpression(metric, n) {
+  if (!metric || !metric.paramTemplate || !metric.param) {
+    return metric ? metric.sqlExpression : null;
+  }
+  const raw = Math.trunc(Number(n));
+  if (!Number.isFinite(raw)) return metric.sqlExpression;
+  const v = Math.max(metric.param.min ?? 0, raw);
+  return metric.paramTemplate.split(metric.param.token).join(String(v));
+}
+
+/**
+ * Innings Number scope-filter descriptor (filter-rejig Wave R1). NOT an aggregate
+ * metric — it narrows WHICH innings are in scope (a WHERE predicate on the
+ * batting_innings / bowling_innings view's `innings_number` column), so Wave R2's
+ * filter code (filters.js) owns the wiring; this is the single verified source of
+ * the number-critical mapping, replacing the old batted-first / chased "Innings
+ * Order" concept.
+ *
+ * CRITICAL: `innings_number` in the views is 0-BASED (verified against the ball
+ * layer — values 0..1 for white-ball formats, 0..3 for red-ball). Display
+ * "Innings 1" is stored `innings_number = 0`, so stored = display − 1
+ * (`toStored`). The column is discipline-aware by construction: on batting_innings
+ * it is the innings the batter batted in, on bowling_innings the innings the
+ * bowler bowled in — so a plain `innings_number = toStored(value)` predicate over
+ * the active discipline's view already means "the innings the player batted /
+ * bowled in", with no extra handling.
+ */
+export const INNINGS_NUMBER_FILTER = {
+  column: "innings_number",
+  zeroBased: true,
+  toStored: (displayN) => Number(displayN) - 1,
+  whiteBall: [1, 2],       // T20 / IT20 / ODI / ODM: two innings per match
+  redBall: [1, 2, 3, 4],   // Test / MDM: up to four innings per match
+};
