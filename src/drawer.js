@@ -44,7 +44,6 @@ import {
   matchupVsActive,
   effectiveNamespace,
   eligibleMetrics,
-  FIELDING_KIND_OPTIONS,
   FIELDING_POSITIONS,
 } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
@@ -1060,8 +1059,39 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // operator on Fielding Wicket Type is not yet wired, so "catches ≥ N" is not
     // presently expressible — flagged for the owner.)
     if (!matchup) {
+      // Fielding Wicket Type ▸ (Wave R2c): a COUNT sub-filter (owner ruling) — each
+      // kind maps to its fielding-count metric and adds a NUMERIC condition
+      // ("Caught → at least → 10" = catches ≥ 10), flowing through the normal
+      // condition path (buildQuery's fielding_cte join + conditionToHaving). This
+      // RESTORES the Catches/Stumpings/Run-outs count filtering R2b removed as
+      // standalone leaves (they belong here). Caught → catches · Run-out → run_outs ·
+      // Stumped → stumpings.
+      const fieldingWicketTypeFamily = () => {
+        const variants = [];
+        const caught = leafMetric("catches", "Caught");
+        if (caught) variants.push(caught);
+        // Caught & bowled: NO distinct fielding count exists. In fielding_cte
+        // (buildFieldingCteSql, table.js — outside this wave's file ownership) a c&b
+        // is folded INTO `catches` (kind IN ('caught','caught and bowled')). Per the
+        // brief ("do NOT guess"), it is offered DISABLED with an honest note rather
+        // than mapped to `catches` (would mislead) or the bowling
+        // `wkt_caught_and_bowled` (different source, absent in batting mode). Kept
+        // VISIBLE so the owner's four kinds all show. FLAGGED — a real count needs a
+        // data-engineer fielding_cte column + metric def.
+        variants.push({
+          kind: "leaf", label: "Caught & bowled", disabled: true,
+          title:
+            "No separate fielding count yet — caught & bowled is counted within Caught. Needs a data change to filter on its own.",
+          run: () => {},
+        });
+        const runout = leafMetric("run_outs", "Run-out");
+        if (runout) variants.push(runout);
+        const stumped = leafMetric("stumpings", "Stumped");
+        if (stumped) variants.push(stumped);
+        return variants.length ? { kind: "family", label: "Fielding Wicket Type", variants } : null;
+      };
       pushGroup("Fielding Stats", [
-        singleFamily("Fielding Wicket Type", "fld_kind", FIELDING_KIND_OPTIONS.map((o) => [o.label, preselectFielding("kinds", o.value)])),
+        fieldingWicketTypeFamily(),
         singleFamily("Wickets by Batting Position", "fld_pos", FIELDING_POSITIONS.map((n) => [`Position ${n}`, preselectFielding("positions", n)])),
       ]);
     }
@@ -1183,6 +1213,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
             vRow.className = `palette__variant-row${v.disabled ? " is-disabled" : ""}`;
             vRow.dataset.label = v.label.toLowerCase();
             vRow.innerHTML = labelHTML(v.label);
+            // A disabled variant may carry a `title` explaining WHY (e.g. Fielding
+            // Wicket Type ▸ "Caught & bowled" — no separate fielding count yet).
+            if (v.title) vRow.title = v.title;
             if (!v.disabled) vRow.addEventListener("click", (e) => { e.stopPropagation(); doPick(v.run); });
             wrap.appendChild(vRow);
           }
