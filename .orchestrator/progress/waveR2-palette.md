@@ -74,8 +74,30 @@ number-producing work → independent DuckDB verify.
   in wireNumeric.
 - `pickSingleton(key, preselect?)` / `pickMetric(gi, key)` — the two mutation paths.
 
+## Flag-ON verification (Ball Ranges) — DONE
+Temp-set `DATA_BASE_URL` to `http://localhost:8000/data/wave1_out/` (R2 doesn't ship the
+delivery parquet yet — 404) and loaded `?engine=ball`; REVERTED after (`git checkout
+src/config.js`). Ball engine anchors reproduce (2,813 / Karanbir 2,454). Ball Ranges
+group appears: Phase ▸ [Powerplay,Middle,Death] · Over Range · Team Ball Range ·
+Batter/Bowler Ball Range ▸ [First N,Last N]. Phase ▸ Powerplay pre-selects the win_phase
+chip; Search → count 2,813→1,570, top row Waseem Muhammad (powerplay), "Powerplay overs"
+pill — the folded window drives the query byte-identically. 0 console errors flag-on.
+
+## Handoff to R3 (player pop-up drawer, src/playerFilters.js)
+R3 must replicate this palette in the PLAYER pop-up drawer. The reusable pieces all live
+in drawer.js's `mountFilterDrawer` closure (NOT exported yet): `buildPaletteGroups(s,gi)`
+(the 7-group taxonomy + ▸ + renames + deletes + fold), `mountAddPalette(addctlEl)`,
+`portalPanel()` (leak-free), `pickSingleton`/`pickMetric`, the preselect closures, and the
+palette DOM skeleton in `groupCardHTML`. If R3 shares them, consider extracting to a small
+`src/addPalette.js` module (keep drawer.js callers byte-identical). The player drawer has
+its OWN filter set / state — R3 owns mapping its filters onto the same leaf/family shape.
+`mountWindowPlayer` gained `presetEdge(edge)` (drawerInnings.js) for the Ball Range ▸.
+
 ## Gotchas
 - Close any open palette at the TOP of renderNumeric (rebuild removes the addctl; a
   portaled-open panel would orphan on <body>). `currentPaletteClose` tracks it; close is idempotent.
 - Both surfaces (Stats popup + Graph popup) mount `mountFilterDrawer` → both get the
-  palette automatically. Verify both.
+  palette automatically. Verify both. (Both are in the DOM at once: when scripting, scope
+  to the VISIBLE popup; an OPEN palette panel is portaled to <body>, not under its host.)
+- The `vs bowling style` fine styles load lazily; buildPaletteGroups triggers a one-shot
+  renderNumeric rebuild once they arrive so they appear as ▸ variants.
