@@ -1345,7 +1345,17 @@ export function mountWindowPlayer(container, store, onChange, { embedded = false
     renderEdge();
   }
   sync();
-  return { sync };
+  // presetEdge (Wave R2 palette): the Batter/Bowler Ball Range ▸ First/Last variant
+  // pre-selects the direction from the "+ Add condition" palette. The edge is a LOCAL
+  // draft (an incomplete piece — no N yet — writes no state), so a state write alone
+  // can't set it; this sets the draft edge and repaints the toggle WITHOUT committing
+  // (N is still empty ⇒ the piece stays inactive until the user types N). Byte-neutral
+  // to the numbers: no piece is written, so state.deliveryWindow is unchanged.
+  function presetEdge(nextEdge) {
+    edge = nextEdge === "last" ? "last" : "first";
+    renderEdge();
+  }
+  return { sync, presetEdge };
 }
 
 // Game-count meta label (ROUND 3, task 4): "1,013 games" — localized thousands

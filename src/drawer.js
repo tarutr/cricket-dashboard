@@ -42,6 +42,8 @@ import {
   matchupVsActive,
   effectiveNamespace,
   eligibleMetrics,
+  FIELDING_KIND_OPTIONS,
+  FIELDING_POSITIONS,
 } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { ballEngineEnabled } from "./config.js";
@@ -178,20 +180,30 @@ const SINGLETON_TYPES = [
   { key: "mc_innings_order", label: "Innings order", group: "Match context", menOnly: false },
 ];
 
-// Dropdown OPTION order per group (R5 Wave 1a, item 7; "bowling" re-added R5
-// Wave 2 per owner — his Player list omitted it only because he was thinking of
-// batting filters). "rpos" is injected into the Basic-metrics optgroup right
-// after "Innings".
-const PLAYER_ADD_ORDER = ["team", "opposition", "hand", "bowling", "role"];
-// Stage sits between Event and Venue (owner, polish item 3) — the round is part of
-// the competition, and its option list now cross-filters by the picked Event(s).
-const MATCH_ADD_ORDER = ["event", "mc_stage", "venue"];
-// Fielding slice singletons, in the "Fielding" optgroup (after the metric options).
-const FIELDING_SLICE_ADD_ORDER = ["fld_pos", "fld_kind", "fld_phase"];
-// Match-context singletons, in their own "Match context" optgroup (Wave 6).
-const MATCH_CONTEXT_ADD_ORDER = [
-  "mc_result", "mc_toss_result", "mc_toss_decision", "mc_innings_order",
-];
+// (The old per-group option-ORDER arrays — PLAYER_ADD_ORDER / MATCH_ADD_ORDER /
+// FIELDING_SLICE_ADD_ORDER / MATCH_CONTEXT_ADD_ORDER — drove the native <select>'s
+// optgroups and were retired with it in Wave R2: the search palette's order now
+// lives in buildPaletteGroups' explicit 7-group taxonomy.)
+
+// ── Filter-rejig Wave R2: metrics DELETED from the "+ Add condition" PICKER ──
+// Display-only removal from the filter list (decision 68 / filter-rejig-spec.md
+// "Deletes"). The metric DEFINITIONS + columns + data STAY in metrics.js — these
+// keys are only withheld from buildPaletteGroups' offered leaves, so the query
+// builders are untouched (numbers sacred). Cut ONLY for genuine redundancy /
+// owner-cut, never for niche:
+//   • ALL per-phase metrics (Powerplay/Middle/Death SR/Econ/Wkts + ODI variants,
+//     batting + bowling) — subsumed by Ball Ranges: Phase + the base metric.
+//     Caught generically by `isPhaseMetric` truthy, so no key list can drift.
+//   • Progression SR (first-10 / 11–20 / 21+) — subsumed by Batter/Bowler Ball
+//     Range + Strike Rate.
+//   • Wickets per Innings, Not Out % — owner cuts. Dismissals Effected —
+//     re-summed from catches+stumpings+run-outs. Boundary % Conceded (balls-based)
+//     — replaced by Boundary Run %.
+const DELETED_FILTER_METRIC_KEYS = new Set([
+  "sr_first10", "sr_11_20", "sr_21plus",
+  "wickets_per_innings", "not_out_pct", "dismissals_effected", "boundary_pct_conceded",
+]);
+const isDeletedFilterMetric = (m) => Boolean(m.isPhaseMetric) || DELETED_FILTER_METRIC_KEYS.has(m.key);
 
 /**
  * Mount the condition builder into `advancedHost` (the Advanced Filters section
@@ -720,115 +732,494 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     return m ? metricDisplayLabel(m, formats) : metricKey;
   }
 
-  // Display-only override for the "+ Add condition…" dropdown OPTION label
-  // (R4 Wave 1a; relabelled again R7 Wave B item 6 → "Reg. Batting Position"):
-  // "R. Pos." reads as jargon in that menu. Everything else that shows this
-  // condition type — the row's own type label (syncSingletonRows sets it to
-  // "R. Pos." / "Batting position"), pills, and the metric label elsewhere — is
-  // untouched; SINGLETON_TYPES.rpos.label ("R. Pos.") stays as-is and still
-  // drives those. Scoped to this one builder function rather than renaming the
-  // shared type label globally.
-  const ADD_CONDITION_LABEL_OVERRIDES = { rpos: "Reg. Batting Position" };
-
-  // Dismissal-type dropdown labels drop the leading "Out " (R5 Wave 1a, item 7:
-  // "Caught" not "Out Caught"). Display-only — the metric KEYS/labels in
-  // metrics.js are untouched; this strips the prefix at render time only. The
-  // bowling wkt_* labels have no "Out " prefix, so this is a no-op for them.
+  // Dismissal-type labels drop the leading "Out " (R5 Wave 1a, item 7: "Caught"
+  // not "Out Caught"). Display-only — the metric KEYS/labels in metrics.js are
+  // untouched; this strips the prefix at render time only. The bowling wkt_*
+  // labels have no "Out " prefix, so this is a no-op for them.
   const stripOutPrefix = (label) => label.replace(/^Out\s+/, "");
 
-  function addSelectOptionsHTML(s) {
+  // ── "+ Add condition" search palette (filter-rejig Wave R2, decision 68) ──────
+  // The native <select> is replaced by the owner-chosen Option-C "search-first
+  // palette": a trigger opens a portaled popover with a pinned search box + the 7
+  // filter groups as headers; typing filters leaf labels AND ▸ variant names; ▸
+  // families expand inline; a "No matching filter" empty state. buildPaletteGroups
+  // returns the taxonomy; each leaf's run() fires the SAME store mutation the old
+  // <select> did (pickSingleton = the c: path, pickMetric = the m: path), so the
+  // query builders are untouched (numbers sacred). Renames/regroup/deletes/fold
+  // are all DISPLAY-ONLY, expressed in the taxonomy below.
+  //
+  // The ▸ sub-filter mechanic: an entry expands to variants; a variant either adds
+  // a distinct metric (Dismissal Type / Wicket Types / % Runs in… / Balls per… /
+  // Extras) OR reveals a categorical singleton row with that value pre-selected
+  // (Match/Toss Result → distinct singletons; Phase / Fielding Wicket Type /
+  // Wickets by Batting Position / vs bowling style / vs batting hand → one singleton
+  // pre-filled; Batter/Bowler Ball Range → win_player edge pre-set). Pre-selecting a
+  // categorical value is equivalent to the user ticking it in the row (the row
+  // editors derive display from state), so it moves numbers only because the user
+  // chose a filter — not a query-builder change.
+
+  /** The c: path: reveal a singleton row (optionally pre-selecting a categorical
+   * value via `preselect`), seeding Result/Stage defaults exactly as before. */
+  function pickSingleton(key, preselect) {
+    sessionAdded[key] = true;
+    // Result (FIX A/B): adding auto-checks "All" for BOTH the Result outcome
+    // picker and its nested Result Condition — no narrowing until a specific is
+    // picked, so the query stays byte-identical. Stage gets the same "All" default.
+    if (key === "mc_result") {
+      const st = store.get();
+      const patch = {};
+      if ((st.result || []).length === 0) patch.result = ["all"];
+      if ((st.resultCondition || []).length === 0) patch.resultCondition = ["all"];
+      if (Object.keys(patch).length) store.set(patch);
+    } else if (key === "mc_stage") {
+      if ((store.get().stage || []).length === 0) store.set({ stage: ["all"] });
+    }
+    if (preselect) preselect();
+    syncSingletonRows();
+    renderNumeric(store.get(), true); // refresh presence-driven palette disabled states
+    onChange();
+  }
+
+  /** The m: path: append a numeric condition on `metricKey` to group `gi` and
+   * focus the freshly-added row's value input (identical to the old <select>). */
+  function pickMetric(gi, metricKey) {
+    addConditionToGroup(store, gi, metricKey);
+    renderNumeric(store.get(), true);
+    const groupEl = numericEl.querySelector(`.cond-group[data-gi="${gi}"]`);
+    const inputs = (groupEl || numericEl).querySelectorAll('.cond-row--metric [data-role="v1"]');
+    if (inputs.length) inputs[inputs.length - 1].focus();
+    onChange();
+  }
+
+  // Pre-select closures for the categorical singleton ▸ families (each equivalent
+  // to the user ticking that value in the revealed row).
+  const preselectPhase = (v) => () =>
+    store.set({ deliveryWindow: withDeliveryWindowPiece(store.get().deliveryWindow, "phase", [v]) });
+  const preselectFielding = (field, value) => () =>
+    store.set({ fielding: { ...(store.get().fielding || {}), [field]: [value] } });
+  const preselectMatchupVs = (dim, value) => () => store.set({ matchupVs: { dim, value } });
+  const preselectEdge = (edge) => () => winPlayerController.presetEdge(edge);
+
+  /**
+   * Build the 7-group palette taxonomy for the current state, with each metric
+   * condition targeting group `gi`. Returns [{ name, note?, items }]; an item is
+   * { kind:'leaf', label, disabled?, run } or { kind:'family', label, disabled?,
+   * variants:[leaf…] }. Discipline-aware, gender/format/matchup gated exactly as
+   * the old dropdown was. Metric leaves are drawn from the SAME source the old
+   * dropdown used — partitionFilterMetrics(eligibleMetrics(ns)) minus the deletes —
+   * so no eligible metric is ever lost: anything not placed by the explicit spec
+   * structure is appended to the discipline's Detailed group (catch-all), which
+   * also covers the matchup namespaces' own metric sets.
+   */
+  function buildPaletteGroups(s, gi) {
     const ns = effectiveNamespace(s);
     const women = s.gender === "female";
-    // R. Pos. (kind:"position") is a position-MODE value, not a numeric
-    // quantity, so it can never be a numeric stat-condition (table.js's
-    // conditionApplicability already drops it silently). Exclude position-kind
-    // metrics from the "+ Add condition…" numeric lists so it never appears as
-    // an addable numeric condition. The R.Pos FILTER is unaffected — that's the
-    // separate "Regular position" singleton (c:rpos, the modal-position editor),
-    // injected into the Basic-metrics group after "Innings" below.
-    const numericMetrics = eligibleMetrics(ns, s.formats).filter((m) => m.kind !== "position");
-    const { basic, dismissal, fielding, impact, advanced } = partitionFilterMetrics(numericMetrics);
-    // A singleton already showing is disabled in every group's dropdown (at most
-    // one each); presence re-enables it the moment its row is removed.
-    const present = SINGLETON_TYPES.filter((t) => isPresent(t, s)).map((t) => t.key);
-    const singletonOpt = (key) => {
-      const t = SINGLETON_TYPES.find((x) => x.key === key);
-      if (!t || (t.menOnly && women)) return "";
-      // "Batting hand" is a batting-only condition (decision 54): a player's
-      // batting hand isn't their bowling arm, so it's never offered while the
-      // bowling discipline is active — same discipline-gating idea as R. Pos.
-      // (basicOpts below), just applied here since "hand" comes off the plain
-      // PLAYER_ADD_ORDER list rather than its own injected slot.
-      if (key === "hand" && s.discipline !== "batting") return "";
-      return `<option value="c:${t.key}"${present.includes(t.key) ? " disabled" : ""}>${escHtml(
-        ADD_CONDITION_LABEL_OVERRIDES[t.key] || t.label
-      )}</option>`;
+    const disc = s.discipline;
+    const matchup = matchupVsActive(s);
+    const ballOn = ballEngineEnabled();
+    const winPB = windowPhaseBallsAllowed(s);
+
+    // R. Pos. (kind:"position") is a mode value, never a numeric condition; drop
+    // it and the deleted keys before partitioning (same source as the old picker).
+    const numericMetrics = eligibleMetrics(ns, s.formats)
+      .filter((m) => m.kind !== "position" && !isDeletedFilterMetric(m));
+    const parts = partitionFilterMetrics(numericMetrics);
+    const eligibleByKey = new Map(numericMetrics.map((m) => [m.key, m]));
+    const placed = new Set(); // metric keys already placed by the explicit structure
+
+    const presentSingles = new Set(SINGLETON_TYPES.filter((t) => isPresent(t, s)).map((t) => t.key));
+    const singlePresent = (key) => presentSingles.has(key);
+
+    // ── item builders ──────────────────────────────────────────────────────────
+    const leafMetric = (key, label) => {
+      const m = eligibleByKey.get(key);
+      if (!m) return null; // not eligible in this namespace/format — skip gracefully
+      placed.add(key);
+      return { kind: "leaf", label: label ?? metricDisplayLabel(m, s.formats), run: () => pickMetric(gi, key) };
     };
-    const singletonOpts = (order) => order.map(singletonOpt).join("");
-    const metricOpt = (m, label) => `<option value="m:${escAttr(m.key)}">${escHtml(label ?? metricDisplayLabel(m, s.formats))}</option>`;
-    const metricOpts = (list) => list.map((m) => metricOpt(m)).join("");
-    // Basic metrics group: standard metric options, with the position singletons
-    // injected right after the "Innings" option. R5-A #8 splits them:
-    //   • c:rpos ("Reg. Batting Position") — R. Pos. (state.regularPositions), a
-    //     BATTING concept, so offered in every batting context (plain batting AND
-    //     batting matchup); never while the plain discipline is bowling.
-    //   • c:strikerpos ("Batting position") — the MATCHUP-ONLY striker/batter-
-    //     faced position filter (state.positions), offered whenever a Vs bucket is
-    //     active (batting matchup: batter's own position; bowling matchup: the
-    //     STRIKER's position faced, decision 46, anchor-verified).
-    const basicOpts = () => {
-      const rposOpt = s.discipline === "batting" ? singletonOpt("rpos") : "";
-      const strikerOpt = matchupVsActive(s) ? singletonOpt("strikerpos") : "";
-      const posOpts = `${rposOpt}${strikerOpt}`;
-      const parts = [];
-      let injected = false;
-      for (const m of basic) {
-        parts.push(metricOpt(m));
-        if (m.key === "innings") {
-          parts.push(posOpts);
-          injected = true;
+    const leafSingle = (key, label, preselect = null) => ({
+      kind: "leaf", label, disabled: singlePresent(key), run: () => pickSingleton(key, preselect),
+    });
+    const metricFamily = (label, variantDefs) => {
+      const variants = variantDefs.map(([key, vlabel]) => leafMetric(key, vlabel)).filter(Boolean);
+      return variants.length ? { kind: "family", label, variants } : null;
+    };
+    // A categorical ▸ family bound to ONE singleton: variants pre-select a value;
+    // the family + variants disable once that singleton row is present.
+    const singleFamily = (label, key, variantDefs) => {
+      const present = singlePresent(key);
+      const variants = variantDefs.map(([vlabel, preselect]) => ({
+        kind: "leaf", label: vlabel, disabled: present, run: () => pickSingleton(key, preselect),
+      }));
+      return { kind: "family", label, disabled: present, variants };
+    };
+    const pushGroup = (name, items, note) => {
+      const kept = items.filter(Boolean);
+      if (kept.length) groups.push({ name, note, items: kept });
+    };
+
+    const groups = [];
+
+    // 1 ── Player Profile ────────────────────────────────────────────────────────
+    pushGroup("Player Profile", [
+      !women ? leafSingle("role", "Playing role") : null,
+      !women && disc === "batting" ? leafSingle("hand", "Batting hand") : null,
+      !women ? leafSingle("bowling", "Bowling style") : null,
+      disc === "batting" ? leafSingle("rpos", "Regular batting position") : null,
+      leafSingle("team", "Team"),
+    ]);
+
+    // 2 ── Match Details ─────────────────────────────────────────────────────────
+    const matchResultFamily = {
+      kind: "family", label: "Match/Toss Result",
+      variants: [
+        { kind: "leaf", label: "Match Result", disabled: singlePresent("mc_result"), run: () => pickSingleton("mc_result") },
+        { kind: "leaf", label: "Toss Result", disabled: singlePresent("mc_toss_result"), run: () => pickSingleton("mc_toss_result") },
+        { kind: "leaf", label: "Toss Decision", disabled: singlePresent("mc_toss_decision"), run: () => pickSingleton("mc_toss_decision") },
+      ],
+    };
+    pushGroup("Match Details", [
+      leafSingle("opposition", "Opposition"),
+      leafSingle("event", "Event"),
+      leafSingle("venue", "Venue"),
+      leafSingle("mc_stage", "Stage"),
+      // "Innings order" (batted / bowled first) kept as-is; the spec's replacement
+      // Innings Number filter needs a query-builder wave (see waveR2 progress note).
+      leafSingle("mc_innings_order", "Innings order"),
+      matchResultFamily,
+    ]);
+
+    // 3/4 ── Batting / Bowling metric groups (discipline-specific) ────────────────
+    const dismissalVariant = (m) => [m.key, stripOutPrefix(metricDisplayLabel(m, s.formats))];
+    if (disc === "batting") {
+      pushGroup("Batting · Basic Stats", [
+        leafMetric("matches", "Matches"),
+        leafMetric("innings", "Innings"),
+        leafMetric("runs", "Runs"),
+        leafMetric("balls_faced", "Balls Faced"),
+        leafMetric("fours", "4s"),
+        leafMetric("sixes", "6s"),
+        metricFamily("Dismissal Type", parts.dismissal.map(dismissalVariant)),
+        leafMetric("ducks", "Ducks"),
+        leafMetric("not_outs", "Not Outs"),
+        leafMetric("high_score", "High Score"),
+        leafMetric("fifties", "50s"),
+        leafMetric("hundreds", "100s"),
+        leafMetric("innings_score_ge", "Innings Score ≥ N"),
+      ]);
+      pushGroup("Batting · Detailed Stats", [
+        leafMetric("average", "Batting Average"),
+        leafMetric("strike_rate", "Batting Strike Rate"),
+        leafMetric("balls_per_dismissal", "Balls per Dismissal"),
+        leafMetric("boundary_pct", "Boundary Ball %"),
+        leafMetric("boundary_runs_pct", "Boundary Run %"),
+        leafMetric("dot_pct", "Dot %"),
+        leafMetric("running_sr", "NBSR"),
+        leafMetric("balls_faced_share", "Percentage of Balls Faced"),
+        metricFamily("Balls per…", [["balls_per_boundary", "Boundary"], ["balls_per_four", "4"], ["balls_per_six", "6"]]),
+        metricFamily("% Runs in…", [
+          ["runs_1s_pct", "1s"], ["runs_2s_pct", "2s"], ["runs_3s_pct", "3s"],
+          ["runs_4s_boundary_pct", "4s-boundary"], ["runs_4s_run_pct", "4s-run"],
+          ["runs_5s_pct", "5s"], ["runs_6s_boundary_pct", "6s-boundary"], ["runs_6s_run_pct", "6s-run"],
+        ]),
+        ...leftoverLeaves(parts, placed, gi, eligibleByKey, s),
+      ]);
+    } else {
+      pushGroup("Bowling · Basic Stats", [
+        leafMetric("matches", "Matches"),
+        leafMetric("innings", "Innings"),
+        leafMetric("overs", "Overs"),
+        leafMetric("balls", "Balls"),
+        leafMetric("maidens", "Maidens"),
+        leafMetric("runs_conceded", "Runs Conceded"),
+        leafMetric("wickets", "Wickets"),
+        metricFamily("Wicket Types", parts.dismissal.map((m) => [m.key, metricDisplayLabel(m, s.formats)])),
+        leafMetric("best", "Best Bowling"),
+        leafMetric("four_wicket_hauls", "4-WI"),
+        leafMetric("five_wicket_hauls", "5-WI"),
+        leafMetric("wicket_hauls_ge", "Wicket Hauls ≥ N"),
+      ]);
+      pushGroup("Bowling · Detailed Stats", [
+        leafMetric("average", "Bowling Average"),
+        leafMetric("economy", "Economy"),
+        leafMetric("strike_rate", "Bowling Strike Rate"),
+        metricFamily("Extras", [["extras_wides", "Wides"], ["extras_noballs", "No-balls"]]),
+        leafMetric("dot_pct", "Dot %"),
+        leafMetric("boundary_runs_pct", "Boundary Run %"),
+        ...leftoverLeaves(parts, placed, gi, eligibleByKey, s),
+      ]);
+    }
+
+    // 5 ── Ball Ranges (ball-engine only; folds the four delivery-window entries) ─
+    if (ballOn) {
+      pushGroup("Ball Ranges", [
+        winPB ? singleFamily("Phase", "win_phase", [
+          ["Powerplay", preselectPhase("pp")], ["Middle", preselectPhase("mid")], ["Death", preselectPhase("death")],
+        ]) : null,
+        leafSingle("win_overs", "Over Range"),
+        winPB ? leafSingle("win_balls", "Team Ball Range") : null,
+        {
+          kind: "family", label: "Batter/Bowler Ball Range", disabled: singlePresent("win_player"),
+          variants: [
+            { kind: "leaf", label: "First N", disabled: singlePresent("win_player"), run: () => pickSingleton("win_player", preselectEdge("first")) },
+            { kind: "leaf", label: "Last N", disabled: singlePresent("win_player"), run: () => pickSingleton("win_player", preselectEdge("last")) },
+          ],
+        },
+      ]);
+    }
+
+    // 6 ── Matchup (Vs) — men only (needs a profile) ──────────────────────────────
+    if (!women) {
+      const vsItems = [];
+      if (disc === "batting") {
+        const vsTypes = vsBowlingTypes || [];
+        vsItems.push(singleFamily("vs bowling style", "vs", [
+          ["Pace", preselectMatchupVs("group", "Pace")],
+          ["Spin", preselectMatchupVs("group", "Spin")],
+          ...vsTypes.map((t) => [matchupBucketLabel(t), preselectMatchupVs("type", t)]),
+        ]));
+        // Fine bowling styles load lazily (matchup_batting distinct-values); once
+        // they arrive, rebuild so they appear as variants (renderNumeric closes any
+        // open palette first). One-shot: the next build has vsBowlingTypes set, so
+        // this branch won't re-fire.
+        if (!vsBowlingTypes) loadVsBowlingTypes().then((types) => { if (types && types.length) renderNumeric(store.get(), true); });
+      } else {
+        vsItems.push(singleFamily("vs batting hand", "vs", [
+          ["Right-hand bat", preselectMatchupVs("hand", "Right-hand bat")],
+          ["Left-hand bat", preselectMatchupVs("hand", "Left-hand bat")],
+        ]));
+      }
+      if (matchup) vsItems.push(leafSingle("strikerpos", "Batting position"));
+      pushGroup("Matchup (Vs)", vsItems, "men only");
+    }
+
+    // 7 ── Fielding Stats (plain mode only — no matchup grain) ─────────────────────
+    if (!matchup) {
+      pushGroup("Fielding Stats", [
+        singleFamily("Fielding Wicket Type", "fld_kind", FIELDING_KIND_OPTIONS.map((o) => [o.label, preselectFielding("kinds", o.value)])),
+        singleFamily("Wickets by Batting Position", "fld_pos", FIELDING_POSITIONS.map((n) => [`Position ${n}`, preselectFielding("positions", n)])),
+        ...parts.fielding.map((m) => leafMetric(m.key, metricDisplayLabel(m, s.formats))),
+        ...parts.impact.map((m) => leafMetric(m.key, metricDisplayLabel(m, s.formats))),
+      ]);
+    }
+
+    return groups;
+  }
+
+  /** Any eligible metric NOT placed by the explicit spec structure (basic ∪
+   * advanced partitions) — appended to the discipline's Detailed group so nothing
+   * is ever lost, and the matchup namespaces' own metric sets still surface. */
+  function leftoverLeaves(parts, placed, gi, eligibleByKey, s) {
+    return [...parts.basic, ...parts.advanced]
+      .filter((m) => !placed.has(m.key))
+      .map((m) => {
+        placed.add(m.key);
+        return { kind: "leaf", label: metricDisplayLabel(m, s.formats), run: () => pickMetric(gi, m.key) };
+      });
+  }
+
+  // ── Palette component (portal + search + ▸ drill-down) ───────────────────────
+  // Only one palette is open at a time; renderNumeric closes it before any rebuild
+  // (a portaled-open panel would orphan on <body>). currentPaletteClose tracks it.
+  let currentPaletteClose = null;
+
+  /** Leak-free portal for the palette panel: doc listeners are added on open and
+   * REMOVED on close, so re-creating the palette on every numeric rebuild never
+   * leaks (unlike wirePortalDropdown, whose doc listeners are permanent — fine for
+   * its once-mounted callers, wrong here). Positioning mirrors wirePortalDropdown. */
+  function portalPanel(toggleEl, panelEl, { onOpen } = {}) {
+    const home = { parent: panelEl.parentNode, next: panelEl.nextSibling };
+    let opened = false;
+    function position() {
+      const r = toggleEl.getBoundingClientRect();
+      const margin = 8;
+      panelEl.style.position = "fixed";
+      panelEl.style.zIndex = "1000"; // above the .filters-popup panel (z-index:100)
+      panelEl.style.minWidth = `${Math.round(r.width)}px`;
+      panelEl.style.top = `${Math.round(r.bottom + 6)}px`;
+      const width = panelEl.offsetWidth || Math.round(r.width);
+      let left = Math.min(r.left, window.innerWidth - width - margin);
+      left = Math.max(margin, left);
+      panelEl.style.left = `${Math.round(left)}px`;
+      panelEl.style.right = "auto";
+      const maxH = Math.max(160, Math.round(window.innerHeight - (r.bottom + 6) - margin));
+      panelEl.style.maxHeight = `${maxH}px`;
+      panelEl.style.overflowY = "auto";
+    }
+    const onScroll = () => { if (opened) position(); };
+    const onResize = () => { if (opened) position(); };
+    const onDocClick = (e) => {
+      if (!opened) return;
+      if (panelEl.contains(e.target) || toggleEl === e.target || toggleEl.contains(e.target)) return;
+      close();
+    };
+    const onKeydown = (e) => {
+      if (e.key === "Escape" && opened) { close(); e.stopPropagation(); }
+    };
+    function open() {
+      if (opened || toggleEl.disabled) return;
+      if (currentPaletteClose && currentPaletteClose !== close) currentPaletteClose();
+      opened = true;
+      panelEl.hidden = false;
+      document.body.appendChild(panelEl);
+      position();
+      toggleEl.setAttribute("aria-expanded", "true");
+      window.addEventListener("scroll", onScroll, true);
+      window.addEventListener("resize", onResize);
+      document.addEventListener("click", onDocClick, true);
+      document.addEventListener("keydown", onKeydown, true);
+      currentPaletteClose = close;
+      if (onOpen) onOpen();
+    }
+    function close() {
+      if (!opened) return;
+      opened = false;
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("click", onDocClick, true);
+      document.removeEventListener("keydown", onKeydown, true);
+      panelEl.hidden = true;
+      for (const p of ["position", "zIndex", "minWidth", "top", "left", "right", "maxHeight", "overflowY"]) panelEl.style[p] = "";
+      if (home.next && home.next.parentNode === home.parent) home.parent.insertBefore(panelEl, home.next);
+      else home.parent.appendChild(panelEl);
+      toggleEl.setAttribute("aria-expanded", "false");
+      if (currentPaletteClose === close) currentPaletteClose = null;
+    }
+    toggleEl.addEventListener("click", () => { if (opened) close(); else open(); });
+    return { open, close };
+  }
+
+  /** Build + wire ONE add-condition palette (one per numeric group card). */
+  function mountAddPalette(addctlEl) {
+    const gi = Number(addctlEl.dataset.gi);
+    const toggleEl = addctlEl.querySelector('[data-role="palette-toggle"]');
+    const panelEl = addctlEl.querySelector('[data-role="palette-panel"]');
+    const searchEl = addctlEl.querySelector('[data-role="palette-search"]');
+    const listEl = addctlEl.querySelector('[data-role="palette-list"]');
+    const emptyEl = addctlEl.querySelector('[data-role="palette-empty"]');
+
+    const portal = portalPanel(toggleEl, panelEl, {
+      onOpen: () => { searchEl.value = ""; resetFilter(); searchEl.focus(); },
+    });
+    const doPick = (run) => { portal.close(); run(); };
+
+    // ── list DOM ────────────────────────────────────────────────────────────────
+    const labelHTML = (label) =>
+      `<span class="palette__row-label" data-text="${escAttr(label)}">${escHtml(label)}</span>`;
+    for (const g of buildPaletteGroups(store.get(), gi)) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "palette__group";
+      const header = document.createElement("div");
+      header.className = "palette__group-header";
+      header.innerHTML = `${escHtml(g.name)}${g.note ? `<span class="palette__group-note"> (${escHtml(g.note)})</span>` : ""}`;
+      groupEl.appendChild(header);
+
+      for (const item of g.items) {
+        if (item.kind === "family") {
+          const row = document.createElement("button");
+          row.type = "button";
+          row.className = `palette__row palette__row--family${item.disabled ? " is-disabled" : ""}`;
+          row.dataset.label = item.label.toLowerCase();
+          row.setAttribute("aria-expanded", "false");
+          row.innerHTML = `${labelHTML(item.label)}<span class="palette__chevron" aria-hidden="true">›</span>`;
+          groupEl.appendChild(row);
+          const wrap = document.createElement("div");
+          wrap.className = "palette__variants";
+          wrap.hidden = true;
+          for (const v of item.variants) {
+            const vRow = document.createElement("button");
+            vRow.type = "button";
+            vRow.className = `palette__variant-row${v.disabled ? " is-disabled" : ""}`;
+            vRow.dataset.label = v.label.toLowerCase();
+            vRow.innerHTML = labelHTML(v.label);
+            if (!v.disabled) vRow.addEventListener("click", (e) => { e.stopPropagation(); doPick(v.run); });
+            wrap.appendChild(vRow);
+          }
+          groupEl.appendChild(wrap);
+          if (!item.disabled) {
+            row.addEventListener("click", () => {
+              const willOpen = wrap.hidden;
+              wrap.hidden = !willOpen;
+              row.classList.toggle("is-open", willOpen);
+              row.setAttribute("aria-expanded", String(willOpen));
+            });
+          }
+        } else {
+          const row = document.createElement("button");
+          row.type = "button";
+          row.className = `palette__row${item.disabled ? " is-disabled" : ""}`;
+          row.dataset.label = item.label.toLowerCase();
+          row.innerHTML = labelHTML(item.label);
+          if (!item.disabled) row.addEventListener("click", () => doPick(item.run));
+          groupEl.appendChild(row);
         }
       }
-      if (!injected) { // no Innings option (edge) — append
-        parts.push(posOpts);
-      }
-      return parts.join("");
+      listEl.appendChild(groupEl);
+    }
+
+    // ── search / highlight ────────────────────────────────────────────────────
+    const labelSpan = (rowEl) => rowEl.querySelector(".palette__row-label");
+    const clearHi = (rowEl) => { const sp = labelSpan(rowEl); if (sp) sp.textContent = sp.dataset.text; };
+    const highlight = (rowEl, q) => {
+      const sp = labelSpan(rowEl); if (!sp) return;
+      const text = sp.dataset.text;
+      const i = text.toLowerCase().indexOf(q);
+      if (i < 0) { sp.textContent = text; return; }
+      sp.innerHTML = `${escHtml(text.slice(0, i))}<mark>${escHtml(text.slice(i, i + q.length))}</mark>${escHtml(text.slice(i + q.length))}`;
     };
-    const dismissalOpts = dismissal.map((m) => metricOpt(m, stripOutPrefix(m.label))).join("");
-    // "Matchup (Vs)" (R5-A #5): the FIRST entry INSIDE the "Advanced metrics"
-    // optgroup (directly above the first advanced metric, Dot Ball %), NOT a
-    // standalone entry above the optgroups. singletonOpt returns "" for women
-    // (menOnly) — no stray empty option — and disables it once the vs row is
-    // already present, same as any other singleton option. The Advanced group
-    // renders when there is any advanced metric OR the vs option (men) to hold.
-    const vsTopOpt = singletonOpt("vs");
-    // Fielding SLICE singletons (Dismissed position / Dismissal kind / Fielding
-    // phase) join the "Fielding" optgroup below the metric options — PLAIN mode
-    // only (fielding has no matchup grain, so nothing to slice under a Vs bucket).
-    const fieldingSliceOpts = matchupVsActive(s) ? "" : singletonOpts(FIELDING_SLICE_ADD_ORDER);
-    // Match context (Wave 6): the five categorical match-context filters. Both
-    // genders, all views (no matchup gate) — offered unconditionally.
-    const matchCtxOpts = singletonOpts(MATCH_CONTEXT_ADD_ORDER);
-    // Delivery optgroup (Wave 3, decision 67; UI-A REWORK): the four window entries,
-    // each gated in the dropdown per format — Phase / Ball range only under a single
-    // T20 / 50-over bucket (windowPhaseBallsAllowed); Over range + Player balls in
-    // every format (Over range is the only delivery filter offered on red ball). The
-    // whole group is ball-engine-only; singletonOpt disables an already-present entry.
-    const winPB = windowPhaseBallsAllowed(s);
-    const deliveryOpts = ballEngineEnabled()
-      ? `${winPB ? singletonOpt("win_phase") : ""}${singletonOpt("win_overs")}${winPB ? singletonOpt("win_balls") : ""}${singletonOpt("win_player")}`
-      : "";
-    return `
-      <option value="">+ Add condition…</option>
-      ${deliveryOpts ? `<optgroup label="Delivery">${deliveryOpts}</optgroup>` : ""}
-      <optgroup label="Player">${singletonOpts(PLAYER_ADD_ORDER)}</optgroup>
-      <optgroup label="Match">${singletonOpts(MATCH_ADD_ORDER)}</optgroup>
-      <optgroup label="Match context">${matchCtxOpts}</optgroup>
-      <optgroup label="Basic metrics">${basicOpts()}</optgroup>
-      ${advanced.length || vsTopOpt ? `<optgroup label="Advanced metrics">${vsTopOpt}${metricOpts(advanced)}</optgroup>` : ""}
-      ${dismissal.length ? `<optgroup label="Dismissal type">${dismissalOpts}</optgroup>` : ""}
-      ${fielding.length || fieldingSliceOpts ? `<optgroup label="Fielding">${metricOpts(fielding)}${fieldingSliceOpts}</optgroup>` : ""}
-      ${impact.length ? `<optgroup label="Impact">${metricOpts(impact)}</optgroup>` : ""}`;
+    function resetFilter() {
+      listEl.querySelectorAll(".palette__row, .palette__variant-row").forEach((r) => { r.style.display = ""; clearHi(r); });
+      listEl.querySelectorAll(".palette__variants").forEach((v) => { v.hidden = true; });
+      listEl.querySelectorAll(".palette__row--family").forEach((r) => { r.classList.remove("is-open"); r.setAttribute("aria-expanded", "false"); });
+      listEl.querySelectorAll(".palette__group").forEach((g) => { g.style.display = ""; });
+      emptyEl.hidden = true;
+      listEl.style.display = "";
+    }
+    function filterList(query) {
+      const q = query.trim().toLowerCase();
+      if (!q) { resetFilter(); return; }
+      let any = false;
+      listEl.querySelectorAll(".palette__group").forEach((groupEl) => {
+        let groupHas = false;
+        groupEl.querySelectorAll(":scope > .palette__row").forEach((row) => {
+          const isFamily = row.classList.contains("palette__row--family");
+          const wrap = isFamily ? row.nextElementSibling : null;
+          const selfMatch = row.dataset.label.includes(q);
+          let variantMatch = false;
+          if (wrap && wrap.classList.contains("palette__variants")) {
+            wrap.querySelectorAll(".palette__variant-row").forEach((vRow) => {
+              const show = selfMatch || vRow.dataset.label.includes(q);
+              vRow.style.display = show ? "" : "none";
+              if (vRow.dataset.label.includes(q)) { variantMatch = true; highlight(vRow, q); } else clearHi(vRow);
+            });
+            const open = selfMatch || variantMatch;
+            wrap.hidden = !open;
+            row.classList.toggle("is-open", open);
+            row.setAttribute("aria-expanded", String(open));
+          }
+          const show = selfMatch || variantMatch;
+          row.style.display = show ? "" : "none";
+          if (selfMatch) highlight(row, q); else clearHi(row);
+          if (show) groupHas = true;
+        });
+        groupEl.style.display = groupHas ? "" : "none";
+        if (groupHas) any = true;
+      });
+      emptyEl.hidden = any;
+      listEl.style.display = any ? "" : "none";
+    }
+    function pickFirstVisible() {
+      for (const r of listEl.querySelectorAll(".palette__row, .palette__variant-row")) {
+        if (r.style.display === "none" || r.classList.contains("is-disabled") || r.classList.contains("palette__row--family")) continue;
+        r.click();
+        return;
+      }
+    }
+    searchEl.addEventListener("input", () => filterList(searchEl.value));
+    searchEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); pickFirstVisible(); }
+      else if (e.key === "Escape") { e.stopPropagation(); portal.close(); toggleEl.focus(); }
+    });
   }
 
   // ── Singleton rows: show/hide + editor sync ─────────────────────────────────
@@ -962,7 +1353,18 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
         ${head}
         <div class="cond-group__rows">${rows}</div>
         <div class="cond-group__add">
-          <select class="select cond-builder__add-select" data-role="add-cond" data-gi="${gi}" aria-label="Add a filter condition">${addSelectOptionsHTML(s)}</select>
+          <div class="addctl" data-role="add-palette" data-gi="${gi}">
+            <button type="button" class="select cond-builder__add-toggle" data-role="palette-toggle" aria-haspopup="dialog" aria-expanded="false" aria-label="Add a filter condition">
+              <span class="cond-builder__add-plus" aria-hidden="true">+</span>
+              <span class="cond-builder__add-text">Add condition</span>
+              <span class="cond-builder__add-caret" aria-hidden="true"></span>
+            </button>
+            <div class="palette" data-role="palette-panel" hidden>
+              <input type="text" class="input palette__search" data-role="palette-search" placeholder="Search filters&hellip;" autocomplete="off" aria-label="Search filters" />
+              <div class="palette__list" data-role="palette-list"></div>
+              <div class="palette__empty" data-role="palette-empty" hidden>No matching filter.</div>
+            </div>
+          </div>
         </div>
       </div>`;
   }
@@ -985,6 +1387,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       totalNumericConds(s) >= 1
         ? `<button type="button" class="text-btn text-btn--add-group" data-role="add-group">+ Add group</button>`
         : "";
+    // Close any open palette before wiping the cards: a portaled-open panel would
+    // otherwise be orphaned on <body> when its host addctl is replaced.
+    if (currentPaletteClose) currentPaletteClose();
     numericEl.innerHTML = cards + addGroupBtn;
     wireNumeric();
   }
@@ -992,45 +1397,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   function wireNumeric() {
     const groups = realGroups(store.get());
 
-    // Per-group "+ Add condition" dropdowns (singleton OR metric, by data-gi).
-    numericEl.querySelectorAll('[data-role="add-cond"]').forEach((sel) => {
-      sel.addEventListener("change", () => {
-        const gi = Number(sel.dataset.gi);
-        const v = sel.value;
-        sel.value = "";
-        if (!v) return;
-        if (v.startsWith("c:")) {
-          const key = v.slice(2);
-          sessionAdded[key] = true;
-          // Result (FIX A/B): adding the condition auto-checks "All" for BOTH the
-          // Result outcome picker and its nested Result Condition sub-picker — All =
-          // no narrowing, so the query stays byte-identical until the user picks a
-          // specific outcome/condition. Stage (polish item 3) gets the same "All"
-          // default. Seed only when unset so re-adding after a manual clear doesn't
-          // clobber an existing choice.
-          if (key === "mc_result") {
-            const s = store.get();
-            const patch = {};
-            if ((s.result || []).length === 0) patch.result = ["all"];
-            if ((s.resultCondition || []).length === 0) patch.resultCondition = ["all"];
-            if (Object.keys(patch).length) store.set(patch);
-          } else if (key === "mc_stage") {
-            if ((store.get().stage || []).length === 0) store.set({ stage: ["all"] });
-          }
-          syncSingletonRows();
-          renderNumeric(store.get(), true); // refresh disabled states in every group's dropdown
-          onChange();
-        } else if (v.startsWith("m:")) {
-          addConditionToGroup(store, gi, v.slice(2));
-          renderNumeric(store.get(), true);
-          // Focus the freshly-added row's value input within its own group.
-          const groupEl = numericEl.querySelector(`.cond-group[data-gi="${gi}"]`);
-          const inputs = (groupEl || numericEl).querySelectorAll('.cond-row--metric [data-role="v1"]');
-          if (inputs.length) inputs[inputs.length - 1].focus();
-          onChange();
-        }
-      });
-    });
+    // Per-group "+ Add condition" search palettes (one per group card, by data-gi).
+    // Each builds its taxonomy from the live state and fires pickSingleton / pickMetric.
+    numericEl.querySelectorAll('[data-role="add-palette"]').forEach((el) => mountAddPalette(el));
 
     // Per-group Match All|Any toggle (writes group.op "AND"/"OR").
     numericEl.querySelectorAll('[data-role="group-op"]').forEach((seg) => {

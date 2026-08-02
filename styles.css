@@ -946,6 +946,135 @@ a { color: var(--color-accent); }
 
 .cond-builder__add-select { align-self: flex-start; min-width: 14rem; max-width: 100%; }
 
+/* ── "+ Add condition" search palette (filter-rejig Wave R2, Option C) ─────────
+   Replaces the native <select>. The trigger reuses the .select look; the panel is
+   portaled to <body> on open (position:fixed set inline), so its closed-state
+   position:absolute inside .addctl only matters while docked. */
+.addctl { position: relative; align-self: flex-start; max-width: 100%; }
+
+.cond-builder__add-toggle {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 14rem;
+  max-width: 100%;
+  text-align: left;
+}
+.cond-builder__add-plus { color: var(--color-accent); font-weight: 700; }
+.cond-builder__add-text { flex: 1 1 auto; }
+.cond-builder__add-caret {
+  width: 0; height: 0; flex: 0 0 auto;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--color-muted);
+}
+
+.palette {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: 20rem;
+  max-width: 88vw;
+  padding: var(--space-3);
+  background: var(--color-bg-raised);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+}
+/* .palette sets its own unconditional display:flex, which beats the UA
+   [hidden]{display:none} at equal specificity — so re-assert the closed state. */
+.palette[hidden] { display: none; }
+
+.palette__search { width: 100%; margin-bottom: var(--space-3); }
+
+.palette__list {
+  max-height: 20rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.palette__group-header {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-muted);
+  font-weight: 600;
+  padding: var(--space-3) var(--space-1) var(--space-1);
+}
+.palette__group:first-child .palette__group-header { padding-top: var(--space-1); }
+.palette__group-note { text-transform: none; letter-spacing: 0; font-weight: 400; font-style: italic; }
+
+.palette__row,
+.palette__variant-row {
+  font: inherit;
+  border: none;
+  background: none;
+  color: var(--color-fg);
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  border-radius: var(--radius-sm);
+}
+.palette__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-1);
+  font-size: 0.88rem;
+}
+.palette__row:hover { background: var(--color-panel); }
+.palette__row-label { min-width: 0; }
+.palette__chevron {
+  color: var(--color-accent);
+  font-weight: 700;
+  flex: 0 0 auto;
+  transition: transform 0.12s ease;
+}
+.palette__row--family.is-open .palette__chevron { transform: rotate(90deg); }
+
+.palette__variants {
+  display: flex;
+  flex-direction: column;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--color-line);
+  margin: 0 0 var(--space-1) var(--space-3);
+}
+.palette__variants[hidden] { display: none; }
+.palette__variant-row {
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.85rem;
+}
+.palette__variant-row:hover { background: var(--color-steel-tint); color: var(--color-steel-strong); }
+
+/* A present singleton / an already-added family: recolor-only disabled, the same
+   language as .dropdown__item.is-disabled — visible but not pickable. */
+.palette__row.is-disabled,
+.palette__variant-row.is-disabled {
+  color: var(--color-muted);
+  cursor: not-allowed;
+}
+.palette__row.is-disabled:hover,
+.palette__variant-row.is-disabled:hover { background: none; }
+
+.palette__empty {
+  color: var(--color-muted);
+  font-size: 0.88rem;
+  font-style: italic;
+  padding: var(--space-3) var(--space-1);
+}
+
+.palette mark {
+  background: var(--color-accent-tint);
+  color: var(--color-accent-strong);
+  border-radius: 2px;
+}
+
 /* Games-count meta beside a team/event/venue option name. */
 .team-dropdown__meta { color: var(--color-muted); font-size: var(--text-sm2); }
 
