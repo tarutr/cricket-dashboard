@@ -25,6 +25,7 @@ import {
   eligibleMetrics,
   positionsFilterActive,
   oppositionFilterActive,
+  inningsNumberFilterActive,
   matchContextActive,
   COLUMN_PRESET_DEFS,
   activePresetKey,
@@ -1056,7 +1057,20 @@ export function buildQuery(state, visibleColumns) {
   // WHERE) — not the player_matches source, which knows nothing about result/toss/
   // stage/etc. and would over-count. match_id stays unambiguous (the mctx join
   // renames its own key to mctx_match_id).
-  const inningsLevel = positionsFilterActive(state) || oppositionFilterActive(state) || wantsMatchContext;
+  // Innings Number (Wave R2d): like positions/opposition, this narrows to an
+  // innings SUBSET (WHERE innings_number IN (…) on the batting/bowling view), so
+  // "matches" must be COUNT(DISTINCT match_id) over the FILTERED innings rows —
+  // matches in which the player actually batted/bowled in the selected innings —
+  // not the whole-scope player_matches count (which knows nothing about which
+  // innings the player appeared in and would over-count). Mirrors the old
+  // "Innings order" filter, which was innings-level for the same reason. Additive:
+  // with no Innings Number set, inningsNumberFilterActive() is false → the gate is
+  // unchanged and every anchor stays byte-identical.
+  const inningsLevel =
+    positionsFilterActive(state) ||
+    oppositionFilterActive(state) ||
+    inningsNumberFilterActive(state) ||
+    wantsMatchContext;
   if (wantsMatches && inningsLevel) {
     selectParts.push(`COUNT(DISTINCT match_id) AS matches`);
   }
