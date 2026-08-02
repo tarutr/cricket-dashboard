@@ -1989,6 +1989,27 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
   },
+  // Boundary Run % (matchup_bowling) — Wave R2d. The removal audit found the
+  // boundary_runs_pct replacement for the deleted balls-based boundary_pct_conceded
+  // was added to batting / bowling / matchup_batting but NOT matchup_bowling, so
+  // bowling-vs-a-batting-hand lost boundary-concession filtering. This restores it:
+  // identical formula to the plain-bowling def — share of RUNS CONCEDED that came in
+  // boundary 4s/6s off the bat. Denominator runs_conceded (runs_batter + noballs +
+  // wides, byes/leg-byes excluded) is NULLIF-guarded; fewer is better (matches the
+  // Boundary % Conceded convention above). Placed in the matchup-bowling Detailed
+  // Stats palette group (drawer.js line already calls leafMetric("boundary_runs_pct")
+  // in the shared Bowling · Detailed group — it resolves here once this def exists).
+  {
+    key: "boundary_runs_pct",
+    label: "% Runs from Boundaries",
+    shortLabel: "Bdry Run%",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "(4 * SUM(fours_conceded) + 6 * SUM(sixes_conceded)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
+    higherIsBetter: false, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
   {
     key: "fours_conceded",
     label: "Fours Conceded",
