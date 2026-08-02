@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsOrderFilterActive, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS, INNINGS_ORDER_OPTIONS } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingKindActive, fieldingPhaseActive, FIELDING_KIND_OPTIONS, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsOrderFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS, INNINGS_ORDER_OPTIONS } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
@@ -309,6 +309,13 @@ export function mountPills(
     if (inningsOrderFilterActive(s)) {
       const captured = [...s.inningsOrder];
       pills.push({ key: "mc_innings_order", label: labelsFor(s.inningsOrder, INNINGS_ORDER_OPTIONS).join(", "), remove: () => store.set({ inningsOrder: [] }), restore: () => store.set({ inningsOrder: captured }) });
+    }
+    // Innings Number (Wave R2c): removable chip, mirroring the Innings-order pill it
+    // replaces (label from inningsNumberLabel — format-independent ordinals).
+    if (inningsNumberFilterActive(s)) {
+      const captured = [...s.inningsNumber];
+      const sorted = [...s.inningsNumber].sort((a, b) => a - b);
+      pills.push({ key: "inn_num", label: `Innings: ${sorted.map(inningsNumberLabel).join(", ")}`, remove: () => store.set({ inningsNumber: [] }), restore: () => store.set({ inningsNumber: captured }) });
     }
     // Stage: label only the narrowing picks — the "All" sentinel is never one, and
     // the "No Stage" sentinel reads out as its label (polish item 3). Removing the

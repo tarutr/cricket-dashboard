@@ -27,7 +27,7 @@
 // match_type values — "T20" here means the T20-bucket (T20 + IT20), matching the
 // Phase 2 brief's owner decision that Cricsheet mislabels internationals.
 
-import { metricsFor, matchupBucketLabel, getMetric, metricDisplayLabel } from "./metrics.js";
+import { metricsFor, matchupBucketLabel, getMetric, metricDisplayLabel, INNINGS_NUMBER_FILTER } from "./metrics.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 
 /**
@@ -419,6 +419,36 @@ export function tossDecisionFilterActive(state) {
 export function inningsOrderFilterActive(state) {
   return Array.isArray(state.inningsOrder) && state.inningsOrder.length > 0;
 }
+
+// ── Innings Number (filter-rejig Wave R2c) ───────────────────────────────────
+// The REPLACEMENT for the old batted-first/chased "Innings order": narrows to
+// the innings the player batted / bowled in, by its 1-based DISPLAY number
+// (INNINGS_NUMBER_FILTER maps display N → the 0-based stored innings_number in
+// filters.js). White-ball formats (T20 / 50-over) have TWO innings; a selection
+// that includes Red Ball allows up to FOUR (INNINGS_NUMBER_FILTER.whiteBall /
+// .redBall). state.inningsNumber holds the DISPLAY ints; the SQL half lives in
+// filters.js buildScopeClauses (emitted only for the batting/bowling innings
+// views, keyed off their team column — see there). Empty = no predicate =
+// query byte-identical.
+const INNINGS_ORDINALS = ["", "1st", "2nd", "3rd", "4th"];
+/** Human label for a 1-based innings number ("1st innings"). Format-independent
+ * (only the OFFERED SET below varies by format). */
+export function inningsNumberLabel(n) {
+  return `${INNINGS_ORDINALS[n] || `${n}th`} innings`;
+}
+/** The innings-number DISPLAY values selectable under the current formats, as
+ * [{value,label}]. Two for pure white-ball; up to four when Red Ball is in the
+ * selection (a Test/MDM can have four innings). */
+export function inningsNumberOptions(formats) {
+  const maxInn = (formats || []).includes("Red Ball")
+    ? INNINGS_NUMBER_FILTER.redBall.length
+    : INNINGS_NUMBER_FILTER.whiteBall.length;
+  return Array.from({ length: maxInn }, (_, i) => ({ value: i + 1, label: inningsNumberLabel(i + 1) }));
+}
+/** True if the Innings Number filter (state.inningsNumber) is narrowing the set. */
+export function inningsNumberFilterActive(state) {
+  return Array.isArray(state.inningsNumber) && state.inningsNumber.length > 0;
+}
 /** True if the Stage filter (state.stage) is narrowing the set. Like Result,
  * "All" (STAGE_ALL) is the no-narrowing sentinel (Wave 6 polish item 3), so an
  * All-only (or empty) selection is INACTIVE — which is what keeps "Stage
@@ -594,6 +624,11 @@ export function createInitialState(maxMonth) {
     tossResult: [],    // subset of {"won","lost"} — row team ==/<> toss_winner
     tossDecision: [],  // subset of {"bat","field"} — matches.toss_decision
     inningsOrder: [],  // subset of {"first","second"} — row team ==/<> team_batting_first
+    inningsNumber: [], // Innings Number (filter-rejig Wave R2c): 1-based DISPLAY innings numbers
+                       // (1–2 white-ball / 1–4 red-ball) the player batted/bowled in; [] = no
+                       // predicate. filters.js buildScopeClauses maps each to the 0-based stored
+                       // innings_number and emits it only for the batting/bowling innings views.
+                       // Replaces the old "Innings order" as the Innings Number filter.
     stage: [],         // Stage: empty when the condition isn't added; on add it defaults to
                        // [STAGE_ALL] ("All", no narrowing), else CANONICAL stage labels to keep
                        // (name normalization, backlog #5 — filters.js buildMatchContextClauses
@@ -1052,6 +1087,11 @@ export function createStore(initial) {
     if (tossResultFilterActive(s)) parts.push(labelsFor(s.tossResult, TOSS_RESULT_OPTIONS).join(", "));
     if (tossDecisionFilterActive(s)) parts.push(labelsFor(s.tossDecision, TOSS_DECISION_OPTIONS).join(", "));
     if (inningsOrderFilterActive(s)) parts.push(labelsFor(s.inningsOrder, INNINGS_ORDER_OPTIONS).join(", "));
+    // Innings Number (Wave R2c): the 1-based innings the player batted/bowled in.
+    if (inningsNumberFilterActive(s)) {
+      const sorted = [...s.inningsNumber].sort((a, b) => a - b);
+      parts.push(`Innings: ${sorted.map(inningsNumberLabel).join(", ")}`);
+    }
     // Stage: list only the narrowing picks — drop the "All" sentinel and read the
     // "No Stage" sentinel out as its label (item 3).
     if (stageFilterActive(s)) {

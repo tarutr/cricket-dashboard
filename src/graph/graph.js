@@ -2851,6 +2851,10 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       tossResult: buf.tossResult,
       tossDecision: buf.tossDecision,
       inningsOrder: buf.inningsOrder,
+      // Innings Number (Wave R2c): editable in this popup (shared drawer.js), so it
+      // MUST be committed or the edit is silently discarded — same defect class as
+      // the fields above. The graph fetch (charts.js) applies it via buildScopeClauses.
+      inningsNumber: buf.inningsNumber,
       stage: buf.stage,
       // Fielding SLICE conditions (Dismissed position / Dismissal kind /
       // Fielding phase) are mounted straight onto this same buffer store by
@@ -2994,7 +2998,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       state.profile, state.matchupVs,
       state.event, state.eventSeasons, state.venue,
       state.result, state.resultCondition, state.tossResult, state.tossDecision,
-      state.inningsOrder, state.stage, state.fielding,
+      state.inningsOrder, state.inningsNumber, state.stage, state.fielding,
     ]);
   }
 

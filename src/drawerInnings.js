@@ -65,6 +65,8 @@ import {
   TOSS_RESULT_OPTIONS,
   TOSS_DECISION_OPTIONS,
   INNINGS_ORDER_OPTIONS,
+  inningsNumberOptions,
+  inningsNumberLabel,
 } from "./state.js";
 import { searchTeams, searchEvents, searchVenues, searchEventSeasons, searchStages } from "./playerData.js";
 import { withDeliveryWindowPiece } from "./deliveryWindow.js";
@@ -855,6 +857,94 @@ export function mountInningsOrder(container, store, onChange, opts = {}) {
   return mountTokenMultiSelect(container, store, onChange, {
     field: "inningsOrder", options: INNINGS_ORDER_OPTIONS, anyLabel: "Any innings order", label: "Innings order", ...opts,
   });
+}
+
+// ── Innings Number picker (state.inningsNumber; filter-rejig Wave R2c) ─────────
+// A FORMAT-AWARE checkbox multi-select over the innings a player batted/bowled in
+// (1st/2nd for white-ball; up to 4th when Red Ball is in the format selection —
+// inningsNumberOptions). Writes state.inningsNumber (1-based DISPLAY ints); the SQL
+// half (filters.js) maps each to the 0-based stored innings_number. Same self-
+// contained `{ sync }` + portal dropdown shape as the token pickers, but the option
+// list is rebuilt on every sync from the current formats — AND any currently-picked
+// value that the format no longer offers is kept VISIBLE (a switch to white-ball
+// with "4th innings" ticked still shows the 4th box, tickable-off) so a pick is
+// never made invisible, and never silently rewritten. Works in both disciplines and
+// all formats. Discipline-aware only in the QUERY (which innings the player
+// batted/bowled in) — the value set is the same concept either way.
+export function mountInningsNumber(container, store, onChange, { embedded = false } = {}) {
+  const get = () => store.get().inningsNumber || [];
+  const set = (vals) => store.set({ inningsNumber: vals });
+
+  container.innerHTML = `
+    <div class="filter-group filter-group--positions" data-role="innum-group">
+      ${embedded ? "" : `<span class="filter-label">Innings Number</span>`}
+      <div class="dropdown" data-role="innum-dropdown">
+        <button type="button" class="select dropdown__toggle" data-role="innum-toggle" aria-haspopup="true" aria-expanded="false">Any innings</button>
+        <div class="dropdown__panel" data-role="innum-panel" hidden>
+          <div class="dropdown__list" data-role="innum-list"></div>
+        </div>
+      </div>
+    </div>`;
+
+  const els = {
+    toggle: container.querySelector('[data-role="innum-toggle"]'),
+    panel: container.querySelector('[data-role="innum-panel"]'),
+    list: container.querySelector('[data-role="innum-list"]'),
+  };
+
+  /** The values to OFFER: the format-aware set plus any picked-but-out-of-scope
+   * value (kept so a pick is never made invisible), sorted ascending. */
+  function offeredValues() {
+    const formatSet = inningsNumberOptions(store.get().formats).map((o) => o.value);
+    return [...new Set([...formatSet, ...get()])].sort((a, b) => a - b);
+  }
+
+  function updateLabel() {
+    const picked = [...get()].sort((a, b) => a - b);
+    els.toggle.textContent =
+      picked.length === 0
+        ? "Any innings"
+        : picked.length === 1
+        ? inningsNumberLabel(picked[0])
+        : `${picked.length} selected`;
+  }
+
+  function renderList() {
+    const picked = new Set(get());
+    els.list.innerHTML = offeredValues()
+      .map(
+        (v) => `<label class="dropdown__item">
+          <input type="checkbox" data-innum-value="${v}" ${picked.has(v) ? "checked" : ""} />
+          <span>${escHtml(inningsNumberLabel(v))}</span>
+        </label>`
+      )
+      .join("");
+    els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const value = Number(cb.dataset.innumValue);
+        const current = get().slice();
+        const idx = current.indexOf(value);
+        if (cb.checked) {
+          if (idx === -1) current.push(value);
+        } else if (idx !== -1) {
+          current.splice(idx, 1);
+        }
+        set(current.sort((a, b) => a - b));
+        updateLabel();
+        onChange();
+      });
+    });
+  }
+
+  wirePortalDropdown(els.toggle, els.panel, { onOpen: renderList });
+
+  function sync() {
+    updateLabel();
+    renderList();
+  }
+
+  sync();
+  return { sync };
 }
 
 // ── Stage picker (state.stage) ──────────────────────────────────────────────

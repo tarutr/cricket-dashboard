@@ -29,8 +29,10 @@ import {
   resultConditionMethod,
   STAGE_ALL,
   STAGE_NONE,
+  inningsNumberFilterActive,
   escSql as esc,
 } from "./state.js";
+import { INNINGS_NUMBER_FILTER } from "./metrics.js";
 import { eventAliases, stageAliases } from "./canonicalNames.js";
 import { segmentedToggleHTML, wireSegmentedToggle } from "./segmentedToggle.js";
 
@@ -38,6 +40,13 @@ import { segmentedToggleHTML, wireSegmentedToggle } from "./segmentedToggle.js";
 // Native <input type="date"> yields "YYYY-MM-DD" (which buildScopeClauses
 // accepts); presets compute off the DATA's max match date (via setDateBounds),
 // not the wall clock — all UTC arithmetic (no DST drift), like state.js/monthsAgo.
+// The team columns of the batting/bowling INNINGS-GRAIN views (plain + matchup +
+// graph). Only these views carry a per-innings `innings_number` column, so the
+// Innings Number predicate (buildScopeClausesTagged) is emitted only when a caller's
+// own team column is one of these — never for the pom_cte (team) or fielding_cte
+// (fielding_team) queries, whose sources have no such column.
+const INNINGS_GRAIN_TEAM_COLS = new Set(["batting_team", "bowling_team"]);
+
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const pad2 = (n) => String(n).padStart(2, "0");
 const ymd = (y, m, d) => `${y}-${pad2(m)}-${pad2(d)}`;
@@ -389,6 +398,30 @@ export function buildScopeClausesTagged(
   // total — instead of the 10 / 259 he actually made against them.)
   if (oppositionColumn && oppositionFilterActive(state)) {
     clauses.push(`${oppositionColumn} IN (${state.opposition.map((t) => `'${esc(t)}'`).join(", ")})`);
+  }
+
+  // Innings Number (filter-rejig Wave R2c): narrow to the innings the player
+  // batted / bowled in. `innings_number` is a column on the batting/bowling
+  // innings views (0-BASED: display "1st innings" = stored 0 — INNINGS_NUMBER_FILTER
+  // owns that mapping), so this is a direct WHERE predicate, NOT a match-context
+  // join like Innings order. It is discipline-aware by construction (on the batting
+  // view it is the innings the batter batted in; on the bowling view the innings the
+  // bowler bowled in). EMITTED ONLY for the innings-grain callers — those whose own
+  // team column is `batting_team`/`bowling_team` (plain buildQuery, buildMatchupQuery
+  // and the graph fetch, all four of whose views carry innings_number). The pom_cte
+  // (player_matches, teamColumn "team") and fielding_cte (fielding, "fielding_team")
+  // have no innings_number column, so keying off the team column keeps the clause off
+  // those queries. The R. Pos. modal-position inner scope passes no teamColumn, so it
+  // is correctly excluded (modal position is derived over ALL innings). ALWAYS-APPLIES
+  // (it selects WHICH innings are measured, like opposition / innings order), so a
+  // pinned player obeys it. Empty selection ⇒ no clause ⇒ byte-identical.
+  if (INNINGS_GRAIN_TEAM_COLS.has(teamColumn) && inningsNumberFilterActive(state)) {
+    const stored = [...new Set(state.inningsNumber.map((n) => INNINGS_NUMBER_FILTER.toStored(n)))].filter(
+      (n) => Number.isInteger(n) && n >= 0
+    );
+    if (stored.length > 0) {
+      clauses.push(`${INNINGS_NUMBER_FILTER.column} IN (${stored.join(", ")})`);
+    }
   }
 
   // Event / Venue (Batch 1B, task 1B-1): additive match-level filters via a

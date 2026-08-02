@@ -118,6 +118,10 @@ function serializeQueryState(state) {
     tossResult: state.tossResult,
     tossDecision: state.tossDecision,
     inningsOrder: state.inningsOrder,
+    // Innings Number (filter-rejig Wave R2c): a scope filter on the batting/bowling
+    // innings views — a change re-lights Search + busts the render cache, exactly
+    // like the other scope filters. buildScopeClauses reads it directly.
+    inningsNumber: state.inningsNumber,
     stage: state.stage,
     resultCondition: state.resultCondition,
     matchupVs: state.matchupVs,

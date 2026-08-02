@@ -37,6 +37,8 @@ import {
   tossResultFilterActive,
   tossDecisionFilterActive,
   inningsOrderFilterActive,
+  inningsNumberFilterActive,
+  inningsNumberOptions,
   stageFilterActive,
   resultConditionFilterActive,
   matchupVsActive,
@@ -74,6 +76,7 @@ import {
   mountTossResult,
   mountTossDecision,
   mountInningsOrder,
+  mountInningsNumber,
   mountStage,
   mountWindowPhase,
   mountWindowOvers,
@@ -142,6 +145,12 @@ const SINGLETON_TYPES = [
   { key: "bowling", label: "Bowling style", group: "Player", menOnly: true },
   { key: "role", label: "Role", group: "Player", menOnly: true },
   { key: "rpos", label: "R. Pos.", group: "Basic", menOnly: false },
+  // Innings Number (filter-rejig Wave R2c): the REPLACEMENT for "Innings order" —
+  // narrows to the innings the player batted/bowled in (1st/2nd white-ball, 1st–4th
+  // red-ball; format-aware). A top-level scope filter (state.inningsNumber), both
+  // disciplines + genders, every format — so no menOnly/ballOnly/matchup gate. Its
+  // palette entry lives in Batting AND Bowling Basic Stats (see buildPaletteGroups).
+  { key: "inn_num", label: "Innings Number", group: "Basic", menOnly: false },
   // Striker "Batting position" (R5-A #8): the MATCHUP-ONLY ball-level filter on
   // the batter-faced position (state.positions) — the one that powers the Bumrah-
   // vs-openers anchor. Split OUT of the R. Pos. row so it never auto-appears when
@@ -540,6 +549,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const tossResultController = mountTossResult(editorHosts.mc_toss_result, store, onChange, { embedded: true });
   const tossDecisionController = mountTossDecision(editorHosts.mc_toss_decision, store, onChange, { embedded: true });
   const inningsOrderController = mountInningsOrder(editorHosts.mc_innings_order, store, onChange, { embedded: true });
+  const inningsNumberController = mountInningsNumber(editorHosts.inn_num, store, onChange, { embedded: true });
   const stageController = mountStage(editorHosts.mc_stage, store, onChange, { embedded: true, onOptionsLoaded: onCascadeOptionsLoaded });
   // Delivery window (Wave 3, decision 67; UI-A REWORK): the four separate window
   // editors, each mounted into its own singleton row and writing its own piece of
@@ -635,6 +645,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       // was picked with no position chosen).
       case "rpos":
         return s.discipline === "batting" && (s.regularPositions || []).length > 0;
+      // Innings Number (Wave R2c): present when it has a value (both disciplines).
+      case "inn_num":
+        return (s.inningsNumber || []).length > 0;
       case "strikerpos":
         return (s.positions || []).length > 0;
       case "team": return (s.teams || []).length > 0;
@@ -692,6 +705,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "bowling": setProfile({ bowlingType: null }); break;
       case "vs": store.set({ matchupVs: null }); break;
       case "rpos": store.set({ regularPositions: [] }); break;
+      case "inn_num": store.set({ inningsNumber: [] }); break;
       case "strikerpos": store.set({ positions: [] }); break;
       case "team": store.set({ teams: [] }); break;
       case "opposition": store.set({ opposition: [] }); break;
@@ -799,6 +813,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     store.set({ fielding: { ...(store.get().fielding || {}), [field]: [value] } });
   const preselectMatchupVs = (dim, value) => () => store.set({ matchupVs: { dim, value } });
   const preselectEdge = (edge) => () => winPlayerController.presetEdge(edge);
+  // Innings Number ▸ (Wave R2c): a variant pre-selects ONE innings number (the user
+  // can tick more in the revealed row) — equivalent to ticking it in the editor.
+  const preselectInningsNumber = (n) => () => store.set({ inningsNumber: [n] });
 
   /**
    * Build the 7-group palette taxonomy for the current state, with each metric
@@ -888,18 +905,34 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       leafSingle("event", "Event"),
       leafSingle("venue", "Venue"),
       leafSingle("mc_stage", "Stage"),
-      // "Innings order" (batted / bowled first) kept as-is; the spec's replacement
-      // Innings Number filter needs a query-builder wave (see waveR2 progress note).
-      leafSingle("mc_innings_order", "Innings order"),
+      // "Innings order" (batted / bowled first) REMOVED from the palette (Wave R2c):
+      // the spec's replacement, Innings Number ▸, is now live in Batting & Bowling
+      // Basic Stats. No gap — the entry point moved, it didn't disappear. The
+      // mc_innings_order singleton row/editor/pill plumbing is retained but is no
+      // longer reachable from the palette (unaddable), so state.inningsOrder stays []
+      // and nothing downstream changes; a full teardown would touch non-owned files
+      // (pills.js / graph.js / filters.js buildMatchContextClauses) — flagged in the
+      // report as a follow-up.
       matchResultFamily,
     ]);
 
     // 3/4 ── Batting / Bowling metric groups (discipline-specific) ────────────────
     const dismissalVariant = (m) => [m.key, stripOutPrefix(metricDisplayLabel(m, s.formats))];
+    // Innings Number ▸ (Wave R2c): the categorical scope family (revealing the
+    // inn_num singleton row, one variant per selectable innings). Format-aware
+    // variants (1st/2nd white-ball, up to 4th when Red Ball is selected). Placed
+    // right after "Innings" in BOTH Basic Stats groups (spec).
+    const inningsNumberFamily = () =>
+      singleFamily(
+        "Innings Number",
+        "inn_num",
+        inningsNumberOptions(s.formats).map((o) => [o.label, preselectInningsNumber(o.value)])
+      );
     if (disc === "batting") {
       pushGroup("Batting · Basic Stats", [
         leafMetric("matches", "Matches"),
         leafMetric("innings", "Innings"),
+        inningsNumberFamily(),
         leafMetric("runs", "Runs"),
         leafMetric("balls_faced", "Balls Faced"),
         leafMetric("fours", "4s"),
@@ -932,6 +965,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       pushGroup("Bowling · Basic Stats", [
         leafMetric("matches", "Matches"),
         leafMetric("innings", "Innings"),
+        inningsNumberFamily(),
         leafMetric("overs", "Overs"),
         leafMetric("balls", "Balls"),
         leafMetric("maidens", "Maidens"),
@@ -1245,6 +1279,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     tossResultController.sync();
     tossDecisionController.sync();
     inningsOrderController.sync();
+    inningsNumberController.sync();
     stageController.sync();
     winPhaseController.sync();
     winOversController.sync();
@@ -1577,6 +1612,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     if (tossResultFilterActive(s)) n++;
     if (tossDecisionFilterActive(s)) n++;
     if (inningsOrderFilterActive(s)) n++;
+    if (inningsNumberFilterActive(s)) n++;
     if (stageFilterActive(s)) n++;
     if (resultConditionFilterActive(s)) n++;
     // Fielding SLICE conditions — plain mode only (inert under a matchup Vs).
