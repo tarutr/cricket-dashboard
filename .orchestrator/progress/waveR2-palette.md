@@ -52,8 +52,19 @@ number-producing work → independent DuckDB verify.
   first, state.inningsOrder) is KEPT working in Match Details. Needs a wave owning filters.js.
 
 ## Status
-- [ ] Phase 1 — palette shell + ▸ primitive + 7-group restructure + renames + fold + deletes
-- [ ] Phase 3 — 2 boundary-split metric defs + verify + wire into % Runs in…
+- [x] Phase 1+2 — palette shell + ▸ primitive + 7-group restructure + renames + fold +
+  deletes. COMMIT `ebf948d`. Verified flag-off: anchors 2,813 / Karanbir 2,454 / SA
+  Yadav 60·1,544·29.13·150.34; search+highlight+▸ expand + empty state; metric +
+  categorical picks land conditions; both surfaces; 375px no overflow; 0 console errors.
+  Bowling groups verified (Wicket Types ▸, 4-WI/5-WI, Extras ▸, Boundary Run %; phase/
+  WPI/Bdry%Conceded deleted).
+- [x] Phase 3 — 2 boundary-split metric defs (runs_4s_boundary_pct `(4*fours_hit)*100/runs`,
+  runs_6s_boundary_pct `(6*sixes_hit)*100/runs`) added to metrics.js; INDEPENDENTLY
+  verified (`.orchestrator/verify_waveR2_metrics.py`, ALL PASS): SA Yadav 4s-bdry
+  36.788% / 6s-bdry 31.088% == raw-ball derivation; sum == batting boundary_runs_pct
+  67.876%; anchors unchanged. In-app: both wire into `% Runs in…` ▸ [1s,2s,3s,4s-boundary,
+  4s-run,5s,6s-boundary,6s-run]; R1 spot-check in-app (SKY boundary_run_pct 67.876%,
+  innings_score_ge(50)=12) matches R1.
 
 ## Palette API (drawer.js, internal)
 - `buildPaletteGroups(s, gi)` → `[{ name, note?, items:[{kind:'leaf'|'family', label,

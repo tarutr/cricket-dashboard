@@ -583,6 +583,37 @@ const BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
   },
+  // % Runs in 4s (boundary) / 6s (boundary) (filter-rejig Wave R2): the BOUNDARY
+  // halves of the 4s/6s % Runs split, completing the "% Runs in…" family the Wave
+  // R1 note flagged for R2. fours_hit / sixes_hit are the BOUNDARY (is_not_boundary
+  // IS NOT TRUE) fours/sixes — the exact complement of the ran nb_fours / nb_sixes
+  // — so `4s-boundary + 4s-run` recovers all off-the-bat fours and, summed with the
+  // 6s pair + 1s/2s/3s, the batting composition partitions runs. Each is a run-share
+  // (numerator carries the 4/6 run-value factor, like boundary_runs_pct), and
+  // 4s-boundary + 6s-boundary == the existing batting boundary_runs_pct (verified).
+  // Descriptive style split, so higherIsBetter null, matching every % Runs sibling.
+  {
+    key: "runs_4s_boundary_pct",
+    label: "% Runs in 4s (boundary)",
+    shortLabel: "4s-bdry%",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "(4 * SUM(fours_hit)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_6s_boundary_pct",
+    label: "% Runs in 6s (boundary)",
+    shortLabel: "6s-bdry%",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "(6 * SUM(sixes_hit)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
   {
     key: "balls_per_four",
     label: "Balls per Four",
