@@ -79,6 +79,7 @@ import {
   mountWindowPlayer,
   windowPhaseBallsAllowed,
 } from "./drawerInnings.js";
+import { mountSearchSelect } from "./searchSelect.js";
 import { escHtml, escAttr } from "./html.js";
 
 // Display order for the profile-filter option lists.
@@ -279,30 +280,89 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     store.set({ profile: { ...store.get().profile, ...patch } });
   }
 
-  function selectOptionsHTML(values, selected, anyLabel) {
-    const opts = [`<option value="">${escHtml(anyLabel)}</option>`];
-    for (const v of values) opts.push(`<option value="${escAttr(v)}" ${v === selected ? "selected" : ""}>${escHtml(v)}</option>`);
-    return opts.join("");
-  }
+  // Wave F1: the five profile pickers are the unified PANEL component now
+  // (mountSearchSelect, searchable:false → the P checkbox-panel look for a short
+  // fixed vocabulary), not native <select>s. Each still writes the SAME
+  // state.profile.* value (string, or null for the "Any …" clear row) and fires
+  // onChange, so buildQuery is untouched — only the widget changed.
+  const toOptions = (values) => (values || []).map((v) => ({ value: v, label: v }));
 
   // Role editor: broad role + (conditional) detailed sub-role + (when the broad
   // role is "Bowler") the FINE bowling styles (ROUND 3, task 2). The fine-style
-  // select writes the SAME state.profile.bowlingType as the standalone "Bowling
+  // picker writes the SAME state.profile.bowlingType as the standalone "Bowling
   // style" condition — they are two editors of one value (see report note on the
   // redundancy). renderProfileEditors keeps both in sync from profile.bowlingType.
   editorHosts.role.innerHTML = `
     <div class="profile-role">
-      <select class="select" data-role="prof-roleGroup" aria-label="Playing role"></select>
-      <select class="select" data-role="prof-roleSub" aria-label="Detailed role" hidden></select>
-      <select class="select" data-role="prof-roleBowling" aria-label="Bowling style" hidden></select>
+      <div data-role="prof-roleGroup"></div>
+      <div data-role="prof-roleSub" hidden></div>
+      <div data-role="prof-roleBowling" hidden></div>
     </div>`;
-  const roleGroupEl = editorHosts.role.querySelector('[data-role="prof-roleGroup"]');
-  const roleSubEl = editorHosts.role.querySelector('[data-role="prof-roleSub"]');
-  const roleBowlingEl = editorHosts.role.querySelector('[data-role="prof-roleBowling"]');
-  editorHosts.hand.innerHTML = `<select class="select" data-role="prof-hand" aria-label="Batting hand"></select>`;
-  const handEl = editorHosts.hand.querySelector('[data-role="prof-hand"]');
-  editorHosts.bowling.innerHTML = `<select class="select" data-role="prof-bowling" aria-label="Bowling style"></select>`;
-  const bowlingEl = editorHosts.bowling.querySelector('[data-role="prof-bowling"]');
+  const roleGroupHost = editorHosts.role.querySelector('[data-role="prof-roleGroup"]');
+  const roleSubHost = editorHosts.role.querySelector('[data-role="prof-roleSub"]');
+  const roleBowlingHost = editorHosts.role.querySelector('[data-role="prof-roleBowling"]');
+  editorHosts.hand.innerHTML = `<div data-role="prof-hand"></div>`;
+  const handHost = editorHosts.hand.querySelector('[data-role="prof-hand"]');
+  editorHosts.bowling.innerHTML = `<div data-role="prof-bowling"></div>`;
+  const bowlingHost = editorHosts.bowling.querySelector('[data-role="prof-bowling"]');
+
+  const roleGroupSel = mountSearchSelect(roleGroupHost, {
+    searchable: false,
+    portal: true,
+    ariaLabel: "Playing role",
+    placeholder: "Any role",
+    allowEmptyLabel: "Any role",
+    onChange: (val) => {
+      setProfile({ roleGroup: val || null, roleSub: null });
+      renderProfileEditors();
+      onChange();
+    },
+  });
+  const roleSubSel = mountSearchSelect(roleSubHost, {
+    searchable: false,
+    portal: true,
+    ariaLabel: "Detailed role",
+    placeholder: "Any",
+    allowEmptyLabel: "Any",
+    onChange: (val) => {
+      setProfile({ roleSub: val || null });
+      onChange();
+    },
+  });
+  const roleBowlingSel = mountSearchSelect(roleBowlingHost, {
+    searchable: false,
+    portal: true,
+    ariaLabel: "Bowling style",
+    placeholder: "Any bowling style",
+    allowEmptyLabel: "Any bowling style",
+    onChange: (val) => {
+      setProfile({ bowlingType: val || null });
+      renderProfileEditors();
+      onChange();
+    },
+  });
+  const handSel = mountSearchSelect(handHost, {
+    searchable: false,
+    portal: true,
+    ariaLabel: "Batting hand",
+    placeholder: "Any",
+    allowEmptyLabel: "Any",
+    onChange: (val) => {
+      setProfile({ battingHand: val || null });
+      onChange();
+    },
+  });
+  const bowlingSel = mountSearchSelect(bowlingHost, {
+    searchable: false,
+    portal: true,
+    ariaLabel: "Bowling style",
+    placeholder: "Any",
+    allowEmptyLabel: "Any",
+    onChange: (val) => {
+      setProfile({ bowlingType: val || null });
+      onChange();
+    },
+  });
 
   // ── "Vs" matchup editor (R3.2) ──────────────────────────────────────────────
   // Mirrors the results-toolbar's bonded Vs control — both edit state.matchupVs,
@@ -372,53 +432,37 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     }
   }
 
+  // Push the current option lists + values into the mounted panels (setOptions
+  // before setValue so a value always resolves against a fresh list). Same
+  // show/hide rules the native <select>s had — the change handlers now live in
+  // each panel's onChange above.
   function renderProfileEditors() {
     const p = store.get().profile;
-    roleGroupEl.innerHTML = selectOptionsHTML(profileOptions.roleGroups, p.roleGroup, "Any role");
+    roleGroupSel.setOptions(toOptions(profileOptions.roleGroups));
+    roleGroupSel.setValue(p.roleGroup);
     const subs = p.roleGroup ? profileOptions.subByGroup[p.roleGroup] || [] : [];
     if (subs.length > 0) {
-      roleSubEl.innerHTML = selectOptionsHTML(subs, p.roleSub, "Any");
-      roleSubEl.hidden = false;
+      roleSubSel.setOptions(toOptions(subs));
+      roleSubSel.setValue(p.roleSub);
+      roleSubHost.hidden = false;
     } else {
-      roleSubEl.innerHTML = "";
-      roleSubEl.hidden = true;
+      roleSubHost.hidden = true;
     }
     // Fine bowling styles: shown only when the broad role is "Bowler". Hiding it
     // (role changed away from Bowler) never CLEARS bowlingType — the standalone
     // "Bowling style" condition may own that value; the pill keeps it honest.
     if (p.roleGroup === "Bowler" && profileOptions.bowlingTypes.length > 0) {
-      roleBowlingEl.innerHTML = selectOptionsHTML(profileOptions.bowlingTypes, p.bowlingType, "Any bowling style");
-      roleBowlingEl.hidden = false;
+      roleBowlingSel.setOptions(toOptions(profileOptions.bowlingTypes));
+      roleBowlingSel.setValue(p.bowlingType);
+      roleBowlingHost.hidden = false;
     } else {
-      roleBowlingEl.innerHTML = "";
-      roleBowlingEl.hidden = true;
+      roleBowlingHost.hidden = true;
     }
-    handEl.innerHTML = selectOptionsHTML(profileOptions.battingHands, p.battingHand, "Any");
-    bowlingEl.innerHTML = selectOptionsHTML(profileOptions.bowlingTypes, p.bowlingType, "Any");
+    handSel.setOptions(toOptions(profileOptions.battingHands));
+    handSel.setValue(p.battingHand);
+    bowlingSel.setOptions(toOptions(profileOptions.bowlingTypes));
+    bowlingSel.setValue(p.bowlingType);
   }
-
-  roleGroupEl.addEventListener("change", () => {
-    setProfile({ roleGroup: roleGroupEl.value || null, roleSub: null });
-    renderProfileEditors();
-    onChange();
-  });
-  roleSubEl.addEventListener("change", () => {
-    setProfile({ roleSub: roleSubEl.value || null });
-    onChange();
-  });
-  roleBowlingEl.addEventListener("change", () => {
-    setProfile({ bowlingType: roleBowlingEl.value || null });
-    renderProfileEditors();
-    onChange();
-  });
-  handEl.addEventListener("change", () => {
-    setProfile({ battingHand: handEl.value || null });
-    onChange();
-  });
-  bowlingEl.addEventListener("change", () => {
-    setProfile({ bowlingType: bowlingEl.value || null });
-    onChange();
-  });
 
   async function loadProfileOptions() {
     const token = ++profileOptionsLoadToken;

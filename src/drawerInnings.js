@@ -281,45 +281,35 @@ export function mountRegularPositions(container, store, onChange, { embedded = f
   container.innerHTML = `
     <div class="filter-group filter-group--rpos" data-role="rpos-group">
       ${embedded ? "" : `<span class="filter-label" title="${escAttr(DESC)}">R. Pos.</span>`}
-      <div class="dropdown" data-role="rpos-dropdown">
-        <button type="button" class="select dropdown__toggle" data-role="rpos-toggle" aria-haspopup="true" aria-expanded="false" title="${escAttr(DESC)}">Any position</button>
-        <div class="dropdown__panel" data-role="rpos-panel" hidden>
-          <div class="dropdown__list" data-role="rpos-list">
-            ${REGULAR_POSITIONS.map(
-              (p) => `<label class="dropdown__item">
-                <input type="checkbox" data-position="${p}" />
-                <span>${p}</span>
-              </label>`
-            ).join("")}
-          </div>
-        </div>
-      </div>
+      <div data-role="rpos-host"></div>
     </div>
   `;
 
-  const els = {
-    group: container.querySelector('[data-role="rpos-group"]'),
-    toggle: container.querySelector('[data-role="rpos-toggle"]'),
-    panel: container.querySelector('[data-role="rpos-panel"]'),
-    list: container.querySelector('[data-role="rpos-list"]'),
-  };
+  const groupEl = container.querySelector('[data-role="rpos-group"]');
+  const hostEl = container.querySelector('[data-role="rpos-host"]');
 
-  function updateToggleLabel() {
-    els.toggle.textContent = positionsSummaryLabel(store.get().regularPositions);
-  }
-
-  const dropdown = wirePortalDropdown(els.toggle, els.panel);
-
-  els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-    cb.addEventListener("change", () => {
-      const value = Number(cb.dataset.position);
-      const current = new Set(store.get().regularPositions);
-      if (cb.checked) current.add(value);
-      else current.delete(value);
-      store.set({ regularPositions: [...current] });
-      updateToggleLabel();
+  // Wave F1: the R. Pos. checkbox panel is the unified PANEL component now
+  // (mountSearchMultiSelect, searchable:false → the P checkbox-panel look for the
+  // fixed 1–11 vocabulary), not the bespoke `.dropdown__*` markup. It still writes
+  // the SAME numeric state.regularPositions, so the query is byte-identical.
+  //
+  // The toggle summary is VALUE-based ("1, 2, 3" ≤3, "N selected" ≥4, else "Any
+  // position"), which the panel's count-only `summarize` can't build — so close
+  // over the handle and read getValues() (up to date when summarize runs during a
+  // toggle/setValues), the same pattern the scoped multi-selects use.
+  let handle;
+  handle = mountSearchMultiSelect(hostEl, {
+    options: REGULAR_POSITIONS.map((p) => ({ value: p, label: String(p) })),
+    values: store.get().regularPositions,
+    searchable: false,
+    portal: true,
+    ariaLabel: "Regular position",
+    placeholder: "Any position",
+    summarize: () => positionsSummaryLabel(handle ? handle.getValues() : []),
+    onChange: (values) => {
+      store.set({ regularPositions: values }); // SAME numeric state → query unchanged
       onChange();
-    });
+    },
   });
 
   function sync() {
@@ -330,16 +320,12 @@ export function mountRegularPositions(container, store, onChange, { embedded = f
     // (plain or matchup), where the striker-position control is the only position
     // filter. (Previously plain-mode-only, both disciplines.)
     const show = state.discipline === "batting";
-    els.group.hidden = !show;
+    groupEl.hidden = !show;
     if (!show) {
-      dropdown.close();
+      handle.close();
       return;
     }
-    updateToggleLabel();
-    const selected = new Set(state.regularPositions);
-    els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-      cb.checked = selected.has(Number(cb.dataset.position));
-    });
+    handle.setValues(state.regularPositions);
   }
 
   sync();

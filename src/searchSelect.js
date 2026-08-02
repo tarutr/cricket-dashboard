@@ -61,7 +61,27 @@ function normalizeOptions(opts) {
  *   clipping `overflow` ancestor — same technique as mountSearchMultiSelect's
  *   own `portal` option below (added for src/playerFilters.js's popup drawer,
  *   whose panel is `overflow-y: auto`, Wave C item 4f).
+ * @param {boolean|"auto"} [opts.searchable] show the filter box? `true` (default,
+ *   the S look every existing caller relies on); `false` (the P checkbox-panel
+ *   look — a plain option list, no search box); `"auto"` (search box only when
+ *   the option count exceeds `autoSearchThreshold`). See the SEARCHABLE note below.
+ * @param {number} [opts.autoSearchThreshold] option-count cutoff for `searchable:"auto"`.
  * @returns {{setValue:Function,setOptions:Function,getValue:Function,setInvalid:Function,open:Function,close:Function,destroy:Function}}
+ *
+ * ── OPTIONAL SEARCH BOX (`searchable`) — the P↔S merge (Wave F1) ─────────────
+ * The app used to have TWO custom popovers: this one (S: rounded panel + a filter
+ * box) and a separate checkbox panel (P: `.dropdown__*` — the SAME popover shell
+ * but with NO filter box, a fixed short vocabulary picked by ticking rows). The
+ * only real difference was the search box, so this component now expresses BOTH.
+ *
+ * When the filter box is off (`searchable:false`, or `"auto"` under threshold) the
+ * `<input>` is kept in the DOM as the keyboard sink — but made `readOnly` and
+ * visually hidden (still focusable) so the panel reads as a plain option list.
+ * readOnly means it never accumulates a query, so the list always shows in full
+ * (no risk of an invisible filter hiding rows). Keyboard is unchanged — Arrow/
+ * Enter/Esc — plus native-<select>-style **type-to-jump**: a printable key moves
+ * the highlight to the next option whose label starts with it. Every current
+ * caller omits `searchable`, so they keep the always-on filter box, byte-identical.
  */
 export function mountSearchSelect(hostEl, {
   options = null,
@@ -76,6 +96,8 @@ export function mountSearchSelect(hostEl, {
   renderRow = null,
   allowEmptyLabel = null,
   portal = false,
+  searchable = true,
+  autoSearchThreshold = 8,
 } = {}) {
   const uid = `ssel-${++uidCounter}`;
   let allOptions = normalizeOptions(options);
@@ -103,6 +125,22 @@ export function mountSearchSelect(hostEl, {
   const panelEl = hostEl.querySelector(".search-select__panel");
   const filterEl = hostEl.querySelector(".search-select__filter");
   const listEl = hostEl.querySelector(".search-select__list");
+
+  // ── Optional filter box (searchable) — see the SEARCHABLE note in the JSDoc ──
+  let hasFilter = true;
+  function resolveHasFilter() {
+    if (searchable === "auto") return allOptions.length > autoSearchThreshold;
+    return searchable !== false;
+  }
+  function applySearchable() {
+    hasFilter = resolveHasFilter();
+    hostEl.classList.toggle("search-select--no-filter", !hasFilter);
+    // Kept in the DOM as the keyboard sink even when hidden; readOnly so it never
+    // holds a query (the list then always shows in full).
+    filterEl.readOnly = !hasFilter;
+    filterEl.setAttribute("aria-autocomplete", hasFilter ? "list" : "none");
+    if (!hasFilter) filterEl.value = "";
+  }
 
   function optionByValue(v) {
     return allOptions.find((o) => o.value === v) || null;
@@ -325,9 +363,25 @@ export function mountSearchSelect(hostEl, {
     }
   }
   function onFilterInput() {
+    if (!hasFilter) return; // readOnly → never fires, but never filter when off
     applyFilter(filterEl.value);
     activeIndex = filtered.length ? 0 : -1;
     renderList();
+  }
+  // Native-<select>-style type-to-jump for the no-filter (P) mode: a printable
+  // key moves the highlight to the next enabled option whose label starts with it.
+  function typeJump(ch) {
+    const c = ch.toLowerCase();
+    const n = filtered.length;
+    for (let k = 1; k <= n; k++) {
+      const idx = ((activeIndex < 0 ? -1 : activeIndex) + k) % n;
+      const o = filtered[idx];
+      if (o && !o.disabled && (o.label || "").toLowerCase().startsWith(c)) {
+        activeIndex = idx;
+        renderList();
+        return;
+      }
+    }
   }
   function onFilterKeydown(e) {
     if (e.key === "ArrowDown") {
@@ -339,6 +393,9 @@ export function mountSearchSelect(hostEl, {
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (activeIndex >= 0) choose(activeIndex);
+    } else if (!hasFilter && e.key.length === 1 && e.key !== " ") {
+      e.preventDefault();
+      typeJump(e.key);
     } else if (e.key === "Escape") {
       e.preventDefault();
       // When portaled inside a scrolling popup (e.g. src/playerFilters.js's
@@ -383,6 +440,7 @@ export function mountSearchSelect(hostEl, {
     }
     if (destroyed || myToken !== fetchToken) return; // superseded / torn down
     allOptions = normalizeOptions(result);
+    applySearchable(); // 'auto' cutoff depends on the loaded option count
     if (isOpen) {
       applyFilter(filterEl.value);
       activeIndex = filtered.length ? 0 : -1;
@@ -393,6 +451,7 @@ export function mountSearchSelect(hostEl, {
   }
 
   // Initial paint.
+  applySearchable();
   syncToggleLabel();
   if (fetchOptions) loadAsync();
 
@@ -405,6 +464,7 @@ export function mountSearchSelect(hostEl, {
     },
     setOptions(opts) {
       allOptions = normalizeOptions(opts);
+      applySearchable(); // 'auto' cutoff depends on the new option count
       // Value may no longer resolve — the toggle then falls back to placeholder;
       // callers own any prune/onChange decision (this never fires onChange).
       syncToggleLabel();
@@ -474,6 +534,11 @@ export function mountSearchSelect(hostEl, {
  * @param {boolean} [opts.keepMissingSelected] see the "missing selected values" note below
  * @param {string} [opts.missingNote] short annotation shown on a missing-selected row
  * @param {boolean} [opts.pinSelected] see the "pinned selection" note below
+ * @param {boolean|"auto"} [opts.searchable] show the filter box? `true` (default) / `false`
+ *   (the P checkbox-panel look — a plain checkbox list, no search box) / `"auto"` (search
+ *   box only above `autoSearchThreshold` options). Same mechanism as mountSearchSelect's —
+ *   see its SEARCHABLE note. Space still ticks the active row in the no-filter mode.
+ * @param {number} [opts.autoSearchThreshold] option-count cutoff for `searchable:"auto"`.
  * @returns {{setValues:Function,getValues:Function,setOptions:Function,setInvalid:Function,open:Function,close:Function,destroy:Function}}
  *
  * ── MISSING SELECTED VALUES (`keepMissingSelected`) ─────────────────────────
@@ -533,6 +598,8 @@ export function mountSearchMultiSelect(hostEl, {
   keepMissingSelected = false,
   missingNote = "",
   pinSelected = false,
+  searchable = true,
+  autoSearchThreshold = 8,
 } = {}) {
   const uid = `smsel-${++uidCounter}`;
   let allOptions = normalizeOptions(options);
@@ -566,6 +633,22 @@ export function mountSearchMultiSelect(hostEl, {
   const filterEl = hostEl.querySelector(".search-select__filter");
   const noteEl = hostEl.querySelector(".search-select__note");
   const listEl = hostEl.querySelector(".search-select__list");
+
+  // ── Optional filter box (searchable) — see mountSearchSelect's SEARCHABLE note.
+  // In the no-filter (P checkbox-panel) mode the input is kept as the keyboard
+  // sink but hidden + readOnly, so the panel reads as a plain checkbox list. ────
+  let hasFilter = true;
+  function resolveHasFilter() {
+    if (searchable === "auto") return allOptions.length > autoSearchThreshold;
+    return searchable !== false;
+  }
+  function applySearchable() {
+    hasFilter = resolveHasFilter();
+    hostEl.classList.toggle("search-select--no-filter", !hasFilter);
+    filterEl.readOnly = !hasFilter;
+    filterEl.setAttribute("aria-autocomplete", hasFilter ? "list" : "none");
+    if (!hasFilter) filterEl.value = "";
+  }
 
   // ── Optional portal (R2-2b-ii) ─────────────────────────────────────────────
   // When mounted inside a scrolling / overflow-hidden container (the Filters
@@ -867,9 +950,25 @@ export function mountSearchMultiSelect(hostEl, {
     }
   }
   function onFilterInput() {
+    if (!hasFilter) return; // readOnly → never fires, but never filter when off
     applyFilter(filterEl.value);
     activeIndex = filtered.length ? 0 : -1;
     renderList();
+  }
+  // Native-<select>-style type-to-jump for the no-filter (P) mode: a printable
+  // key moves the highlight to the next enabled option whose label starts with it.
+  function typeJump(ch) {
+    const c = ch.toLowerCase();
+    const n = filtered.length;
+    for (let k = 1; k <= n; k++) {
+      const idx = ((activeIndex < 0 ? -1 : activeIndex) + k) % n;
+      const o = filtered[idx];
+      if (o && !isRowDisabled(o) && (o.label || "").toLowerCase().startsWith(c)) {
+        activeIndex = idx;
+        renderList();
+        return;
+      }
+    }
   }
   function onFilterKeydown(e) {
     if (e.key === "ArrowDown") {
@@ -884,11 +983,15 @@ export function mountSearchMultiSelect(hostEl, {
     } else if (e.key === " " || e.key === "Spacebar") {
       // Space toggles ONLY when the filter box is empty (the natural "open →
       // space-tick" flow); once the user is typing a multi-word search it types
-      // a space like any text input.
+      // a space like any text input. (No-filter mode: always empty → always ticks.)
       if (filterEl.value === "" && activeIndex >= 0) {
         e.preventDefault();
         toggle(activeIndex);
       }
+    } else if (!hasFilter && e.key.length === 1) {
+      // Printable key in the no-filter mode → type-to-jump (Space handled above).
+      e.preventDefault();
+      typeJump(e.key);
     } else if (e.key === "Escape") {
       e.preventDefault();
       // When portaled inside the Filters popup, keep this Escape from bubbling
@@ -930,6 +1033,7 @@ export function mountSearchMultiSelect(hostEl, {
   document.addEventListener("click", onDocClick);
 
   // Initial paint.
+  applySearchable();
   syncToggleLabel();
 
   // ── Handle ──────────────────────────────────────────────────────────────
@@ -954,6 +1058,7 @@ export function mountSearchMultiSelect(hostEl, {
     setOptions(opts) {
       allOptions = normalizeOptions(opts);
       optionsEverSet = true;
+      applySearchable(); // 'auto' cutoff depends on the new option count
       // Drop any selection that no longer resolves; callers own any onChange
       // decision (this never fires onChange, matching the single-pick handle).
       // With keepMissingSelected the pick is KEPT and surfaced as a muted row

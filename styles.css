@@ -845,6 +845,14 @@ a { color: var(--color-accent); }
 .cond-row__value .team-dropdown__toggle { width: auto; max-width: 100%; }
 .cond-row__value .profile-role { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .cond-row__value .profile-role .select { flex: 0 1 auto; min-width: 0; width: auto; }
+/* Wave F1: the profile pickers (Role / Hand / Bowling) and any panel that replaced
+   a native <select> directly in a condition row size to content — the component
+   defaults to width:100% (for the graph sidebar), which would stretch the compact
+   editors here. The toggle keeps a small floor so a short label stays clickable. */
+.cond-row__value > .search-select,
+.profile-role > .search-select { width: auto; }
+.cond-row__value > .search-select .search-select__toggle,
+.profile-role > .search-select .search-select__toggle { min-width: 7rem; }
 
 /* ── Nested pickers: Event → Season and Result → Result Condition ────────────
    Both rows have the SAME shape (polish item 6), so they share the layout rules
@@ -2697,6 +2705,22 @@ a { color: var(--color-accent); }
 .search-select__filter {
   width: 100%;
   margin-bottom: var(--space-2);
+}
+/* No-filter (P checkbox-panel) mode, Wave F1: the filter <input> stays in the DOM
+   as the keyboard sink (focused on open, drives Arrow/Enter/type-to-jump) but is
+   taken out of view + out of flow, so the panel reads as a plain option list. The
+   visually-hidden-but-focusable pattern (clip, not display:none) keeps it reachable
+   for keyboard/AT. Out of flow → the list sits at the panel's padded top edge. */
+.search-select--no-filter .search-select__filter {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 .search-select__list {
   display: flex;
