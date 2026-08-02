@@ -935,11 +935,24 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
         inningsNumberFamily(),
         leafMetric("runs", "Runs"),
         leafMetric("balls_faced", "Balls Faced"),
+        // Matchup-namespace restore (Wave R2c): matchup_batting's "Balls Faced" metric
+        // has KEY "balls" (not "balls_faced"), so the line above — which resolves in
+        // PLAIN batting — skips it in matchup mode. This companion places it in
+        // matchup-batting (ns = matchup_batting) and is null (skipped) in plain
+        // batting, where key "balls" doesn't exist — so exactly ONE "Balls Faced"
+        // shows per namespace, never both.
+        leafMetric("balls", "Balls Faced"),
         leafMetric("fours", "4s"),
         leafMetric("sixes", "6s"),
         metricFamily("Dismissal Type", parts.dismissal.map(dismissalVariant)),
         leafMetric("ducks", "Ducks"),
         leafMetric("not_outs", "Not Outs"),
+        // Matchup-namespace restore (Wave R2c): "Dismissals" is a matchup_batting
+        // metric only — leafMetric resolves it just in matchup-batting mode (ns =
+        // matchup_batting) and returns null (skipped) in plain batting. Restores a
+        // filter R2b's catch-all removal dropped; "Balls Faced" above already sits
+        // in this group and likewise resolves against the active namespace.
+        leafMetric("dismissals", "Dismissals"),
         leafMetric("high_score", "High Score"),
         leafMetric("fifties", "50s"),
         leafMetric("hundreds", "100s"),
@@ -971,6 +984,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
         leafMetric("maidens", "Maidens"),
         leafMetric("runs_conceded", "Runs Conceded"),
         leafMetric("wickets", "Wickets"),
+        // Matchup-namespace restore (Wave R2c): "Fours Conceded" / "Sixes Conceded"
+        // are matchup_bowling metrics only — leafMetric resolves them in matchup-
+        // bowling mode (ns = matchup_bowling) and returns null (skipped) in plain
+        // bowling. Restores two filters R2b's catch-all removal dropped.
+        leafMetric("fours_conceded", "Fours Conceded"),
+        leafMetric("sixes_conceded", "Sixes Conceded"),
         metricFamily("Wicket Types", parts.dismissal.map((m) => [m.key, metricDisplayLabel(m, s.formats)])),
         leafMetric("best", "Best Bowling"),
         // 4-WI / 5-WI removed (R2b): the fixed exactly-4 / 5-plus haul leaves are
