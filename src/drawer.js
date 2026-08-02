@@ -107,8 +107,8 @@ function orderBy(present, order) {
 // "Opposition"); Bowling style is no longer a standalone dropdown entry (it is
 // reachable via Role → Bowler, which exposes the fine bowling styles and writes
 // the SAME profile.bowlingType); and R. Pos. relocates into the Basic-metrics
-// group after "Innings". The DROPDOWN order/grouping is driven by the explicit
-// order arrays in addSelectOptionsHTML below (not by this array's order or the
+// group after "Innings". The PALETTE order/grouping is driven by the explicit
+// 7-group taxonomy in buildPaletteGroups below (not by this array's order or the
 // `group` field, which is now documentation only). This array's order drives the
 // applied-ROW render order in the singleton-rows container.
 const SINGLETON_TYPES = [
@@ -132,7 +132,7 @@ const SINGLETON_TYPES = [
   // FIRST entry INSIDE the "Advanced metrics" optgroup, directly above Dot Ball
   // %): the matchup opponent selector, mirroring the toolbar's bonded Vs control
   // — both edit state.matchupVs, synced via the shared store (see
-  // addSelectOptionsHTML). Leads this array too, so its applied row renders
+  // buildPaletteGroups). Leads this array too, so its applied row renders
   // first among the singleton rows (SINGLETON_TYPES order also drives applied-row
   // order). Men-only (matchupVsActive hard-gates on male; coverage is ~0% for women).
   { key: "vs", label: "Matchup (Vs)", group: "Basic", menOnly: true },
@@ -545,7 +545,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   // editors, each mounted into its own singleton row and writing its own piece of
   // state.deliveryWindow. Mounted unconditionally (their skeleton rows are built
   // like every singleton), but each only ever becomes VISIBLE / addable while the
-  // ball engine is active (+ its format gate) — see isPresent + addSelectOptionsHTML.
+  // ball engine is active (+ its format gate) — see isPresent + buildPaletteGroups.
   // Flag-OFF they stay hidden, inert rows that never write state.deliveryWindow.
   const winPhaseController = mountWindowPhase(editorHosts.win_phase, store, onChange, { embedded: true });
   const winOversController = mountWindowOvers(editorHosts.win_overs, store, onChange, { embedded: true });
