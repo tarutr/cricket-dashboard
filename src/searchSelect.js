@@ -135,6 +135,10 @@ export function mountSearchSelect(hostEl, {
   function applySearchable() {
     hasFilter = resolveHasFilter();
     hostEl.classList.toggle("search-select--no-filter", !hasFilter);
+    // Mark the PANEL too, not just the host: with portal:true the open panel is
+    // reparented to <body>, so a host-scoped CSS rule would stop matching the
+    // filter. The panel always carries its own filter, so key the hide off it.
+    panelEl.classList.toggle("search-select__panel--no-filter", !hasFilter);
     // Kept in the DOM as the keyboard sink even when hidden; readOnly so it never
     // holds a query (the list then always shows in full).
     filterEl.readOnly = !hasFilter;
@@ -645,6 +649,9 @@ export function mountSearchMultiSelect(hostEl, {
   function applySearchable() {
     hasFilter = resolveHasFilter();
     hostEl.classList.toggle("search-select--no-filter", !hasFilter);
+    // Mark the PANEL too (see mountSearchSelect's applySearchable) — with
+    // portal:true the panel is reparented to <body>, escaping a host-scoped rule.
+    panelEl.classList.toggle("search-select__panel--no-filter", !hasFilter);
     filterEl.readOnly = !hasFilter;
     filterEl.setAttribute("aria-autocomplete", hasFilter ? "list" : "none");
     if (!hasFilter) filterEl.value = "";

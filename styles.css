@@ -2710,8 +2710,10 @@ a { color: var(--color-accent); }
    as the keyboard sink (focused on open, drives Arrow/Enter/type-to-jump) but is
    taken out of view + out of flow, so the panel reads as a plain option list. The
    visually-hidden-but-focusable pattern (clip, not display:none) keeps it reachable
-   for keyboard/AT. Out of flow → the list sits at the panel's padded top edge. */
-.search-select--no-filter .search-select__filter {
+   for keyboard/AT. Out of flow → the list sits at the panel's padded top edge.
+   Keyed off the PANEL's own class (not the host) so it still matches when portal:true
+   reparents the open panel to <body>. */
+.search-select__panel--no-filter .search-select__filter {
   position: absolute;
   width: 1px;
   height: 1px;
