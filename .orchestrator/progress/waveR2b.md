@@ -31,14 +31,22 @@ surfaces (Stats popup + Graph popup) show the corrected palette name-for-name; P
 filter works; 0 console errors; 375px no horizontal overflow.
 
 ## PHASE 2 — query-builder completion (COMMIT `wip(waveR2b-qb):`)
-1. **Innings Score ≥ N ▸ / Wicket Hauls ≥ N ▸ real N input** — (owned files only).
-   conditionRowHTML renders an inline N input for param metrics (metric.paramTemplate +
-   metric.param); wired via the existing v1/v2 input handler (extended to data-role="n").
-   `conditionToHaving` (table.js) uses `paramSqlExpression(metric, cond.n)` for param
-   metrics, else `metric.sqlExpression`. ADDITIVE: cond.n lives inside state.advanced
-   (whole-object serialized by serializeQueryState), and an undefined n falls back to the
-   default sqlExpression → byte-identical when no N is set. Verified: innings_score_ge(50)=12,
-   (100)=1, wicket_hauls_ge(3)=15 for known players == independent DuckDB.
+1. **Innings Score ≥ N ▸ / Wicket Hauls ≥ N ▸ real N input** — DONE (owned files only:
+   drawer.js + table.js + styles.css). conditionRowHTML renders an inline N input for param
+   metrics (metric.paramTemplate + metric.param) → "<base> ≥ [N] <unit> <operator> <value>";
+   wired via the existing v1/v2 input handler (extended to data-role="n"). `conditionToHaving`
+   (table.js) uses `paramSqlExpression(metric, cond.n)` for param metrics, else
+   `metric.sqlExpression`. ADDITIVE: cond.n lives inside state.advanced (whole-object
+   serialized by serializeQueryState — verified it re-lights Search), and an undefined n
+   falls back to the default sqlExpression → byte-identical when no N is set.
+   Verified in-app (Men/Batting/T20/Intl, anchor dates): Innings Score ≥ 100, ≥1 → 103
+   players; changed N to 50 → 641 players (both == independent DuckDB); condition removed →
+   baseline 2,813 / Karanbir 2,454 unchanged (additive). Bowling Wicket Hauls ≥ [4] wickets
+   renders identically. Independent DuckDB (verify_waveR2b_metrics.py, ALL PASS):
+   innings_score_ge(50)=12, (100)=1, wicket_hauls_ge(3)=15. 375px: row wraps clean, 0 overflow.
+   KNOWN LIMITATION (flagged): the scope pill / describeCondition (state.js, NOT owned) shows
+   the generic "Innings Score ≥ N" label, not the chosen N — the N is honoured in the query
+   but not surfaced in the pill text. Fixing needs a state.js change.
 2. **Innings Number ▸** — BLOCKED by file ownership; NOT built. A new top-level scope filter
    needs (a) a key in `serializeQueryState` (table.js, restricted to conditionToHaving here —
    without it the Search button never lights + the render cache goes stale), (b) state.js

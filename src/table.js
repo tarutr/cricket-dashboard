@@ -8,7 +8,7 @@
 // advanced-filter conditions on rate/ratio metrics and to render "—" for
 // no-data cells (NULL already renders "—"; this module never coalesces ratios).
 
-import { getMetric, hasMetricData, matchupBucketLabel, DISMISSAL_KINDS, metricDisplayLabel } from "./metrics.js";
+import { getMetric, hasMetricData, matchupBucketLabel, DISMISSAL_KINDS, metricDisplayLabel, paramSqlExpression } from "./metrics.js";
 import { query } from "./db.js";
 import {
   buildScopeClausesTagged,
@@ -656,7 +656,19 @@ function conditionToHaving(cond, discipline, exprFn) {
   // path below; in matchup mode exprFn resolves them to the joined peak CTE
   // column `peak.<key>` (materialized in buildMatchupQuery). Plain peaks
   // (source "innings") evaluate their real sqlExpression directly, unchanged.
-  const expr = exprFn ? exprFn(cond, metric) : metric.sqlExpression;
+  //
+  // Parametrised threshold metrics (R2b Phase 2: Innings Score ≥ N / Wicket Hauls
+  // ≥ N) carry a `paramTemplate`; the plain (non-matchup) path compiles the
+  // aggregate at the user's per-condition threshold via paramSqlExpression(metric,
+  // cond.n). ADDITIVE: paramSqlExpression returns the metric's DEFAULT sqlExpression
+  // whenever cond.n is absent/invalid, so a condition without an N is byte-identical
+  // to before. (These metrics live in the plain batting/bowling namespaces only, so
+  // the matchup exprFn branch never sees them.)
+  const expr = exprFn
+    ? exprFn(cond, metric)
+    : metric.paramTemplate
+      ? paramSqlExpression(metric, cond.n)
+      : metric.sqlExpression;
   if (!expr) return null;
   // §8.1: rate/ratio metrics (zeroIsData:false) treat 0 as "no data" too, so a
   // condition on them must also exclude value = 0 even though the numeric

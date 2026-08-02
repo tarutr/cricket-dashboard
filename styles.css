@@ -1079,6 +1079,10 @@ a { color: var(--color-accent); }
 /* ── Date presets + required note (task 1B-2) ───────────────────────────────── */
 .date-range__input { min-height: 40px; flex: 1 1 8.5rem; min-width: 0; }
 .cond-row__value-input { flex: 0 1 6rem; min-width: 4rem; }
+/* Param-threshold N box (R2b: Innings Score ≥ [N] runs, Wicket Hauls ≥ [N] wickets):
+   a compact fixed width so the "<metric> ≥ [N] <unit> <operator> <value>" row stays
+   tidy and wraps cleanly on narrow (375px) viewports. */
+.cond-row__n-input { flex: 0 0 4rem; min-width: 3.25rem; }
 
 .date-presets { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
 
