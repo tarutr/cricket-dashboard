@@ -114,3 +114,30 @@ Plan APPROVED by owner 2026-08-03; decisions 1–3 resolved (above).
   per-row **sticky** scope (Format/Team type/Date) inside the popup; edit(pencil, pre-filled)+delete(✕) inline with
   the row-title; row identity = first condition in literal operator form + (i); sort/pin; both buttons "Add Filter
   Row". Replaces T-2a's code-seeding.
+
+### T-2b FILTER SET — per-innings-slice classification, owner sign-off 2026-08-03
+The tab's conditions are **per-innings WHERE slices** (not the leaderboard's player-level HAVING gate). A filter is
+offered ONLY if a single innings has that quantity. **Every metric stays available as a COLUMN** over the slice —
+"not sliceable" means "not a filter", never "hidden".
+
+**✅ OFFERED as slice filters (full operator set ≥/≤/=/between where numeric):**
+- Per-innings amounts — batting: Runs, Balls Faced, 4s, 6s; bowling: Wickets, Runs Conceded, Balls/Overs, Maidens,
+  Wicket-types (Bowled/LBW/Caught/C&B/Stumped/Hit-wicket), Fours/Sixes Conceded, Extras (Wides/No-balls).
+- Per-innings rates — Strike Rate, Economy, Dot %, Boundary Ball %, Boundary Run %, NBSR, % Runs in 1s/2s/3s/4s/5s/6s,
+  % of Balls Faced.
+- Per-innings thresholds — **Innings Score** and **Wicket Hauls** (both take the FULL operator set — Innings Score
+  ≥50 AND ≤99 = the 50s; note ≥ includes exactly-N, per owner 2026-08-03).
+- Innings booleans (Y/N) — **Ducks, Not Outs**, batting **dismissal-type** (Caught/Bowled/LBW/Run-out/Stumped/… as
+  "dismissed by X = Y/N"), and **PotM (Y/N)** (match-award join; owner 2026-08-03 — replaces PotM Count in the pop-up).
+- Scope — Innings Number, Opposition, Event, Venue, Stage, Match Result, Toss Result/Decision, Team, Matchup
+  (vs bowling style / vs batting hand / vs opponent player / batting position).
+
+**❌ NOT offered as filters (kept as COLUMNS): Batting Average, Balls per Dismissal, Bowling Average, Bowling Strike
+Rate, High Score, Best Bowling, Matches, PotM Count (→ PotM Y/N), 50s, 100s (→ Innings Score), Balls per
+Boundary/Four/Six.**
+
+**⏸ DEFERRED to T-3 (fielding wave):** fielding counts (Caught/Stumped/Run-out) + Wickets by Batting Position —
+needs the fielding source wired per-innings; decision revisited then.
+
+**OPEN (non-blocking, owner): does the MAIN leaderboard also switch PotM Count → PotM (Y/N), or keep the count?**
+Default if unanswered = leaderboard keeps PotM Count (meaningful there); pop-up gets PotM (Y/N) only.
