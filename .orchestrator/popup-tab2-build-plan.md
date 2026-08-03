@@ -139,5 +139,17 @@ Boundary/Four/Six.**
 **⏸ DEFERRED to T-3 (fielding wave):** fielding counts (Caught/Stumped/Run-out) + Wickets by Batting Position —
 needs the fielding source wired per-innings; decision revisited then.
 
-**OPEN (non-blocking, owner): does the MAIN leaderboard also switch PotM Count → PotM (Y/N), or keep the count?**
-Default if unanswered = leaderboard keeps PotM Count (meaningful there); pop-up gets PotM (Y/N) only.
+**RESOLVED (owner 2026-08-03): the MAIN leaderboard KEEPS "PotM Count"; the player pop-up gets "PotM (Y/N)".**
+Different filters for different use cases. Do NOT change the leaderboard's PotM Count filter.
+
+### T-2b build is STAGED into two verified steps (owner go 2026-08-03)
+- **T-2b-i — SLICING ENGINE (numbers-critical; data-engineer/Opus):** make the tab's conditions apply as **per-innings
+  WHERE slices** (not the leaderboard's HAVING gate) for the ✅ filter set above, + build **PotM (Y/N)** (pop-up only).
+  Mechanism: reuse `buildQuery`'s proven logic via a MINIMAL ADDITIVE pre-aggregate WHERE injection so a no-filter row
+  stays byte-identical to the leaderboard BY CONSTRUCTION; a new `conditionToInningsWhere` maps each eligible metric to
+  its innings-column WHERE. Code-seeded rows; PROVE: leaderboard anchors byte-identical (buildQuery unchanged for
+  existing callers), no-filter pop-up row == leaderboard row, and a SLICED row correct (SA Yadav "Innings Score ≥ 100"
+  = his stats OVER his century innings, independent DuckDB). Also thread per-row opponent/window off the module globals.
+- **T-2b-ii — EDITOR UI (frontend-heavy/Opus):** "Add Filter Row" → real Add-condition palette (surface:"popup",
+  restricted to the ✅ set, full operators for numerics, Y/N for booleans) writing a per-row condition-set; per-row
+  sticky scope; edit(pencil)/delete(✕)/sort/pin; row identity + (i); both buttons "Add Filter Row".
