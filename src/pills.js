@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingPhaseActive, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingPhaseActive, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
@@ -189,6 +189,21 @@ export function mountPills(
         label: tok.label,
         remove: () => store.set({ deliveryWindow: withDeliveryWindowPiece(store.get().deliveryWindow, key, null) }),
         restore: () => store.set({ deliveryWindow: withDeliveryWindowPiece(store.get().deliveryWindow, key, capturedPiece) }),
+      });
+    }
+
+    // Opponent-player head-to-head (pop-up Tab-2 T-1, owner decision 70): one
+    // removable pill for the picked opponent, labelled "vs {name}" (the matchup
+    // "vs …" family). Derived from the APPLIED snapshot like every other filter
+    // pill (no pill until Search commits it); its ×/+ soft-deletes on the LIVE
+    // store and commits on the next Search. Only ever set on the ball engine.
+    if (opponentPlayerActive(s)) {
+      const captured = { ...s.opponentPlayer };
+      pills.push({
+        key: "opponentPlayer",
+        label: `vs ${s.opponentPlayer.name || s.opponentPlayer.id}`,
+        remove: () => store.set({ opponentPlayer: null }),
+        restore: () => store.set({ opponentPlayer: captured }),
       });
     }
 

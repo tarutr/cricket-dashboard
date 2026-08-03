@@ -4,7 +4,7 @@
 // with Retry (never a blank page), then wire up state/filters/advanced/table
 // and do the initial render.
 
-import { initDB, getManifest, prewarmBallEngine, setDeliveryWindow } from "./db.js";
+import { initDB, getManifest, prewarmBallEngine, setDeliveryWindow, setOpponentPlayer } from "./db.js";
 import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, pruneDeliveryWindowForFormats, effectiveNamespace } from "./state.js";
 import { isConditionComplete } from "./advanced.js";
 import { mountFilters } from "./filters.js";
@@ -165,6 +165,9 @@ export function clearAll({ returnToTable = true } = {}) {
   // none — clear the engine's active window so a later windowless Search is
   // byte-identical (createInitialState already sets deliveryWindow: null).
   setDeliveryWindow(null);
+  // Opponent-player head-to-head (Tab-2 T-1, decision 70): Clear resets it too, so
+  // a later Search is byte-identical (createInitialState sets opponentPlayer: null).
+  setOpponentPlayer(null);
   // Re-render every control from the fresh defaults (the store.subscribe hook
   // refreshes pills/badge; the controls need an explicit re-render).
   // filterController.render() re-syncs the Gender/Discipline selects.
@@ -780,6 +783,12 @@ function boot() {
         // in-window balls. null ⇒ predicate "" ⇒ byte-identical to today. This is the
         // Search-gate: the window applies ONLY here, never on a pending drawer edit.
         setDeliveryWindow(appliedState.deliveryWindow);
+        // Opponent-player head-to-head (Tab-2 T-1, decision 70): commit it into the
+        // engine on the SAME Search gate as the window. db.js folds it into the base
+        // ball predicate for every engine view a query touches, so the leaderboard
+        // (and pinned rows — pins OBEY it) recompute over only balls against opponent
+        // Y. null ⇒ predicate "" ⇒ byte-identical to today.
+        setOpponentPlayer(appliedState.opponentPlayer);
         // A4: this Search commits any soft-deleted (staged) pill removals — the
         // pending store already dropped their effects at × time, so clear the
         // staged display set before re-rendering so committed pills vanish.

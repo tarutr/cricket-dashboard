@@ -209,6 +209,15 @@ export function oppositionFilterActive(state) {
   return Array.isArray(state.opposition) && state.opposition.length > 0;
 }
 
+/** True if the opponent-player head-to-head filter is currently narrowing the
+ * counted balls to one opponent Y (pop-up Tab-2 T-1, owner decision 70). Only
+ * ever set while the ball engine is active (the picker renders only then), so no
+ * extra flag gate is needed here — the pill / scope token / count all defer to it,
+ * mirroring the delivery-window convention. */
+export function opponentPlayerActive(state) {
+  return Boolean(state.opponentPlayer && state.opponentPlayer.id);
+}
+
 // ── Match filters: Event / Venue (Batch 1B, task 1B-1) ──────────────────────
 // Two additive match-level filters, structurally mirroring oppositionFilterActive
 // above but WITHOUT its teamType === "international" gate: event_name and venue
@@ -640,6 +649,14 @@ export function createInitialState(maxMonth) {
                    // ball predicate into the ball-engine base CTE for ALL four views (windows define the
                    // numbers → pins obey them; innings under a window = innings with ≥1 in-window ball).
                    // The drawer UI that sets this comes in a later wave (engine half only for now).
+    opponentPlayer: null, // Opponent-player head-to-head filter (pop-up Tab-2 T-1, owner decision 70).
+                   // null = no opponent = every number byte-identical to today (the invariant).
+                   // When set: { id, name } — restricts the counted BALLS to those against ONE
+                   // opponent Y (subject batting ⇒ bowler_id = Y; subject bowling ⇒ batter_id = Y).
+                   // Ball-engine ONLY (per-delivery ids); db.js reads it via setOpponentPlayer() and
+                   // folds the ball predicate into the same base-CTE hook as the delivery window (so
+                   // pins obey it too). `id` reaches SQL; `name` is display-only (pill/scope label).
+                   // See src/opponentFilter.js + opponentPlayerActive() below.
     matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)
     pinnedPlayers: [], // [{id, name}] — owner decision 46 task 3b: players ADDED to the table's
                    // result set regardless of the PLAYER-SHORTLISTING filters (team/profile/
@@ -1024,6 +1041,12 @@ export function createStore(initial) {
     // then), so no extra flag gate is needed.
     for (const tok of deliveryWindowTokens(s.deliveryWindow, effectiveNamespace(s))) {
       parts.push(tok.label);
+    }
+
+    // Opponent-player head-to-head (pop-up Tab-2 T-1, decision 70): the "vs whom"
+    // scope — one token, matching its pill. Only ever set on the ball engine.
+    if (opponentPlayerActive(s)) {
+      parts.push(`vs ${s.opponentPlayer.name || s.opponentPlayer.id}`);
     }
 
     if (s.teams && s.teams.length > 0) {

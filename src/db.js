@@ -11,6 +11,7 @@ import { buildInningsViewSql, DELIVERY_FILES } from "./ballEngine.js";
 import { buildMatchupViewSql } from "./ballEngineMatchup.js";
 import { neededViewColumns, coversColumns, unionColumns, columnsArePlayerLocal } from "./ballColumns.js";
 import { deliveryWindowPredicate } from "./deliveryWindow.js";
+import { opponentPlayerPredicate } from "./opponentFilter.js";
 
 // View name -> parquet file name.
 const VIEWS = {
@@ -69,10 +70,37 @@ export function setDeliveryWindow(spec) {
   activeDeliveryWindow = spec || null;
 }
 
-/** The active window's ball predicate for one engine discipline, or "" when no
- * window is set. Discipline selects the player clock (bat_ball vs bowl_ball). */
+// ── Opponent-player head-to-head (pop-up Tab-2 T-1, owner decision 70) ───────
+// The active opponent spec ({id, name} or null). Same state-free convention as
+// the delivery window: the UI pushes state.opponentPlayer here on Search via
+// setOpponentPlayer(), and it is AND-composed into the SAME base-CTE ball
+// predicate as the window (windowPredicateFor below), so it rides the existing
+// windowPredicate thread (cache signature / materialise / widen / full-rebuild
+// all already carry it) with zero new plumbing. null ⇒ predicate "" ⇒ nothing
+// composed ⇒ byte-identical to today (THE invariant). Discipline picks the
+// opposite-role id column (batter's bowler / bowler's batter — see opponentFilter.js).
+let activeOpponentPlayer = null;
+
+/** Set (or clear, with null) the active opponent-player spec. main.js calls this
+ * at the Search commit (`setOpponentPlayer(appliedState.opponentPlayer)`), beside
+ * setDeliveryWindow. Takes effect on the NEXT query. Shape: src/opponentFilter.js. */
+export function setOpponentPlayer(opp) {
+  activeOpponentPlayer = opp || null;
+}
+
+/** The active BALL-level predicate for one engine discipline — the delivery
+ * window AND the opponent-player head-to-head, composed. "" when neither is set
+ * (byte-identical to today). Discipline selects the window's player clock
+ * (bat_ball vs bowl_ball) AND the opponent's opposite-role id column (bowler_id
+ * for a batting query, batter_id for a bowling query). When only the window is
+ * set the window string is returned VERBATIM (byte-identical to the pre-T-1
+ * behaviour); when only the opponent is set, just its clause; both ⇒ AND-composed. */
 function windowPredicateFor(discipline) {
-  return deliveryWindowPredicate(activeDeliveryWindow, discipline);
+  const win = deliveryWindowPredicate(activeDeliveryWindow, discipline);
+  const opp = opponentPlayerPredicate(activeOpponentPlayer, discipline);
+  if (!opp) return win; // opponent inactive → byte-identical to the window-only path
+  if (!win) return opp;
+  return `${win} AND (${opp})`;
 }
 
 /** Generate the reconstruction SELECT for an engine view, dispatching to the

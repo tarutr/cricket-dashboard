@@ -502,12 +502,32 @@ a { color: var(--color-accent); }
 .graph-player-search__results,
 .dropdown__panel,
 .search-select__panel,
+.opp-picker__results,
 .omnisearch__results {
   z-index: 20;
   background: var(--color-bg-raised);
   border: 1px solid var(--color-line);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-popover);
+}
+
+/* Opponent-player picker (pop-up Tab-2 T-1): reuses the shared player-search
+   component (omnisearch) as a value picker inside the Filters drawer. Unlike the
+   leaderboard's absolutely-positioned .omnisearch__results, this results panel
+   renders in NORMAL FLOW so it is never clipped by the Filters popup's overflow —
+   it just pushes the rows below it down (the popup scrolls). Item rows reuse
+   .omnisearch__item / .omnisearch__empty styling verbatim. */
+.opp-picker {
+  width: 100%;
+}
+.opp-picker__input {
+  width: 100%;
+}
+.opp-picker__results {
+  margin-top: var(--space-1);
+  max-height: 16rem;
+  overflow-y: auto;
+  padding: var(--space-1);
 }
 
 .team-dropdown__panel {

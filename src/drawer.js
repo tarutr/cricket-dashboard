@@ -39,6 +39,7 @@ import {
   stageFilterActive,
   resultConditionFilterActive,
   matchupVsActive,
+  opponentPlayerActive,
   effectiveNamespace,
 } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
@@ -73,6 +74,7 @@ import {
   mountWindowOvers,
   mountWindowBalls,
   mountWindowPlayer,
+  mountOpponentPlayer,
   windowPhaseBallsAllowed,
 } from "./drawerInnings.js";
 import { mountSearchSelect } from "./searchSelect.js";
@@ -151,6 +153,17 @@ const SINGLETON_TYPES = [
   // in matchup mode (isPresent gates it on matchupVsActive). Men-only in practice
   // (matchup coverage ~0% for women; matchupVsActive hard-gates on male anyway).
   { key: "strikerpos", label: "Batting position", group: "Basic", menOnly: true },
+  // Opponent-player head-to-head (pop-up Tab-2 T-1, owner decision 70): "subject X
+  // vs opponent Y" — restricts the counted balls to those against ONE opponent
+  // (subject batting ⇒ bowler_id = Y; subject bowling ⇒ batter_id = Y). BALL-ENGINE
+  // ONLY (`ballOnly`) — needs per-delivery ids absent from the innings parquets, so
+  // it is flag-gated exactly like the delivery-window rows above (never shows nor
+  // auto-appears flag-OFF). NOT menOnly: bowler_id/batter_id exist for every
+  // delivery, so — unlike the profile-backed vs bowling style / vs batting hand —
+  // it works for both genders (matching the Ball Ranges group's gender-agnostic
+  // gate). Its palette leaf lives in the Matchup (Vs) group; its editor is the
+  // reused player-search (drawerInnings.js mountOpponentPlayer).
+  { key: "vs_opp", label: "vs opponent player", group: "Basic", menOnly: false, ballOnly: true },
   { key: "event", label: "Event", group: "Match", menOnly: false },
   // Stage (tournament round) moved OUT of the "Match context" group into "Match",
   // directly under Event and above Venue (owner, polish item 3) — it is a property
@@ -542,6 +555,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const winOversController = mountWindowOvers(editorHosts.win_overs, store, onChange, { embedded: true });
   const winBallsController = mountWindowBalls(editorHosts.win_balls, store, onChange, { embedded: true });
   const winPlayerController = mountWindowPlayer(editorHosts.win_player, store, onChange, { embedded: true });
+  // Opponent-player head-to-head (Tab-2 T-1, decision 67 family / decision 70):
+  // reuses the shared player-search (mountOpponentPlayer). Mounted unconditionally
+  // like every singleton editor; its row is only ever visible/addable on the ball
+  // engine (isPresent's ballOnly gate). Writes state.opponentPlayer; db.js turns
+  // that into the base-CTE ball predicate on Search.
+  const opponentController = mountOpponentPlayer(editorHosts.vs_opp, store, onChange, { embedded: true });
 
   // ── "This will come back empty" notice (owner ruling) ──────────────────────
   // Since a dead-end pick is now KEPT and greyed rather than reset, a search can
@@ -608,6 +627,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "win_overs": return ballEngineEnabled() && Boolean(s.deliveryWindow && s.deliveryWindow.overs);
       case "win_balls": return ballEngineEnabled() && Boolean(s.deliveryWindow && s.deliveryWindow.balls);
       case "win_player": return ballEngineEnabled() && Boolean(s.deliveryWindow && s.deliveryWindow.player);
+      // Opponent-player (Tab-2 T-1): present when an opponent is picked. Gated on
+      // the ball engine too (belt-and-suspenders — flag-OFF opponentPlayer is
+      // always null and the row is ballOnly-hidden anyway).
+      case "vs_opp": return ballEngineEnabled() && Boolean(s.opponentPlayer && s.opponentPlayer.id);
       case "role": return Boolean(s.profile.roleGroup);
       // Batting hand is a batting-only concept (decision 54): a player's
       // batting hand isn't their bowling arm, so the row (and the value) never
@@ -679,6 +702,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "win_overs": store.set({ deliveryWindow: withDeliveryWindowPiece(store.get().deliveryWindow, "overs", null) }); break;
       case "win_balls": store.set({ deliveryWindow: withDeliveryWindowPiece(store.get().deliveryWindow, "balls", null) }); break;
       case "win_player": store.set({ deliveryWindow: withDeliveryWindowPiece(store.get().deliveryWindow, "player", null) }); break;
+      case "vs_opp": store.set({ opponentPlayer: null }); break;
       case "role": setProfile({ roleGroup: null, roleSub: null }); break;
       case "hand": setProfile({ battingHand: null }); break;
       case "bowling": setProfile({ bowlingType: null }); break;
@@ -854,6 +878,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     winOversController.sync();
     winBallsController.sync();
     winPlayerController.sync();
+    opponentController.sync();
     renderProfileEditors();
   }
 
@@ -1149,6 +1174,8 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // piece (Phase / Over range / Ball range / Player balls), matching the four
     // separate pills (flag-OFF deliveryWindow is always null → zero pieces here).
     n += deliveryWindowTokens(s.deliveryWindow).length;
+    // Opponent-player head-to-head (Tab-2 T-1): one when active (ball engine only).
+    if (opponentPlayerActive(s)) n++;
     if ((s.teams || []).length > 0) n++;
     if (s.gender !== "female") {
       const p = s.profile;

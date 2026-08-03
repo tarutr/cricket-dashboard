@@ -307,31 +307,44 @@ export function createPaletteGroupsBuilder(deps) {
       ]);
     }
 
-    // 6 ── Matchup (Vs) — men only (needs a profile) ──────────────────────────────
+    // 6 ── Matchup (Vs) ───────────────────────────────────────────────────────────
     // T-F3: unaffected by `surface` — kept whole on "popup" (Team + every Matchup
-    // entry stays; "vs opponent player" lands here later, wave T-1).
-    if (!women) {
+    // entry stays). The profile-backed entries (vs bowling style / vs batting hand /
+    // Batting position) are MEN-ONLY (matchup coverage is ~0% for women). T-1 adds
+    // "vs opponent player", which is GENDER-AGNOSTIC + ball-engine-gated (see below),
+    // so the group can now surface on the women view too (opponent-only) when the
+    // ball engine is on.
+    {
       const vsItems = [];
-      if (disc === "batting") {
-        const vsTypes = getVsBowlingTypes() || [];
-        vsItems.push(singleFamily("vs bowling style", "vs", [
-          ["Pace", preselectMatchupVs("group", "Pace")],
-          ["Spin", preselectMatchupVs("group", "Spin")],
-          ...vsTypes.map((t) => [matchupBucketLabel(t), preselectMatchupVs("type", t)]),
-        ]));
-        // Fine bowling styles load lazily (matchup_batting distinct-values); once
-        // they arrive, rebuild so they appear as variants (renderNumeric closes any
-        // open palette first). One-shot: the next build has getVsBowlingTypes() set,
-        // so this branch's caller-side guard won't re-fire.
-        ensureVsBowlingTypesLoaded();
-      } else {
-        vsItems.push(singleFamily("vs batting hand", "vs", [
-          ["Right-hand bat", preselectMatchupVs("hand", "Right-hand bat")],
-          ["Left-hand bat", preselectMatchupVs("hand", "Left-hand bat")],
-        ]));
+      if (!women) {
+        if (disc === "batting") {
+          const vsTypes = getVsBowlingTypes() || [];
+          vsItems.push(singleFamily("vs bowling style", "vs", [
+            ["Pace", preselectMatchupVs("group", "Pace")],
+            ["Spin", preselectMatchupVs("group", "Spin")],
+            ...vsTypes.map((t) => [matchupBucketLabel(t), preselectMatchupVs("type", t)]),
+          ]));
+          // Fine bowling styles load lazily (matchup_batting distinct-values); once
+          // they arrive, rebuild so they appear as variants (renderNumeric closes any
+          // open palette first). One-shot: the next build has getVsBowlingTypes() set,
+          // so this branch's caller-side guard won't re-fire.
+          ensureVsBowlingTypesLoaded();
+        } else {
+          vsItems.push(singleFamily("vs batting hand", "vs", [
+            ["Right-hand bat", preselectMatchupVs("hand", "Right-hand bat")],
+            ["Left-hand bat", preselectMatchupVs("hand", "Left-hand bat")],
+          ]));
+        }
+        if (matchup) vsItems.push(leafSingle("strikerpos", "Batting position"));
       }
-      if (matchup) vsItems.push(leafSingle("strikerpos", "Batting position"));
-      pushGroup("Matchup (Vs)", vsItems, "men only");
+      // Opponent-player head-to-head (T-1, owner decision 70): "subject X vs opponent
+      // Y" (bowler_id when batting / batter_id when bowling). BALL-ENGINE ONLY —
+      // flag-gated exactly like the Ball Ranges group (per-delivery ids are absent
+      // from the innings parquets). NOT men-only: those ids exist for every delivery,
+      // so it works for both genders (unlike the profile-backed vs entries above).
+      // Placed beside vs bowling style / vs batting hand (decision-70 grouping).
+      if (ballOn) vsItems.push(leafSingle("vs_opp", "vs opponent player"));
+      pushGroup("Matchup (Vs)", vsItems, women ? undefined : "men only");
     }
 
     // 7 ── Fielding Stats (plain mode only — no matchup grain) ─────────────────────

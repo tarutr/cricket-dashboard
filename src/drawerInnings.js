@@ -71,6 +71,7 @@ import { withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { canonicalStage } from "./canonicalNames.js";
 import { query } from "./db.js";
 import { mountSearchMultiSelect } from "./searchSelect.js";
+import { mountOmnisearch } from "./omnisearch.js";
 import { escHtml, escAttr } from "./html.js";
 
 const POSITIONS = Array.from({ length: 12 }, (_, i) => i + 1);
@@ -1421,6 +1422,66 @@ export function mountWindowPlayer(container, store, onChange, { embedded = false
     renderEdge();
   }
   return { sync, presetEdge };
+}
+
+/**
+ * Mount the Opponent-player head-to-head picker (state.opponentPlayer — pop-up
+ * Tab-2 T-1, owner decision 70). REUSES the shared player-search component
+ * (src/omnisearch.js, searchPlayers-backed typeahead) rather than a bespoke one:
+ * `showFilterAction:false` turns it into a pure player-value PICKER (no "Filter
+ * the table" row), and a chosen row becomes the opponent { id, name }. The results
+ * container renders in NORMAL FLOW (`.opp-picker__results`, not the leaderboard's
+ * absolute `.omnisearch__results`) so it never gets clipped by the Filters popup's
+ * overflow — it just pushes the drawer content down. Ball-engine only (its palette
+ * leaf + row are ballOnly-gated in drawer.js). Writes state.opponentPlayer; db.js
+ * turns that into the base-CTE ball predicate on Search (numbers-critical path).
+ */
+export function mountOpponentPlayer(container, store, onChange, { embedded = false } = {}) {
+  void embedded;
+  container.innerHTML = `
+    <div class="opp-picker" data-role="opp-picker">
+      <input type="text" class="input opp-picker__input" data-role="opp-input" role="combobox"
+             aria-autocomplete="list" aria-expanded="false" autocomplete="off"
+             placeholder="Search a player…" aria-label="Opponent player" />
+      <div class="opp-picker__results" data-role="opp-results" role="listbox" aria-label="Opponent player search results" hidden></div>
+    </div>`;
+  const inputEl = container.querySelector('[data-role="opp-input"]');
+  const resultsEl = container.querySelector('[data-role="opp-results"]');
+  // Tracks the last id we WROTE to the input, so a state change (sync) refreshes
+  // the box without clobbering a live search the user is typing.
+  let lastWrittenId = null;
+
+  mountOmnisearch(inputEl, resultsEl, {
+    showFilterAction: false, // picker mode — no "Filter the table" action row
+    onOpenPlayer: (id, name) => {
+      lastWrittenId = id;
+      inputEl.value = name || "";
+      store.set({ opponentPlayer: { id, name } });
+      onChange();
+    },
+  });
+
+  // Clearing the box clears the filter (mirrors the window editors' "empty piece
+  // ⇒ no predicate"). A programmatic value set (onOpenPlayer / sync) does NOT fire
+  // 'input', so this only ever fires on a real user edit.
+  inputEl.addEventListener("input", () => {
+    if (inputEl.value.trim() === "" && store.get().opponentPlayer) {
+      lastWrittenId = null;
+      store.set({ opponentPlayer: null });
+      onChange();
+    }
+  });
+
+  function sync() {
+    const opp = store.get().opponentPlayer;
+    const id = opp && opp.id ? opp.id : null;
+    if (id !== lastWrittenId) {
+      inputEl.value = id ? opp.name || opp.id : "";
+      lastWrittenId = id;
+    }
+  }
+  sync();
+  return { sync };
 }
 
 // Game-count meta label (ROUND 3, task 4): "1,013 games" — localized thousands

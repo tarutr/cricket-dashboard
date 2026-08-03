@@ -47,9 +47,16 @@ const MAX_ROWS = 8;
  *
  * @param {HTMLInputElement} inputEl
  * @param {HTMLElement} resultsEl - popover panel, positioned via CSS under inputEl
- * @param {{onOpenPlayer?: (id: string, name: string) => void, onFilterTable?: (text: string, matches: Array<{id: string, name: string}>) => void}} callbacks
+ * @param {{onOpenPlayer?: (id: string, name: string) => void, onFilterTable?: (text: string, matches: Array<{id: string, name: string}>) => void, showFilterAction?: boolean}} callbacks
+ *
+ * `showFilterAction` (default true): whether to render the trailing "Filter the
+ * table to names matching …" action row. The two leaderboard mounts (header search
+ * / table pin search) omit it and keep it — byte-identical. A value-PICKER reuse
+ * (drawerInnings.js's mountOpponentPlayer, Tab-2 T-1) passes `false`: there is no
+ * table to filter, so the dropdown is a pure player list and Enter-with-no-
+ * highlight is a no-op (only an arrowed-to row commits).
  */
-export function mountOmnisearch(inputEl, resultsEl, { onOpenPlayer, onFilterTable } = {}) {
+export function mountOmnisearch(inputEl, resultsEl, { onOpenPlayer, onFilterTable, showFilterAction = true } = {}) {
   let debounceId = null;
   let requestToken = 0;
   let rows = []; // last-fetched player rows for `currentTerm`
@@ -96,12 +103,14 @@ export function mountOmnisearch(inputEl, resultsEl, { onOpenPlayer, onFilterTabl
         );
       });
     }
-    const filterIdx = rows.length;
-    parts.push(
-      `<button type="button" class="omnisearch__item omnisearch__item--action${activeIndex === filterIdx ? " is-active" : ""}" data-idx="${filterIdx}" role="option" aria-selected="${activeIndex === filterIdx}">` +
-        `Filter the table to names matching &ldquo;${esc(term)}&rdquo;` +
-        `</button>`
-    );
+    if (showFilterAction) {
+      const filterIdx = rows.length;
+      parts.push(
+        `<button type="button" class="omnisearch__item omnisearch__item--action${activeIndex === filterIdx ? " is-active" : ""}" data-idx="${filterIdx}" role="option" aria-selected="${activeIndex === filterIdx}">` +
+          `Filter the table to names matching &ldquo;${esc(term)}&rdquo;` +
+          `</button>`
+      );
+    }
     resultsEl.innerHTML = parts.join("");
     resultsEl.querySelectorAll(".omnisearch__item").forEach((btn) => {
       btn.addEventListener("click", () => choose(Number(btn.dataset.idx), term));
@@ -199,6 +208,9 @@ export function mountOmnisearch(inputEl, resultsEl, { onOpenPlayer, onFilterTabl
         choose(activeIndex, currentTerm);
         return;
       }
+      // Picker mode (no filter-table action): Enter with no highlighted row has
+      // nothing to commit — do nothing rather than run the (nonexistent) action.
+      if (!showFilterAction) return;
       // Closed dropdown, or open with nothing highlighted: always flush any
       // pending/stale debounce and re-run the lookup fresh so Enter reflects
       // exactly what's in the box right now (also covers Enter-with-no-
@@ -208,7 +220,8 @@ export function mountOmnisearch(inputEl, resultsEl, { onOpenPlayer, onFilterTabl
       return;
     }
     if (!isOpen) return;
-    const total = rows.length + 1; // +1 for the trailing filter-table action
+    const total = rows.length + (showFilterAction ? 1 : 0); // +1 for the trailing filter-table action
+    if (total === 0) return; // picker mode with no matches — nothing to arrow through
     if (e.key === "ArrowDown") {
       e.preventDefault();
       activeIndex = activeIndex < total - 1 ? activeIndex + 1 : 0;
