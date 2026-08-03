@@ -2,8 +2,11 @@
 //
 // Pure HTML builders for the player popup (B7, decision 44a). Every export
 // here is side-effect-free: data in, HTML string out — src/playerPage.js owns
-// fetching + DOM wiring, src/playerFilters.js owns the filters-drawer DOM;
-// this module only owns composing what a section's data means visually.
+// fetching + DOM wiring; this module only owns composing what a section's
+// data means visually. (The popup's old "Player Filters" overlay drawer,
+// formerly src/playerFilters.js, was RETIRED — decision 70 — in favour of the
+// Overview/Filters tab scaffold; this file's scopeLine no longer takes an
+// overlay argument and overlayPillsHTML is gone.)
 // Metric vocabulary (labels, formatting, hasMetricData's no-data rule) comes
 // ONLY from src/metrics.js + table.js's formatValue (SPEC §8: one metrics
 // module) — nothing here redefines a metric.
@@ -17,21 +20,13 @@ import { formatValue } from "./table.js";
 import { escHtml, escAttr } from "./html.js";
 import { FORMAT_BUCKETS } from "./state.js";
 
-// ── Months (shared by the header's scope line and playerFilters.js's date
-// pickers — one copy so both read "Jul 2023" identically). ─────────────────
+// ── Months ───────────────────────────────────────────────────────────────────
 export const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-export function monthLabel(yyyymm) {
-  if (!yyyymm) return null;
-  const [y, m] = yyyymm.split("-").map(Number);
-  return `${MONTH_NAMES[m - 1]} ${y}`;
-}
-
 /** Day-precision label for the popup's scope sentence (R5 Wave 2: "1 Jan
- * 2020"), as opposed to monthLabel's month-only granularity above (still used
- * by the drawer's date pickers). Reads the same "YYYY-MM-DD" values
- * state.dateFrom/dateTo always store (src/state.js's shape comment; native
- * <input type="date"> writes this shape everywhere in current code). */
+ * 2020"). Reads the same "YYYY-MM-DD" values state.dateFrom/dateTo always
+ * store (src/state.js's shape comment; native <input type="date"> writes
+ * this shape everywhere in current code). */
 export function fullDateLabel(yyyymmdd) {
   if (!yyyymmdd) return null;
   const [y, m, d] = yyyymmdd.split("-").map(Number);
@@ -532,13 +527,17 @@ export function bowlingMatchupsHTML(matchups) {
   return `${coverageHTML}${miniTableHTML(BOWLING_HAND_HEADERS, rows)}`;
 }
 
-// ── Honest refusal rendering (B7 overlay) ────────────────────────────────────
-// A section fetcher returns `{ unsupported: [dims] }` when the popup's
-// filters-drawer overlay asked for something that source can't honor (see
-// playerData.js's PLAYER_SECTION_SUPPORT / applyOverlay). We NEVER show a
-// partially-filtered number — the section greys out in place with a plain-
-// English note instead, exactly like the leaderboard matchup mode's coverage
-// gate greys a whole bucket table rather than show a misleading partial one.
+// ── Honest refusal rendering ─────────────────────────────────────────────────
+// A section fetcher can return `{ unsupported: [dims] }` when a requested
+// dimension can't be honored by that source. We NEVER show a partially-
+// filtered number — the section greys out in place with a plain-English note
+// instead, exactly like the leaderboard matchup mode's coverage gate greys a
+// whole bucket table rather than show a misleading partial one. (This was
+// wired to the popup's now-retired "Player Filters" overlay — decision 70 —
+// which was the only thing that could ever set `unsupported`; every fetch in
+// playerData.js is unconditional now, so no live call site produces this
+// shape any more. Kept as dead-but-harmless scaffolding, unchanged by this
+// task's scope, since a later build may reuse the same refusal idiom.)
 const DIM_LABELS = { date: "date range", positions: "batting position", opposition: "opposition", vs: "Vs" };
 
 export function dimDisplayLabel(dim) {
@@ -562,11 +561,13 @@ export function sectionOrUnsupported(title, result, renderFn) {
   return sectionHTML(title, renderFn(result));
 }
 
-/** Whole-tab refusal (bowling only in practice): the overlay carries a dim
- * that NO section on this tab can honor at all (e.g. a Positions/Vs value
- * set from the Batting tab, where bowling's own core has no position/vs
- * concept — PLAYER_SECTION_SUPPORT's bowling.core says so). Greys the entire
- * tab with one note rather than every section repeating itself. */
+/** Whole-tab refusal (bowling only in practice): the (now-retired, decision
+ * 70) overlay could carry a dim that NO section on this tab could honor at
+ * all (e.g. a Positions/Vs value set from the Batting tab, where bowling's
+ * own core has no position/vs concept). Greys the entire tab with one note
+ * rather than every section repeating itself. Dead-but-harmless since the
+ * overlay's retirement — playerData.js's fetchBowlingCore never returns
+ * `{unsupported}` any more — kept unchanged, per this task's scope. */
 export function wholeTabUnsupportedHTML(tabLabel, dims) {
   const dimLabel = (dims || []).map(dimDisplayLabel).join(" and ");
   return `<p class="player-page__note player-page__note--muted">${escHtml(
@@ -574,7 +575,7 @@ export function wholeTabUnsupportedHTML(tabLabel, dims) {
   )} can't be shown with a ${escHtml(dimLabel)} filter active — remove it (Filters, or the pills above) to see this tab.</p>`;
 }
 
-// ── Scope line + overlay pills ───────────────────────────────────────────────
+// ── Scope line ────────────────────────────────────────────────────────────────
 
 // R5 Wave 2: these three strings feed directly into scopeLine's "Data for...
 // (team type)" sentence below — not a general-purpose "cricket" noun phrase
@@ -602,13 +603,13 @@ export const TEAM_TYPE_LABELS = { international: "International", club: "Domesti
  * popup is open to render this — src/state.js never lets a search run with
  * dateFrom unset, and buildFixedScopeState always fills both).
  *
- * The overlay's own extra narrowing (date/positions/opposition/vs) is
- * intentionally NOT folded into this sentence any more — it already has its
- * own removable-pills row directly below (overlayPillsHTML, rendered by
- * playerPage.js's renderScopeArea right after this line), so restating it
- * here would just duplicate that UI, not add honesty this sentence needs.
+ * (The old "Player Filters" overlay's own extra narrowing — date/positions/
+ * opposition/vs — used to get a removable-pills row directly below this
+ * sentence, via overlayPillsHTML. That overlay is RETIRED (decision 70), so
+ * this function no longer takes an overlay argument and there is no pills row
+ * — Overview is now always the full page-scope base profile.)
  */
-export function scopeLine(state, overlay) {
+export function scopeLine(state) {
   const formatLabel = FORMAT_BUCKETS.filter((b) => state.formats && state.formats.includes(b.key))
     .map((b) => b.label)
     .join(", ");
@@ -635,9 +636,14 @@ export function isRedBallOnly(state) {
   return state.formats.length > 0 && state.formats.every((f) => f === "Red Ball");
 }
 
-/** Normalizes fetchBattingCore's two possible shapes (plain row, or the
- * `vs`-scoped composite from fetchBattingCoreVs) into one shape every
- * downstream renderer reads the same way. */
+/** Normalizes fetchBattingCore's return shape into one shape every downstream
+ * renderer reads the same way. Historically fetchBattingCore could ALSO
+ * return a `vs`-scoped `matchup_batting` composite (via a now-DELETED helper,
+ * fetchBattingCoreVs, that only ever ran off the popup's "Player Filters"
+ * overlay's `vs` control) — that overlay is retired (decision 70), so
+ * `core.source` is always "batting" now and the `matchup_batting` branch
+ * below, and every `isVs` branch downstream in this file, is unreachable.
+ * Left in place, unchanged, as dead-but-harmless per this task's scope. */
 export function normalizeBattingCore(core) {
   if (!core) return null;
   if (core.source === "matchup_batting") return core; // { vs, source, coverage, summary, howout, progression }
@@ -684,22 +690,22 @@ export function battingGridHTML(state, coreNorm, extra) {
   }
 
   // "Wicket Type" (renamed from "How out", owner decision 46). Under a Vs
-  // bucket this is the ONLY per-section content besides the tiles above that
-  // can still split by Vs (it switches source to matchup_batting — see
-  // fetchBattingCoreVs) — its title adopts the vs label too, so the honesty
-  // the bars' own footnote already states ("Bowler-credited dismissals vs X")
-  // is visible in the section heading, not just the caption underneath.
+  // bucket (now unreachable — see normalizeBattingCore's comment above) this
+  // was the ONLY per-section content besides the tiles above that could still
+  // split by Vs — its title adopts the vs label too, so the honesty the bars'
+  // own footnote already states ("Bowler-credited dismissals vs X") is
+  // visible in the section heading, not just the caption underneath.
   const wicketTypeTitle = isVs ? `Wicket Type — bowler-credited vs ${coreNorm.vs}` : "Wicket Type";
   const howOutBody = isVs ? howOutVsHTML(coreNorm.howout, coreNorm.vs) : howOutHTML(coreNorm.howout);
 
   let bodyHTML;
   if (isVs) {
-    // Position / opposition / progression can't split by Vs at all (see
-    // PLAYER_SECTION_SUPPORT — all three are `false` for the `vs` dim) —
-    // owner decision 46 hides them outright instead of greying them out with
-    // "Can't split X by Vs here", so only what's actually splittable renders:
+    // Position / opposition / progression couldn't split by Vs at all —
+    // owner decision 46 hid them outright instead of greying them out with
+    // "Can't split X by Vs here", so only what's actually splittable rendered:
     // the tiles above, and Wicket Type here. No two-col grid, no dead gap
-    // where the hidden sections used to be.
+    // where the hidden sections used to be. (This whole branch is unreachable
+    // now — see normalizeBattingCore's comment above.)
     bodyHTML = sectionHTML(wicketTypeTitle, howOutBody);
   } else {
     // "Progressive Scoring" (renamed from "Scoring by balls faced", decision
@@ -765,31 +771,3 @@ export function bowlingGridHTML(state, core, extra) {
   return `${heroCardsHTML}${twoColA}${matchupsHTML}`;
 }
 
-/** One removable pill per active overlay dimension, `data-dim` naming which
- * overlay key a click should clear, plus a "Reset filters" link clearing all
- * of them at once. Returns "" when the overlay is empty (no pills row at
- * all — matches the main app's pills.js precedent of hiding the whole row). */
-export function overlayPillsHTML(overlay) {
-  if (!overlay) return "";
-  const entries = [];
-  if (overlay.dateFrom || overlay.dateTo) {
-    const f = monthLabel(overlay.dateFrom);
-    const t = monthLabel(overlay.dateTo);
-    entries.push({ dim: "date", label: f && t ? `${f} – ${t}` : f ? `From ${f}` : `Through ${t}` });
-  }
-  if (overlay.positions && overlay.positions.length) {
-    const sorted = [...overlay.positions].sort((a, b) => a - b);
-    entries.push({ dim: "positions", label: `Batting at ${sorted.join(", ")}` });
-  }
-  if (overlay.opposition) entries.push({ dim: "opposition", label: `Against ${overlay.opposition}` });
-  if (overlay.vs) entries.push({ dim: "vs", label: `Vs ${overlay.vs}` });
-  if (entries.length === 0) return "";
-  return `<div class="pills-row player-page__filter-pills">${entries
-    .map(
-      (e) =>
-        `<span class="pill">${escHtml(e.label)} <button type="button" class="pill__x" data-dim="${e.dim}" aria-label="Remove filter">&times;</button></span>`
-    )
-    .join(
-      ""
-    )}<button type="button" class="link-btn player-page__reset-filters" data-role="reset-player-filters">Reset filters</button></div>`;
-}

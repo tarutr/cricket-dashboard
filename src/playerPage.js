@@ -9,20 +9,28 @@
 //
 // Page scope is REDUCED to Format + Date range + Team type (see
 // playerData.js's header) — gender and every leaderboard/drawer filter are
-// inert here, and the scope line always says so, honestly (§8.4). On TOP of
-// that page scope, this popup now has its OWN local "Filters" overlay
-// (src/playerFilters.js) that narrows further (date/positions/opposition/vs)
-// — popup-local, never touching the global store, cleared on close/player
-// switch (see showPlayer() below).
+// inert here, and the scope line always says so, honestly (§8.4).
 //
 // B7 (decision 44a) replaced the old stacked Batting-then-Bowling page with:
 //   - an identity header with a real headshot or a designed monogram medallion
 //   - a sticky [Batting | Bowling] toggle (default = the app's own discipline)
 //     rendering a tight grid per discipline, the OTHER discipline lazy-loaded
 //     on first switch and cached thereafter
-//   - the Filters drawer described above
+//   - a "Filters" drawer that re-scoped sections further (date/positions/
+//     opposition/vs)
 // Every section is still the SAME query from playerData.js — this is
 // re-composition of existing fetches, not new aggregation shapes.
+//
+// Decision 70 (2026-08-03): the "Player Filters" drawer above is RETIRED —
+// replaced by a two-tab scaffold (Overview | Filters, below the identity
+// header). Overview is exactly the old always-full-page-scope base profile
+// (the overlay never touches it any more, so Overview's numbers are the
+// pre-overlay-drawer baseline, byte-identical). Filters is a NEW tab whose
+// real content (a per-row filtered-slice table) is a later build
+// (.orchestrator/popup-tab2-build-plan.md) — today it's an empty shell
+// mounted from src/playerFiltersTab.js. The [Batting | Bowling] discipline
+// toggle stays exactly where it was (header row, not a tab) — it still only
+// controls which discipline's grid Overview shows.
 
 import {
   fetchProfile,
@@ -38,31 +46,16 @@ import {
 } from "./playerData.js";
 import { getManifest } from "./db.js";
 import { escHtml, escAttr } from "./html.js";
-import { mountPlayerFilters } from "./playerFilters.js";
-import {
-  headerPhotoHTML,
-  scopeLine,
-  overlayPillsHTML,
-  normalizeBattingCore,
-  battingGridHTML,
-  bowlingGridHTML,
-} from "./playerSections.js";
+import { mountPlayerFiltersTab } from "./playerFiltersTab.js";
+import { headerPhotoHTML, scopeLine, normalizeBattingCore, battingGridHTML, bowlingGridHTML } from "./playerSections.js";
 
 /** Scope key: the page re-fetches only when the player OR this tuple changes
- * (playerData.js's scope — Format + Date + Team type). The popup's OWN
- * Filters overlay is a SEPARATE key (see cacheKeyFor) — a global scope change
- * invalidates both disciplines' caches, an overlay change invalidates them
- * too, but they're tracked independently so each has one job. */
+ * (playerData.js's scope — Format + Date + Team type). Also doubles as the
+ * per-discipline data cache key (see loadDiscipline) — since decision 70
+ * retired the popup's own overlay, scope is the ONLY thing that can
+ * invalidate a discipline's cached section data now. */
 function scopeKeyFor(state) {
   return JSON.stringify([state.formats, state.dateFrom, state.dateTo, state.teamType]);
-}
-
-/** Cache key for one discipline's fetched section data: changes whenever the
- * global scope OR the popup's local overlay changes — either invalidates
- * both disciplines' cached data (the other is simply re-fetched lazily, on
- * next switch, not eagerly). */
-function cacheKeyFor(state, overlay) {
-  return JSON.stringify([scopeKeyFor(state), overlay]);
 }
 
 // ── Fixed scope (R4 Wave 2, owner ruling) ────────────────────────────────────
@@ -123,16 +116,6 @@ function syncSegmented(el, value) {
   });
 }
 
-function activeOverlayCount(overlay) {
-  if (!overlay) return 0;
-  let n = 0;
-  if (overlay.dateFrom || overlay.dateTo) n++;
-  if (overlay.positions && overlay.positions.length) n++;
-  if (overlay.opposition) n++;
-  if (overlay.vs) n++;
-  return n;
-}
-
 // ── Header / shell HTML ──────────────────────────────────────────────────────
 
 function headerHTML(current, profile) {
@@ -157,22 +140,18 @@ function headerHTML(current, profile) {
     </div>`;
 }
 
-/** Sticky header row: back link + discipline toggle (left), Filters + Graph
- * (right). `showControls` gates toggle/Filters/Graph together — only the
- * fully-loaded page shell passes true (loading/error shells have a `current`
- * player but no confirmed innings yet, same precedent as the old
- * showGraphButton gate). */
+/** Sticky header row: back link + discipline toggle (left), Graph (right).
+ * `showControls` gates the toggle/Graph together — only the fully-loaded
+ * page shell passes true (loading/error shells have a `current` player but
+ * no confirmed innings yet, same precedent as the old showGraphButton gate).
+ * Decision 70: the "Player Filters" button that used to sit here is retired
+ * — Filters is now a tab (see tabBarHTML below), not a header-row button. */
 function headerRowHTML({ showControls = false } = {}) {
   const toggleHTML = showControls
     ? `<div class="segmented player-page__discipline-toggle" data-role="discipline-toggle" role="group" aria-label="Discipline">
         <button type="button" class="segmented__btn" data-value="batting">Batting</button>
         <button type="button" class="segmented__btn" data-value="bowling">Bowling</button>
       </div>`
-    : "";
-  const filtersBtnHTML = showControls
-    ? `<button type="button" class="btn btn--ghost player-page__filters-btn" data-role="open-player-filters">
-        Player Filters <span class="filter-open-btn__count" data-role="filters-count" hidden></span>
-      </button>`
     : "";
   const graphBtnHTML = showControls
     ? `<button type="button" class="btn btn--ghost player-page__graph-btn" data-role="graph-player">Player Graphs</button>`
@@ -183,9 +162,21 @@ function headerRowHTML({ showControls = false } = {}) {
         ${toggleHTML}
       </div>
       <div class="player-page__header-row-group player-page__header-row-group--right">
-        ${filtersBtnHTML}
         ${graphBtnHTML}
       </div>
+    </div>`;
+}
+
+/** Tab scaffold (T-F1, decision 70/71): Overview is the existing base-profile
+ * content (unchanged), Filters is the new per-player filtered-row table shell
+ * (src/playerFiltersTab.js — empty today, built out in a later wave). Overview
+ * is always the active tab on a fresh render — see the markup's own
+ * is-active/aria-selected defaults, mirrored by playerPage()'s activeTab
+ * reset in showPlayer(). */
+function tabBarHTML() {
+  return `<div class="player-page__tabs" data-role="tab-bar" role="tablist" aria-label="Player view">
+      <button type="button" class="player-page__tab is-active" data-tab="overview" role="tab" aria-selected="true">Overview</button>
+      <button type="button" class="player-page__tab" data-tab="filters" role="tab" aria-selected="false">Filters</button>
     </div>`;
 }
 
@@ -217,7 +208,9 @@ function pageShellHTML({ current, profile }) {
       ${headerRowHTML({ showControls: true })}
       ${headerHTML(current, profile)}
       <div class="player-page__scope-area" data-role="scope-area"></div>
+      ${tabBarHTML()}
       <div class="player-page__discipline-body" data-role="discipline-body"></div>
+      <div class="player-page__filters-body" data-role="filters-body" hidden></div>
     </div>`;
 }
 
@@ -230,10 +223,11 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
   let searchDebounceId = null;
 
   let activeDiscipline = "batting"; // local to this popup instance
-  let overlay = null; // popup-local Filters overlay — never touches the store
+  let activeTab = "overview"; // "overview" | "filters" — local to this popup instance
   let profile = null;
-  let cacheKey = null; // cacheKeyFor(state, overlay) the cached data below matches
+  let cacheKey = null; // scopeKeyFor(state) the cached data below matches
   const data = { batting: undefined, bowling: undefined }; // undefined=not fetched, "loading", "error", or the fetched {core, ...extra}
+  let filtersTab = null; // the mounted src/playerFiltersTab.js instance for the current shell, or null
 
   // R4 Wave 2 (header-search entry): true for the lifetime of the CURRENT
   // showPlayer() call when opened via { fixedScope: true } (main.js's header
@@ -251,26 +245,56 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
     return fixedScopeState || store.get();
   }
 
-  // The filters-drawer overlay is `position: fixed` (see styles.css's
-  // .player-filters-drawer) and must escape the popup's own scrolling body —
-  // mounted as a sibling of the app's other overlay hosts (index.html's
-  // #filter-drawer-host / #player-popup-host both live directly under
-  // <body>), not nested inside `container`.
-  const filtersHost = document.createElement("div");
-  document.body.appendChild(filtersHost);
-  const filters = mountPlayerFilters(filtersHost, {
-    onApply: (newOverlay) => {
-      overlay = newOverlay;
-      invalidateCaches();
-      renderScopeArea();
-      loadDiscipline(activeDiscipline, { render: true });
-    },
-  });
-
   function invalidateCaches() {
     data.batting = undefined;
     data.bowling = undefined;
     cacheKey = null;
+  }
+
+  // ---------- Tabs ----------
+
+  function syncTabBar(tabBarEl) {
+    tabBarEl.querySelectorAll(".player-page__tab").forEach((btn) => {
+      const isActive = btn.dataset.tab === activeTab;
+      btn.classList.toggle("is-active", isActive);
+      btn.setAttribute("aria-selected", String(isActive));
+    });
+  }
+
+  /** Show/hide the two tab panels per activeTab, and push the Filters tab's
+   * current player/discipline/scope into it when it becomes visible (same
+   * "re-render on relevant change" idiom as loadDiscipline below — the shell
+   * itself has nothing to fetch yet, but the contract is future-proofed for
+   * when it does, per the module's own header comment). */
+  function applyActiveTab() {
+    const disciplineBodyEl = container.querySelector('[data-role="discipline-body"]');
+    const filtersBodyEl = container.querySelector('[data-role="filters-body"]');
+    if (disciplineBodyEl) disciplineBodyEl.hidden = activeTab !== "overview";
+    if (filtersBodyEl) filtersBodyEl.hidden = activeTab !== "filters";
+    if (activeTab === "filters" && filtersTab && current) {
+      filtersTab.show(current.id, activeDiscipline, effectiveState());
+    }
+  }
+
+  /** (Re)mount the Filters-tab shell for the CURRENT container (a fresh
+   * pageShellHTML render always needs a fresh mount, since its `container`
+   * element was just replaced wholesale by the new innerHTML). Destroys any
+   * previous instance first — defensive, mirrors the old drawer's close()-
+   * before-reopen precedent — even though today's empty shell registers
+   * nothing outside its own container. */
+  function mountFiltersTab() {
+    filtersTab?.destroy();
+    filtersTab = null;
+    const el = container.querySelector('[data-role="filters-body"]');
+    if (el && current) {
+      filtersTab = mountPlayerFiltersTab(el, {
+        store,
+        playerId: current.id,
+        discipline: activeDiscipline,
+        pageState: effectiveState(),
+      });
+    }
+    applyActiveTab();
   }
 
   // ---------- Shared shell wiring ----------
@@ -303,14 +327,21 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
         activeDiscipline = btn.dataset.value;
         syncSegmented(toggleEl, activeDiscipline);
         loadDiscipline(activeDiscipline, { render: true });
+        if (activeTab === "filters" && filtersTab && current) {
+          filtersTab.show(current.id, activeDiscipline, effectiveState());
+        }
       });
     }
 
-    const filtersBtn = container.querySelector('[data-role="open-player-filters"]');
-    if (filtersBtn) {
-      filtersBtn.addEventListener("click", () => {
-        if (!current) return;
-        filters.open({ playerId: current.id, discipline: activeDiscipline, pageState: effectiveState(), overlay });
+    const tabBarEl = container.querySelector('[data-role="tab-bar"]');
+    if (tabBarEl) {
+      syncTabBar(tabBarEl);
+      tabBarEl.addEventListener("click", (e) => {
+        const btn = e.target.closest(".player-page__tab");
+        if (!btn || btn.dataset.tab === activeTab) return;
+        activeTab = btn.dataset.tab;
+        syncTabBar(tabBarEl);
+        applyActiveTab();
       });
     }
 
@@ -326,52 +357,11 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
     }
   }
 
-  function renderFiltersCount() {
-    const el = container.querySelector('[data-role="filters-count"]');
-    if (!el) return;
-    const n = activeOverlayCount(overlay);
-    el.hidden = n === 0;
-    el.textContent = String(n);
-  }
-
   function renderScopeArea() {
     const el = container.querySelector('[data-role="scope-area"]');
     if (!el) return;
     const state = effectiveState();
-    el.innerHTML = `<p class="player-page__scope">${escHtml(
-      scopeLine(state, overlay)
-    )}</p>${overlayPillsHTML(overlay)}`;
-    el.querySelectorAll(".pill__x").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        clearOverlayDim(btn.dataset.dim);
-      });
-    });
-    const resetBtn = el.querySelector('[data-role="reset-player-filters"]');
-    if (resetBtn) resetBtn.addEventListener("click", () => clearOverlayDim(null));
-    renderFiltersCount();
-  }
-
-  function clearOverlayDim(dim) {
-    if (!dim) {
-      overlay = null;
-    } else if (overlay) {
-      const next = { ...overlay };
-      if (dim === "date") {
-        next.dateFrom = null;
-        next.dateTo = null;
-      } else if (dim === "positions") {
-        next.positions = [];
-      } else if (dim === "opposition") {
-        next.opposition = null;
-      } else if (dim === "vs") {
-        next.vs = null;
-      }
-      const empty = !next.dateFrom && !next.dateTo && next.positions.length === 0 && !next.opposition && !next.vs;
-      overlay = empty ? null : next;
-    }
-    invalidateCaches();
-    renderScopeArea();
-    loadDiscipline(activeDiscipline, { render: true });
+    el.innerHTML = `<p class="player-page__scope">${escHtml(scopeLine(state))}</p>`;
   }
 
   // ---------- Search mode ----------
@@ -437,12 +427,11 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
 
   // ---------- Player page ----------
 
-  /** Fetch + render ONE discipline's core+extras. Cached per (scope, overlay);
-   * a cache hit just re-renders instantly (no network). `render:true` swaps
-   * the body immediately (toggle click / Filters apply); the initial load
-   * always renders. */
+  /** Fetch + render ONE discipline's core+extras. Cached per scope; a cache
+   * hit just re-renders instantly (no network). `render:true` swaps the body
+   * immediately (toggle click); the initial load always renders. */
   async function loadDiscipline(discipline, { render }) {
-    const key = cacheKeyFor(effectiveState(), overlay);
+    const key = scopeKeyFor(effectiveState());
     if (key !== cacheKey) {
       invalidateCaches();
       cacheKey = key;
@@ -464,7 +453,7 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
 
     let result;
     try {
-      result = await fetchDisciplineData(discipline, playerRef.id, effectiveState(), overlay);
+      result = await fetchDisciplineData(discipline, playerRef.id, effectiveState());
     } catch (err) {
       if (token !== loadToken || current !== playerRef) return; // superseded — don't clobber newer data
       data[discipline] = { error: err };
@@ -476,45 +465,27 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
     if (render) renderBody();
   }
 
-  async function fetchDisciplineData(discipline, playerId, state, ov) {
+  async function fetchDisciplineData(discipline, playerId, state) {
     if (discipline === "batting") {
-      const core = await fetchBattingCore(playerId, state, ov);
+      const core = await fetchBattingCore(playerId, state);
       const coreNorm = normalizeBattingCore(core);
       if (!coreNorm?.summary || Number(coreNorm.summary.innings) === 0) {
         return { core: coreNorm, positions: [], opposition: null, matchups: { coverage: null, coarse: [], fine: [] } };
       }
-      // Owner decision 46: while a Vs bucket is active, playerSections.js's
-      // battingGridHTML hides the position and opposition sections outright
-      // (neither can split by Vs — PLAYER_SECTION_SUPPORT says so for both),
-      // so skip fetching data nobody will see. Matchups is DIFFERENT: it
-      // can't honor `vs` either (it IS the by-bowling-type breakdown; a
-      // section can't pre-filter to the one bucket it exists to break out),
-      // but it stays VISIBLE under Vs — so strip `vs` from its own overlay
-      // rather than let it come back refused. This is a no-op when `vs`
-      // isn't set (same object reference), so the byte-identical fast path
-      // for an empty overlay is untouched.
-      const isVs = coreNorm.source === "matchup_batting";
-      const matchupsOverlay = ov && ov.vs ? { ...ov, vs: null } : ov;
       const [positions, opposition, matchups] = await Promise.all([
-        isVs ? Promise.resolve([]) : fetchBattingPositions(playerId, state, ov),
-        // Owner task #20: "Vs opposition" now shows for EVERY team type (was
-        // international-only, decision 20's gate removed) — the ONLY
-        // remaining refusal is `isVs` (opposition can't split under a
-        // Vs/matchup scope, unrelated to team type).
-        isVs ? Promise.resolve(null) : fetchBattingOpposition(playerId, state, ov),
-        fetchBattingMatchups(playerId, state, matchupsOverlay),
+        fetchBattingPositions(playerId, state),
+        fetchBattingOpposition(playerId, state),
+        fetchBattingMatchups(playerId, state),
       ]);
       return { core: coreNorm, positions, opposition, matchups };
     }
-    const core = await fetchBowlingCore(playerId, state, ov);
+    const core = await fetchBowlingCore(playerId, state);
     if (!core || Array.isArray(core.unsupported) || Number(core.innings) === 0) {
       return { core, opposition: null, matchups: { coverage: null, hands: [] } };
     }
-    // Owner task #20: "Vs opposition" now shows for EVERY team type — bowling
-    // has no isVs-style refusal at all, so the fetch always runs.
     const [opposition, matchups] = await Promise.all([
-      fetchBowlingOpposition(playerId, state, ov),
-      fetchBowlingMatchups(playerId, state, ov),
+      fetchBowlingOpposition(playerId, state),
+      fetchBowlingMatchups(playerId, state),
     ]);
     return { core, opposition, matchups };
   }
@@ -557,6 +528,8 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
     scopeKey = wantsFixedScope ? null : scopeKeyFor(store.get());
     const token = ++loadToken;
 
+    filtersTab?.destroy();
+    filtersTab = null;
     container.innerHTML = loadingShellHTML(playerRef);
     bindShell(loadAndRenderPlayer);
 
@@ -578,6 +551,7 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
 
       container.innerHTML = pageShellHTML({ current: playerRef, profile });
       bindShell(loadAndRenderPlayer);
+      mountFiltersTab();
       renderScopeArea();
       await loadDiscipline(activeDiscipline, { render: true });
     } catch (err) {
@@ -602,16 +576,16 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
   function showPlayer(id, name, opts = {}) {
     current = { id, name };
     // Fresh player: reset everything popup-local (task 4/decision 44a — the
-    // overlay and the discipline tab are cleared on every player switch, and
-    // by extension on every popup reopen too, since main.js always routes a
-    // reopen through this same showPlayer() call with an explicit id/name).
+    // discipline tab and the active Overview/Filters tab are cleared on every
+    // player switch, and by extension on every popup reopen too, since
+    // main.js always routes a reopen through this same showPlayer() call with
+    // an explicit id/name).
     activeDiscipline = store.get().discipline;
-    overlay = null;
+    activeTab = "overview";
     invalidateCaches();
     profile = null;
     fixedScope = Boolean(opts.fixedScope);
     fixedScopeState = null; // resolved in loadAndRenderPlayer once gender is known
-    filters.close();
     loadAndRenderPlayer();
   }
 

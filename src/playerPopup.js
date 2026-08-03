@@ -57,11 +57,9 @@ export function mountPlayerPopup(hostEl, store, { onGraphPlayer } = {}) {
   };
 
   // Chooser modal (owner decision 46) — mounted as a sibling of this popup at
-  // document.body, same "escape the popup's own scroll container" precedent
-  // as playerFilters.js's drawer (see that module's own comment); its CSS
+  // document.body to escape the popup's own scroll container; its CSS
   // (.player-graph-chooser*, styles.css) sits at a higher z-index than
-  // .player-popup so it visually sits OVER it, same idiom as
-  // .player-filters-drawer already does.
+  // .player-popup so it visually sits OVER it.
   //
   // owner note 17 (fix round): the whole "Graph this player" feature below —
   // this chooser included — is DEFERRED to a later design phase. The chooser
