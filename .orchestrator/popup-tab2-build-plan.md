@@ -65,8 +65,12 @@ Plan APPROVED by owner 2026-08-03; decisions 1–3 resolved (above).
 - **Static verification DONE (orchestrator):** `node --check` all; **query builders byte-untouched** (table.js
   edits all >line 1264; playerData.js diff = only overlay-param + `ov.where`→`where`; drawer.js pinned
   `surface:"leaderboard"`); overlay symbols fully removed; new modules export their APIs.
-- **Browser anchor verification: IN PROGRESS** (flag-off: 2,813 / Karanbir 2,454; SA Yadav pop-up
-  60·1,544·29.13·150.34; tab switch; palette; 0 console errors).
+- **Browser anchor verification: ✅ PASS (2026-08-03) — WAVE A COMPLETE + VERIFIED.** Flag-off: 2,813 players /
+  Karanbir 2,454; SA Yadav pop-up 60·1,544·29.13·150.34 (HS 100); Vs Spin matchup 38/454/SR 140.99 cov 913/1027
+  also reconfirmed in-popup (so the Overview matchup section survived the overlay removal intact); Overview | Filters
+  tabs switch cleanly (Filters = "No filtered rows yet"); "+ Add condition" palette works; old Player Filters button
+  gone; **0 console errors**. (Stale ES-module cache showed the old UI on first open — resolved by hard reload; known
+  CLAUDE.md gotcha, not a defect.)
 
 ### Wave A outcomes / CARRY-FORWARD
 - **T-F2 (accepted scope):** only the columns POPOVER extracted → `src/columnsPicker.js`
