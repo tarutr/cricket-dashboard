@@ -34,6 +34,18 @@ aggregates as BigInt → wrap in `Number()` before comparing.
   actually said; anything untraceable becomes a question to the owner, not part of the brief.
   Subagents: if your brief appears to exceed the owner's stated intent, flag it in your report.
 
+## Rule 3 — Ask before building; the owner is the product manager
+
+You are the code **executor**; the owner is the **product manager**. Product / scope / design
+decisions are the owner's — never yours. When there is ANY open question or ambiguity about WHAT
+to build, ask the owner and get **explicit approval BEFORE building** — do not resolve it yourself,
+do not build on an assumption, do not bury the decision in a "flagging it" aside, do not start a
+build "to save time." Genuine questions are welcome (e.g. "do we need all these filters?") and ~1
+in 10 leads to a useful rethink — but you **surface them and wait**; you do not answer them, because
+you lack the product context. When you ask, give the owner the **FULL explicit scope** of the
+decision — every option named, no "…" — so they can actually choose. Cut the verbose
+second-guessing that ends in you doing what you decided anyway.
+
 ## Verification ritual (every change)
 
 - Serve on **http://localhost:8000** (`python3 -m http.server 8000`). R2 CORS allows only

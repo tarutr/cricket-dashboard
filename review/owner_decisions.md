@@ -884,3 +884,145 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
     Vercel origin. **Anchor note**: the app count = distinct (batter_id, batter_name), ~3 above a raw
     distinct-batter_id (name-variant quirk) — a false "2,813→2,810 drift" scare that was a counting-method
     mismatch, not real drift. **NEXT**: backlog #4 (column-group metric defs) or #5 (dropdown taxonomy).
+
+## 2026-07-30 — Ball-grain rebuild program (supersedes the #4-first plan)
+
+67. **BALL-GRAIN REBUILD APPROVED (owner, 2026-07-30): the app's single source of truth becomes a
+    delivery-grain ("ball layer") parquet set.** Chosen over app-side phase derivation and pipeline
+    phase-column extensions — owner: "build the best possible version of data access first, then worry
+    about load times" (quality over load time; load-speed work stays backlog #14, which may later add
+    fast pre-aggregate parquets as caches only). Program rulings:
+    - **Single source of truth**: engine v2 computes every stat from balls. NO existing parquet is
+      deleted until the new flow is built + tested and we see what must be saved (`player_matches` is
+      already known essential — Matches is selection-based, never derivable from deliveries).
+    - **Physical split by gender × format bucket (6 files)**; the scope strip's Gender+Format picks
+      which files a search reads. Orthogonal to where the window filter lives.
+    - **Delivery-window filter lives in the Advanced-filters drawer** (owner ruled against a scope-strip
+      control): TEAM clock = Phase (named standard windows) / Overs (custom range, e.g. 21–24 of an ODI)
+      / Balls (custom legal-ball range, 1–120 / 1–300). Gating: Phase + Balls offered for T20 and
+      50-Over only; **red ball shows Overs ONLY**. PLAYER clock = first/last X balls faced (batting) /
+      bowled (bowling), offered in ALL formats. Team + player windows compose ("first 10 balls faced,
+      in the death overs"). Clocks count LEGAL deliveries (extras ride inside the window at their
+      position; batter-faced ordinal = wides-excluded per SPEC §4.1; the Hundred handled by legal-ball
+      ordinal as in the exporter).
+    - Windows are defines-the-numbers filters → **pins OBEY them** (the WHO-not-WHAT rule). **Innings
+      under a window = innings with ≥1 ball inside the window** (decision-28 honesty pattern);
+      **Matches stays selection-based** (in the XI = a match), unaffected by windows, and **stays in
+      the advanced filter list** (owner considered popup-only, chose keep).
+    - **Per-phase FILTER entries are REMOVED** — the window replaces them. By-phase COLUMNS remain for
+      side-by-side comparison. Mixed-scope queries (a phase condition alongside full-scope columns)
+      knowingly die — owner: "let the mixed queries die; by phase means everything by phase."
+    - **Fixed progression metrics (SR first-10 / 11–20 / 21+) are REMOVED**, replaced by the player
+      clock; may return later as columns (owner floated a custom column picker alongside presets —
+      parked for the preset redesign).
+    - **Super overs: included in the ball layer, flagged, UNCONDITIONALLY excluded from every player
+      stat and career record** (not a filter, no toggle — they are their own section, outside any
+      phase; a super over is a separate mini-innings, NOT balls 121+). Reserved for a future dedicated
+      super-over records surface.
+    - **Column presets (backlog #4): parked entirely; redesigned FROM SCRATCH after this program**
+      (owner rejected the orchestrator's 2026-07-30 preset proposal). Backlog #9 (per-over layer) is
+      absorbed by this program.
+    - **Step 0 (approved to start)**: measurement + design only — build prototype ball parquets
+      LOCALLY from data/cricket.duckdb (git-ignored), weigh all 6 splits, reproduce the standing
+      anchors from balls, and report a measured current-vs-future load/search time comparison
+      (real R2 bandwidth applied to new sizes + in-browser compute on localhost). Nothing ships;
+      no repo code, pipeline, or R2 touched.
+    - **Extras attribution — RULED (owner, 2026-07-30; was flagged open):** an extra rides into the
+      UPCOMING legal ball's slot on any clock that doesn't count it (team_ball + bowl_ball for wides
+      AND no-balls; bat_ball for wides only — a no-ball IS a genuine faced ball). Identical to
+      export_parquet.py's `legal_ordinal` and today's phase columns, so window totals stay consistent
+      with shipped numbers. For the bowler an extra's RUNS count (economy), the BALL does not.
+    - **Illegal-ball wickets — CONFIRMED (owner, 2026-07-30):** bowler-credited kinds are credited
+      regardless of delivery legality (matches the shipped export); run-outs are not (already excluded).
+      Verified in data: 539 bowler-credited wickets on illegal balls (531 stumped-off-a-wide — legal
+      cricket — + 6 hit-wicket + 1 bowled + 1 caught; the last two are cricket-impossible → 2 Cricsheet
+      source errors, left as-is to keep numbers-sacred). No change.
+    - **SPEED PULLED FORWARD (owner, 2026-07-30, after Wave 2a):** Wave 2a proved the ball engine
+      byte-identical (45 scenarios, 0 mismatched cells; anchors from balls on screen) but ~19.8 s per
+      flag-ON search (orchestrator-confirmed) vs ~0.2 s flag-OFF — cause: reconstructing all ~74 innings
+      columns per search in WASM (~6× native, single-core) when a search uses ~8–10. Owner: "20-second
+      searches are unacceptable" → the load-speed work (old #14) runs NOW, before Wave 2b/3, and
+      HARD-GATES Wave-4 cutover. Approved plan: **Layer 1** query-shaped (column-pruned) reconstruction —
+      engine builds only the columns the current search uses, conservative fallback to full set;
+      **Layer 2** lean base projection (no SELECT *) + a scope-keyed materialization cache so column
+      adds / graph queries / popup opens within one Search reuse the computed table. **Layer 3 —
+      production mode (pure single path vs innings-parquets-as-validated-cache for windowless
+      searches) — is an OWNER DECISION deferred until Layers 1–2 are measured.** Threads via
+      COOP/COEP headers parked (infra/CORS churn) unless measurements disappoint.
+    - **Wave-3 window CONTROL design SIGNED OFF (owner, 2026-07-31: "do it as you suggest"):** ONE combined
+      "Delivery window" drawer entry, two composing sub-sections — **Team innings** (mode toggle Phase [multi-
+      select PP/Mid/Death] / Overs [from–to, format-capped] / Balls [legal team balls]; red-ball shows Overs
+      ONLY; Phase+Balls offered only under a single T20 or 50-over bucket) + **This player** (First/Last N balls
+      faced [batting] / bowled [bowling], per-innings, ALL formats, works on the leaderboard per-row AND in the
+      popup). Windows compose; it is a defines-the-numbers filter → Search-gated + pins OBEY it; pill + honest
+      scope line from `describeDeliveryWindow`; the control is shown only when the ball engine is active. Labels
+      "Delivery window"/"Team innings"/"This player" accepted. **Case-(f) semantics DEFERRED** to the post-
+      rebuild column/filter cleanup pass (owner: "we take a detailed look then"): a player-clock composed with a
+      team window currently counts innings by the literal decision-67 "≥1 in-window BALL" rule, so a
+      crease-present-but-didn't-face innings still counts (SA Yadav first-10∧death = 11 inns vs 4 faced) — that
+      rule STANDS until the cleanup revisits it. Wave-3 ENGINE verified (windowed anchors reproduce from raw
+      balls: death 185/96/192.71, first-10 634/476/133.19, death-inns 13); commit 7474203. UI build = next.
+    - **DESIGN CORRECTED at the UI-A review (owner, 2026-07-31):** the combined single "Delivery window"
+      entry with a Phase|Overs|Balls mode-TOGGLE is a "deprecated design style" — REPLACE with SEPARATE,
+      uniform "+ Add condition" entries, one per option (**Phase** [multi PP/Mid/Death] · **Over range** ·
+      **Ball range** · **Player balls** first/last-N faced|bowled), each its own filter + pill, gated in the
+      dropdown per format (Phase/Ball-range T20+50-over only; Over-range all incl. red-ball; player-clock all),
+      composing freely (contradictory combos → honest empty). Reason: a toggle FORCES one mode and breaks the
+      uniform per-filter pattern (cf. decision 42). Rework needed a flat composable spec
+      `{phase?,overs?,balls?,player?}` (AND of pieces) inside the pure generator; numbers byte-identical.
+      Built + orchestrator-verified (commit a430ea6): 4 separate entries confirmed in the DOM, old combined
+      widget gone, composed window (Death ∧ first-10 = SA Yadav 25 runs, predicate = the two clauses AND-ed)
+      correct, walls untouched branch-wide. See memory [[feedback-uniform-filters]].
+      **Owner (2026-07-31): "yes it's in there" — the four-entry STRUCTURE is accepted; the EXACT/detailed
+      control design (layout, labels, styling) is DEFERRED to the later filters/columns rejig pass (same pass
+      as the from-scratch preset redesign) — do NOT polish it further now.**
+    - **Wave-3 Part B (window controls in Graphs popup + player pop-up) FOLDED into the filters/columns rejig
+      (owner, 2026-07-31: "no point redoing the player filters twice").** The window ENGINE is global, so
+      Graphs/popup already INHERIT the applied window (shown in their scope footer) — they just lack their own
+      window control until the rejig wires it. So Wave 3 = window live on Stats; nothing is broken cross-surface.
+
+68. **FILTER REJIG — full design SIGNED OFF (owner, 2026-07-31); build spec = `.orchestrator/filter-rejig-spec.md`.**
+    First of the post-ball-layer filters/columns rejig (owner sequence: filters → columns → columns-in-filters-
+    popup → presets-from-scratch). The complete "+ Add condition" redesign — new groups (Player Profile · Match
+    Details · Basic Stats · Detailed Stats · Ball Ranges · Matchup (Vs) · Fielding Stats), ~60 flat metric rows
+    collapsed to sub-filters (▸ = one entry → variant → operator → value), per-phase + progression filters
+    DELETED (subsumed by the delivery window = "Ball Ranges"), a batch of renames (numerals + clarity: NBSR,
+    Boundary Ball %/Boundary Run %, Batting/Bowling Strike Rate, 50s/100s, 5-WI, Innings Number, Match/Toss
+    Result, Batting Position, etc.), and a few new metrics (Boundary Run % bowling, Innings Score ≥ N, Extras,
+    Innings Number, generalised Wicket Hauls ≥ N, expanded % Runs in…). **Part B** (window controls on Graphs +
+    player pop-up) folds into this rejig. Full detail + build notes in the spec doc — NOT re-narrated here
+    (pointers-not-copies). Standing rules reinforced this session: NEVER cut a filter for being niche (3rd
+    correction — see [[feedback-no-data-policing]]); uniform per-option filters, no bespoke widgets
+    ([[feedback-uniform-filters]]); verify names/labels/formulas against code before asserting (owner caught
+    "Running SR"/"Boundary % Conceded" mislabels). Columns rejig is NEXT.
+    - **Step-0 OUTCOME (2026-07-30): PASS → Wave 1 GO.** 6 files built locally; the first-draft schema
+      was 8 numbers short (gave 3,012 not 2,813) → schema **v1** adds 4 cols (non_striker_name/position,
+      bowler_credited_wkts, wickets_extra) and reconciles BYTE-FOR-BYTE to every existing export; all
+      anchors reproduce from balls; total 76 MB (SMALLER than the 79 MB of innings/matchup files it
+      retires); warm full-leaderboard search ~0.35 s in DuckDB-WASM, windows free; real bandwidth ~10 MB/s.
+      Owner ruled: STORE bat_ball_rev/bowl_ball_rev (simpler/faster, ~11 MB).
+
+69. **HARMONISATION + REJIG PROGRAM + PLAYER-POP-UP TAB 2 (owner, 2026-08-02→03).** All on `ball-layer`,
+    flag-gated; NOTHING shipped. Plans: `.orchestrator/harmonisation-rejig-plan.md`, `.orchestrator/popup-ballengine-plan.md`,
+    `.orchestrator/filter-rejig-spec.md`, `.orchestrator/control-audit.md` (pointers-not-copies). Anchors held throughout
+    (2,813 / Karanbir 2,454 / SA Yadav 60·1,544·29.13·150.34).
+    - **Full picker harmonisation to ONE design language, foundation-first** (option C search palette; dates =
+      searchable month-list; all categorical multi-selects = checkbox panel, **chips retired**, segmented toggles
+      ONLY for exclusive on/off; **discipline → dropdown everywhere** — decided but DEFERRED to the sweep).
+    - **DONE + verified (leaderboard filter rejig): Wave F** (unified panel `searchSelect.js`; segmented-toggle
+      standard; profile pickers/R.Pos/Gender/Discipline migrated) **and Wave R** (the palette: 7 groups, ▸
+      sub-filters, renames, deletes, delivery-window→Ball Ranges, new metrics, Innings Number filter, Fielding
+      Wicket Type count operator, MAT-innings-level, matchup-bowling Boundary Run %, Caught & bowled, dead-code
+      cleanup). Mechanical audit confirmed **no silent removals**. Commits `acbb9a1`→`bd9bf08`.
+    - **Player pop-up = Option 3 (rebuild on the BALL ENGINE).** P0/P1 done (`b942be1`; pop-up already computes
+      byte-identical on balls, zero code change). **Tab 2 "Filters" design SIGNED OFF** — a rows-as-slices table
+      (each row a full-palette multi-condition slice, **Reading A**; shared REAL leaderboard columns/presets;
+      scope in a filters popup mirroring the leaderboard **minus Gender**; row-name = first filter + (i) shows all;
+      edit=pencil + inline ✕; sort/pin like the leaderboard; no baseline row; per-tab discipline; lean). Profile
+      filters + PotM dropped from the pop-up **FILTERS only** (Team kept; columns untouched = columns rejig's call).
+      **NEW opponent-player filter** (X vs Y; ball engine `bowler_id`/`batter_id`; Tab 2 + main leaderboard).
+      **Build off the REAL components** (every hand-mock hallucinated). **⛔ STUCK on the T0 mock** — restart there.
+    - **AND/OR filter logic** = a design pass AFTER the columns rejig (main popup + player pop-up).
+    - **Order (confirmed):** player pop-up Tab 2 (active) → columns rejig → columns-in-popup + presets → AND/OR →
+      sweep → review → cutover (LAST). Process rule reinforced + codified in `CLAUDE.md` **Rule 3**: I execute, the
+      owner is PM; ask before building; no unilateral scope/order changes; no decisions smuggled into asides.
