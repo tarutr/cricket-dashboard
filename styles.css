@@ -4511,6 +4511,63 @@ a { color: var(--color-accent); }
   min-width: 0;
 }
 
+/* ── Filters tab (T-2a): per-player filtered-row table ─────────────────────── */
+.filters-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.filters-tab__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.filters-tab__toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The Filters tab reuses the leaderboard's .table-scroll / .data-table so the
+   cells, sticky first column and horizontal scroll all inherit the real styling.
+   This host just carries the rounded frame. */
+.filters-tab__table-host {
+  min-width: 0;
+}
+
+/* The reused .data-table__*--sticky rule offsets `left` by the leaderboard's
+   pin + rank columns and sizes itself from a JS-set --sticky-col-w. The Filters
+   tab has neither (its first column IS the sticky one, and there's no rank/pin),
+   so pin it flush-left and give it a fixed, readable width here. Without this the
+   sticky column shifts right by pin+rank widths and overlaps the first metrics. */
+.filters-tab .data-table__th--sticky,
+.filters-tab .data-table__td--sticky {
+  left: 0;
+  --sticky-col-w: 13rem;
+}
+
+/* (i) marker revealing a multi-condition row's full filter list (title-attr for
+   T-2a; T-2b builds the real hover popover). */
+.filters-tab__info {
+  color: var(--color-muted);
+  font-size: 0.8em;
+  cursor: help;
+}
+
+.filters-tab__cell--loading {
+  color: var(--color-muted);
+}
+
+.filters-tab__cell--error {
+  color: var(--color-accent);
+  font-style: italic;
+}
+
 .player-page__section {
   display: flex;
   flex-direction: column;
