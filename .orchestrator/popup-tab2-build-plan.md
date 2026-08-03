@@ -56,8 +56,31 @@ Wave A is 3 parallel tasks (different files: `playerPage.js` / `table.js` / `dra
 3. **Tab column choice is INDEPENDENT** of the leaderboard's (own selection, seeded from the discipline default).
 
 ## Status
-Plan APPROVED by owner 2026-08-03; decisions 1–3 resolved (above). **Wave A SPAWNED 2026-08-03** — T-F1 / T-F2 /
-T-F3 in parallel (worktree isolation; disjoint files). Live-browser anchor verification is DEFERRED to the
-integration step (localhost:8000 / R2 CORS is a single-port singleton — can't run 3 servers at once); workers do
-`node --check` + faithful implementation + self-diff-review + `wip:` commits + progress notes. Integration = merge
-the three worktrees, then one browser pass (leaderboard anchors byte-identical + pop-up boots 0 errors).
+Plan APPROVED by owner 2026-08-03; decisions 1–3 resolved (above).
+**Wave A code LANDED 2026-08-03 — committed `770c5e3` (T-F3), `57892d2` (T-F2), `116e90a` (T-F1) on `ball-layer`.**
+- **Worktree-isolation FAILED and is UNUSABLE this session:** the first spawn used `isolation:worktree`, but the
+  tool based the worktrees on `origin/main` — a DIVERGED branch (not an ancestor of ball-layer; missing all 330
+  commits, no addPalette.js/ball engine/plan docs). Workers correctly refused / were stopped; re-ran in the MAIN
+  working tree (no isolation; workers ran NO git; orchestrator committed). **Do NOT use worktree isolation here.**
+- **Static verification DONE (orchestrator):** `node --check` all; **query builders byte-untouched** (table.js
+  edits all >line 1264; playerData.js diff = only overlay-param + `ov.where`→`where`; drawer.js pinned
+  `surface:"leaderboard"`); overlay symbols fully removed; new modules export their APIs.
+- **Browser anchor verification: IN PROGRESS** (flag-off: 2,813 / Karanbir 2,454; SA Yadav pop-up
+  60·1,544·29.13·150.34; tab switch; palette; 0 console errors).
+
+### Wave A outcomes / CARRY-FORWARD
+- **T-F2 (accepted scope):** only the columns POPOVER extracted → `src/columnsPicker.js`
+  `createColumnsPicker({getColumns,setColumns,getDiscipline,getFormats})`. Preset `<select>` + drag stay
+  host-owned (leaderboard preset = pending/lights-Search; pop-up = instant). **T-2 carry:** pop-up builds its own
+  instant preset select reusing `COLUMN_PRESET_DEFS` + `activePresetKey`.
+- **T-F3:** `src/paletteGroups.js` `createPaletteGroupsBuilder(deps)` → `buildPaletteGroups(state,gi,{surface})`;
+  `surface:"popup"` drops role/hand/bowling/rpos/potm_count, keeps Team + matchup. **T-1 carry:** opponent-player
+  filter goes into the Matchup group here.
+- **T-F1:** `src/playerFiltersTab.js` — `mountPlayerFiltersTab(container,{store,playerId,discipline,pageState}) →
+  {show(playerId,discipline,pageState),destroy()}` (renders "No filtered rows yet"). **T-2 carry:** build the real
+  tab here.
+- **Dead-code (deferred to a sweep):** T-F1 left provably-unreachable Tab-1 vs-render code (`sectionOrUnsupported`,
+  `isVs` branches in `normalizeBattingCore`/`battingGridHTML`, `wholeTabUnsupportedHTML`, `dimDisplayLabel`,
+  `howOutVsHTML`, `VS_DISMISSAL_KEYS`, orphan `monthOptionsHTML`) — safe to delete later.
+- **Size flags (pre-existing, SPEC §8.3 ~600-line):** `drawer.js` 1,188 (was 1,456); `playerPage.js` 615 (was
+  642). Both shrank; neither split unprompted.
