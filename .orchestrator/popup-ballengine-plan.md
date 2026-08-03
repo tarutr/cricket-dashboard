@@ -7,7 +7,10 @@
 ## Goal
 The player pop-up on the ball engine as its single source of truth (P0/P1 DONE — the pop-up already computes
 every section from balls byte-identical + has a player-scoped fast path). Build **Tab 2 — "Filters"**, a
-slice-comparison table for one player. **Tab 1 ("Overview" / base profile) stays UNCHANGED.**
+row-comparison table for one player. **Tab 1 ("Overview" / base profile) stays UNCHANGED in content** — but the
+old **"Player Filters" overlay is RETIRED** (owner 2026-08-03): the new tab-system replaces it, so Overview
+becomes the always-full-scope base profile and ALL filtering lives in Tab 2. Build plan + waves + model/effort:
+`.orchestrator/popup-tab2-build-plan.md`.
 
 ## Tab 2 "Filters" — the signed-off design
 A second tab: a table where **each ROW is a user-defined filtered slice of THAT ONE player's record** — a
@@ -25,22 +28,28 @@ vs SR when ≤120" as two rows side by side.
   (vs bowling style · vs batting hand · vs opponent player) STAY (they're about the opponent). Per-context config
   on the SHARED palette — the main leaderboard keeps them all.
 
-**Scope**
-- Tab 2 has its **own scope control, INSIDE a filters popup** (opened from a Filters button) — like the leaderboard
-  popup, **not laid out inline** in the tab. Scope = leaderboard Search Conditions **minus Gender** (player fixes
-  it): **Discipline · Format · Team type · Date range**. Use the REAL controls (Format = Red Ball / 50 Over / T20;
-  Team type = International / Domestic — there is NO "T20 International"; that was a mock hallucination).
-- **Discipline is per-tab** (Tab 1 header; Tab 2 inside its scope popup) — this removes the shared-header toggle
-  that overlapped the [×]. Converting Discipline to a dropdown everywhere is a **LATER wave, not Tab 2** — Tab 2
-  uses the current shared control.
+**Scope — Format / Team type / Date are PER ROW; Discipline is SHARED per-tab (revised 2026-08-03; supersedes the earlier shared/tab-wide scope design)**
+- There is **NO separate scope / "Filters" popup and no tab-level Filters button.** Each row's **Format · Team
+  type · Date range** live **inside that row's Add Filter Row popup**, alongside its `+ Add condition` filters —
+  so **every row is self-contained on those three** (Row 1 could be Format = T20, dates 2023–24; Row 2
+  Format = Test, all dates). Per-row scope = leaderboard Search Conditions **minus Gender** (player fixes it)
+  **and minus Discipline**. REAL controls (Format = Red Ball / 50 Over / T20; Team type = International /
+  Domestic — there is NO "T20 International").
+- **Discipline is SHARED for the whole tab (owner 2026-08-03 — NOT per-row):** the table is all-batting OR
+  all-bowling; a single table NEVER mixes batting and bowling rows. Reason: **column-name standardisation** —
+  mixed disciplines would confuse the shared column set. Discipline is a tab-level control (like the
+  leaderboard's); its exact placement is a layout detail to SHOW in the T0 mock, not decided abstractly.
+- **Sticky default (owner 2026-08-03):** a new Add Filter Row popup pre-fills its Format / Team type / Date with
+  **the last row that was added**, so the user doesn't re-pick them every time.
 
 **The table**
 - **Columns = the real shared leaderboard column picker + presets** — reuse the SHARED component, not a copy, so
   the later columns rejig flows into Tab 2 automatically. Columns are NOT decided in this program (that's the
   columns rejig). PotM Count remains a column via that shared picker; it is dropped only as a *filter*.
-- **Row identity (first cell)** = the row's FIRST filter as plain TEXT (leaderboard-style, like the player-name
-  column). If a row has >1 filter, an **(i) reveals the COMPLETE filter list, including the one used as the name**,
-  on hover. **No pills.**
+- **Row identity (first cell)** = the row's FIRST filter as plain TEXT in **LITERAL operator form** (e.g.
+  `Innings Score ≥ 100` verbatim — no friendly paraphrase), leaderboard-style, like the player-name column. If a
+  row has >1 filter, an **(i) reveals the COMPLETE filter list (bare list, no header), including the one used as
+  the name**, on hover. **No pills.**
 - **Edit = a pencil icon** (not the word); **edit + ✕ (delete row) inline with the first-column text**, not on a
   line below. Lean; small, tight buttons; conforms to the dashboard design system.
 - **Sort:** default = order rows were added; user can column-sort or **pin** rows — SAME as the leaderboard. **No**
@@ -55,6 +64,17 @@ vs SR when ≤120" as two rows side by side.
   picker/presets. Every hand-built mock this phase HALLUCINATED (invented "T20 International", wrong Match Result,
   invented dropdown-nesting). The real palette already does Match/Toss Result → its real "Condition" add-on with no
   invented nesting. Do NOT re-create these; import/reuse them.
+
+## Terminology (owner-confirmed 2026-08-03 — labels final)
+- **"Add Filter Row"** — standardised on BOTH buttons: the tab button that opens the editor AND the commit button
+  inside the editor (NOT "Search", NOT "Add Row"). Edit mode (opened via the pencil): title reads **"Edit Filter
+  Row"**, commit button reads **"Save"** (assumption — confirm if it too should read "Add Filter Row").
+- **Edit = a pencil icon** (never the word "Edit") + **[✕]** delete, both inline with the row-title text (first cell).
+- **Row label = the row's first condition in LITERAL operator form** (e.g. `Innings Score ≥ 100`); **(i)** reveals
+  the full condition list (bare, no header) when a row has >1 condition.
+- **Empty state = "No filtered rows yet"** (pairs with the "Add Filter Row" button).
+- **"slice" is BANNED from all user-facing text** — say "row" / "filtered row". It survives ONLY as internal
+  shorthand in these planning docs. (Owner has asked twice; see memory `feedback-retire-slice-word`.)
 
 ## Guardrails
 Numbers sacred — a NO-FILTER row == the player's full-scope record (byte-identical); every sliced row
@@ -85,6 +105,7 @@ reorder is needed: Tab 2 reuses the shared column component, so the later column
 automatically. (An earlier draft wrongly put columns first — retracted.)
 
 ## Status
-P0 ✅ / P1 ✅ verified. **Tab-2 design SIGNED OFF (2026-08-03).** ⛔ **STUCK on T0 — no accepted mock yet.** Restart
-here: produce a working mock off the real components (per the BUILD PRINCIPLE above) → owner approval → T1 → T2 →
-T3 → T4. Nothing past T0 builds without owner sign-off.
+P0 ✅ / P1 ✅ verified. **Tab-2 design FULLY FINALISED (2026-08-03)** — terminology (see Terminology section), per-row
+scope for Format / Team type / Date, Discipline shared per-tab (see the revised Scope section); **no open design
+questions remain.** ⛔ **STUCK on T0 — no accepted mock yet.** Next: produce a working mock off the real components
+(per the BUILD PRINCIPLE above) → owner approval → T1 → T2 → T3 → T4. Nothing past T0 builds without owner sign-off.

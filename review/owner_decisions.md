@@ -1026,3 +1026,22 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
     - **Order (confirmed):** player pop-up Tab 2 (active) → columns rejig → columns-in-popup + presets → AND/OR →
       sweep → review → cutover (LAST). Process rule reinforced + codified in `CLAUDE.md` **Rule 3**: I execute, the
       owner is PM; ask before building; no unilateral scope/order changes; no decisions smuggled into asides.
+
+70. **PLAYER POP-UP "FILTERS" TAB — design finalised + build plan approved (owner, 2026-08-03).** Follows #69.
+    Full design detail: `.orchestrator/popup-ballengine-plan.md`; build plan: `.orchestrator/popup-tab2-build-plan.md`
+    (pointers-not-copies). Branch `ball-layer`, flag-gated `?engine=ball`; NOTHING shipped. **T0 mock SKIPPED**
+    (owner: "you understand the design well enough"). Numbers sacred: a no-filter row == that player's leaderboard
+    row (byte-identical); `buildQuery` reused UNCHANGED, scoped per-player via the existing outer-wrap idiom.
+    - **Terminology (final):** add button AND the editor commit button are both **"Add Filter Row"**; edit =
+      **pencil icon** (never the word) + inline **[✕]**, both on the row-title line; row label = the first condition
+      in **LITERAL operator form** (e.g. `Innings Score ≥ 100`); **(i)** reveals the full condition list (bare);
+      empty state = **"No filtered rows yet"**. **The word "slice" is RETIRED from ALL user-facing text** (owner
+      asked twice — internal shorthand only).
+    - **Scope:** Format / Team type / Date are **PER ROW** (set inside each Add Filter Row popup; **sticky** —
+      pre-filled from the last row added); **no separate scope popup / Filters button**. **Discipline is SHARED for
+      the whole tab** (all-batting OR all-bowling; never mixed — column-name standardisation).
+    - **The old "Player Filters" overlay is RETIRED** — the new tab-system replaces it (owner-approved removal).
+    - **Column picker EXTRACTED into a shared component** (reuse, not copy — foundation-first); the tab's column
+      choice is **INDEPENDENT** of the leaderboard's.
+    - **Build plan approved; Wave A (foundations) authorised.** SPEC/BACKLOG doc updates HELD until the ball-layer
+      cut (Option B).
