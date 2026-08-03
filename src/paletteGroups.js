@@ -344,7 +344,10 @@ export function createPaletteGroupsBuilder(deps) {
       // so it works for both genders (unlike the profile-backed vs entries above).
       // Placed beside vs bowling style / vs batting hand (decision-70 grouping).
       if (ballOn) vsItems.push(leafSingle("vs_opp", "vs opponent player"));
-      pushGroup("Matchup (Vs)", vsItems, women ? undefined : "men only");
+      // No "men only" note (owner 2026-08-03): the men-only limitation on the profile-backed
+      // entries is TEMPORARY — women's data arrives in the player-registry backlog phase, so this
+      // group goes cross-gender soon; a "men only" label would just mislead in the meantime.
+      pushGroup("Matchup (Vs)", vsItems);
     }
 
     // 7 ── Fielding Stats (plain mode only — no matchup grain) ─────────────────────

@@ -88,3 +88,29 @@ Plan APPROVED by owner 2026-08-03; decisions 1–3 resolved (above).
   `howOutVsHTML`, `VS_DISMISSAL_KEYS`, orphan `monthOptionsHTML`) — safe to delete later.
 - **Size flags (pre-existing, SPEC §8.3 ~600-line):** `drawer.js` 1,188 (was 1,456); `playerPage.js` 615 (was
   642). Both shrank; neither split unprompted.
+
+### T-1 (opponent-player filter) — ✅ DONE + verified (2026-08-03), committed `ab642e7`
+- Built on the delivery-window pattern: new `src/opponentFilter.js` composed into `windowPredicateFor` in db.js
+  (byte-identical when inactive: `if (!opp) return win`); shared palette Matchup group (ball-engine-gated) +
+  omnisearch picker (`showFilterAction:false`) + "vs {name}" pill.
+- Verified: flag-off + flag-on-inactive anchors byte-identical (2,813 / Karanbir 2,454; SKY 60·1,544·29.13·150.34);
+  ACTIVE head-to-heads match independent raw-ball counts EXACTLY (SA Yadav vs NT Ellis = 72/37/1/8 batting; mirror
+  bowling 37 balls/76 runs/1 wkt). 0 console errors; `config.js` reverted clean.
+- **Owner ruling 2026-08-03: GENDER-AGNOSTIC** — shows on BOTH men & women (works for women; no profile dependency).
+  As built → no filter code change. Per a FOLLOW-UP owner instruction (2026-08-03) the **"men only" NOTE was REMOVED
+  from the Matchup group** entirely (paletteGroups.js) — men-only is a TEMPORARY data limitation (women's data lands
+  in the player-registry backlog phase), so the label would just mislead. Note existed only on the Matchup group.
+- Verified vs the LOCAL ball snapshot (`data/wave1_out`) — `deliveries_*.parquet` is NOT yet on production R2
+  (data staging is a cutover step; `?engine=ball` can't boot against R2 until then).
+
+### T-2 (the Filters tab) — STAGED into two sequential frontend-heavy (Opus) builds (fits one-run limits + verifies the numbers foundation first)
+- **T-2a — data path + rendering:** row model + per-row query (clone pop-up scope + row condition-set + tab
+  discipline → `buildQuery` UNCHANGED → outer-wrap `SELECT * FROM (…) WHERE id='X'` → db.query) + render via
+  `createColumnsPicker` (tab-INDEPENDENT column state). PROVE: a no-filter row == the player's leaderboard row
+  byte-identical (SKY 60·1,544·29.13·150.34); a code-seeded "Innings Score ≥ 100" row == an independent DuckDB
+  count. Empty state "No filtered rows yet"; "Add Filter Row" button present (placeholder wiring).
+- **T-2b — interactive editor + row mgmt:** "Add Filter Row" → the REAL Add-condition palette (`createAddPalette`
+  + `createPaletteGroupsBuilder` surface:"popup") writing a PER-ROW condition-set (local, not the global store);
+  per-row **sticky** scope (Format/Team type/Date) inside the popup; edit(pencil, pre-filled)+delete(✕) inline with
+  the row-title; row identity = first condition in literal operator form + (i); sort/pin; both buttons "Add Filter
+  Row". Replaces T-2a's code-seeding.
