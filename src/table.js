@@ -8,7 +8,7 @@
 // advanced-filter conditions on rate/ratio metrics and to render "—" for
 // no-data cells (NULL already renders "—"; this module never coalesces ratios).
 
-import { getMetric, hasMetricData, matchupBucketLabel, DISMISSAL_KINDS, metricDisplayLabel, paramSqlExpression } from "./metrics.js";
+import { getMetric, hasMetricData, matchupBucketLabel, paramSqlExpression } from "./metrics.js";
 import { query } from "./db.js";
 import {
   buildScopeClausesTagged,
@@ -21,6 +21,7 @@ import {
 } from "./filters.js";
 import { activeGroups } from "./advanced.js";
 import { escHtml, escAttr } from "./html.js";
+import { createColumnsPicker } from "./columnsPicker.js";
 import {
   eligibleMetrics,
   positionsFilterActive,
@@ -1264,85 +1265,9 @@ function dataCellHTML(metric, row) {
   return `<td class="data-table__td" data-key="${metric.key}">${text}</td>`;
 }
 
-// ── Dismissals column-picker pruning (decision 44/42, B2R wave 3) ───────────
-// The plain "batting" namespace is the ONLY one where metrics.js's dismissal
-// taxonomy produces a count+% pair per kind (12 kinds x 2 = 24 checkboxes,
-// see DISMISSAL_KINDS/`section: "dismissal"` in metrics.js) — bowling's wkt_*
-// metrics carry no `section` at all (so they render under Basic, unaffected
-// by any of this) and both matchup namespaces' dismissal metrics are
-// count-only (6 items each, no % sibling), so they're already a plain list
-// and keep the old rendering below untouched. This block is therefore scoped
-// to ns === "batting" only.
-//
-// Grouping metadata lives HERE, not in metrics.js — this file owns rendering
-// only, metrics.js owns the metric catalogue, and "which 6 kinds are common
-// vs rare" is a picker-layout judgment call, not a metric definition. Kind
-// strings match DISMISSAL_KINDS' own `kind` field exactly.
-const RARE_DISMISSAL_KINDS = new Set([
-  "hit wicket",
-  "retired out",
-  "obstructing the field",
-  "handled the ball",
-  "timed out",
-  "hit the ball twice",
-]);
-
-// Display labels for the picker rows — shorter than metrics.js's own `label`
-// (which is prefixed "Out …" for the count metric's own column header, not
-// needed again here since the section header already reads "Dismissals").
-const DISMISSAL_ROW_LABEL = {
-  out_caught: "Caught",
-  out_bowled: "Bowled",
-  out_lbw: "LBW",
-  out_run_out: "Run out",
-  out_stumped: "Stumped",
-  out_caught_and_bowled: "Caught & Bowled",
-  out_hit_wicket: "Hit wicket",
-  out_retired_out: "Retired out",
-  out_obstructing_the_field: "Obstructing the field",
-  out_handled_the_ball: "Handled the ball",
-  out_timed_out: "Timed out",
-  out_hit_the_ball_twice: "Hit the ball twice",
-};
-
-/** One dismissal-kind row: a single checkbox standing for EITHER the count or
- * the % column (metrics.js's `${key}` / `${key}_pct`), whichever the
- * section's "Show as %" toggle currently selects — checked iff either
- * variant is present in `visible` (mixed/legacy state is read honestly here;
- * see computeInitialShowPct's doc comment for when it gets normalised). */
-function dismissalRowHTML(d, visible) {
-  const countKey = d.key;
-  const pctKey = `${d.key}_pct`;
-  const checked = visible.has(countKey) || visible.has(pctKey);
-  const label = DISMISSAL_ROW_LABEL[countKey] ?? d.label;
-  return `<label class="columns-popover__item">
-    <input type="checkbox" data-count-key="${countKey}" data-pct-key="${pctKey}" ${checked ? "checked" : ""} />
-    <span>${escHtml(label)}</span>
-  </label>`;
-}
-
-/** Initial "Show as %" state for a freshly-opened popover, derived from the
- * CURRENT column list rather than any stored preference (there isn't one —
- * this is a transient picker-open computation, same lifetime as the popover
- * itself). Majority rule across the 12 kinds' checked rows: more % columns
- * checked than count columns -> starts on %; a tie (including "none checked
- * at all") starts on counts, the pre-existing convention. A mixed save from
- * before this redesign (e.g. 2 count + 1 %) is NOT silently rewritten by this
- * computation alone — it only decides which way the toggle SHOWS initially;
- * the actual column-list normalisation (collapsing every checked row onto one
- * variant) happens the first time the user flips the toggle or checks/
- * unchecks a row (see the toggle's own change handler below), never merely by
- * opening the popover. */
-function computeInitialShowPct(cols) {
-  const visible = new Set(cols);
-  let pctCount = 0;
-  let countCount = 0;
-  for (const d of DISMISSAL_KINDS) {
-    if (visible.has(`${d.key}_pct`)) pctCount += 1;
-    else if (visible.has(d.key)) countCount += 1;
-  }
-  return pctCount > countCount;
-}
+// The Columns picker's dismissal-% / rare-dismissals grouping + rendering
+// (RARE_DISMISSAL_KINDS, dismissalRowHTML, computeInitialShowPct) moved to
+// src/columnsPicker.js with the rest of the picker popover (Tab-2 wave T-F2).
 
 /** Pseudo-metric for the Player-name column (task 6). It is NOT a real
  * metrics.js entry (name is a structural column, not a stat), so it never
@@ -1488,10 +1413,23 @@ export function mountTable(
   // lookup that never changes at runtime.
   let bowlingTypesCache = null;
   let lastBowlingTypes = [];
-  // The currently-open "Columns" popover, if any (Batch 3 fix 3). Tracked here
-  // (not just a local DOM query) so load() can find and refresh it after
-  // every reload — see openColumnsPopover()'s doc comment.
-  let openColumnsPopoverState = null;
+  // The shared Columns picker (extracted to src/columnsPicker.js, Tab-2 wave
+  // T-F2). The leaderboard's contract: it lists metrics for the EFFECTIVE
+  // namespace (matchup vocab while a Vs selection is active) and applies a
+  // column change INSTANTLY via applyColumnsInstant — a frozen-scope requery
+  // that never lights Search. The popover lives on document.body so a reload
+  // never destroys it; load()/enterView() call columnsPicker.refresh(...) after
+  // every re-render to re-anchor + re-sync it. Same behaviour as the former
+  // in-closure openColumnsPopover; only the UI moved behind this contract.
+  const columnsPicker = createColumnsPicker({
+    getDiscipline: () => effectiveDiscipline(store.get()),
+    getFormats: () => store.get().formats,
+    getColumns: () => {
+      const s = store.get();
+      return s.columns[effectiveDiscipline(s)];
+    },
+    setColumns: (cols) => applyColumnsInstant(effectiveDiscipline(store.get()), cols),
+  });
   // In-progress column drag (task 2), or null. Tracked at this scope (not
   // inside wireColumnDrag's own closure) purely so onUp() can read where the
   // pointer last was over — see wireColumnDrag's doc comment.
@@ -1762,12 +1700,10 @@ export function mountTable(
       });
     }
 
-    if (columnsBtnEl) {
-      columnsBtnEl.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openColumnsPopover(columnsBtnEl);
-      });
-    }
+    // Wire the "Columns" trigger to the shared picker. mount() adds the same
+    // stopPropagation + open-on-click the inline handler used to; each skeleton
+    // rebuild makes a fresh button, so re-mounting it never double-binds.
+    if (columnsBtnEl) columnsPicker.mount(columnsBtnEl);
 
     // SEARCH button (R3.2): replaces the old toolbar "Graph" button and is the
     // ONE query trigger from the toolbar — main.js's runSearch commits pending
@@ -1883,7 +1819,7 @@ export function mountTable(
     // the filters changed resolves AFTER the prompt renders and paints a stale
     // (often 0-row) table over it.
     loadToken++;
-    closeColumnsPopover();
+    columnsPicker.close();
     teardownSkeleton();
     // enterView() unconditionally trusts lastLoadedState/lastRows whenever
     // they're non-null, so this is the ONE place that must actively forget a
@@ -1931,7 +1867,7 @@ export function mountTable(
   function enterView() {
     if (lastLoadedState !== null) {
       renderLoaded(lastRows, lastLoadedState, lastBowlingTypes);
-      refreshOpenColumnsPopover();
+      columnsPicker.refresh(container.querySelector('[data-role="columns-btn"]'));
       return;
     }
     renderPrompt();
@@ -2777,265 +2713,6 @@ export function mountTable(
     });
   }
 
-  /**
-   * The column picker (§ restricted picker, D4 R3 follow-up): lists every
-   * eligible metric in the CURRENT effective namespace — the plain
-   * batting/bowling vocabulary normally, or the matchup_batting/matchup_bowling
-   * vocabulary while a "Vs" selection is active — in the same three sections
-   * (Basic / Dismissals / Phase) either way. Mutates state.columns[ns], so a
-   * pick made in matchup mode never leaks into the plain picker's list or
-   * vice versa (they're different namespaces/keys).
-   *
-   * Batch 3 fix 3: hosted on document.body, NOT inside `container`. Every
-   * checkbox change calls load(), which (pre-Batch-1) reassigned
-   * container.innerHTML wholesale (renderLoading() then renderTable()) — a
-   * popover living inside that subtree was destroyed the instant the first
-   * checkbox fired, so only one column could be ticked per open (the owner's
-   * known complaint). Batch 1's persistent-toolbar refactor (renderLoadingState()
-   * / renderLoaded(), see above) no longer nukes `container` wholesale either,
-   * but this popover still lives on document.body regardless — it must survive
-   * even a full prompt/error transition, which DOES still replace `container`.
-   * Living on body lets it survive reloads for free; positionColumnsPopover()
-   * places it from the anchor button's getBoundingClientRect(), and
-   * refreshOpenColumnsPopover() (called from load(), see below) re-finds the
-   * anchor and re-syncs checked state + position after every reload while
-   * it's open.
-   */
-  function positionColumnsPopover(popover, anchor) {
-    const rect = anchor.getBoundingClientRect();
-    const margin = 8;
-    popover.style.position = "fixed";
-    popover.style.top = `${Math.round(rect.bottom + 6)}px`;
-    // Right-align to the anchor (matches the old right:0-in-parent look),
-    // clamped so it never runs off either edge on a narrow (~380px) viewport.
-    const width = popover.offsetWidth || 240;
-    let left = rect.right - width;
-    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
-    popover.style.left = `${Math.round(left)}px`;
-    popover.style.right = "auto";
-  }
-
-  function closeColumnsPopover() {
-    if (!openColumnsPopoverState) return;
-    const { el, onDocClick, onKeydown, onScroll, onResize } = openColumnsPopoverState;
-    el.remove();
-    document.removeEventListener("click", onDocClick, true);
-    document.removeEventListener("keydown", onKeydown, true);
-    window.removeEventListener("scroll", onScroll, true);
-    window.removeEventListener("resize", onResize);
-    openColumnsPopoverState = null;
-  }
-
-  /** Called from load() after every reload while the popover is open:
-   * re-finds the (possibly recreated) anchor button, repositions, and
-   * re-syncs checkbox checked state from the store — pruneInvalidColumns()
-   * may have silently dropped a phase column out from under it, and the
-   * checkboxes must stay honest about what's actually visible. Closes if the
-   * anchor no longer exists (e.g. the toolbar mode changed under it). */
-  function refreshOpenColumnsPopover() {
-    if (!openColumnsPopoverState) return;
-    const anchor = container.querySelector('[data-role="columns-btn"]');
-    if (!anchor) {
-      closeColumnsPopover();
-      return;
-    }
-    openColumnsPopoverState.anchor = anchor;
-    const state = store.get();
-    const ns = effectiveDiscipline(state);
-    const visible = new Set(state.columns[ns]);
-    openColumnsPopoverState.el.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-      // Two shapes of checkbox share this popover: the plain data-key ones
-      // (Basic/Phase, and Dismissals in every namespace except batting) and
-      // the batting Dismissals section's dual-key rows (data-count-key/
-      // data-pct-key — see dismissalRowHTML), checked iff EITHER of their two
-      // underlying columns is visible. The "Show as %" toggle itself has
-      // neither dataset key and is skipped here — its own checked state is
-      // plain UI state (not derived from `visible`) and untouched by reloads.
-      if (cb.dataset.key) {
-        cb.checked = visible.has(cb.dataset.key);
-      } else if (cb.dataset.countKey) {
-        cb.checked = visible.has(cb.dataset.countKey) || visible.has(cb.dataset.pctKey);
-      }
-    });
-    positionColumnsPopover(openColumnsPopoverState.el, anchor);
-  }
-
-  function openColumnsPopover(anchor) {
-    closeColumnsPopover();
-    const state = store.get();
-    const ns = effectiveDiscipline(state);
-    const all = eligibleMetrics(ns, state.formats);
-    const basic = all.filter(
-      (m) => !m.isPhaseMetric && m.section !== "dismissal" && m.section !== "fielding" && m.section !== "impact"
-    );
-    const dismissal = all.filter((m) => m.section === "dismissal");
-    // Fielding / Impact (Wave 3): their own sub-headers in BOTH views. Plain
-    // data-key checkboxes (same mechanics as Basic) — the generic
-    // [data-key] change handler below already wires them.
-    const fielding = all.filter((m) => m.section === "fielding");
-    const impact = all.filter((m) => m.section === "impact");
-    const phase = all.filter((m) => m.isPhaseMetric);
-    const visible = new Set(state.columns[ns]);
-
-    const popover = document.createElement("div");
-    popover.className = "columns-popover";
-    const section = (label, metrics) =>
-      metrics.length
-        ? `<div class="columns-popover__section-label">${label}</div>
-           <div class="columns-popover__list">
-             ${metrics
-               .map(
-                 (m) => `<label class="columns-popover__item">
-                   <input type="checkbox" data-key="${m.key}" ${visible.has(m.key) ? "checked" : ""} />
-                   <span>${metricDisplayLabel(m, state.formats)}</span>
-                 </label>`
-               )
-               .join("")}
-           </div>`
-        : "";
-
-    // Dismissals: the pruned real/rare + "Show as %" layout, batting ONLY
-    // (see the RARE_DISMISSAL_KINDS doc comment for why every other namespace
-    // keeps the plain `section()` list above — they never had the 24-checkbox
-    // problem this solves).
-    let dismissalHTML;
-    if (ns === "batting") {
-      const showPct = computeInitialShowPct(state.columns[ns]);
-      const realKinds = DISMISSAL_KINDS.filter((d) => !RARE_DISMISSAL_KINDS.has(d.kind));
-      const rareKinds = DISMISSAL_KINDS.filter((d) => RARE_DISMISSAL_KINDS.has(d.kind));
-      dismissalHTML = `
-        <div class="columns-popover__section-label">Dismissals</div>
-        <label class="columns-popover__pct-toggle">
-          <input type="checkbox" data-role="dismissal-pct-toggle" ${showPct ? "checked" : ""} />
-          <span>Show as %</span>
-        </label>
-        <div class="columns-popover__list">
-          ${realKinds.map((d) => dismissalRowHTML(d, visible)).join("")}
-        </div>
-        <details class="columns-popover__disclosure">
-          <summary><span class="columns-popover__disclosure-arrow">▸</span> Rare dismissals</summary>
-          <div class="columns-popover__list">
-            ${rareKinds.map((d) => dismissalRowHTML(d, visible)).join("")}
-          </div>
-        </details>`;
-    } else {
-      dismissalHTML = section("Dismissals", dismissal);
-    }
-
-    popover.innerHTML =
-      section("Basic", basic) +
-      dismissalHTML +
-      section("Fielding", fielding) +
-      section("Impact", impact) +
-      section("Phase", phase);
-    document.body.appendChild(popover);
-    positionColumnsPopover(popover, anchor);
-
-    // Plain data-key checkboxes: Basic, Phase, and (outside batting)
-    // Dismissals — unchanged mechanics from before this redesign.
-    popover.querySelectorAll('input[type="checkbox"][data-key]').forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const s = store.get();
-        const curNs = effectiveDiscipline(s);
-        const cols = s.columns[curNs].slice();
-        if (cb.checked) {
-          if (!cols.includes(cb.dataset.key)) cols.push(cb.dataset.key);
-        } else {
-          const idx = cols.indexOf(cb.dataset.key);
-          if (idx >= 0) cols.splice(idx, 1);
-        }
-        // R4 Wave 4a (A1): INSTANT column change — apply to the frozen table
-        // now (re-rendering / requerying the same rows) without lighting Search.
-        // The checkbox already reflects the pick; the popover (on document.body)
-        // survives the requery via refreshOpenColumnsPopover().
-        applyColumnsInstant(curNs, cols);
-      });
-    });
-
-    // Batting Dismissals rows: each checkbox stands for whichever variant
-    // (count vs %) the toggle currently selects. Ticking a previously-unchecked
-    // row adds THAT variant; unticking removes BOTH (defensive against a
-    // legacy mixed-state save carrying the "wrong" one — see
-    // computeInitialShowPct's doc comment).
-    const toggleEl = popover.querySelector('[data-role="dismissal-pct-toggle"]');
-    popover.querySelectorAll('input[type="checkbox"][data-count-key]').forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const s = store.get();
-        const curNs = effectiveDiscipline(s); // always "batting" — this section only renders when ns === "batting"
-        const cols = s.columns[curNs].slice();
-        const countKey = cb.dataset.countKey;
-        const pctKey = cb.dataset.pctKey;
-        if (cb.checked) {
-          const activeKey = toggleEl.checked ? pctKey : countKey;
-          if (!cols.includes(activeKey)) cols.push(activeKey);
-        } else {
-          [countKey, pctKey].forEach((k) => {
-            const idx = cols.indexOf(k);
-            if (idx >= 0) cols.splice(idx, 1);
-          });
-        }
-        applyColumnsInstant(curNs, cols); // A1: INSTANT, no Search light
-      });
-    });
-
-    // Section-level "Show as %" toggle: on every flip, normalise EVERY
-    // currently-checked dismissal row onto the new variant (drop whichever
-    // key is present, push the toggle's own key) — this is the "normalise on
-    // first interaction" rule (decision 44c): opening the popover never
-    // rewrites a legacy mixed-state column list by itself, only an actual
-    // toggle flip (or a row check/uncheck, handled above) does.
-    if (toggleEl) {
-      toggleEl.addEventListener("change", () => {
-        const s = store.get();
-        const curNs = effectiveDiscipline(s);
-        const cols = s.columns[curNs].slice();
-        const showPct = toggleEl.checked;
-        for (const d of DISMISSAL_KINDS) {
-          const countKey = d.key;
-          const pctKey = `${d.key}_pct`;
-          const wasChecked = cols.includes(countKey) || cols.includes(pctKey);
-          if (!wasChecked) continue;
-          [countKey, pctKey].forEach((k) => {
-            const idx = cols.indexOf(k);
-            if (idx >= 0) cols.splice(idx, 1);
-          });
-          cols.push(showPct ? pctKey : countKey);
-        }
-        applyColumnsInstant(curNs, cols); // A1: INSTANT, no Search light
-      });
-    }
-
-    const onDocClick = (e) => {
-      if (popover.contains(e.target) || e.target === anchor || anchor.contains?.(e.target)) return;
-      closeColumnsPopover();
-    };
-    const onKeydown = (e) => {
-      if (e.key === "Escape") closeColumnsPopover();
-    };
-    const onScroll = () => {
-      if (!openColumnsPopoverState) return;
-      const a = openColumnsPopoverState.anchor;
-      if (!document.body.contains(a)) {
-        closeColumnsPopover();
-        return;
-      }
-      positionColumnsPopover(openColumnsPopoverState.el, a);
-    };
-    const onResize = () => closeColumnsPopover();
-
-    // Deferred so the very click that opened the popover doesn't immediately
-    // close it again via onDocClick.
-    setTimeout(() => document.addEventListener("click", onDocClick, true), 0);
-    document.addEventListener("keydown", onKeydown, true);
-    // Capture:true — scroll doesn't bubble, but a capturing listener on
-    // window still sees scrolls on nested scrollable ancestors (e.g.
-    // .table-scroll's horizontal scrollbar).
-    window.addEventListener("scroll", onScroll, true);
-    window.addEventListener("resize", onResize);
-
-    openColumnsPopoverState = { el: popover, anchor, onDocClick, onKeydown, onScroll, onResize };
-  }
-
   async function load(scopeState = null, { resort = true, preserveSortFlag = false } = {}) {
     let state;
     if (scopeState) {
@@ -3121,7 +2798,7 @@ export function mountTable(
       // The columns popover (if open) lives outside `container` precisely so
       // this reload never destroys it (Batch 3 fix 3) — re-find its anchor in
       // the freshly-rendered toolbar, reposition, and re-sync checked state.
-      refreshOpenColumnsPopover();
+      columnsPicker.refresh(container.querySelector('[data-role="columns-btn"]'));
       // Pinned players with zero rows in this result set (task 3b, extended
       // 4d/A6): computed in BOTH plain and matchup mode — Wave 4b/decision 47a
       // routed buildMatchupQuery onto the same whereWithPinExemption/
@@ -3148,8 +2825,9 @@ export function mountTable(
       if (token !== loadToken) return null;
       renderError(err, load);
       // No columns-btn in the error state — close honestly rather than leave
-      // a popover floating over an error box with no anchor.
-      refreshOpenColumnsPopover();
+      // a popover floating over an error box with no anchor (refresh() closes
+      // when its anchor argument is null).
+      columnsPicker.refresh(container.querySelector('[data-role="columns-btn"]'));
       return null;
     }
   }
