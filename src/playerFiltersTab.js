@@ -71,6 +71,7 @@ import {
 } from "./state.js";
 import { createColumnsPicker } from "./columnsPicker.js";
 import { openFilterRowEditor } from "./playerFilterEditor.js";
+import { getScopeSingletonsController, describeRowSingletons } from "./playerFilterScope.js";
 import { escHtml, escAttr } from "./html.js";
 
 // "slice" is BANNED from user-facing text (owner ruling). Label a row that
@@ -297,13 +298,18 @@ function conditionsToInningsWhere(conditions, discipline) {
 let rowSeq = 0;
 const nextRowId = () => `row-${++rowSeq}`;
 
-function makeRow(conditions, scope) {
+function makeRow(conditions, scope, singletons, deliveryWindow, opponentPlayer) {
   return {
     id: nextRowId(),
     scope: scope || { formats: null, dateFrom: null, dateTo: null, teamType: null },
     conditions: conditions || emptyAdvancedBlock(),
-    deliveryWindow: null,
-    opponentPlayer: null,
+    // T-2c: the row's scope singletons (a partial state — Team / Opposition / Event
+    // / Venue / Stage / Match & Toss Result / Innings Number), overlaid onto the
+    // clean row state by buildRowState. deliveryWindow / opponentPlayer are the
+    // row's ball predicates, threaded per-call to db.query in fetchRow.
+    singletons: singletons || {},
+    deliveryWindow: deliveryWindow || null,
+    opponentPlayer: opponentPlayer || null,
     pinned: false,
   };
 }
@@ -341,7 +347,7 @@ function conditionLiteralLabel(cond, discipline, formats) {
   return `${base} ${OP_SYMBOLS[cond.operator] ?? cond.operator} ${cond.v1}`;
 }
 
-/** Every complete condition on a row, as literal-form strings (for the (i)). */
+/** Every complete per-innings condition on a row, as literal-form strings. */
 function allConditionLabels(conditions, discipline, formats) {
   const out = [];
   for (const g of sliceActiveGroups(conditions || emptyAdvancedBlock(), discipline)) {
@@ -350,8 +356,18 @@ function allConditionLabels(conditions, discipline, formats) {
   return out;
 }
 
+/** ALL of a row's filter labels — the per-innings conditions THEN the scope
+ * singletons (T-2c: Opposition / Event / Stage / window / opponent / …). Combining
+ * them keeps the first-cell label + (i) honest (SPEC §8.4): a row filtered ONLY by
+ * a scope singleton reads e.g. "vs Australia", never the misleading "No conditions". */
+function rowAllLabels(row, discipline, formats) {
+  const numeric = allConditionLabels(row.conditions, discipline, formats);
+  const scope = describeRowSingletons(row.singletons, row.deliveryWindow, row.opponentPlayer, discipline);
+  return [...numeric, ...scope];
+}
+
 function rowLabel(row, discipline, formats) {
-  const labels = allConditionLabels(row.conditions, discipline, formats);
+  const labels = rowAllLabels(row, discipline, formats);
   return labels.length ? labels[0] : NO_CONDITION_LABEL;
 }
 
@@ -364,6 +380,7 @@ function rowLabel(row, discipline, formats) {
 function buildRowState(row, pageState, discipline) {
   const base = createInitialState(null); // complete neutral state; dateTo overridden below
   const scope = row.scope || {};
+  const singletons = row.singletons || {};
   const ps = pageState || {};
   return {
     ...base,
@@ -373,6 +390,23 @@ function buildRowState(row, pageState, discipline) {
     dateFrom: scope.dateFrom ?? ps.dateFrom ?? base.dateFrom,
     dateTo: scope.dateTo ?? ps.dateTo ?? base.dateTo,
     teamType: scope.teamType ?? ps.teamType ?? base.teamType,
+    // T-2c scope singletons: buildQuery's OWN buildScopeClauses (Team / Opposition /
+    // Event / Venue / Innings Number) + buildMatchContextClauses (Match & Toss
+    // Result / Stage) apply these as WHERE — buildQuery is UNCHANGED (numbers
+    // sacred). Each defaults to base's empty value, so a row with no scope singleton
+    // emits no extra clause and stays byte-identical. (deliveryWindow / opponentPlayer
+    // are ball predicates — set NOT here but per-call on db.query in fetchRow.)
+    teams: singletons.teams ?? base.teams,
+    opposition: singletons.opposition ?? base.opposition,
+    event: singletons.event ?? base.event,
+    eventSeasons: singletons.eventSeasons ?? base.eventSeasons,
+    venue: singletons.venue ?? base.venue,
+    stage: singletons.stage ?? base.stage,
+    result: singletons.result ?? base.result,
+    resultCondition: singletons.resultCondition ?? base.resultCondition,
+    tossResult: singletons.tossResult ?? base.tossResult,
+    tossDecision: singletons.tossDecision ?? base.tossDecision,
+    inningsNumber: singletons.inningsNumber ?? base.inningsNumber,
     advanced: emptyAdvancedBlock(),
   };
 }
@@ -415,6 +449,16 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
   let curPageState = pageState || null;
   let rows = []; // user-defined via the editor; empty ⇒ "No filtered rows yet"
   let fetchToken = 0;
+
+  // T-2c: the shared scope-singletons controller (Opposition / Event / Stage /
+  // window / opponent / … value editors). One instance app-wide (see
+  // getScopeSingletonsController) — the editor modal borrows its persistent host.
+  const scopeController = getScopeSingletonsController();
+
+  // T-2c UX change 2 (owner 2026-08-03): a discipline switch RESETS the tab's rows
+  // (a batting-worded row can't slice bowling) + WARNS. When a switch clears rows,
+  // this holds the notice text shown until the user next adds a row.
+  let disciplineResetNotice = null;
 
   // Per-row query results, keyed by row id: `undefined` = loading, `null` = the
   // player has no innings under the row, `{__error:true}` = query failed, else the
@@ -471,6 +515,12 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
   // ---------- the editor ----------
 
   function openEditor(mode, existingRow) {
+    // Opening the editor clears any lingering discipline-reset notice (the user is
+    // now acting on the current discipline's rows).
+    if (disciplineResetNotice) {
+      disciplineResetNotice = null;
+      renderRows();
+    }
     const initialScope =
       mode === "edit" ? { ...existingRow.scope } : lastScope ? { ...lastScope } : defaultScope();
     openFilterRowEditor(document, {
@@ -483,16 +533,25 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
       isBooleanMetric,
       isPopupFilterMetric,
       conditionBaseName,
-      onCommit: ({ conditions, scope }) => {
+      // T-2c: the shared scope-singletons controller + this row's existing scope
+      // singletons / ball predicates (edit pre-fill).
+      scopeController,
+      initialSingletons: mode === "edit" ? existingRow.singletons : null,
+      initialDeliveryWindow: mode === "edit" ? existingRow.deliveryWindow : null,
+      initialOpponentPlayer: mode === "edit" ? existingRow.opponentPlayer : null,
+      onCommit: ({ conditions, scope, singletons, deliveryWindow, opponentPlayer }) => {
         lastScope = { ...scope }; // sticky
         if (mode === "edit") {
           existingRow.conditions = conditions;
           existingRow.scope = scope;
+          existingRow.singletons = singletons || {};
+          existingRow.deliveryWindow = deliveryWindow || null;
+          existingRow.opponentPlayer = opponentPlayer || null;
           rowData.delete(existingRow.id);
           renderRows();
           queryRow(existingRow);
         } else {
-          const row = makeRow(conditions, scope);
+          const row = makeRow(conditions, scope, singletons, deliveryWindow, opponentPlayer);
           rows.push(row);
           rowData.set(row.id, undefined);
           renderRows();
@@ -530,6 +589,7 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
             <button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>
           </div>
         </div>
+        <p class="filters-tab__reset-notice" data-role="reset-notice" role="status" hidden></p>
         <div class="filters-tab__table-host" data-role="table-host"></div>
       </div>`;
 
@@ -669,7 +729,7 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
   function labelCellHTML(row) {
     const formats = row.scope.formats || currentFormats();
     const label = rowLabel(row, curDiscipline, formats);
-    const all = allConditionLabels(row.conditions, curDiscipline, formats);
+    const all = rowAllLabels(row, curDiscipline, formats);
     const info =
       all.length > 1
         ? ` <span class="filters-tab__info" tabindex="0" role="note" title="${escAttr(
@@ -710,6 +770,13 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     const host = container.querySelector('[data-role="table-host"]');
     if (!host) return;
     syncPresetSelect();
+    // T-2c: the discipline-reset warning (owner 2026-08-03), shown until dismissed
+    // by the next Add Filter Row.
+    const noticeEl = container.querySelector('[data-role="reset-notice"]');
+    if (noticeEl) {
+      noticeEl.hidden = !disciplineResetNotice;
+      noticeEl.textContent = disciplineResetNotice || "";
+    }
     if (rows.length === 0) {
       host.innerHTML = `<p class="player-page__note player-page__note--muted">No filtered rows yet</p>`;
       columnsPicker.refresh(container.querySelector('[data-role="columns-btn"]'));
@@ -775,6 +842,18 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     const nextDisc = nextDiscipline === "bowling" ? "bowling" : "batting";
     const disciplineChanged = nextDisc !== curDiscipline;
     const playerChanged = nextPlayerId != null && nextPlayerId !== curPlayerId;
+    // T-2c UX change 2 (owner 2026-08-03): a discipline switch RESETS the rows + WARNS.
+    // A batting-worded row (e.g. "6s ≥ 2") can't slice a bowling record, so rather
+    // than leave stale/meaningless rows, clear them and show a brief warning naming
+    // the target discipline. Only fires when there is actually something to clear.
+    if (disciplineChanged && rows.length > 0) {
+      rows = [];
+      disciplineResetNotice = `Switching to ${nextDisc === "bowling" ? "Bowling" : "Batting"} cleared your filter rows — a ${
+        nextDisc === "bowling" ? "batting" : "bowling"
+      } filter can't slice ${nextDisc}.`;
+    } else if (disciplineChanged) {
+      disciplineResetNotice = null; // nothing was cleared; no notice
+    }
     curPlayerId = nextPlayerId ?? curPlayerId;
     curDiscipline = nextDisc;
     curPageState = nextPageState || curPageState;

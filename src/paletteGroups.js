@@ -49,12 +49,19 @@
 //     Bowling, Matches, 50s/100s, Balls per…) fall out automatically.
 //   • Innings Score / Wicket Hauls read plainly (full-operator numeric editor),
 //     not the leaderboard's "≥ N" count shape; PotM is added as a Y/N leaf.
-//   • Every SCOPE SINGLETON (Team / Opposition / Event / Venue / Stage / Match &
-//     Toss Result / Innings Number / Matchup Vs / opponent player / delivery
-//     window / fielding position) is WITHHELD for now (leafSingle/singleFamily/
-//     matchResultFamily → null): those need per-row value editors + query wiring
-//     not built in this wave. Held back — NOT dropped from the design — to keep
-//     every offered filter honest; see the report / owner note.
+//   • The SCOPE SINGLETONS in POPUP_SCOPE_SINGLETON_KEYS (Team / Opposition / Event
+//     / Venue / Stage / Match & Toss Result / Innings Number + the ball-engine
+//     vs-opponent / four delivery-window keys) are OFFERED (T-2c): leafSingle /
+//     singleFamily / matchResultFamily return real leaves whose value editor is a
+//     store-adapter reuse of the drawer's own singleton editors
+//     (src/playerFilterScope.js). Their clauses come from the row's clean-state
+//     buildQuery (buildScopeClauses / buildMatchContextClauses) — buildQuery is
+//     UNCHANGED (numbers sacred) and an empty selection is byte-identical.
+//   • Still WITHHELD (→ null): the matchup "Vs" entries (vs bowling style / vs
+//     batting hand / batting position — they route through buildMatchupQuery, a
+//     different path this tab never uses) and fielding position (its per-innings
+//     source lands in T-3). Held back — NOT dropped from the design — to keep
+//     every offered filter honest (SPEC §8.4).
 // Only the "popup" branch changes; the leaderboard taxonomy is byte-untouched.
 
 import { effectiveNamespace, matchupVsActive, eligibleMetrics, FIELDING_POSITIONS, inningsNumberOptions } from "./state.js";
@@ -92,6 +99,30 @@ const stripOutPrefix = (label) => label.replace(/^Out\s+/, "");
 // T-F3: the "popup" surface's Player-Profile exclusions (see file header). Any
 // other surface (i.e. "leaderboard") excludes nothing — same 6 leaves as today.
 const POPUP_EXCLUDED_PLAYER_PROFILE_LEAVES = new Set(["role", "hand", "bowling", "rpos", "potm_count"]);
+
+// T-2c: the SCOPE SINGLETONS the player pop-up ("popup" surface) now OFFERS as
+// per-row filters (owner 2026-08-03). Each flows through the row's clean-state
+// buildQuery — buildScopeClauses (Team / Opposition / Event / Venue / Innings
+// Number) and buildMatchContextClauses (Match & Toss Result / Stage) apply them as
+// WHERE, so buildQuery stays UNCHANGED (numbers sacred) and an empty selection is
+// byte-identical. Their value editors are a store-adapter reuse of the drawer's own
+// singleton editors (src/playerFilterScope.js). Everything a "popup" surface still
+// WITHHOLDS is simply absent from this set: the Player-Profile leaves
+// (role/hand/bowling/rpos — also excluded above), the matchup "Vs" entries (vs
+// bowling style / vs batting hand / batting position, which route through
+// buildMatchupQuery — a different path this tab never uses; a separate follow-up),
+// and fielding (its per-innings source lands in T-3). vs_opp + the four Ball-Ranges
+// window keys are included too: they are ball-engine-gated by the existing `ballOn`
+// guards below, and their per-call {opponentPlayer, deliveryWindow} threading is the
+// T-2b-i db.query path (not buildScopeClauses). Consulted ONLY on the "popup"
+// surface — leafSingle / singleFamily / matchResultFamily are byte-untouched on the
+// leaderboard.
+const POPUP_SCOPE_SINGLETON_KEYS = new Set([
+  "team", "opposition", "event", "venue", "mc_stage",
+  "mc_result", "mc_toss_result", "mc_toss_decision", "inn_num",
+  "vs_opp", "win_phase", "win_overs", "win_balls", "win_player",
+]);
+const popupWithholdsSingleton = (surface, key) => surface === "popup" && !POPUP_SCOPE_SINGLETON_KEYS.has(key);
 
 /**
  * Bind the taxonomy builder to one surface's instance closures (its own store,
@@ -159,16 +190,16 @@ export function createPaletteGroupsBuilder(deps) {
       if (surface === "popup" && metricSliceable && !metricSliceable(key, disc)) return null;
       return { kind: "leaf", label: label ?? metricDisplayLabel(m, s.formats), metricKey: key, run: () => pickMetric(gi, key) };
     };
-    // Pop-up surface withholds every scope SINGLETON (Team / Opposition / Event /
-    // Venue / Stage / Result / Toss / Innings Number / Matchup Vs / opponent /
-    // delivery-window / fielding position). Those need their own per-row value
-    // editors + query wiring, which are NOT built in this wave (T-2b-i wired only
-    // the numeric/boolean per-innings slices + per-row opponent/window threading).
-    // Showing them without a working data path would be a dishonest filter (SPEC
-    // §8.4), so they are held back here — flagged for the owner, not dropped from
-    // the design. (No live consumer uses `surface:"popup"` yet, so this is safe.)
+    // Pop-up surface (T-2c): OFFERS the scope singletons in POPUP_SCOPE_SINGLETON_KEYS
+    // (Team / Opposition / Event / Venue / Stage / Match & Toss Result / Innings
+    // Number + the ball-engine vs-opponent / delivery-window keys), each with the
+    // store-adapter value editor wired through pickSingleton (src/playerFilterScope.js);
+    // still WITHHOLDS every other singleton (the matchup "Vs" entries route through
+    // buildMatchupQuery and fielding needs the T-3 source — showing either without a
+    // working data path would be a dishonest filter, SPEC §8.4). Byte-untouched on
+    // the leaderboard surface.
     const leafSingle = (key, label, preselect = null) => {
-      if (surface === "popup") return null;
+      if (popupWithholdsSingleton(surface, key)) return null;
       return { kind: "leaf", label, disabled: singlePresent(key), run: () => pickSingleton(key, preselect) };
     };
     const metricFamily = (label, variantDefs) => {
@@ -178,7 +209,7 @@ export function createPaletteGroupsBuilder(deps) {
     // A categorical ▸ family bound to ONE singleton: variants pre-select a value;
     // the family + variants disable once that singleton row is present.
     const singleFamily = (label, key, variantDefs) => {
-      if (surface === "popup") return null; // categorical singleton families withheld in the pop-up (see leafSingle)
+      if (popupWithholdsSingleton(surface, key)) return null; // pop-up offers only the POPUP_SCOPE_SINGLETON_KEYS families (see leafSingle)
       const present = singlePresent(key);
       const variants = variantDefs.map(([vlabel, preselect]) => ({
         kind: "leaf", label: vlabel, disabled: present, run: () => pickSingleton(key, preselect),
@@ -229,9 +260,11 @@ export function createPaletteGroupsBuilder(deps) {
       // (Wave R2c), now live in Batting & Bowling Basic Stats. Its old plumbing
       // (mc_innings_order singleton row/editor/pill/state/clause) was fully torn
       // down in the waveR2-cleanup pass — no gap, the entry point moved.
-      // Match/Toss Result reveal singleton rows too, so they are withheld in the
-      // pop-up for the same reason as the other scope singletons (see leafSingle).
-      surface === "popup" ? null : matchResultFamily,
+      // Match/Toss Result (T-2c): OFFERED on the pop-up too — all three of its
+      // variant keys (mc_result / mc_toss_result / mc_toss_decision) are in
+      // POPUP_SCOPE_SINGLETON_KEYS, revealed by the store-adapter editors. Their
+      // clauses come from buildMatchContextClauses (buildQuery unchanged).
+      matchResultFamily,
     ]);
 
     // 3/4 ── Batting / Bowling metric groups (discipline-specific) ────────────────

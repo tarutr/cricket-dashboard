@@ -93,6 +93,15 @@ export function openFilterRowEditor(hostDoc, deps) {
     conditionBaseName,
     onCommit,
     onClose,
+    // T-2c: the shared scope-singletons controller (playerFilterScope.js) — the
+    // reused drawer value editors for Opposition / Event / Venue / Stage / Match &
+    // Toss Result / Innings Number / Team + vs-opponent + delivery-window, behind a
+    // store adapter. Its rows mount into this modal; on commit the editor reads the
+    // draft off it. Absent (older callers) ⇒ no scope singletons, unchanged.
+    scopeController = null,
+    initialSingletons = null,
+    initialDeliveryWindow = null,
+    initialOpponentPlayer = null,
   } = deps;
 
   const draft = {
@@ -108,9 +117,10 @@ export function openFilterRowEditor(hostDoc, deps) {
 
   const isEdit = mode === "edit";
   const title = isEdit ? "Edit Filter Row" : "Add Filter Row";
-  // Owner ruling: the ADD commit button reads "Add Filter Row" (same as the tab
-  // button). Edit-mode commit reads "Save" (terminology-note assumption — flagged).
-  const commitLabel = isEdit ? "Save" : "Add Filter Row";
+  // Owner ruling (2026-08-03): BOTH the add AND the edit-mode commit button read
+  // "Add Filter Row" (same label as the tab button) — the earlier "Save" assumption
+  // was resolved to "Add Filter Row".
+  const commitLabel = "Add Filter Row";
 
   // ── overlay + card ──────────────────────────────────────────────────────────
   const overlay = document.createElement("div");
@@ -125,6 +135,9 @@ export function openFilterRowEditor(hostDoc, deps) {
         <div class="pfe__section">
           <div class="pfe__label">Conditions</div>
           <div class="pfe__conds" data-role="conds"></div>
+          <!-- T-2c: the reused scope-singleton value editors mount here (their
+               rows are appended by the shared controller's host). -->
+          <div class="pfe__scope-rows-host" data-role="scope-rows-host"></div>
           ${paletteSkeletonHTML(GI)}
         </div>
         <div class="pfe__section pfe__scope">
@@ -165,16 +178,21 @@ export function openFilterRowEditor(hostDoc, deps) {
     gender: gender || "male",
     formats: draft.scope.formats && draft.scope.formats.length ? draft.scope.formats : formats && formats.length ? formats : ["T20"],
   });
+  // T-2c: the scope singletons offered on the "popup" surface are revealed by the
+  // shared controller (pickSingleton), disabled once shown (isPresent/SINGLETON_TYPES),
+  // and their ▸-variants pre-fill via its preselect closures. The matchup "Vs" and
+  // fielding preselects stay no-ops (those leaves are withheld — paletteGroups.js).
+  const noPreselect = () => () => {};
   const buildGroups = createPaletteGroupsBuilder({
-    isPresent: () => false,
-    SINGLETON_TYPES: [],
-    pickSingleton: () => {}, // popup withholds every singleton — never fired
+    isPresent: scopeController ? (t) => scopeController.isRevealed(t.key) : () => false,
+    SINGLETON_TYPES: scopeController ? scopeController.SINGLETON_TYPES : [],
+    pickSingleton: scopeController ? (key, preselect) => scopeController.revealSingleton(key, preselect) : () => {},
     pickMetric: (_gi, key) => addCondition(key),
-    preselectPhase: () => () => {},
-    preselectFielding: () => () => {},
-    preselectMatchupVs: () => () => {},
-    preselectEdge: () => () => {},
-    preselectInningsNumber: () => () => {},
+    preselectPhase: scopeController ? scopeController.preselectPhase : noPreselect,
+    preselectFielding: noPreselect,
+    preselectMatchupVs: noPreselect,
+    preselectEdge: scopeController ? scopeController.preselectEdge : noPreselect,
+    preselectInningsNumber: scopeController ? scopeController.preselectInningsNumber : noPreselect,
     getVsBowlingTypes: () => null,
     ensureVsBowlingTypesLoaded: () => {},
     metricSliceable: isPopupFilterMetric,
@@ -275,6 +293,8 @@ export function openFilterRowEditor(hostDoc, deps) {
         // Preserve FORMAT_BUCKETS order; empty ⇒ null (inherit the pop-up scope).
         const next = FORMAT_BUCKETS.map((b) => b.key).filter((k) => set.has(k));
         draft.scope.formats = next.length ? next : null;
+        // T-2c: the per-row scope changed → reload the scope editors' option lists.
+        if (scopeController) scopeController.onScopeChanged();
       });
     });
   }
@@ -287,6 +307,7 @@ export function openFilterRowEditor(hostDoc, deps) {
       btn.addEventListener("click", () => {
         draft.scope.teamType = btn.dataset.tt;
         renderTeamType();
+        if (scopeController) scopeController.onScopeChanged();
       });
     });
   }
@@ -295,13 +316,22 @@ export function openFilterRowEditor(hostDoc, deps) {
     const toEl = overlay.querySelector('[data-role="date-to"]');
     if (draft.scope.dateFrom) fromEl.value = draft.scope.dateFrom;
     if (draft.scope.dateTo) toEl.value = draft.scope.dateTo;
-    fromEl.addEventListener("change", () => { draft.scope.dateFrom = fromEl.value || null; });
-    toEl.addEventListener("change", () => { draft.scope.dateTo = toEl.value || null; });
+    fromEl.addEventListener("change", () => {
+      draft.scope.dateFrom = fromEl.value || null;
+      if (scopeController) scopeController.onScopeChanged();
+    });
+    toEl.addEventListener("change", () => {
+      draft.scope.dateTo = toEl.value || null;
+      if (scopeController) scopeController.onScopeChanged();
+    });
   }
 
   // ── lifecycle ─────────────────────────────────────────────────────────────────
   function teardown() {
     palette.closeCurrent();
+    // Detach the shared scope-singleton host BEFORE removing the modal, so its
+    // persistent editors (+ their one-time document listeners) survive the close.
+    if (scopeController) scopeController.detach();
     document.removeEventListener("keydown", onKey, true);
     overlay.remove();
   }
@@ -312,8 +342,14 @@ export function openFilterRowEditor(hostDoc, deps) {
   function commit() {
     const conditions = cleanConditions(draft.conditions);
     const scope = { ...draft.scope };
+    // T-2c: pull the scope-singleton draft off the controller BEFORE teardown (it
+    // reads its live state). deliveryWindow / opponentPlayer are the row's ball
+    // predicates (threaded per-call to db.query); the rest are scope WHERE fields.
+    const singletons = scopeController ? scopeController.getScopeSingletons() : {};
+    const deliveryWindow = scopeController ? scopeController.getDeliveryWindow() : null;
+    const opponentPlayer = scopeController ? scopeController.getOpponentPlayer() : null;
     teardown();
-    if (onCommit) onCommit({ conditions, scope });
+    if (onCommit) onCommit({ conditions, scope, singletons, deliveryWindow, opponentPlayer });
   }
   function onKey(e) {
     if (e.key === "Escape") { e.stopPropagation(); cancel(); }
@@ -330,4 +366,18 @@ export function openFilterRowEditor(hostDoc, deps) {
   renderTeamType();
   wireDates();
   palette.mountAddPalette(addctlEl);
+
+  // T-2c: attach the shared scope-singleton editors into this modal + start a fresh
+  // editor session — reset the draft to this row's singletons and reveal the ones
+  // that carry a value (edit pre-fill). scope is passed by REFERENCE (draft.scope
+  // is mutated in place by the scope controls above), so the editors' option lists
+  // always read the row's live Format / Team type / Date.
+  if (scopeController) {
+    const scopeRowsHost = overlay.querySelector('[data-role="scope-rows-host"]');
+    if (scopeRowsHost) scopeController.mountInto(scopeRowsHost);
+    scopeController.begin(
+      { scope: draft.scope, discipline, gender: gender || "male", fallbackFormats: formats, onChange: () => {} },
+      { singletons: initialSingletons, deliveryWindow: initialDeliveryWindow, opponentPlayer: initialOpponentPlayer }
+    );
+  }
 }
