@@ -895,8 +895,22 @@ function regularPositionCteSql(state) {
  * the slice. Otherwise the player_matches source is kept (it also counts
  * matches where the player didn't bat/bowl).
  */
-export function buildQuery(state, visibleColumns) {
+export function buildQuery(state, visibleColumns, opts = {}) {
   const discipline = state.discipline;
+
+  // Tab-2 per-innings SLICE injection (T-2b-i): an OPTIONAL pre-aggregate WHERE
+  // predicate on the innings-grain view columns (runs / sixes_hit / wickets / …),
+  // AND-ed into this query's WHERE below so every aggregate runs over ONLY the
+  // sliced innings instead of the whole record. This is the numbers-correct way to
+  // make the pop-up Filters tab's conditions per-INNINGS slices rather than the
+  // leaderboard's player-level HAVING gate. The caller (playerFiltersTab.js) owns
+  // the metric→column mapping (conditionToInningsWhere); this stays a generic,
+  // taxonomy-agnostic string injection so the numbers path can never diverge.
+  // Absent/empty ⇒ finalWhereSql === whereSql AND inningsLevel unchanged ⇒ every
+  // existing 2-arg caller is BYTE-IDENTICAL by construction. Only the plain
+  // (non-matchup) path honours it — the Filters tab never combines a per-innings
+  // slice with a "Vs" matchup selection in this wave.
+  const inningsWhere = opts && opts.inningsWhere ? String(opts.inningsWhere) : null;
 
   if (matchupVsActive(state)) {
     return buildMatchupQuery(state, discipline, visibleColumns);
@@ -1014,6 +1028,11 @@ export function buildQuery(state, visibleColumns) {
   // Vs pin-handling can never diverge.
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
   const whereSql = whereWithPinExemption(whereClauses, idCol, pins);
+  // T-2b-i: AND the per-innings slice predicate in. It defines WHAT is counted
+  // (like a phase/fielding slice), NOT which players are shortlisted, so it
+  // ALWAYS-APPLIES — sits OUTSIDE the pin exemption (a pinned player is still
+  // measured over their sliced innings). Byte-identical when inningsWhere is null.
+  const finalWhereSql = inningsWhere ? `(${whereSql}) AND (${inningsWhere})` : whereSql;
 
   // Fielding subquery (fielding rebuild): pre-aggregate the EVENT-GRAIN `fielding`
   // view to ONE row per fielder, honoring the FULL leaderboard scope — core
@@ -1076,7 +1095,12 @@ export function buildQuery(state, visibleColumns) {
     positionsFilterActive(state) ||
     oppositionFilterActive(state) ||
     inningsNumberFilterActive(state) ||
-    wantsMatchContext;
+    wantsMatchContext ||
+    // T-2b-i: a per-innings slice narrows to an innings SUBSET exactly like the
+    // filters above, so a visible "matches" column must count DISTINCT match_id
+    // over the SLICED innings (not the whole-scope player_matches count, which
+    // ignores the slice). Additive: null slice leaves inningsLevel unchanged.
+    Boolean(inningsWhere);
   if (wantsMatches && inningsLevel) {
     selectParts.push(`COUNT(DISTINCT match_id) AS matches`);
   }
@@ -1112,7 +1136,7 @@ export function buildQuery(state, visibleColumns) {
     ...(cteDefs.length ? [`WITH ${cteDefs.join(",\n")}`] : []),
     `SELECT ${selectParts.join(", ")}`,
     `FROM ${fromSql}`,
-    `WHERE ${whereSql}`,
+    `WHERE ${finalWhereSql}`,
     `GROUP BY ${groupBy.join(", ")}`,
     // No base gate anymore (decision 44c) — HAVING is emitted only when the
     // advanced stat-conditions path contributes a predicate.

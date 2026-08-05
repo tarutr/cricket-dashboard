@@ -88,16 +88,43 @@ export function setOpponentPlayer(opp) {
   activeOpponentPlayer = opp || null;
 }
 
+// ── Per-CALL window/opponent (pop-up Tab-2 T-2b-i) ───────────────────────────
+// The module globals above are correct for the leaderboard (one active window/
+// opponent at a time, set on Search). But the Filters tab fires MANY per-row
+// queries where DIFFERENT rows may hold DIFFERENT opponents/windows concurrently
+// — a global would let one row's opponent leak into another's numbers. So query()
+// takes an OPTIONAL per-call spec that OVERRIDES the globals for THAT query only,
+// stored per-SQL below so every in-flight query resolves its OWN predicate.
+// A spec key that is `undefined` falls back to the global (existing callers pass
+// no opts ⇒ spec === globals ⇒ byte-identical); an EXPLICIT value (incl. null)
+// wins, so a Tab-2 row can force "no opponent/window" independent of the
+// leaderboard's global state.
+/** sql -> { deliveryWindow, opponentPlayer } for the in-flight engine queries. */
+const pendingEngineSpecs = new Map();
+
+/** Resolve a query's effective window/opponent spec: per-call opts where the key
+ * is present, otherwise the module global. */
+function effectiveSpec(opts) {
+  return {
+    deliveryWindow: opts && opts.deliveryWindow !== undefined ? opts.deliveryWindow : activeDeliveryWindow,
+    opponentPlayer: opts && opts.opponentPlayer !== undefined ? opts.opponentPlayer : activeOpponentPlayer,
+  };
+}
+
 /** The active BALL-level predicate for one engine discipline — the delivery
- * window AND the opponent-player head-to-head, composed. "" when neither is set
- * (byte-identical to today). Discipline selects the window's player clock
- * (bat_ball vs bowl_ball) AND the opponent's opposite-role id column (bowler_id
- * for a batting query, batter_id for a bowling query). When only the window is
- * set the window string is returned VERBATIM (byte-identical to the pre-T-1
- * behaviour); when only the opponent is set, just its clause; both ⇒ AND-composed. */
-function windowPredicateFor(discipline) {
-  const win = deliveryWindowPredicate(activeDeliveryWindow, discipline);
-  const opp = opponentPlayerPredicate(activeOpponentPlayer, discipline);
+ * window AND the opponent-player head-to-head, composed, for a given `spec`
+ * (`{deliveryWindow, opponentPlayer}`; falls back to the module globals when a
+ * spec is not supplied — keeping legacy internal call shapes byte-identical).
+ * "" when neither is set (byte-identical to today). Discipline selects the
+ * window's player clock (bat_ball vs bowl_ball) AND the opponent's opposite-role
+ * id column (bowler_id for a batting query, batter_id for a bowling query). When
+ * only the window is set the window string is returned VERBATIM (byte-identical to
+ * the pre-T-1 behaviour); when only the opponent is set, just its clause; both ⇒
+ * AND-composed. */
+function windowPredicateFor(discipline, spec) {
+  const s = spec || { deliveryWindow: activeDeliveryWindow, opponentPlayer: activeOpponentPlayer };
+  const win = deliveryWindowPredicate(s.deliveryWindow, discipline);
+  const opp = opponentPlayerPredicate(s.opponentPlayer, discipline);
   if (!opp) return win; // opponent inactive → byte-identical to the window-only path
   if (!win) return opp;
   return `${win} AND (${opp})`;
@@ -391,9 +418,13 @@ const pendingEngineSqls = new Set();
  */
 function widenForPendingQueries(need, discipline, sql, files, scopePredicate, windowPredicate, playerPredicate) {
   if (pendingEngineSqls.size < 2) return need;
-  // The window is global + discipline-fixed (same activeDeliveryWindow for every
-  // query in flight), so including it in the signature never changes fold
-  // behaviour — but it keeps this signature in lock-step with the cache key.
+  // The window/opponent is now PER-CALL (T-2b-i): each in-flight query carries its
+  // OWN spec (pendingEngineSpecs), so a folded sibling must match on ITS OWN
+  // window predicate, not this query's. When every query shares the global spec
+  // (the leaderboard case), each otherWindow equals windowPredicate exactly, so
+  // fold behaviour is byte-identical to before; a Tab-2 row with a different
+  // opponent/window simply gets a different signature and is never folded in
+  // (safe: folding only ever adds columns, but a mismatched window must not fold).
   const signature = `${files.join("|")}::${scopePredicate}::${windowPredicate}::${playerPredicate}`;
   let columns = need.columns;
   let full = need.full;
@@ -404,7 +435,8 @@ function widenForPendingQueries(need, discipline, sql, files, scopePredicate, wi
     const otherScope = scopeForQuery(other);
     const otherNeed = neededViewColumns(discipline, other);
     const otherPlayer = playerScopeFor(discipline, other, otherNeed);
-    if (`${otherScope.files.join("|")}::${otherScope.scopePredicate}::${windowPredicate}::${otherPlayer}` !== signature) continue;
+    const otherWindow = windowPredicateFor(discipline, pendingEngineSpecs.get(other));
+    if (`${otherScope.files.join("|")}::${otherScope.scopePredicate}::${otherWindow}::${otherPlayer}` !== signature) continue;
     if (otherNeed.full) {
       full = true;
       columns = null;
@@ -445,7 +477,7 @@ function enginePlanDisciplines(sql) {
  * @returns {{discipline: string, key: string, files: string[], scopePredicate: string, pruned: boolean}[]}
  *   the plan, so a binder error can rebuild exactly these views with everything.
  */
-async function ensureEngineScope(sql) {
+async function ensureEngineScope(sql, spec) {
   if (!engineOn) return [];
   const disciplines = enginePlanDisciplines(sql);
   if (disciplines.length === 0) return [];
@@ -462,8 +494,9 @@ async function ensureEngineScope(sql) {
     // bowl clock). "" when no window is set ⇒ everything below is byte-identical
     // to today (the key gains "", the SQL adds nothing). When set it AND-composes
     // into the base ball CTE, changing the row set to the in-window balls (and so
-    // the innings to those with ≥1 in-window ball — decision 67).
-    const windowPredicate = windowPredicateFor(discipline);
+    // the innings to those with ≥1 in-window ball — decision 67). Uses THIS
+    // query's per-call spec (T-2b-i) — the module globals when no spec was passed.
+    const windowPredicate = windowPredicateFor(discipline, spec);
     // Queue-aware widening: the app fires bursts (a popup's section battery, a
     // graph's parallel fetches) whose members read the same scope but slightly
     // different columns. Serialised, that would materialise once per member.
@@ -719,7 +752,7 @@ export async function initDB(onProgress) {
  * (Arrow -> JSON, with safely-integral BigInts coerced to Number) plus wall
  * clock timing in milliseconds.
  */
-export async function query(sql) {
+export async function query(sql, opts) {
   if (!conn) {
     throw makeError(
       new Error("query() called before initDB() completed"),
@@ -727,6 +760,9 @@ export async function query(sql) {
     );
   }
   // Flag OFF: byte-untouched — straight to the connection, no queue, no engine.
+  // The per-call spec is a ball-engine concept (it feeds the reconstruction's base
+  // predicate), so flag-off it is irrelevant and ignored — the pop-up's per-innings
+  // slices reach flag-off via buildQuery's inningsWhere, not this path.
   if (!engineOn) return runQuery(sql);
   // Flag ON: the batting/bowling VIEWS are re-pointed per query (at that query's
   // scope + column set), so two queries must never be in flight at once — the
@@ -736,8 +772,16 @@ export async function query(sql) {
   // parallel fetches) collapse onto ONE materialisation — see
   // widenForPendingQueries, which reads this queue to build for all of them at
   // once instead of once per member.
+  // T-2b-i: resolve THIS query's effective window/opponent spec (per-call opts
+  // overriding the module globals) and record it per-SQL so the serialised
+  // execution + the look-ahead widening both read the right one.
+  const spec = effectiveSpec(opts);
   pendingEngineSqls.add(sql);
-  return serializeEngineQuery(() => runQuery(sql)).finally(() => pendingEngineSqls.delete(sql));
+  pendingEngineSpecs.set(sql, spec);
+  return serializeEngineQuery(() => runQuery(sql, spec)).finally(() => {
+    pendingEngineSqls.delete(sql);
+    pendingEngineSpecs.delete(sql);
+  });
 }
 
 let engineChain = Promise.resolve();
@@ -751,13 +795,15 @@ function serializeEngineQuery(fn) {
   return run;
 }
 
-async function runQuery(sql) {
+async function runQuery(sql, spec) {
   const start = performance.now();
   // Ball engine: point the batting/bowling views at a table materialised for
   // this query's scope AND column needs before it runs. No-op when the flag is
   // off or the query does not touch those views. Inside the timer on purpose —
-  // with the flag on, the reconstruction IS the query's cost.
-  const plan = await ensureEngineScope(sql);
+  // with the flag on, the reconstruction IS the query's cost. `spec` is this
+  // query's per-call window/opponent (T-2b-i); undefined on the flag-off path
+  // (ensureEngineScope returns [] there anyway) and for legacy internal callers.
+  const plan = await ensureEngineScope(sql, spec);
   let table;
   try {
     table = await conn.query(sql);
