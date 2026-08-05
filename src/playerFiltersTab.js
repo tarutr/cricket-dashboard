@@ -426,7 +426,15 @@ function buildRowState(row, pageState, discipline) {
 async function fetchRow(row, playerId, pageState, discipline, cols) {
   const rowState = buildRowState(row, pageState, discipline);
   const inningsWhere = conditionsToInningsWhere(row.conditions, discipline);
-  const { sql, matchesSql } = buildQuery(rowState, cols, { inningsWhere });
+  // T-2d: a ball predicate (opponent-player / delivery window) restricts the view
+  // rows to the filtered balls but is threaded to db.query AFTER buildQuery, so it
+  // never flips buildQuery's innings-level MAT gate — leaving "Matches" on the
+  // whole-scope player_matches source (e.g. vs an opponent it would read 64, not the
+  // 8 matches actually played vs them). Passing inningsMatches forces MAT to
+  // COUNT(DISTINCT match_id) over the ball-restricted view rows. Only set when a
+  // ball predicate is present, so a no-filter / scope-only row is byte-identical.
+  const inningsMatches = Boolean(row.deliveryWindow || row.opponentPlayer);
+  const { sql, matchesSql } = buildQuery(rowState, cols, { inningsWhere, inningsMatches });
   const wrapped = `SELECT * FROM (\n${sql}\n) t\nWHERE id = '${esc(playerId)}'`;
   const qOpts = { deliveryWindow: row.deliveryWindow ?? null, opponentPlayer: row.opponentPlayer ?? null };
   const tasks = [query(wrapped, qOpts)];

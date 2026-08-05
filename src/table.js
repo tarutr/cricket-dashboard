@@ -912,6 +912,17 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // slice with a "Vs" matchup selection in this wave.
   const inningsWhere = opts && opts.inningsWhere ? String(opts.inningsWhere) : null;
 
+  // Tab-2 MAT-over-filtered-balls signal (T-2d): an OPTIONAL boolean the pop-up's
+  // per-row query passes ONLY when a BALL predicate (opponent-player / delivery
+  // window) is active. Those predicates are threaded to db.query AFTER buildQuery
+  // (they restrict the ball-engine view reconstruction), so buildQuery can't see
+  // them and would otherwise leave "matches" on the whole-scope player_matches
+  // source. This flag forces the innings-level MAT path below — COUNT(DISTINCT
+  // match_id) over the (ball-restricted) view rows — so MAT counts the matches the
+  // player actually played WITHIN the ball filter. Absent/false ⇒ inningsLevel is
+  // unchanged ⇒ every existing 2-arg caller (leaderboard, graph) is BYTE-IDENTICAL.
+  const inningsMatches = Boolean(opts && opts.inningsMatches);
+
   if (matchupVsActive(state)) {
     return buildMatchupQuery(state, discipline, visibleColumns);
   }
@@ -1100,7 +1111,13 @@ export function buildQuery(state, visibleColumns, opts = {}) {
     // filters above, so a visible "matches" column must count DISTINCT match_id
     // over the SLICED innings (not the whole-scope player_matches count, which
     // ignores the slice). Additive: null slice leaves inningsLevel unchanged.
-    Boolean(inningsWhere);
+    Boolean(inningsWhere) ||
+    // T-2d: a ball predicate (opponent-player / delivery window) restricts the
+    // view rows to the filtered balls but is invisible to buildQuery (threaded to
+    // db.query), so MAT must likewise count DISTINCT match_id over those rows
+    // rather than the whole-scope player_matches source. Additive: false leaves
+    // inningsLevel unchanged (every existing caller passes no opts).
+    inningsMatches;
   if (wantsMatches && inningsLevel) {
     selectParts.push(`COUNT(DISTINCT match_id) AS matches`);
   }
