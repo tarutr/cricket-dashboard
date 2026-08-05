@@ -160,7 +160,7 @@ export function createPaletteGroupsBuilder(deps) {
    * Player Profile group (#1) varies by surface; every other group is built
    * identically regardless.
    */
-  function buildPaletteGroups(s, gi, { surface = "leaderboard" } = {}) {
+  function buildPaletteGroups(s, gi, { surface = "leaderboard", popupLock = null } = {}) {
     const excludeLeaf = (key) => surface === "popup" && POPUP_EXCLUDED_PLAYER_PROFILE_LEAVES.has(key);
     const ns = effectiveNamespace(s);
     const women = s.gender === "female";
@@ -168,6 +168,20 @@ export function createPaletteGroupsBuilder(deps) {
     const matchup = matchupVsActive(s);
     const ballOn = ballEngineEnabled();
     const winPB = windowPhaseBallsAllowed(s);
+
+    // T-2e (owner Option A, 2026-08-03): on the "popup" surface a row is EITHER a
+    // matchup-Vs row — which routes through buildMatchupQuery and therefore combines
+    // ONLY with the buildScope/matchContext scope singletons — OR a per-innings-SLICE
+    // row (combines with scope + more slices). NEVER both: buildMatchupQuery ignores
+    // the inningsWhere slices AND the ball predicates (vs_opp / delivery window), so
+    // mixing them would SILENTLY drop the slice — the exact "do not silently ignore"
+    // trap. `popupLock` is computed by the editor from the row's live draft
+    // ("matchup" | "slice" | null); these four gates enforce the exclusivity honestly
+    // in the offered palette. All inert off the popup surface — the leaderboard
+    // taxonomy is BYTE-UNTOUCHED.
+    const popupMatchupLocked = surface === "popup" && popupLock === "matchup"; // hide per-innings slices + ball predicates
+    const popupMatchupOffered = surface === "popup" && popupLock === null;     // offer matchup-Vs only on an EMPTY row
+    const popupSliceOffered = surface === "popup" && popupLock !== "matchup";  // offer slices + ball predicates unless matchup-locked
 
     // R. Pos. (kind:"position") is a mode value, never a numeric condition; drop
     // it and the deleted keys before partitioning (same source as the old picker).
@@ -183,6 +197,10 @@ export function createPaletteGroupsBuilder(deps) {
     const leafMetric = (key, label) => {
       const m = eligibleByKey.get(key);
       if (!m) return null; // not eligible in this namespace/format — skip gracefully
+      // T-2e: a matchup-Vs row (popupMatchupLocked) combines ONLY with scope
+      // singletons — every per-innings metric SLICE is withheld (buildMatchupQuery
+      // never sees inningsWhere). Inert off the popup surface.
+      if (popupMatchupLocked) return null;
       // Pop-up surface: withhold the ❌ column-only metrics (Average, Bowling SR,
       // High Score, Best, Matches, 50s/100s, Balls per…) — a metric is offered
       // as a FILTER here iff the slice engine can slice it (metricSliceable is
@@ -216,6 +234,24 @@ export function createPaletteGroupsBuilder(deps) {
       }));
       return { kind: "family", label, disabled: present, variants };
     };
+    // T-2e (owner Option A): the matchup-Vs family ("vs bowling style" / "vs batting
+    // hand"). On the LEADERBOARD it is singleFamily("…", "vs", …) — BYTE-UNTOUCHED. On
+    // the POPUP it is NOT a buildScope singleton (matchupVs lives on the ROW, routed
+    // through buildMatchupQuery), so it bypasses the popup scope-singleton withhold and
+    // is offered ONLY on an empty row (popupMatchupOffered). Its variants set the row's
+    // matchupVs draft via the editor's pickSingleton("vs") + preselectMatchupVs (a Vs
+    // pick is a whole-row mode, not a stacked condition), so once present the family is
+    // hidden (the row is now popupLock === "matchup").
+    const matchupVsFamily = (label, variantDefs) => {
+      if (surface !== "popup") return singleFamily(label, "vs", variantDefs);
+      if (!popupMatchupOffered) return null;
+      return {
+        kind: "family", label,
+        variants: variantDefs.map(([vlabel, preselect]) => ({
+          kind: "leaf", label: vlabel, run: () => pickSingleton("vs", preselect),
+        })),
+      };
+    };
     const pushGroup = (name, items, note) => {
       const kept = items.filter(Boolean);
       if (kept.length) groups.push({ name, note, items: kept });
@@ -238,7 +274,8 @@ export function createPaletteGroupsBuilder(deps) {
       // Pop-up (T-2b-ii, owner 2026-08-03): PotM as a per-innings Y/N slice
       // (metrics.js has no `potm` metric — this is a bespoke boolean condition the
       // slice engine resolves via a match-award EXISTS). Replaces PotM Count here.
-      surface === "popup" ? { kind: "leaf", label: "PotM (Y/N)", metricKey: "potm", run: () => pickMetric(gi, "potm") } : null,
+      // T-2e: it is a per-innings slice, so it's withheld on a matchup-Vs row.
+      surface === "popup" && !popupMatchupLocked ? { kind: "leaf", label: "PotM (Y/N)", metricKey: "potm", run: () => pickMetric(gi, "potm") } : null,
       leafSingle("team", "Team"),
     ]);
 
@@ -284,6 +321,14 @@ export function createPaletteGroupsBuilder(deps) {
         leafMetric("matches", "Matches"),
         leafMetric("innings", "Innings"),
         inningsNumberFamily(),
+        // T-2e (owner 2026-08-03): Batting position — a batting-only, per-innings LIST
+        // slice on the plain `batting` view's `batting_position` (compiles to
+        // `batting_position IN (…)` via inningsWhere). Popup-only + withheld on a
+        // matchup-Vs row (a per-innings slice). Bowling's "batting position" is the
+        // matchup striker-position path, so it is NOT offered on the bowling tab.
+        surface === "popup" && !popupMatchupLocked && disc === "batting"
+          ? { kind: "leaf", label: "Batting position", metricKey: "batting_position", run: () => pickMetric(gi, "batting_position") }
+          : null,
         leafMetric("runs", "Runs"),
         leafMetric("balls_faced", "Balls Faced"),
         // Matchup-namespace restore (Wave R2c): matchup_batting's "Balls Faced" metric
@@ -362,7 +407,10 @@ export function createPaletteGroupsBuilder(deps) {
     }
 
     // 5 ── Ball Ranges (ball-engine only; folds the four delivery-window entries) ─
-    if (ballOn) {
+    // T-2e: the delivery-window pieces are ball predicates (threaded to db.query,
+    // IGNORED by buildMatchupQuery), so the whole group is withheld on a matchup-Vs
+    // row (popupSliceOffered false) — same exclusivity as vs_opp above.
+    if (ballOn && (surface !== "popup" || popupSliceOffered)) {
       pushGroup("Ball Ranges", [
         winPB ? singleFamily("Phase", "win_phase", [
           ["Powerplay", preselectPhase("pp")], ["Middle", preselectPhase("mid")], ["Death", preselectPhase("death")],
@@ -391,7 +439,7 @@ export function createPaletteGroupsBuilder(deps) {
       if (!women) {
         if (disc === "batting") {
           const vsTypes = getVsBowlingTypes() || [];
-          vsItems.push(singleFamily("vs bowling style", "vs", [
+          vsItems.push(matchupVsFamily("vs bowling style", [
             ["Pace", preselectMatchupVs("group", "Pace")],
             ["Spin", preselectMatchupVs("group", "Spin")],
             ...vsTypes.map((t) => [matchupBucketLabel(t), preselectMatchupVs("type", t)]),
@@ -399,10 +447,11 @@ export function createPaletteGroupsBuilder(deps) {
           // Fine bowling styles load lazily (matchup_batting distinct-values); once
           // they arrive, rebuild so they appear as variants (renderNumeric closes any
           // open palette first). One-shot: the next build has getVsBowlingTypes() set,
-          // so this branch's caller-side guard won't re-fire.
-          ensureVsBowlingTypesLoaded();
+          // so this branch's caller-side guard won't re-fire. Skipped when the family
+          // isn't offered (popup non-empty row), so a matchup/slice row fires no load.
+          if (surface !== "popup" || popupMatchupOffered) ensureVsBowlingTypesLoaded();
         } else {
-          vsItems.push(singleFamily("vs batting hand", "vs", [
+          vsItems.push(matchupVsFamily("vs batting hand", [
             ["Right-hand bat", preselectMatchupVs("hand", "Right-hand bat")],
             ["Left-hand bat", preselectMatchupVs("hand", "Left-hand bat")],
           ]));
@@ -415,7 +464,10 @@ export function createPaletteGroupsBuilder(deps) {
       // from the innings parquets). NOT men-only: those ids exist for every delivery,
       // so it works for both genders (unlike the profile-backed vs entries above).
       // Placed beside vs bowling style / vs batting hand (decision-70 grouping).
-      if (ballOn) vsItems.push(leafSingle("vs_opp", "vs opponent player"));
+      // T-2e: vs_opp is a ball predicate (threaded to db.query, IGNORED by
+      // buildMatchupQuery), so it is withheld on a matchup-Vs row (popupSliceOffered
+      // is false there) — it belongs to the per-innings-slice side of the exclusivity.
+      if (ballOn && (surface !== "popup" || popupSliceOffered)) vsItems.push(leafSingle("vs_opp", "vs opponent player"));
       // No "men only" note (owner 2026-08-03): the men-only limitation on the profile-backed
       // entries is TEMPORARY — women's data arrives in the player-registry backlog phase, so this
       // group goes cross-gender soon; a "men only" label would just mislead in the meantime.

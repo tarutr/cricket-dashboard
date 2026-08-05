@@ -60,7 +60,7 @@
 
 import { query } from "./db.js";
 import { buildQuery, formatValue } from "./table.js";
-import { getMetric, metricDisplayLabel, DISMISSAL_KINDS } from "./metrics.js";
+import { getMetric, metricDisplayLabel, matchupBucketLabel, DISMISSAL_KINDS } from "./metrics.js";
 import {
   createInitialState,
   emptyAdvancedBlock,
@@ -196,6 +196,16 @@ function isBooleanCond(cond) {
   return typeof cond.yn === "boolean";
 }
 
+// T-2e: Batting position is a per-innings LIST slice — a batting-only multi-select
+// of order positions that compiles to `batting_position IN (…)`. Its own condition
+// shape (`{ metricKey:"batting_position", positions:[…] }`), so it needs its own
+// completeness / SQL / label handling alongside the numeric + Y/N shapes above.
+const BATTING_POSITION_KEY = "batting_position";
+/** A LIST condition carries a `positions` array (batting position multi-select). */
+function isListCond(cond) {
+  return Array.isArray(cond.positions);
+}
+
 /** True when a metric KEY is a Y/N boolean slice in this discipline (Ducks /
  * Not Outs / a dismissal-type / PotM) rather than a numeric quantity — the editor
  * uses this to route a palette pick to the Y/N control vs the operator+value one. */
@@ -224,6 +234,11 @@ export function isPopupFilterMetric(metricKey, discipline) {
  * numeric-only HAVING completeness (which would drop Y/N conditions). */
 function isSliceConditionComplete(cond, discipline) {
   if (!cond || !cond.metricKey) return false;
+  // T-2e: Batting position (LIST) — batting-only, complete once ≥1 position ticked.
+  if (isListCond(cond)) {
+    return cond.metricKey === BATTING_POSITION_KEY && discipline === "batting"
+      && (cond.positions || []).some((p) => Number.isInteger(Number(p)));
+  }
   if (isBooleanCond(cond)) {
     return cond.metricKey === POTM_METRIC_KEY || Boolean(BOOLEAN_SLICE[discipline] && BOOLEAN_SLICE[discipline][cond.metricKey]);
   }
@@ -251,6 +266,14 @@ function sliceActiveGroups(conditions, discipline) {
  */
 function conditionToInningsWhere(cond, discipline) {
   if (!isSliceConditionComplete(cond, discipline)) return null;
+  // T-2e: Batting position (LIST) → `batting_position IN (…)` on the plain batting
+  // view. Values coerced to finite integers (no injection surface). Batting-only —
+  // guarded by isSliceConditionComplete above.
+  if (isListCond(cond)) {
+    const nums = [...new Set((cond.positions || []).map(Number).filter(Number.isInteger))].sort((a, b) => a - b);
+    if (!nums.length) return null;
+    return `(batting_position IN (${nums.join(", ")}))`;
+  }
   if (isBooleanCond(cond)) {
     if (cond.metricKey === POTM_METRIC_KEY) return potmSlice(discipline, cond.yn);
     const b = BOOLEAN_SLICE[discipline][cond.metricKey];
@@ -298,7 +321,7 @@ function conditionsToInningsWhere(conditions, discipline) {
 let rowSeq = 0;
 const nextRowId = () => `row-${++rowSeq}`;
 
-function makeRow(conditions, scope, singletons, deliveryWindow, opponentPlayer) {
+function makeRow(conditions, scope, singletons, deliveryWindow, opponentPlayer, matchupVs) {
   return {
     id: nextRowId(),
     scope: scope || { formats: null, dateFrom: null, dateTo: null, teamType: null },
@@ -310,6 +333,11 @@ function makeRow(conditions, scope, singletons, deliveryWindow, opponentPlayer) 
     singletons: singletons || {},
     deliveryWindow: deliveryWindow || null,
     opponentPlayer: opponentPlayer || null,
+    // T-2e: the matchup-Vs bucket ({dim,value}) or null. When set, buildRowState puts
+    // it on the clean row state so buildQuery dispatches to buildMatchupQuery (Option
+    // A) — the row IS that player's leaderboard matchup record. Mutually exclusive
+    // with conditions / ball predicates (the editor enforces it), so those stay empty.
+    matchupVs: matchupVs || null,
     pinned: false,
   };
 }
@@ -330,6 +358,7 @@ const PENCIL_GLYPH =
 /** Friendly, operator-token-stripped base name for a condition's metric. */
 function conditionBaseName(cond, discipline, formats) {
   if (cond.metricKey === POTM_METRIC_KEY) return "PotM";
+  if (cond.metricKey === BATTING_POSITION_KEY) return "Batting position";
   const metric = getMetric(cond.metricKey, discipline) || getMetric(cond.metricKey);
   if (!metric) return cond.metricKey;
   // Threshold metrics carry a "≥ N" token in their label — strip it so a slice
@@ -342,6 +371,10 @@ function conditionBaseName(cond, discipline, formats) {
 
 function conditionLiteralLabel(cond, discipline, formats) {
   const base = conditionBaseName(cond, discipline, formats);
+  if (isListCond(cond)) {
+    const nums = [...new Set((cond.positions || []).map(Number).filter(Number.isInteger))].sort((a, b) => a - b);
+    return `${base}: ${nums.join(", ")}`;
+  }
   if (isBooleanCond(cond)) return `${base} = ${cond.yn ? "Yes" : "No"}`;
   if (cond.operator === "between") return `${base} ${cond.v1}–${cond.v2}`;
   return `${base} ${OP_SYMBOLS[cond.operator] ?? cond.operator} ${cond.v1}`;
@@ -356,14 +389,26 @@ function allConditionLabels(conditions, discipline, formats) {
   return out;
 }
 
-/** ALL of a row's filter labels — the per-innings conditions THEN the scope
- * singletons (T-2c: Opposition / Event / Stage / window / opponent / …). Combining
- * them keeps the first-cell label + (i) honest (SPEC §8.4): a row filtered ONLY by
- * a scope singleton reads e.g. "vs Australia", never the misleading "No conditions". */
+/** T-2e: the honest label for a row's matchup-Vs bucket (Option A). "type" (fine
+ * bowling style) reads through matchupBucketLabel so bare Pace/Spin show as
+ * "(unspecified)"; "group" (Pace/Spin) and "hand" (Right-/Left-hand bat) read
+ * verbatim, matching the leaderboard's own Vs vocabulary. */
+function matchupVsLabel(matchupVs) {
+  if (!matchupVs || !matchupVs.dim) return null;
+  if (matchupVs.dim === "type") return `vs ${matchupBucketLabel(matchupVs.value)}`;
+  return `vs ${matchupVs.value}`;
+}
+
+/** ALL of a row's filter labels — the matchup-Vs bucket (T-2e) THEN the per-innings
+ * conditions THEN the scope singletons (T-2c: Opposition / Event / Stage / window /
+ * opponent / …). Combining them keeps the first-cell label + (i) honest (SPEC §8.4):
+ * a row filtered ONLY by a scope singleton reads e.g. "vs Australia", a matchup row
+ * reads "vs Spin", never the misleading "No conditions". */
 function rowAllLabels(row, discipline, formats) {
+  const matchup = matchupVsLabel(row.matchupVs);
   const numeric = allConditionLabels(row.conditions, discipline, formats);
   const scope = describeRowSingletons(row.singletons, row.deliveryWindow, row.opponentPlayer, discipline);
-  return [...numeric, ...scope];
+  return [...(matchup ? [matchup] : []), ...numeric, ...scope];
 }
 
 function rowLabel(row, discipline, formats) {
@@ -407,6 +452,15 @@ function buildRowState(row, pageState, discipline) {
     tossResult: singletons.tossResult ?? base.tossResult,
     tossDecision: singletons.tossDecision ?? base.tossDecision,
     inningsNumber: singletons.inningsNumber ?? base.inningsNumber,
+    // T-2e (owner Option A): a matchup-Vs bucket makes matchupVsActive(state) true, so
+    // buildQuery dispatches to buildMatchupQuery — the row's numbers become that
+    // player's LEADERBOARD-IDENTICAL matchup record vs the bucket. buildMatchupQuery
+    // honors the scope singletons above (buildScopeClauses / buildMatchContextClauses)
+    // but ignores per-innings slices + ball predicates, which the editor guarantees are
+    // empty on a matchup row. null ⇒ the plain path (byte-identical). matchupVsActive
+    // also hard-gates on gender === "male", so a women's row (never offered the family)
+    // simply falls to the plain path.
+    matchupVs: row.matchupVs || null,
     advanced: emptyAdvancedBlock(),
   };
 }
@@ -547,7 +601,10 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
       initialSingletons: mode === "edit" ? existingRow.singletons : null,
       initialDeliveryWindow: mode === "edit" ? existingRow.deliveryWindow : null,
       initialOpponentPlayer: mode === "edit" ? existingRow.opponentPlayer : null,
-      onCommit: ({ conditions, scope, singletons, deliveryWindow, opponentPlayer }) => {
+      // T-2e: the row's matchup-Vs bucket (edit pre-fill). Batting-only "Batting
+      // position" is a LIST condition routed through the editor's own addCondition.
+      initialMatchupVs: mode === "edit" ? existingRow.matchupVs : null,
+      onCommit: ({ conditions, scope, singletons, deliveryWindow, opponentPlayer, matchupVs }) => {
         lastScope = { ...scope }; // sticky
         if (mode === "edit") {
           existingRow.conditions = conditions;
@@ -555,11 +612,12 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
           existingRow.singletons = singletons || {};
           existingRow.deliveryWindow = deliveryWindow || null;
           existingRow.opponentPlayer = opponentPlayer || null;
+          existingRow.matchupVs = matchupVs || null;
           rowData.delete(existingRow.id);
           renderRows();
           queryRow(existingRow);
         } else {
-          const row = makeRow(conditions, scope, singletons, deliveryWindow, opponentPlayer);
+          const row = makeRow(conditions, scope, singletons, deliveryWindow, opponentPlayer, matchupVs);
           rows.push(row);
           rowData.set(row.id, undefined);
           renderRows();

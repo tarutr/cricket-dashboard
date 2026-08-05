@@ -162,7 +162,7 @@ const BOWLING_TYPE_PREFERENCE = [
   "Fast",
 ];
 
-function orderBowlingTypes(values) {
+export function orderBowlingTypes(values) {
   const set = new Set(values);
   const known = BOWLING_TYPE_PREFERENCE.filter((v) => set.has(v));
   const knownSet = new Set(known);

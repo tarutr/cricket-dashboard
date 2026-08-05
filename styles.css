@@ -4692,6 +4692,24 @@ a { color: var(--color-accent); }
 .pfe-cond__ctrl { flex: 0 0 auto; }
 .pfe-cond__remove { margin-left: auto; }
 
+/* T-2e: Batting position — a per-innings LIST slice (tick order positions 1..11). */
+.pfe-cond--positions { align-items: flex-start; }
+.pfe-cond__positions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  flex: 1 1 auto;
+}
+.pfe-cond__poschk {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+/* T-2e: the matchup-Vs (Option A) draft row — a bucket <select> + remove. */
+.pfe-cond--matchupvs .pfe-cond__ctrl { min-width: 8rem; }
+
 /* T-2c: reused scope-singleton value editors (Opposition / Event / Stage / window /
    opponent / …) mounted into the editor modal via the store-adapter controller. Each
    row is a label + the drawer's own editor + a remove-×, styled like a condition row. */

@@ -23,7 +23,18 @@ import { createAddPalette, paletteSkeletonHTML } from "./addPalette.js";
 import { createPaletteGroupsBuilder } from "./paletteGroups.js";
 import { OPERATORS } from "./advanced.js";
 import { createInitialState, emptyAdvancedBlock, FORMAT_BUCKETS } from "./state.js";
+import { query } from "./db.js";
+import { orderBowlingTypes } from "./table.js";
+import { matchupBucketLabel } from "./metrics.js";
 import { escHtml, escAttr } from "./html.js";
+
+// T-2e: the batting-position LIST slice + the matchup-Vs pick. Batting position ticks
+// order positions 1..11 (compiled to `batting_position IN (…)` by the tab's slice
+// engine); the key is shared with playerFiltersTab.js's conditionToInningsWhere.
+const BATTING_POSITION_KEY = "batting_position";
+const BATTING_POSITIONS = Array.from({ length: 11 }, (_, i) => i + 1);
+/** A LIST condition (batting position multi-select) carries a `positions` array. */
+const isListCond = (cond) => Array.isArray(cond.positions);
 
 const TEAM_TYPES = [
   { value: "international", label: "International" },
@@ -54,6 +65,8 @@ function cleanConditions(conditions) {
       ...g,
       conds: (g.conds || []).filter((c) => {
         if (!c.metricKey) return false;
+        // T-2e: a batting-position LIST slice is usable once ≥1 position is ticked.
+        if (isListCond(c)) return (c.positions || []).some((p) => Number.isInteger(Number(p)));
         if (isBooleanCond(c)) return true;
         if (!Number.isFinite(Number(c.v1)) || c.v1 === "") return false;
         if (c.operator === "between" && (!Number.isFinite(Number(c.v2)) || c.v2 === "")) return false;
@@ -102,6 +115,8 @@ export function openFilterRowEditor(hostDoc, deps) {
     initialSingletons = null,
     initialDeliveryWindow = null,
     initialOpponentPlayer = null,
+    // T-2e: the row's matchup-Vs bucket ({dim,value}) for edit pre-fill, or null.
+    initialMatchupVs = null,
   } = deps;
 
   const draft = {
@@ -112,6 +127,10 @@ export function openFilterRowEditor(hostDoc, deps) {
       dateTo: initialScope?.dateTo ?? null,
       teamType: initialScope?.teamType ?? "international",
     },
+    // T-2e (owner Option A): the matchup-Vs bucket. Mutually exclusive with the
+    // per-innings slices / ball predicates — the palette enforces it via popupLock,
+    // and commit() belt-and-braces clears the other side.
+    matchupVs: initialMatchupVs && initialMatchupVs.dim ? { ...initialMatchupVs } : null,
   };
   if (!draft.conditions.groups.length) draft.conditions.groups.push({ op: "AND", conds: [] });
 
@@ -168,7 +187,9 @@ export function openFilterRowEditor(hostDoc, deps) {
   document.body.appendChild(overlay);
 
   const condsEl = overlay.querySelector('[data-role="conds"]');
-  const addctlEl = overlay.querySelector('[data-role="add-palette"]');
+  // Reassigned on rebuildPalette() (the skeleton is replaced so the offered leaves
+  // can change with popupLock / loaded bowling types).
+  let addctlEl = overlay.querySelector('[data-role="add-palette"]');
 
   // ── the real "+ Add condition" palette (surface:"popup") ──────────────────────
   // Its leaf run() calls THIS editor's pickMetric, appending to the local draft.
@@ -178,45 +199,147 @@ export function openFilterRowEditor(hostDoc, deps) {
     gender: gender || "male",
     formats: draft.scope.formats && draft.scope.formats.length ? draft.scope.formats : formats && formats.length ? formats : ["T20"],
   });
+
+  // ── T-2e: fine bowling-type variants for the "vs bowling style" family ─────────
+  // Loaded lazily from matchup_batting distinct-values (the SAME source the drawer +
+  // toolbar use), ordered identically via table.js's orderBowlingTypes. Until they
+  // resolve the family shows just Pace / Spin; on load we rebuild the palette (so the
+  // ▸ family gains them) AND re-render the conditions (so the matchup-Vs row's own
+  // <select> gains them). Batting-only; a no-op for the bowling tab (hand only).
+  let vsBowlingTypes = null;
+  let vsTypesLoading = false;
+  const getVsBowlingTypes = () => vsBowlingTypes;
+  function ensureVsBowlingTypesLoaded() {
+    if (vsBowlingTypes || vsTypesLoading || discipline !== "batting") return;
+    vsTypesLoading = true;
+    query(`SELECT DISTINCT bowling_type AS v FROM matchup_batting WHERE bowling_type <> '(unmapped)'`)
+      .then(({ rows }) => {
+        vsTypesLoading = false;
+        const types = orderBowlingTypes(rows.map((r) => r.v));
+        if (types.length) { vsBowlingTypes = types; rebuildPalette(); renderConditions(); }
+      })
+      .catch(() => { vsTypesLoading = false; }); // leave null so a later build retries
+  }
+
+  // ── T-2e: matchup-Vs ↔ per-innings-slice mutual exclusion (owner Option A) ─────
+  // A row is EITHER a matchup-Vs row (combines only with scope singletons) OR a
+  // per-innings-slice row (per-innings conditions + batting position + ball
+  // predicates). The palette enforces it via popupLock, recomputed from the live
+  // draft after every change; rebuildPalette re-mounts the offered leaves when the
+  // lock (or the loaded bowling types) change.
+  function computePopupLock() {
+    if (draft.matchupVs) return "matchup";
+    const hasCond = group().conds.length > 0;
+    const hasBallPred = Boolean(
+      scopeController && (scopeController.getDeliveryWindow() || scopeController.getOpponentPlayer())
+    );
+    return hasCond || hasBallPred ? "slice" : null;
+  }
+
   // T-2c: the scope singletons offered on the "popup" surface are revealed by the
   // shared controller (pickSingleton), disabled once shown (isPresent/SINGLETON_TYPES),
-  // and their ▸-variants pre-fill via its preselect closures. The matchup "Vs" and
-  // fielding preselects stay no-ops (those leaves are withheld — paletteGroups.js).
+  // and their ▸-variants pre-fill via its preselect closures. T-2e wires the matchup
+  // "Vs" family: pickSingleton("vs") + preselectMatchupVs set the row's matchupVs
+  // draft (NOT a buildScope singleton). Fielding preselects stay no-ops (withheld).
   const noPreselect = () => () => {};
   const buildGroups = createPaletteGroupsBuilder({
     isPresent: scopeController ? (t) => scopeController.isRevealed(t.key) : () => false,
     SINGLETON_TYPES: scopeController ? scopeController.SINGLETON_TYPES : [],
-    pickSingleton: scopeController ? (key, preselect) => scopeController.revealSingleton(key, preselect) : () => {},
+    // "vs" is not a scope singleton — it's the matchup-Vs mode, handled by the editor.
+    pickSingleton: (key, preselect) => {
+      if (key === "vs") { if (preselect) preselect(); return; }
+      if (scopeController) scopeController.revealSingleton(key, preselect);
+    },
     pickMetric: (_gi, key) => addCondition(key),
     preselectPhase: scopeController ? scopeController.preselectPhase : noPreselect,
     preselectFielding: noPreselect,
-    preselectMatchupVs: noPreselect,
+    preselectMatchupVs: (dim, value) => () => setMatchupVs(dim, value),
     preselectEdge: scopeController ? scopeController.preselectEdge : noPreselect,
     preselectInningsNumber: scopeController ? scopeController.preselectInningsNumber : noPreselect,
-    getVsBowlingTypes: () => null,
-    ensureVsBowlingTypesLoaded: () => {},
+    getVsBowlingTypes,
+    ensureVsBowlingTypesLoaded,
     metricSliceable: isPopupFilterMetric,
   });
-  const palette = createAddPalette({ buildGroups: (gi) => buildGroups(paletteState(), gi, { surface: "popup" }) });
+  const palette = createAddPalette({
+    buildGroups: (gi) => buildGroups(paletteState(), gi, { surface: "popup", popupLock: computePopupLock() }),
+  });
+
+  // Current lock — rebuild the palette only when it actually changes (avoids
+  // re-mounting the skeleton on every keystroke in a value input).
+  let currentLock = null;
+
+  /** Re-mount the "+ Add condition" palette against the LIVE draft (popupLock +
+   * loaded bowling types). Replaces the addctl skeleton so a stale offered set can't
+   * linger; closes any open panel first (a portaled panel would orphan otherwise). */
+  function rebuildPalette() {
+    palette.closeCurrent();
+    const holder = addctlEl.parentNode;
+    if (!holder) return;
+    const tmp = document.createElement("div");
+    tmp.innerHTML = paletteSkeletonHTML(GI);
+    const fresh = tmp.firstElementChild;
+    holder.replaceChild(fresh, addctlEl);
+    addctlEl = fresh;
+    palette.mountAddPalette(addctlEl);
+  }
+
+  /** Recompute the lock; rebuild the palette iff it changed. Called after any draft
+   * change that can flip matchup ↔ slice ↔ empty (add/remove condition, set/clear
+   * matchup-Vs, add/remove a ball-predicate scope singleton). */
+  function refreshPaletteForLock() {
+    const next = computePopupLock();
+    if (next !== currentLock) { currentLock = next; rebuildPalette(); }
+  }
 
   function group() {
     if (!draft.conditions.groups.length) draft.conditions.groups.push({ op: "AND", conds: [] });
     return draft.conditions.groups[GI];
   }
 
+  /** Set / change the row's matchup-Vs bucket (owner Option A). Clears any per-innings
+   * conditions (mutual exclusion — the palette prevents mixing, this is belt-and-
+   * braces so a legacy draft can't smuggle both). Re-render + relock the palette. */
+  function setMatchupVs(dim, value) {
+    draft.matchupVs = { dim, value };
+    group().conds.length = 0;
+    renderConditions();
+    refreshPaletteForLock();
+  }
+  function removeMatchupVs() {
+    draft.matchupVs = null;
+    renderConditions();
+    refreshPaletteForLock();
+  }
+
   function addCondition(key) {
-    const cond = isBooleanMetric(key, discipline)
-      ? { metricKey: key, yn: true }
-      : { metricKey: key, operator: "gte", v1: "", v2: "" };
+    // T-2e: Batting position is a LIST slice (multi-select), not a numeric/boolean.
+    const cond = key === BATTING_POSITION_KEY
+      ? { metricKey: key, positions: [] }
+      : isBooleanMetric(key, discipline)
+        ? { metricKey: key, yn: true }
+        : { metricKey: key, operator: "gte", v1: "", v2: "" };
     group().conds.push(cond);
     renderConditions();
-    const inputs = condsEl.querySelectorAll('[data-role="v1"], [data-role="yn"]');
+    refreshPaletteForLock(); // an empty row just became a slice row → hide matchup-Vs
+    const inputs = condsEl.querySelectorAll('[data-role="v1"], [data-role="yn"], [data-role="pos"]');
     if (inputs.length) inputs[inputs.length - 1].focus();
   }
 
   // ── draft condition rows ──────────────────────────────────────────────────────
   function condRowHTML(cond, ci) {
     const base = conditionBaseName(cond, discipline, draft.scope.formats || formats);
+    // T-2e: Batting position — a LIST multi-select (tick order positions 1..11).
+    if (isListCond(cond)) {
+      const sel = new Set((cond.positions || []).map(Number));
+      const boxes = BATTING_POSITIONS.map(
+        (p) => `<label class="pfe-cond__poschk"><input type="checkbox" data-role="pos" data-pos="${p}" ${sel.has(p) ? "checked" : ""}/> ${p}</label>`
+      ).join("");
+      return `<div class="pfe-cond pfe-cond--positions" data-ci="${ci}">
+          <span class="pfe-cond__name">${escHtml(base)}</span>
+          <div class="pfe-cond__positions" role="group" aria-label="${escAttr(base)}">${boxes}</div>
+          <button type="button" class="icon-btn pfe-cond__remove" data-role="remove-cond" title="Remove condition" aria-label="Remove condition">&times;</button>
+        </div>`;
+    }
     if (isBooleanCond(cond)) {
       return `<div class="pfe-cond" data-ci="${ci}">
           <span class="pfe-cond__name">${escHtml(base)}</span>
@@ -244,14 +367,57 @@ export function openFilterRowEditor(hostDoc, deps) {
       </div>`;
   }
 
+  // ── T-2e: the matchup-Vs draft row (a <select> to change the bucket + × remove) ─
+  function matchupVsSelectOptionsHTML() {
+    const cur = draft.matchupVs ? `${draft.matchupVs.dim}:${draft.matchupVs.value}` : "";
+    const opt = (v, label) => `<option value="${escAttr(v)}" ${v === cur ? "selected" : ""}>${escHtml(label)}</option>`;
+    if (discipline === "batting") {
+      const types = getVsBowlingTypes() || [];
+      let out = opt("group:Pace", "Pace") + opt("group:Spin", "Spin");
+      // Keep a fine "type:…" pick selectable even before the async list resolves.
+      if (draft.matchupVs && draft.matchupVs.dim === "type" && !types.includes(draft.matchupVs.value)) {
+        out += opt(`type:${draft.matchupVs.value}`, matchupBucketLabel(draft.matchupVs.value));
+      }
+      out += types.map((t) => opt(`type:${t}`, matchupBucketLabel(t))).join("");
+      return out;
+    }
+    return opt("hand:Right-hand bat", "Right-handers") + opt("hand:Left-hand bat", "Left-handers");
+  }
+  function matchupVsRowHTML() {
+    return `<div class="pfe-cond pfe-cond--matchupvs" data-role="matchupvs-row">
+        <span class="pfe-cond__name">Matchup (Vs)</span>
+        <span class="pfe-cond__op">is</span>
+        <select class="select pfe-cond__ctrl" data-role="matchupvs-select" aria-label="Matchup opponent">${matchupVsSelectOptionsHTML()}</select>
+        <button type="button" class="icon-btn pfe-cond__remove" data-role="remove-matchupvs" title="Remove matchup filter" aria-label="Remove matchup filter">&times;</button>
+      </div>`;
+  }
+
   function renderConditions() {
     const conds = group().conds;
-    if (conds.length === 0) {
+    const hasMatchup = Boolean(draft.matchupVs);
+    if (conds.length === 0 && !hasMatchup) {
       condsEl.innerHTML = `<p class="pfe__empty">No conditions yet — a row with only a scope compares the player's whole record under it.</p>`;
       return;
     }
-    condsEl.innerHTML = conds.map((c, ci) => condRowHTML(c, ci)).join("");
-    condsEl.querySelectorAll(".pfe-cond").forEach((rowEl) => {
+    // Load the batting fine-type variants so the matchup-Vs <select> can offer them
+    // (the palette family also triggers this, but an edited matchup row skips it).
+    if (hasMatchup && discipline === "batting") ensureVsBowlingTypesLoaded();
+    condsEl.innerHTML = (hasMatchup ? matchupVsRowHTML() : "") + conds.map((c, ci) => condRowHTML(c, ci)).join("");
+
+    // matchup-Vs row: change the bucket / remove the whole matchup mode.
+    const mvSel = condsEl.querySelector('[data-role="matchupvs-select"]');
+    if (mvSel)
+      mvSel.addEventListener("change", () => {
+        const raw = mvSel.value;
+        const i = raw.indexOf(":");
+        if (i > 0) setMatchupVs(raw.slice(0, i), raw.slice(i + 1));
+      });
+    const mvRm = condsEl.querySelector('[data-role="remove-matchupvs"]');
+    if (mvRm) mvRm.addEventListener("click", removeMatchupVs);
+
+    // Condition rows (numeric / Y/N / batting-position list) carry a data-ci; the
+    // matchup-Vs row does not, so it is skipped by this selector.
+    condsEl.querySelectorAll(".pfe-cond[data-ci]").forEach((rowEl) => {
       const ci = Number(rowEl.dataset.ci);
       const cond = group().conds[ci];
       const opEl = rowEl.querySelector('[data-role="op"]');
@@ -262,18 +428,29 @@ export function openFilterRowEditor(hostDoc, deps) {
         opEl.addEventListener("change", () => {
           cond.operator = opEl.value;
           renderConditions(); // between ↔ single toggles the second input
-          const nv = condsEl.querySelectorAll(".pfe-cond")[ci];
+          const nv = condsEl.querySelectorAll(".pfe-cond[data-ci]")[ci];
           const focusEl = nv && (nv.querySelector('[data-role="v2"]') || nv.querySelector('[data-role="v1"]'));
           if (focusEl) focusEl.focus();
         });
       if (v1El) v1El.addEventListener("input", () => { cond.v1 = v1El.value; });
       if (v2El) v2El.addEventListener("input", () => { cond.v2 = v2El.value; });
       if (ynEl) ynEl.addEventListener("change", () => { cond.yn = ynEl.value === "yes"; });
+      // Batting-position checkboxes (LIST slice).
+      rowEl.querySelectorAll('[data-role="pos"]').forEach((cb) => {
+        cb.addEventListener("change", () => {
+          const p = Number(cb.dataset.pos);
+          const set = new Set((cond.positions || []).map(Number));
+          if (cb.checked) set.add(p);
+          else set.delete(p);
+          cond.positions = [...set].sort((a, b) => a - b);
+        });
+      });
       const rm = rowEl.querySelector('[data-role="remove-cond"]');
       if (rm)
         rm.addEventListener("click", () => {
           group().conds.splice(ci, 1);
           renderConditions();
+          refreshPaletteForLock(); // removing the last slice re-offers matchup-Vs
         });
     });
   }
@@ -340,16 +517,21 @@ export function openFilterRowEditor(hostDoc, deps) {
     if (onClose) onClose();
   }
   function commit() {
-    const conditions = cleanConditions(draft.conditions);
     const scope = { ...draft.scope };
     // T-2c: pull the scope-singleton draft off the controller BEFORE teardown (it
     // reads its live state). deliveryWindow / opponentPlayer are the row's ball
     // predicates (threaded per-call to db.query); the rest are scope WHERE fields.
     const singletons = scopeController ? scopeController.getScopeSingletons() : {};
-    const deliveryWindow = scopeController ? scopeController.getDeliveryWindow() : null;
-    const opponentPlayer = scopeController ? scopeController.getOpponentPlayer() : null;
+    // T-2e (owner Option A): a matchup-Vs row routes through buildMatchupQuery, which
+    // IGNORES per-innings slices + ball predicates. The palette's popupLock prevents
+    // ever adding both, but clear the other side belt-and-braces so a committed row is
+    // never a silent lie — a matchup row carries ONLY matchupVs + scope singletons.
+    const matchupVs = draft.matchupVs && draft.matchupVs.dim ? { ...draft.matchupVs } : null;
+    const conditions = matchupVs ? emptyAdvancedBlock() : cleanConditions(draft.conditions);
+    const deliveryWindow = matchupVs ? null : scopeController ? scopeController.getDeliveryWindow() : null;
+    const opponentPlayer = matchupVs ? null : scopeController ? scopeController.getOpponentPlayer() : null;
     teardown();
-    if (onCommit) onCommit({ conditions, scope, singletons, deliveryWindow, opponentPlayer });
+    if (onCommit) onCommit({ conditions, scope, singletons, deliveryWindow, opponentPlayer, matchupVs });
   }
   function onKey(e) {
     if (e.key === "Escape") { e.stopPropagation(); cancel(); }
@@ -365,19 +547,26 @@ export function openFilterRowEditor(hostDoc, deps) {
   renderFormats();
   renderTeamType();
   wireDates();
-  palette.mountAddPalette(addctlEl);
 
   // T-2c: attach the shared scope-singleton editors into this modal + start a fresh
   // editor session — reset the draft to this row's singletons and reveal the ones
   // that carry a value (edit pre-fill). scope is passed by REFERENCE (draft.scope
   // is mutated in place by the scope controls above), so the editors' option lists
-  // always read the row's live Format / Team type / Date.
+  // always read the row's live Format / Team type / Date. onChange → refreshPaletteForLock
+  // so revealing/clearing a ball predicate (vs_opp / window) relocks the palette.
+  // Begun BEFORE the palette mounts so the first computePopupLock() reads accurate
+  // ball-predicate state (edit pre-fill of a ball-predicate row is slice-locked).
   if (scopeController) {
     const scopeRowsHost = overlay.querySelector('[data-role="scope-rows-host"]');
     if (scopeRowsHost) scopeController.mountInto(scopeRowsHost);
     scopeController.begin(
-      { scope: draft.scope, discipline, gender: gender || "male", fallbackFormats: formats, onChange: () => {} },
+      { scope: draft.scope, discipline, gender: gender || "male", fallbackFormats: formats, onChange: refreshPaletteForLock },
       { singletons: initialSingletons, deliveryWindow: initialDeliveryWindow, opponentPlayer: initialOpponentPlayer }
     );
   }
+
+  // T-2e: seed the lock from the initial draft so the first palette build matches an
+  // edited row (matchup → scope-only; slice → no matchup-Vs), then mount.
+  currentLock = computePopupLock();
+  palette.mountAddPalette(addctlEl);
 }
