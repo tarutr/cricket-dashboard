@@ -37,16 +37,25 @@
 //                                     implementation, unchanged from before).
 //
 // `surface` ("leaderboard" default | "popup"): "leaderboard" is TODAY'S full
-// taxonomy, byte-identical to the pre-extraction version. "popup" drops the 4
-// fixed Player-Profile filters — Playing role, Batting hand, Bowling style,
-// Regular batting position — plus PotM-as-a-filter (a pop-up row is already
-// scoped to ONE player, so filtering by that player's own profile/awards is
-// moot) but KEEPS Team and every Matchup (Vs) entry untouched (vs bowling
-// style / vs batting hand; vs opponent player lands later, wave T-1). Every
-// OTHER group — Match Details, Batting/Bowling stats, Ball Ranges, Fielding
-// Stats — is identical on both surfaces; only what's listed above changes.
-// "popup" is DEFINED here but not yet consumed by any mount (T-F3 scope; the
-// pop-up's own mount is wave T-2).
+// taxonomy, byte-identical to the pre-extraction version.
+//
+// "popup" (player pop-up Tab-2 "Filters", consumed by playerFiltersTab.js →
+// playerFilterEditor.js) offers ONLY the per-innings SLICE filter set the tab's
+// engine (T-2b-i) can compute for one player's record:
+//   • Metric leaves are kept iff `metricSliceable(key, disc)` — the ✅ per-innings
+//     amounts / rates / thresholds (Innings Score, Wicket Hauls) + the Y/N
+//     booleans (Ducks, Not Outs, dismissal-type, PotM). The ❌ column-only
+//     metrics (Batting/Bowling Average, Bowling Strike Rate, High Score, Best
+//     Bowling, Matches, 50s/100s, Balls per…) fall out automatically.
+//   • Innings Score / Wicket Hauls read plainly (full-operator numeric editor),
+//     not the leaderboard's "≥ N" count shape; PotM is added as a Y/N leaf.
+//   • Every SCOPE SINGLETON (Team / Opposition / Event / Venue / Stage / Match &
+//     Toss Result / Innings Number / Matchup Vs / opponent player / delivery
+//     window / fielding position) is WITHHELD for now (leafSingle/singleFamily/
+//     matchResultFamily → null): those need per-row value editors + query wiring
+//     not built in this wave. Held back — NOT dropped from the design — to keep
+//     every offered filter honest; see the report / owner note.
+// Only the "popup" branch changes; the leaderboard taxonomy is byte-untouched.
 
 import { effectiveNamespace, matchupVsActive, eligibleMetrics, FIELDING_POSITIONS, inningsNumberOptions } from "./state.js";
 import { ballEngineEnabled } from "./config.js";
@@ -94,6 +103,12 @@ export function createPaletteGroupsBuilder(deps) {
     pickSingleton, pickMetric,
     preselectPhase, preselectFielding, preselectMatchupVs, preselectEdge, preselectInningsNumber,
     getVsBowlingTypes, ensureVsBowlingTypesLoaded,
+    // T-2b-ii: the pop-up ("popup" surface) offers a metric leaf ONLY when it is
+    // a per-innings SLICEABLE filter (numeric amount/rate/threshold or Y/N
+    // boolean) — supplied by the pop-up mount (playerFiltersTab.js) as the slice
+    // engine's single source of truth. Absent on the leaderboard surface (drawer.js
+    // passes none), so the full leaderboard taxonomy is byte-untouched.
+    metricSliceable,
   } = deps;
 
   /**
@@ -137,11 +152,25 @@ export function createPaletteGroupsBuilder(deps) {
     const leafMetric = (key, label) => {
       const m = eligibleByKey.get(key);
       if (!m) return null; // not eligible in this namespace/format — skip gracefully
-      return { kind: "leaf", label: label ?? metricDisplayLabel(m, s.formats), run: () => pickMetric(gi, key) };
+      // Pop-up surface: withhold the ❌ column-only metrics (Average, Bowling SR,
+      // High Score, Best, Matches, 50s/100s, Balls per…) — a metric is offered
+      // as a FILTER here iff the slice engine can slice it (metricSliceable is
+      // the drift-proof source of truth). Never consulted on the leaderboard.
+      if (surface === "popup" && metricSliceable && !metricSliceable(key, disc)) return null;
+      return { kind: "leaf", label: label ?? metricDisplayLabel(m, s.formats), metricKey: key, run: () => pickMetric(gi, key) };
     };
-    const leafSingle = (key, label, preselect = null) => ({
-      kind: "leaf", label, disabled: singlePresent(key), run: () => pickSingleton(key, preselect),
-    });
+    // Pop-up surface withholds every scope SINGLETON (Team / Opposition / Event /
+    // Venue / Stage / Result / Toss / Innings Number / Matchup Vs / opponent /
+    // delivery-window / fielding position). Those need their own per-row value
+    // editors + query wiring, which are NOT built in this wave (T-2b-i wired only
+    // the numeric/boolean per-innings slices + per-row opponent/window threading).
+    // Showing them without a working data path would be a dishonest filter (SPEC
+    // §8.4), so they are held back here — flagged for the owner, not dropped from
+    // the design. (No live consumer uses `surface:"popup"` yet, so this is safe.)
+    const leafSingle = (key, label, preselect = null) => {
+      if (surface === "popup") return null;
+      return { kind: "leaf", label, disabled: singlePresent(key), run: () => pickSingleton(key, preselect) };
+    };
     const metricFamily = (label, variantDefs) => {
       const variants = variantDefs.map(([key, vlabel]) => leafMetric(key, vlabel)).filter(Boolean);
       return variants.length ? { kind: "family", label, variants } : null;
@@ -149,6 +178,7 @@ export function createPaletteGroupsBuilder(deps) {
     // A categorical ▸ family bound to ONE singleton: variants pre-select a value;
     // the family + variants disable once that singleton row is present.
     const singleFamily = (label, key, variantDefs) => {
+      if (surface === "popup") return null; // categorical singleton families withheld in the pop-up (see leafSingle)
       const present = singlePresent(key);
       const variants = variantDefs.map(([vlabel, preselect]) => ({
         kind: "leaf", label: vlabel, disabled: present, run: () => pickSingleton(key, preselect),
@@ -174,6 +204,10 @@ export function createPaletteGroupsBuilder(deps) {
       // (metrics.js `potm_count`), between Regular batting position and Team. The
       // old `player_of_match` (Impact section) is no longer offered as a filter.
       !excludeLeaf("potm_count") ? leafMetric("potm_count", "PotM Count") : null,
+      // Pop-up (T-2b-ii, owner 2026-08-03): PotM as a per-innings Y/N slice
+      // (metrics.js has no `potm` metric — this is a bespoke boolean condition the
+      // slice engine resolves via a match-award EXISTS). Replaces PotM Count here.
+      surface === "popup" ? { kind: "leaf", label: "PotM (Y/N)", metricKey: "potm", run: () => pickMetric(gi, "potm") } : null,
       leafSingle("team", "Team"),
     ]);
 
@@ -195,7 +229,9 @@ export function createPaletteGroupsBuilder(deps) {
       // (Wave R2c), now live in Batting & Bowling Basic Stats. Its old plumbing
       // (mc_innings_order singleton row/editor/pill/state/clause) was fully torn
       // down in the waveR2-cleanup pass — no gap, the entry point moved.
-      matchResultFamily,
+      // Match/Toss Result reveal singleton rows too, so they are withheld in the
+      // pop-up for the same reason as the other scope singletons (see leafSingle).
+      surface === "popup" ? null : matchResultFamily,
     ]);
 
     // 3/4 ── Batting / Bowling metric groups (discipline-specific) ────────────────
@@ -238,7 +274,9 @@ export function createPaletteGroupsBuilder(deps) {
         leafMetric("high_score", "High Score"),
         leafMetric("fifties", "50s"),
         leafMetric("hundreds", "100s"),
-        leafMetric("innings_score_ge", "Innings Score ≥ N"),
+        // Pop-up: full-operator numeric on the innings' runs (≥/≤/=/between via the
+        // editor), so it reads "Innings Score" — not the leaderboard's "≥ N" count.
+        leafMetric("innings_score_ge", surface === "popup" ? "Innings Score" : "Innings Score ≥ N"),
       ]);
       pushGroup("Batting · Detailed Stats", [
         leafMetric("average", "Batting Average"),
@@ -277,7 +315,8 @@ export function createPaletteGroupsBuilder(deps) {
         // 4-WI / 5-WI removed (R2b): the fixed exactly-4 / 5-plus haul leaves are
         // superseded by the parametrised Wicket Hauls ≥ N ▸ below. The metric defs
         // (four_wicket_hauls / five_wicket_hauls) stay in metrics.js as columns.
-        leafMetric("wicket_hauls_ge", "Wicket Hauls ≥ N"),
+        // Pop-up: full-operator numeric on the innings' wickets (see Innings Score).
+        leafMetric("wicket_hauls_ge", surface === "popup" ? "Wicket Hauls" : "Wicket Hauls ≥ N"),
       ]);
       pushGroup("Bowling · Detailed Stats", [
         leafMetric("average", "Bowling Average"),

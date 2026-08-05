@@ -70,6 +70,7 @@ import {
   escSql as esc,
 } from "./state.js";
 import { createColumnsPicker } from "./columnsPicker.js";
+import { openFilterRowEditor } from "./playerFilterEditor.js";
 import { escHtml, escAttr } from "./html.js";
 
 // "slice" is BANNED from user-facing text (owner ruling). Label a row that
@@ -194,6 +195,28 @@ function isBooleanCond(cond) {
   return typeof cond.yn === "boolean";
 }
 
+/** True when a metric KEY is a Y/N boolean slice in this discipline (Ducks /
+ * Not Outs / a dismissal-type / PotM) rather than a numeric quantity — the editor
+ * uses this to route a palette pick to the Y/N control vs the operator+value one. */
+export function isBooleanMetric(metricKey, discipline) {
+  if (metricKey === POTM_METRIC_KEY) return true;
+  const map = BOOLEAN_SLICE[discipline];
+  return Boolean(map && map[metricKey]);
+}
+
+/** True when a metric KEY is OFFERED as a per-row filter in the pop-up palette:
+ * the slice engine can compute it per innings AND the owner offers it as a filter.
+ * Bowling Strike Rate is slice-computable but ruled a COLUMN-only stat (owner ✅/❌
+ * 2026-08-03), so it is the one engine-sliceable key withheld. paletteGroups.js's
+ * "popup" surface consults this (as `metricSliceable`) so the ❌ column-only
+ * metrics fall out of the palette with no drift-prone key list. */
+export function isPopupFilterMetric(metricKey, discipline) {
+  if (discipline === "bowling" && metricKey === "strike_rate") return false;
+  const num = SLICE_COLUMN_EXPR[discipline];
+  if (num && num[metricKey]) return true;
+  return isBooleanMetric(metricKey, discipline);
+}
+
 /** True when a condition is complete AND sliceable in this discipline. Boolean →
  * yn set + a predicate exists; numeric → its expr is mapped + v1 finite (+ v2 for
  * "between"). Local to the tab: the slice model differs from advanced.js's
@@ -264,50 +287,33 @@ function conditionsToInningsWhere(conditions, discipline) {
   return parts.length > 1 ? `(${parts.join(topJoiner)})` : parts[0];
 }
 
-// ── T-2b-i code-seed (REPLACED by the real editor in T-2b-ii) ────────────────
-// Rows seeded in code to PROVE the slicing foundation without the editor. Rows 2–4
-// are BATTING-oriented proofs; on a bowling tab their batting-only conditions
-// simply don't slice (→ full record), which T-2b-ii's real editor supersedes.
-//   1. NO-FILTER row      — byte-identical to the leaderboard record (the anchor).
-//   2. Innings Score ≥ 100 — the player's stats OVER his 100+ innings only.
-//   3. Innings Score ≥ 50  — a MULTI-innings slice (over all his 50+ innings).
-//   4. PotM = Yes          — innings in matches the player won Player of the Match.
-// `id`s are stable strings so re-renders keep row identity.
+// ── Row model (T-2b-ii — rows are USER-DEFINED via the editor) ───────────────
+// The T-2a/T-2b-i code-seeded proof rows are gone; every row now comes from the
+// "Add Filter Row" editor (playerFilterEditor.js). A row carries its own per-row
+// `scope` (Format / Team type / Date) + the local `conditions` block the editor
+// built. Per-row ball predicates (opponent / delivery window) stay null in this
+// wave — their editors land next; the T-2b-i query threading is already in place.
+// `id`s are stable strings so re-renders keep row identity (sort / pin / edit).
 let rowSeq = 0;
 const nextRowId = () => `row-${++rowSeq}`;
 
-const NO_ROW_SCOPE = { formats: null, dateFrom: null, dateTo: null, teamType: null };
-function makeRow(conditions) {
+function makeRow(conditions, scope) {
   return {
     id: nextRowId(),
-    scope: { ...NO_ROW_SCOPE }, // inherit pop-up scope
+    scope: scope || { formats: null, dateFrom: null, dateTo: null, teamType: null },
     conditions: conditions || emptyAdvancedBlock(),
-    // Per-row ball predicates (T-2b-i threading): null here so seeded rows carry
-    // NO opponent/window and never inherit the leaderboard's globals. T-2b-ii's
-    // editor sets these per row.
     deliveryWindow: null,
     opponentPlayer: null,
     pinned: false,
   };
 }
-function oneCondition(cond) {
-  return { op: "AND", groups: [{ op: "AND", conds: [cond] }] };
-}
 
-function seedRows() {
-  return [
-    makeRow(emptyAdvancedBlock()),
-    makeRow(oneCondition({ metricKey: "innings_score_ge", operator: "gte", v1: "100" })),
-    makeRow(oneCondition({ metricKey: "innings_score_ge", operator: "gte", v1: "50" })),
-    makeRow(oneCondition({ metricKey: POTM_METRIC_KEY, yn: true })),
-  ];
-}
-
-// A no-filter row for the "Add Filter Row" placeholder (T-2b-ii replaces this
-// with the real editor popup).
-function placeholderRow() {
-  return makeRow(emptyAdvancedBlock());
-}
+// Inline SVG icons (no per-icon network; PIN reuses the leaderboard's pushpin so
+// a pinned row reads identically. PENCIL = Material "edit").
+const PIN_GLYPH =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg>';
+const PENCIL_GLYPH =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>';
 
 // ── Row identity label (first condition, LITERAL operator form) ──────────────
 // The signed-off design: the first cell = the row's FIRST condition as plain text
@@ -323,7 +329,9 @@ function conditionBaseName(cond, discipline, formats) {
   // Threshold metrics carry a "≥ N" token in their label — strip it so a slice
   // reads "Innings Score ≥ 100" (the user's own operator + value), not "≥ N".
   if (metric.paramTemplate) return (metric.label || cond.metricKey).replace(/\s*[≥≤=]\s*N\b.*$/, "").trim();
-  return metricDisplayLabel(metric, formats) || metric.label || cond.metricKey;
+  // Drop the leading "Out " on the batting dismissal-type booleans so a row reads
+  // "Caught = Yes" (matching the palette's stripped labels); a no-op for others.
+  return (metricDisplayLabel(metric, formats) || metric.label || cond.metricKey).replace(/^Out\s+/, "");
 }
 
 function conditionLiteralLabel(cond, discipline, formats) {
@@ -401,19 +409,45 @@ async function fetchRow(row, playerId, pageState, discipline, cols) {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function mountPlayerFiltersTab(container, { store, playerId, discipline, pageState } = {}) {
+  void store; // the tab is store-independent (per-row queries are self-contained)
   let curPlayerId = playerId ?? null;
   let curDiscipline = discipline === "bowling" ? "bowling" : "batting";
   let curPageState = pageState || null;
-  let rows = seedRows(); // T-2a code-seed; T-2b drives this from the editor
-  let refreshToken = 0;
+  let rows = []; // user-defined via the editor; empty ⇒ "No filtered rows yet"
+  let fetchToken = 0;
+
+  // Per-row query results, keyed by row id: `undefined` = loading, `null` = the
+  // player has no innings under the row, `{__error:true}` = query failed, else the
+  // aggregate row. Cached so sort / pin re-order WITHOUT re-querying.
+  const rowData = new Map();
+
+  // Sticky per-row scope: a new "Add Filter Row" pre-fills Format / Team type /
+  // Date from the LAST committed row (owner 2026-08-03); null ⇒ the pop-up scope.
+  let lastScope = null;
+
+  // Display sort. `key` = a metric column key, "__label" for the Filter column,
+  // or null for add-order. Pinned rows always float to the top (like the
+  // leaderboard); NO Best/Worst, NO baseline row.
+  const sortState = { key: null, dir: "desc" };
 
   // Tab-INDEPENDENT column selection (decision 3), lazily seeded per discipline
-  // from the discipline default. Keyed by plain discipline (no matchup vocab in
-  // the tab — matchupVs is per-row and lands in T-2b).
+  // from the discipline default.
   const tabColumns = { batting: null, bowling: null };
 
   function currentFormats() {
     return (curPageState && curPageState.formats) || ["T20"];
+  }
+
+  /** The pop-up's effective scope, as the editor's default for a FIRST row (so a
+   * no-condition row with this scope == the player's leaderboard row). */
+  function defaultScope() {
+    const ps = curPageState || {};
+    return {
+      formats: [...currentFormats()],
+      dateFrom: ps.dateFrom ?? null,
+      dateTo: ps.dateTo ?? null,
+      teamType: ps.teamType ?? "international",
+    };
   }
 
   function columnsFor(disc) {
@@ -428,11 +462,45 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     setColumns: (cols) => {
       tabColumns[curDiscipline] = cols;
       syncPresetSelect();
-      refreshTable(); // re-query with the new SELECT list; picker survives on body
+      refreshData(true); // the SELECT list changed → re-query every row
     },
     getDiscipline: () => curDiscipline,
     getFormats: () => currentFormats(),
   });
+
+  // ---------- the editor ----------
+
+  function openEditor(mode, existingRow) {
+    const initialScope =
+      mode === "edit" ? { ...existingRow.scope } : lastScope ? { ...lastScope } : defaultScope();
+    openFilterRowEditor(document, {
+      mode,
+      initialConditions: mode === "edit" ? existingRow.conditions : emptyAdvancedBlock(),
+      initialScope,
+      discipline: curDiscipline,
+      gender: curPageState && curPageState.gender,
+      formats: currentFormats(),
+      isBooleanMetric,
+      isPopupFilterMetric,
+      conditionBaseName,
+      onCommit: ({ conditions, scope }) => {
+        lastScope = { ...scope }; // sticky
+        if (mode === "edit") {
+          existingRow.conditions = conditions;
+          existingRow.scope = scope;
+          rowData.delete(existingRow.id);
+          renderRows();
+          queryRow(existingRow);
+        } else {
+          const row = makeRow(conditions, scope);
+          rows.push(row);
+          rowData.set(row.id, undefined);
+          renderRows();
+          queryRow(row);
+        }
+      },
+    });
+  }
 
   // ---------- shell (toolbar + table host), rendered once per discipline ----------
 
@@ -466,14 +534,7 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
       </div>`;
 
     const addBtn = container.querySelector('[data-role="add-filter-row"]');
-    if (addBtn) {
-      addBtn.addEventListener("click", () => {
-        // PLACEHOLDER (T-2a): adds a no-filter row. T-2b opens the real
-        // Add-condition palette editor here.
-        rows.push(placeholderRow());
-        refreshTable();
-      });
-    }
+    if (addBtn) addBtn.addEventListener("click", () => openEditor("add", null));
 
     const presetSel = container.querySelector('[data-role="preset-select"]');
     if (presetSel) {
@@ -482,13 +543,52 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
         const cols = def && def.columns(currentFormats());
         if (cols) {
           tabColumns[curDiscipline] = cols;
-          refreshTable();
+          refreshData(true);
         }
       });
     }
 
     const columnsBtn = container.querySelector('[data-role="columns-btn"]');
     if (columnsBtn) columnsPicker.mount(columnsBtn);
+
+    // ONE delegated click handler on the persistent table host: sort headers +
+    // per-row pin / edit / delete. Survives every innerHTML re-render of the host.
+    const host = container.querySelector('[data-role="table-host"]');
+    if (host) host.addEventListener("click", onHostClick);
+  }
+
+  function onHostClick(e) {
+    const sortBtn = e.target.closest(".data-table__sort-btn");
+    if (sortBtn) {
+      const th = sortBtn.closest("[data-sort-key]");
+      if (th) toggleSort(th.dataset.sortKey);
+      return;
+    }
+    const actBtn = e.target.closest("[data-act]");
+    if (!actBtn) return;
+    const tr = actBtn.closest("tr[data-row-id]");
+    if (!tr) return;
+    const row = rows.find((r) => r.id === tr.dataset.rowId);
+    if (!row) return;
+    if (actBtn.dataset.act === "pin") {
+      row.pinned = !row.pinned;
+      renderRows();
+    } else if (actBtn.dataset.act === "edit") {
+      openEditor("edit", row);
+    } else if (actBtn.dataset.act === "del") {
+      rows = rows.filter((r) => r.id !== row.id);
+      rowData.delete(row.id);
+      renderRows();
+    }
+  }
+
+  function toggleSort(key) {
+    if (sortState.key === key) sortState.dir = sortState.dir === "asc" ? "desc" : "asc";
+    else {
+      sortState.key = key;
+      sortState.dir = key === "__label" ? "asc" : "desc";
+    }
+    renderRows();
   }
 
   function syncPresetSelect() {
@@ -498,7 +598,45 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     presetSel.value = active ?? "__custom";
   }
 
-  // ---------- table host (re-rendered on any data / column / row change) ----------
+  // ---------- ordering ----------
+
+  function valForSort(data, metric) {
+    if (!data || data.__error || !metric) return null;
+    const v = data[metric.key];
+    if (v == null) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  /** Order rows for display: pinned first (SPEC pin-to-top), then the active
+   * column sort (NULL/loading last regardless of direction — SPEC §8.5), else
+   * add-order. Reads only the rowData cache, so it never re-queries. */
+  function orderedRows() {
+    const pinned = rows.filter((r) => r.pinned);
+    const rest = rows.filter((r) => !r.pinned);
+    if (!sortState.key) return [...pinned, ...rest];
+    let cmp;
+    if (sortState.key === "__label") {
+      cmp = (a, b) => {
+        const la = rowLabel(a, curDiscipline, a.scope.formats || currentFormats());
+        const lb = rowLabel(b, curDiscipline, b.scope.formats || currentFormats());
+        return sortState.dir === "asc" ? la.localeCompare(lb) : lb.localeCompare(la);
+      };
+    } else {
+      const metric = getMetric(sortState.key, curDiscipline);
+      cmp = (a, b) => {
+        const va = valForSort(rowData.get(a.id), metric);
+        const vb = valForSort(rowData.get(b.id), metric);
+        if (va == null && vb == null) return 0;
+        if (va == null) return 1;
+        if (vb == null) return -1;
+        return sortState.dir === "asc" ? va - vb : vb - va;
+      };
+    }
+    return [...pinned.slice().sort(cmp), ...rest.slice().sort(cmp)];
+  }
+
+  // ---------- table render (cache-only; no queries fired here) ----------
 
   function metricColumns() {
     return columnsFor(curDiscipline)
@@ -506,90 +644,128 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
       .filter(Boolean);
   }
 
+  function sortArrow(key) {
+    return sortState.key === key ? (sortState.dir === "asc" ? " ▲" : " ▼") : "";
+  }
+
   function headerHTML(metrics) {
+    const labelSorted = sortState.key === "__label" ? " is-sorted" : "";
     const metricThs = metrics
-      .map((m) => `<th class="data-table__th" scope="col">${escHtml(m.shortLabel || m.label || m.key)}</th>`)
+      .map((m) => {
+        const sorted = sortState.key === m.key ? " is-sorted" : "";
+        return `<th data-sort-key="${escAttr(m.key)}" class="data-table__th${sorted}" scope="col"><button type="button" class="data-table__sort-btn">${escHtml(
+          m.shortLabel || m.label || m.key
+        )}${sortArrow(m.key)}</button></th>`;
+      })
       .join("");
     return `<thead><tr>
-        <th class="data-table__th data-table__th--sticky" scope="col">Filter</th>
+        <th data-sort-key="__label" class="data-table__th data-table__th--sticky${labelSorted}" scope="col"><button type="button" class="data-table__sort-btn">Filter${sortArrow(
+          "__label"
+        )}</button></th>
         ${metricThs}
       </tr></thead>`;
   }
 
   function labelCellHTML(row) {
-    const formats = currentFormats();
+    const formats = row.scope.formats || currentFormats();
     const label = rowLabel(row, curDiscipline, formats);
     const all = allConditionLabels(row.conditions, curDiscipline, formats);
     const info =
       all.length > 1
-        ? ` <span class="filters-tab__info" title="${escAttr(all.join("\n"))}" aria-label="Full filter list">(i)</span>`
+        ? ` <span class="filters-tab__info" tabindex="0" role="note" title="${escAttr(
+            all.join("\n")
+          )}" aria-label="Full filter list: ${escAttr(all.join(", "))}">(i)</span>`
         : "";
-    return `<td class="data-table__td data-table__td--sticky">${escHtml(label)}${info}</td>`;
+    const pinLabel = row.pinned ? "Unpin row" : "Pin row to top";
+    return `<td class="data-table__td data-table__td--sticky">
+      <div class="filters-tab__rowhead">
+        <button type="button" class="pin-toggle filters-tab__pin${
+          row.pinned ? " is-pinned" : ""
+        }" data-act="pin" aria-pressed="${row.pinned ? "true" : "false"}" title="${pinLabel}" aria-label="${pinLabel}">${PIN_GLYPH}</button>
+        <span class="filters-tab__rowlabel">${escHtml(label)}</span>${info}
+        <button type="button" class="icon-btn filters-tab__edit" data-act="edit" title="Edit filter row" aria-label="Edit filter row">${PENCIL_GLYPH}</button>
+        <button type="button" class="icon-btn filters-tab__del" data-act="del" title="Delete filter row" aria-label="Delete filter row">&times;</button>
+      </div>
+    </td>`;
   }
 
-  /** A body row's data cells (called after the query resolves; `data` may be
-   * null when the player has no rows under this filter → every cell "—"). */
-  function dataCellsHTML(metrics, data) {
+  /** A row's data cells from the cache: loading "…", error banner, or values. */
+  function dataCellsHTML(row, metrics) {
+    const data = rowData.get(row.id);
+    if (data === undefined) return metrics.map(() => `<td class="data-table__td filters-tab__cell--loading">…</td>`).join("");
+    if (data && data.__error) {
+      const span = metrics.length || 1;
+      return `<td class="data-table__td filters-tab__cell--error" colspan="${span}">Couldn't load this row.</td>`;
+    }
     return metrics
-      .map((m) => {
-        const value = data ? data[m.key] : null;
-        return `<td class="data-table__td" data-key="${escAttr(m.key)}">${escHtml(formatValue(m, value))}</td>`;
-      })
+      .map((m) => `<td class="data-table__td" data-key="${escAttr(m.key)}">${escHtml(formatValue(m, data ? data[m.key] : null))}</td>`)
       .join("");
   }
 
-  function loadingCellsHTML(metrics) {
-    return metrics.map(() => `<td class="data-table__td filters-tab__cell--loading">…</td>`).join("");
+  function rowCellsHTML(row, metrics) {
+    return labelCellHTML(row) + dataCellsHTML(row, metrics);
   }
 
-  function errorCellsHTML(metrics) {
-    const span = metrics.length || 1;
-    return `<td class="data-table__td filters-tab__cell--error" colspan="${span}">Couldn't load this row.</td>`;
-  }
-
-  function refreshTable() {
+  function renderRows() {
     const host = container.querySelector('[data-role="table-host"]');
     if (!host) return;
     syncPresetSelect();
-
     if (rows.length === 0) {
       host.innerHTML = `<p class="player-page__note player-page__note--muted">No filtered rows yet</p>`;
       columnsPicker.refresh(container.querySelector('[data-role="columns-btn"]'));
       return;
     }
-
     const metrics = metricColumns();
-    const cols = columnsFor(curDiscipline);
-    const bodyRows = rows
-      .map(
-        (row) =>
-          `<tr data-row-id="${escAttr(row.id)}">${labelCellHTML(row)}${loadingCellsHTML(metrics)}</tr>`
-      )
+    const body = orderedRows()
+      .map((row) => `<tr data-row-id="${escAttr(row.id)}">${rowCellsHTML(row, metrics)}</tr>`)
       .join("");
-    host.innerHTML = `<div class="table-scroll"><table class="data-table">${headerHTML(metrics)}<tbody>${bodyRows}</tbody></table></div>`;
+    host.innerHTML = `<div class="table-scroll"><table class="data-table">${headerHTML(metrics)}<tbody>${body}</tbody></table></div>`;
     columnsPicker.refresh(container.querySelector('[data-role="columns-btn"]'));
+  }
 
-    // Fire per-row queries; fill each row's cells as it resolves. A token guards
-    // against a newer refresh (player switch / discipline / column change)
-    // overwriting a stale row.
-    const token = ++refreshToken;
+  /** Patch ONE resolved row's cells in place (used when add-order is stable, so
+   * no re-order is needed); a full renderRows() is used when a sort is active. */
+  function updateRowCells(row) {
+    const host = container.querySelector('[data-role="table-host"]');
+    if (!host) return;
+    const tr = host.querySelector(`tr[data-row-id="${CSS.escape(row.id)}"]`);
+    if (tr) tr.innerHTML = rowCellsHTML(row, metricColumns());
+  }
+
+  // ---------- data (queries) ----------
+
+  function queryRow(row) {
+    const token = fetchToken;
     const player = curPlayerId;
     const ps = curPageState;
     const disc = curDiscipline;
+    const cols = columnsFor(curDiscipline);
+    fetchRow(row, player, ps, disc, cols)
+      .then((data) => {
+        if (token !== fetchToken) return;
+        rowData.set(row.id, data ?? null);
+        if (sortState.key) renderRows();
+        else updateRowCells(row);
+      })
+      .catch((err) => {
+        if (token !== fetchToken) return;
+        rowData.set(row.id, { __error: true });
+        if (sortState.key) renderRows();
+        else updateRowCells(row);
+        console.error("[cricdb] Filters tab row query failed:", err);
+      });
+  }
+
+  /** Re-render + (re)query. `forceAll` re-queries every row (player / discipline /
+   * column change); otherwise only rows missing a cached result are queried. */
+  function refreshData(forceAll) {
+    fetchToken++;
     for (const row of rows) {
-      fetchRow(row, player, ps, disc, cols)
-        .then((data) => {
-          if (token !== refreshToken) return;
-          const tr = host.querySelector(`tr[data-row-id="${CSS.escape(row.id)}"]`);
-          if (!tr) return;
-          tr.innerHTML = labelCellHTML(row) + dataCellsHTML(metrics, data);
-        })
-        .catch((err) => {
-          if (token !== refreshToken) return;
-          const tr = host.querySelector(`tr[data-row-id="${CSS.escape(row.id)}"]`);
-          if (tr) tr.innerHTML = labelCellHTML(row) + errorCellsHTML(metrics);
-          console.error("[cricdb] Filters tab row query failed:", err);
-        });
+      if (forceAll || !rowData.has(row.id)) rowData.set(row.id, undefined);
+    }
+    renderRows();
+    for (const row of rows) {
+      if (rowData.get(row.id) === undefined) queryRow(row);
     }
   }
 
@@ -598,15 +774,16 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
   function show(nextPlayerId, nextDiscipline, nextPageState) {
     const nextDisc = nextDiscipline === "bowling" ? "bowling" : "batting";
     const disciplineChanged = nextDisc !== curDiscipline;
+    const playerChanged = nextPlayerId != null && nextPlayerId !== curPlayerId;
     curPlayerId = nextPlayerId ?? curPlayerId;
     curDiscipline = nextDisc;
     curPageState = nextPageState || curPageState;
     // A discipline change swaps the column namespace + preset vocabulary, so the
-    // toolbar shell is rebuilt; otherwise only the data re-runs.
-    if (disciplineChanged || !container.querySelector(".filters-tab")) {
-      renderShell();
-    }
-    refreshTable();
+    // toolbar shell is rebuilt. A player OR discipline change invalidates every
+    // cached value (they're player/discipline-specific).
+    if (disciplineChanged || !container.querySelector(".filters-tab")) renderShell();
+    if (disciplineChanged || playerChanged) rowData.clear();
+    refreshData(true);
   }
 
   function destroy() {
@@ -616,7 +793,7 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
 
   // Initial mount render.
   renderShell();
-  refreshTable();
+  refreshData(true);
 
   return { show, destroy };
 }

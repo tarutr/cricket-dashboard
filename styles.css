@@ -4548,11 +4548,11 @@ a { color: var(--color-accent); }
 .filters-tab .data-table__th--sticky,
 .filters-tab .data-table__td--sticky {
   left: 0;
-  --sticky-col-w: 13rem;
+  --sticky-col-w: 16rem;
 }
 
-/* (i) marker revealing a multi-condition row's full filter list (title-attr for
-   T-2a; T-2b builds the real hover popover). */
+/* (i) marker revealing a multi-condition row's full filter list (native tooltip
+   via title, newline-separated; keyboard-focusable). */
 .filters-tab__info {
   color: var(--color-muted);
   font-size: 0.8em;
@@ -4566,6 +4566,161 @@ a { color: var(--color-accent); }
 .filters-tab__cell--error {
   color: var(--color-accent);
   font-style: italic;
+}
+
+/* Row head (sticky first cell): pin + label + (i) + pencil + delete, all inline
+   and lean per the signed-off design (no pills, no second line). */
+.filters-tab__rowhead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.filters-tab__rowlabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.filters-tab__pin {
+  flex: 0 0 auto;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  font-size: 0.95em;
+}
+/* The pencil + delete stay muted and compact; only delete lifts to the red
+   "destructive" hover (icon-btn default), edit stays neutral. */
+.filters-tab__edit,
+.filters-tab__del {
+  flex: 0 0 auto;
+  min-width: 1.6rem;
+  min-height: 1.6rem;
+  padding: 2px;
+  opacity: 0.55;
+}
+.filters-tab__edit svg {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+  display: block;
+}
+.filters-tab__edit:hover {
+  opacity: 1;
+  color: var(--color-fg);
+  background: var(--color-panel);
+}
+.filters-tab__del { font-size: 1.05rem; }
+.filters-tab__del:hover { opacity: 1; }
+
+/* ── "Add Filter Row" editor modal (playerFilterEditor.js) ────────────────────
+   A focused dialog OVER the player pop-up (z 100) but UNDER the "+ Add condition"
+   palette panel (z 1000, portaled to body), so the palette floats above it. */
+.pfe-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--space-6) var(--space-4);
+  background: rgba(27, 36, 48, 0.45);
+  overflow-y: auto;
+}
+.pfe {
+  width: min(34rem, 100%);
+  background: var(--color-bg-raised);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+}
+.pfe__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-line);
+}
+.pfe__title { margin: 0; font-size: 1rem; }
+.pfe__body {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  overflow-y: auto;
+}
+.pfe__section { display: flex; flex-direction: column; gap: var(--space-2); }
+.pfe__label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+}
+.pfe__conds { display: flex; flex-direction: column; gap: var(--space-2); }
+.pfe__empty { margin: 0; color: var(--color-muted); font-size: 0.9rem; }
+
+.pfe-cond {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: var(--color-panel);
+  border-radius: var(--radius-md);
+}
+.pfe-cond__name { font-weight: 600; }
+.pfe-cond__op,
+.pfe-cond__and { color: var(--color-muted); font-size: 0.9rem; }
+.pfe-cond__val { width: 5.5rem; }
+.pfe-cond__ctrl { flex: 0 0 auto; }
+.pfe-cond__remove { margin-left: auto; }
+
+.pfe__scope { gap: var(--space-3); }
+.pfe__scope-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.pfe__scope-key {
+  flex: 0 0 5.5rem;
+  color: var(--color-muted);
+  font-size: 0.9rem;
+}
+.pfe__formats { display: flex; gap: var(--space-3); flex-wrap: wrap; }
+.pfe-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  cursor: pointer;
+}
+.pfe__teamtype { display: inline-flex; border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); overflow: hidden; }
+.pfe-seg {
+  font: inherit;
+  padding: var(--space-1) var(--space-3);
+  background: var(--color-bg-raised);
+  border: none;
+  cursor: pointer;
+  color: var(--color-fg);
+}
+.pfe-seg + .pfe-seg { border-left: 1px solid var(--color-line-strong); }
+.pfe-seg:hover { background: var(--color-panel); }
+.pfe-seg.is-active { background: var(--color-accent); color: #fff; }
+.pfe__dates { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.pfe__date { width: 9rem; }
+.pfe__date-sep { color: var(--color-muted); }
+
+.pfe__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-line);
 }
 
 .player-page__section {
