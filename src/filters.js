@@ -536,16 +536,27 @@ export function buildScopeClausesTagged(
 // / event_stage / method) shares a name with any base-view column, so no other
 // ambiguity is introduced.
 
+/** The `matches` sub-select (aliased `mctx`) carrying the match-context columns —
+ * shared by BOTH matchContextJoinSql (the leaderboard's LEFT JOIN) and the fielding
+ * mode's correlated EXISTS (playerFiltersTab.js, via table.js), so the projected
+ * column set can never drift between the two. match_id is projected as
+ * `mctx_match_id` to avoid clashing with a base view's own `match_id`. */
+export function matchContextSubselectSql() {
+  return (
+    `(SELECT match_id AS mctx_match_id, match_winner, result_type, ` +
+    `is_super_over, toss_winner, toss_decision, team_batting_first, event_stage, method ` +
+    `FROM matches) mctx`
+  );
+}
+
 /** LEFT-JOIN clause bringing the match-context columns onto each innings row of
  * `viewAlias` (the base view/table name — `batting`, `bowling`, `matchup_batting`,
  * `matchup_bowling`). match_id is projected as `mctx_match_id` to avoid clashing
- * with the base view's own `match_id`. */
+ * with the base view's own `match_id`. The sub-select is the SHARED
+ * matchContextSubselectSql (emitted SQL is byte-identical to the previous inline
+ * form). */
 export function matchContextJoinSql(viewAlias) {
-  return (
-    ` LEFT JOIN (SELECT match_id AS mctx_match_id, match_winner, result_type, ` +
-    `is_super_over, toss_winner, toss_decision, team_batting_first, event_stage, method ` +
-    `FROM matches) mctx ON mctx.mctx_match_id = ${viewAlias}.match_id`
-  );
+  return ` LEFT JOIN ${matchContextSubselectSql()} ON mctx.mctx_match_id = ${viewAlias}.match_id`;
 }
 
 /** WHERE-clause fragments for the active match-context filters, comparing the

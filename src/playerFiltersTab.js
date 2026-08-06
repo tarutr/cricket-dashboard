@@ -76,6 +76,7 @@ import {
   escSql as esc,
 } from "./state.js";
 import { createColumnsPicker } from "./columnsPicker.js";
+import { loadDimOptions } from "./dimOptions.js";
 import { openFilterRowEditor } from "./playerFilterEditor.js";
 import { getScopeSingletonsController, describeRowSingletons } from "./playerFilterScope.js";
 import { escHtml, escAttr } from "./html.js";
@@ -337,17 +338,29 @@ function conditionsToInningsWhere(conditions, discipline) {
 // carries no match_id and must not be modified). buildQuery / buildMatchupQuery /
 // conditionToHaving are entirely untouched.
 //
-// SCOPE COVERAGE: buildFieldingCteSql applies core (gender / format / date / team
-// type) + team (fielding_team) + OPPOSITION + event + venue + innings-number scope.
-// It does NOT join `matches`, so match-CONTEXT singletons (Stage / Match Result /
-// Toss) are NOT honored — exactly as the leaderboard's fielding column ignores them
-// today. Whether to OFFER them on a fielding row is a T-3b design decision.
+// SCOPE COVERAGE (top-level state, via buildFieldingCteSql's buildScopeClausesTagged
+// — matches the leaderboard fielding column, so no leaderboard change): core (gender
+// / format / date / team type) + team (fielding_team) + OPPOSITION + event + venue.
 //
-// The fielding SLICE dims live on `state.fielding = { positions, kinds, phases }`
-// (buildFieldingSliceClauses' contract): positions = the DISMISSED batter's batting
-// position; kinds = 'caught' / 'stumped' / 'run out' / 'caught and bowled'; phases =
-// the fielding-event phase (machinery still valid; whether to OFFER phase given the
-// phase-filter retirement is a T-3b question).
+// T-3a-ext FULL FILTER SET: every other fielding dim is a WHERE on the fielding
+// record, carried on the `state.fielding` namespace and compiled by table.js's
+// buildFieldingSliceClauses (+ its additive buildFieldingExtraSliceClauses) — a
+// namespace the LEADERBOARD never sets, so its fielding column stays byte-identical:
+//   • DIRECT columns (fielding_events): out_batting_position (positions), kind (kinds),
+//     phase (phases) — the original trio — PLUS out_hand (hands), out_role (roles),
+//     out_batter_id (outBatters), bowler_id (bowlers), bowler_style (bowlerStyles),
+//     city (cities), innings_number (inningsNumbers, 0-based stored), over_number
+//     (overFrom / overTo, 0-based range).
+//   • MATCH-CONTEXT (via `matches`, which fielding_events lacks): Season (seasons)
+//     as a semi-join; Stage (stage), Match Result (result), Toss result (tossResult),
+//     Toss decision (tossDecision) via the leaderboard's buildMatchContextClauses
+//     reused inside a correlated EXISTS on the fielding row's own match (player-
+//     relative Result/Toss compare the fielder's own fielding_team).
+// buildFieldingRowState just passes `row.fielding` straight through to
+// state.fielding, so wiring a new dim is a T-3b editor concern only — the query
+// engine already reads it. Availability of the profile-derived dims (out_hand /
+// out_role / bowler_style) is DATA-DRIVEN via loadFieldingDimOptions (no gender
+// hardcode): empty options ⇒ T-3b hides the filter.
 
 /** The six fielding tallies a fielding row shows, in display order. Keys match the
  * fielding metrics in metrics.js (source "fielding_events") + the derived "matches".
@@ -395,12 +408,16 @@ export function buildFieldingRowState(row, pageState) {
     eventSeasons: singletons.eventSeasons ?? base.eventSeasons,
     venue: singletons.venue ?? base.venue,
     inningsNumber: singletons.inningsNumber ?? base.inningsNumber,
-    // NOTE: stage / result / tossResult / tossDecision are deliberately NOT copied
-    // — buildFieldingCteSql does not join `matches`, so match-context singletons are
-    // silently ignored by the fielding source (mirroring the leaderboard). A T-3b
-    // decision to support them would require touching the sacred CTE — out of scope.
-    // The fielding SLICE dims (positions / kinds / phases) buildFieldingSliceClauses
-    // reads. Missing lists ⇒ no slice clause ⇒ the full fielding record.
+    // NOTE: TOP-LEVEL stage / result / tossResult / tossDecision are deliberately NOT
+    // copied — the fielding source's match-context lives on the state.fielding
+    // namespace instead (see below), so the leaderboard's own top-level match-context
+    // never leaks into the fielding column (it keeps ignoring it, unchanged).
+    // The fielding SLICE dims — the full T-3a-ext set (positions / kinds / phases +
+    // hands / roles / outBatters / bowlers / bowlerStyles / cities / inningsNumbers /
+    // overFrom / overTo + seasons / stage / result / tossResult / tossDecision) — ride
+    // on `state.fielding`, read by table.js buildFieldingSliceClauses. This passes
+    // `row.fielding` straight through: whatever sub-fields the (T-3b) editor set are
+    // honored, and a missing list/bound ⇒ no clause ⇒ the full fielding record.
     fielding: (row && row.fielding) || { positions: [], kinds: [], phases: [] },
     advanced: emptyAdvancedBlock(),
   };
@@ -479,9 +496,26 @@ export async function fetchFieldingRow(row, playerId, pageState) {
   return res.rows[0] || null;
 }
 
+/**
+ * DATA-DRIVEN availability probe for a fielding dim (T-3a-ext) — a thin, fielding-
+ * scoped wrapper over the generic loadDimOptions. Returns the distinct non-null
+ * values of `column` on the `fielding` source within the pop-up's scope. Its FIRST
+ * use is the profile-derived dims (out_hand / out_role / bowler_style): a non-empty
+ * result means T-3b OFFERS the filter, an empty result means it HIDES it. No gender
+ * hardcode — men return values, women return [] (all NULL), and future women's
+ * profiles will make the filter auto-appear. `scope` is a pageState-shaped object
+ * ({ gender, formats, teamType, dateFrom, dateTo }).
+ */
+export function loadFieldingDimOptions(column, scope) {
+  return loadDimOptions("fielding", column, scope || {});
+}
+
 /** Build a fielding row (T-3a seeds these in code; T-3b's editor will build them).
- * `fielding` = { positions, kinds, phases } slice dims; `scope` / `singletons` as on
- * batting/bowling rows. Carries no conditions / ball predicates / matchupVs — a
+ * `fielding` carries the full T-3a-ext slice set — the original { positions, kinds,
+ * phases } trio plus any of { hands, roles, outBatters, bowlers, bowlerStyles,
+ * cities, inningsNumbers, overFrom, overTo, seasons, stage, result, tossResult,
+ * tossDecision } the editor sets (missing ⇒ unset ⇒ no clause). `scope` / `singletons`
+ * as on batting/bowling rows. Carries no conditions / ball predicates / matchupVs — a
  * fielding record is sliced only by its own dims + scope. */
 export function makeFieldingRow(fielding, scope, singletons) {
   return {
@@ -494,14 +528,21 @@ export function makeFieldingRow(fielding, scope, singletons) {
   };
 }
 
-/** T-3a code-seeded fielding rows for verification (T-3b replaces with the editor):
- * a NO-FILTER row (the player's full fielding record) + a positions {1,2,3} slice
- * (catches/stumpings/run-outs where the DISMISSED batter batted 1–3). `scope` is the
- * pop-up's effective scope so the no-filter row equals the leaderboard fielding row. */
+/** Code-seeded fielding rows for verification (T-3b replaces with the editor):
+ * a NO-FILTER row (the player's full fielding record — equals the leaderboard
+ * fielding row) + a positions {1,2,3} slice, plus T-3a-ext demonstrators of the new
+ * dims (a spin bowler-style slice and a Toss-decision match-context slice). `scope`
+ * is the pop-up's effective scope so the no-filter row equals the leaderboard row. */
 export function seedFieldingRows(scope) {
   return [
     makeFieldingRow({ positions: [], kinds: [], phases: [] }, scope, {}),
     makeFieldingRow({ positions: [1, 2, 3], kinds: [], phases: [] }, scope, {}),
+    makeFieldingRow(
+      { bowlerStyles: ["Legbreak", "Legbreak googly", "Slow left-arm orthodox", "Right-arm offbreak", "Left-arm wrist-spin", "Left-arm slow"] },
+      scope,
+      {}
+    ),
+    makeFieldingRow({ tossDecision: ["bat"] }, scope, {}),
   ];
 }
 

@@ -18,6 +18,7 @@ import {
   gateWithPinExemption,
   buildMatchContextClauses,
   matchContextJoinSql,
+  matchContextSubselectSql,
 } from "./filters.js";
 import { activeGroups } from "./advanced.js";
 import { escHtml, escAttr } from "./html.js";
@@ -743,11 +744,15 @@ export const isPomMetric = (m) => m && m.source === "player_matches" && m.key !=
 /** SQL WHERE predicates for the fielding SLICE conditions (fielding rebuild) —
  * the fielding metric's OWN dims, applied inside `fielding_cte` so the
  * Catches/Stumpings/Run-outs/Dismissals-Effected totals count only the sliced
- * events. Reads `state.fielding` ({ positions:[], kinds:[], phases:[] } — all
- * multi-select lists, mirroring the app's existing position/opposition pickers).
- * Returns [] when nothing is set, so the fielding_cte (and the whole query) stays
- * byte-identical to the un-sliced case. Columns referenced (out_batting_position,
- * kind, phase) all live on the fielding_events view. */
+ * events. Reads `state.fielding`: the original trio { positions, kinds, phases }
+ * (multi-select lists, mirroring the app's existing position/opposition pickers)
+ * PLUS the T-3a-ext full filter set appended by buildFieldingExtraSliceClauses
+ * (out_hand/out_role/out_batter_id/bowler_id/bowler_style/city/innings_number/
+ * over range + Season/Stage/Result/Toss via `matches`). Returns [] when nothing is
+ * set, so the fielding_cte (and the whole query) stays byte-identical to the
+ * un-sliced case — the leaderboard only ever sets positions/kinds/phases, so its
+ * fielding column is unchanged. Columns referenced (out_batting_position, kind,
+ * phase, and the extras) all live on the fielding_events view. */
 export function buildFieldingSliceClauses(state) {
   const f = state.fielding || {};
   const clauses = [];
@@ -762,6 +767,104 @@ export function buildFieldingSliceClauses(state) {
   if (Array.isArray(f.phases) && f.phases.length > 0) {
     clauses.push(`phase IN (${f.phases.map((p) => `'${esc(p)}'`).join(", ")})`);
   }
+  // T-3a-ext (ADDITIVE — numbers sacred): the FULL fielding filter set beyond the
+  // original position/kind/phase trio. Reads FURTHER state.fielding.* sub-fields and
+  // emits NOTHING when they are unset, so buildFieldingCteSql (and thus the
+  // leaderboard's fielding column, which only ever sets positions/kinds/phases) is
+  // byte-identical. Kept in a separate exported function so the byte-identity is
+  // obvious and the extra dims are testable in isolation.
+  for (const c of buildFieldingExtraSliceClauses(state)) clauses.push(c);
+  return clauses;
+}
+
+/**
+ * The ADDITIVE fielding SLICE clauses (T-3a-ext) beyond position/kind/phase — the
+ * full fielding filter set for the player pop-up's Fielding discipline. All read
+ * FURTHER sub-fields on `state.fielding`; each contributes nothing when unset, so
+ * this returns [] for the leaderboard (which sets only positions/kinds/phases),
+ * keeping buildFieldingSliceClauses — and the sacred buildFieldingCteSql that calls
+ * it — byte-identical.
+ *
+ * DIRECT columns on the `fielding` view (fielding_events): out_hand, out_role,
+ * out_batter_id, bowler_id, bowler_style, city (string IN-lists); innings_number
+ * (0-BASED stored ints — T-3b's editor owns the display mapping); over_number (a
+ * 0-based range, over 1 = over_number 0, either bound optional). All player-scoped
+ * by construction (the CTE groups by fielder_id and the outer wrap pins the player).
+ *
+ * MATCH-CONTEXT (fielding_events carries no match-context columns → reach `matches`):
+ *  • Season — a non-correlated `match_id IN (SELECT … FROM matches …)` semi-join,
+ *    mirroring the Event/Venue semi-joins in buildScopeClausesTagged.
+ *  • Stage / Match Result / Toss result / Toss decision — the leaderboard's
+ *    buildMatchContextClauses reused VERBATIM (no drift) inside a CORRELATED EXISTS
+ *    on the fielding row's own match. Player-relative Result/Toss compare the
+ *    fielder's own `fielding_team` to the match fields, exactly like a batting row's
+ *    `batting_team`. The mctx sub-select is the SHARED matchContextSubselectSql (same
+ *    projection the leaderboard's LEFT JOIN uses). `fielding` is the correlation name
+ *    (buildFieldingCteSql and the fld_matches_cte both do a bare `FROM fielding`).
+ *
+ * These match-context sub-fields live under state.fielding (NOT top-level
+ * state.stage/result/…) precisely so the leaderboard's own top-level match-context
+ * never leaks into the fielding source — the fielding column keeps ignoring it,
+ * unchanged. Values are coerced/escaped at the point of use (no injection surface).
+ */
+export function buildFieldingExtraSliceClauses(state) {
+  const f = state.fielding || {};
+  const clauses = [];
+  const pushInList = (col, vals) => {
+    const lits = [...new Set((vals || []).filter((v) => v != null && v !== ""))].map((v) => `'${esc(v)}'`);
+    if (lits.length) clauses.push(`${col} IN (${lits.join(", ")})`);
+  };
+  const pushIntList = (col, vals) => {
+    const nums = [...new Set((vals || []).map(Number).filter(Number.isInteger))];
+    if (nums.length) clauses.push(`${col} IN (${nums.join(", ")})`);
+  };
+
+  // Dismissed-batter profile dims (availability is DATA-DRIVEN — see loadDimOptions).
+  pushInList("out_hand", f.hands);
+  pushInList("out_role", f.roles);
+  pushInList("out_batter_id", f.outBatters);
+  // Bowler dims.
+  pushInList("bowler_id", f.bowlers);
+  pushInList("bowler_style", f.bowlerStyles);
+  // Location + innings.
+  pushInList("city", f.cities);
+  pushIntList("innings_number", f.inningsNumbers); // 0-based stored (T-3b maps display)
+
+  // Over range (0-based over_number; over 1 = over_number 0). Either bound optional.
+  const from = Number(f.overFrom);
+  if (Number.isFinite(from)) clauses.push(`over_number >= ${Math.trunc(from)}`);
+  const to = Number(f.overTo);
+  if (Number.isFinite(to)) clauses.push(`over_number <= ${Math.trunc(to)}`);
+
+  // Season — a match-level attribute on `matches` (fielding_events has none):
+  // a non-correlated semi-join, gender-scoped exactly like Event/Venue.
+  const seasons = [...new Set((f.seasons || []).filter((s) => s != null && s !== ""))];
+  if (seasons.length) {
+    clauses.push(
+      `match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND season IN (${seasons
+        .map((s) => `'${esc(s)}'`)
+        .join(", ")}))`
+    );
+  }
+
+  // Match context (Stage / Match Result / Toss result / Toss decision): reuse the
+  // leaderboard's buildMatchContextClauses VERBATIM inside a correlated EXISTS on the
+  // fielding row's own match, comparing the fielder's `fielding_team` for the
+  // player-relative Result/Toss terms. Only the four task-scoped facets are wired;
+  // resultCondition stays [] so the reused builder emits nothing for it.
+  const mctxAdapter = {
+    result: f.result || [],
+    tossResult: f.tossResult || [],
+    tossDecision: f.tossDecision || [],
+    stage: f.stage || [],
+    resultCondition: [],
+  };
+  const mctxClauses = buildMatchContextClauses(mctxAdapter, "fielding.fielding_team");
+  if (mctxClauses.length) {
+    const inner = ["mctx.mctx_match_id = fielding.match_id", ...mctxClauses].join(" AND ");
+    clauses.push(`EXISTS (SELECT 1 FROM ${matchContextSubselectSql()} WHERE ${inner})`);
+  }
+
   return clauses;
 }
 
