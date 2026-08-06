@@ -127,8 +127,11 @@ Plan approved; **Wave F started 2026-08-02.**
 
 ## REMAINING ORDER (owner-confirmed 2026-08-03)
 The leaderboard **filters rejig is COMPLETE** (Wave F + R landed + verified). Remaining, in order:
-1. **Player pop-up Tab 2** (ACTIVE thread) — `.orchestrator/popup-ballengine-plan.md`: T0 working mock → owner
-   approval → T1 opponent-player filter (also lands on the leaderboard) → T2 build → T3 fielding → T4 perf/review.
+1. **Player pop-up Tab 2 — ✅ BUILT (2026-08-03), all on `ball-layer`.** T0 mock SKIPPED (owner). Delivered:
+   Wave A (scaffold + overlay retire + shared columns/palette extraction) → T-1 opponent-player → T-2a..e
+   (slicing engine, editor, scope singletons, matches-fix, matchup Vs + batting position) → T-3a/ext/b (fielding
+   mode) → retrofit (data-driven filter availability, `cac8dfe`). **NEXT = the overall pop-up review in a FRESH
+   session** — see `.orchestrator/popup-tab2-review-handoff.md`. (T-4 perf folds into the pre-cut integration.)
 2. **Columns rejig** — Columns popover → shared panel; by-phase columns move here; renames. *(Tab 2 reuses the
    shared column component, so it picks up this rejig automatically — no reorder needed.)*
 3. **Columns-in-filters-popup**, then **column presets** (design shown to owner first).

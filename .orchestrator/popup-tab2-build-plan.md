@@ -153,3 +153,16 @@ Different filters for different use cases. Do NOT change the leaderboard's PotM 
 - **T-2b-ii — EDITOR UI (frontend-heavy/Opus):** "Add Filter Row" → real Add-condition palette (surface:"popup",
   restricted to the ✅ set, full operators for numerics, Y/N for booleans) writing a per-row condition-set; per-row
   sticky scope; edit(pencil)/delete(✕)/sort/pin; row identity + (i); both buttons "Add Filter Row".
+
+---
+
+## ✅ BUILD COMPLETE — 2026-08-03 (the whole tab, all on `ball-layer`, nothing pushed)
+Everything below this line is DONE + committed + verified. Waves + commits: Wave A `116e90a`/`57892d2`/`770c5e3`
+· T-1 `ab642e7`/`dbf9e84` · T-2a `10d4cd2` · T-2b-i `e95dc1d` · T-2b-ii `d719b63` · T-2c `99a959d` · T-2d `58279ca`
+· T-2e `c39ab52` · T-3a `4c7ce94` · T-3a-ext `f3713cf` · T-3b `aa38481` · retrofit (data-driven availability)
+`cac8dfe`. The men-only OFFER-path hardcode is fully removed (data-driven `filterAvailability.js`); numbers-path
+gender guards (state.js `matchupVsActive`/`profileSemiJoin`) left as a number-critical backstop (separate task).
+
+**NEXT = the OVERALL POP-UP REVIEW, in a fresh session.** Full state, how-to-verify, and the 8 open items are in
+**`.orchestrator/popup-tab2-review-handoff.md`** (the review session's starting point). `SPEC.md` + `review/BACKLOG.md`
+remain HELD until the cut (owner Option B).
