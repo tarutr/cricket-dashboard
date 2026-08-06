@@ -134,6 +134,16 @@ export function createPaletteGroupsBuilder(deps) {
     pickSingleton, pickMetric,
     preselectPhase, preselectFielding, preselectMatchupVs, preselectEdge, preselectInningsNumber,
     getVsBowlingTypes, ensureVsBowlingTypesLoaded,
+    // DATA-DRIVEN availability (owner "remove the hardcode everywhere",
+    // 2026-08-03) — replaces the old `!women` gates on the Player-Profile leaves
+    // (role/hand/bowling) and the Matchup "Vs" family. `isFilterAvailable(key, s)`
+    // is a SYNC getter over an async-loaded per-gender cache (src/filterAvailability.js),
+    // wired by each surface (drawer + pop-up editor); `ensureFilterAvailabilityLoaded(s)`
+    // kicks off that load. Defaults keep an un-wired surface offering everything
+    // (optimistic) rather than silently hiding a men filter. Display-only — no
+    // query builder is consulted here (numbers sacred).
+    isFilterAvailable = () => true,
+    ensureFilterAvailabilityLoaded = () => {},
     // T-2b-ii: the pop-up ("popup" surface) offers a metric leaf ONLY when it is
     // a per-innings SLICEABLE filter (numeric amount/rate/threshold or Y/N
     // boolean) — supplied by the pop-up mount (playerFiltersTab.js) as the slice
@@ -163,8 +173,11 @@ export function createPaletteGroupsBuilder(deps) {
   function buildPaletteGroups(s, gi, { surface = "leaderboard", popupLock = null } = {}) {
     const excludeLeaf = (key) => surface === "popup" && POPUP_EXCLUDED_PLAYER_PROFILE_LEAVES.has(key);
     const ns = effectiveNamespace(s);
-    const women = s.gender === "female";
     const disc = s.discipline;
+    // Kick off the data-driven availability load for this scope (idempotent per
+    // gender); when it resolves the surface re-renders so the offered leaves
+    // settle. Until then isFilterAvailable is optimistic (see deps note).
+    ensureFilterAvailabilityLoaded(s);
     const matchup = matchupVsActive(s);
     const ballOn = ballEngineEnabled();
     const winPB = windowPhaseBallsAllowed(s);
@@ -263,9 +276,12 @@ export function createPaletteGroupsBuilder(deps) {
     // T-F3: each of the 4 fixed profile leaves + PotM Count is withheld on the
     // "popup" surface via excludeLeaf (see file header); Team is never excluded.
     pushGroup("Player Profile", [
-      !women && !excludeLeaf("role") ? leafSingle("role", "Playing role") : null,
-      !women && disc === "batting" && !excludeLeaf("hand") ? leafSingle("hand", "Batting hand") : null,
-      !women && !excludeLeaf("bowling") ? leafSingle("bowling", "Bowling style") : null,
+      // Data-driven (owner 2026-08-03): each profile leaf is offered iff its
+      // profile data exists for the current scope (men → yes, women today → no,
+      // future women's data → auto-shown) — replaces the old `!women` gate.
+      isFilterAvailable("profileRole", s) && !excludeLeaf("role") ? leafSingle("role", "Playing role") : null,
+      isFilterAvailable("profileHand", s) && disc === "batting" && !excludeLeaf("hand") ? leafSingle("hand", "Batting hand") : null,
+      isFilterAvailable("profileBowling", s) && !excludeLeaf("bowling") ? leafSingle("bowling", "Bowling style") : null,
       disc === "batting" && !excludeLeaf("rpos") ? leafSingle("rpos", "Regular batting position") : null,
       // PotM Count (R2b): the filterable count of Player-of-the-Match awards
       // (metrics.js `potm_count`), between Regular batting position and Team. The
@@ -430,14 +446,18 @@ export function createPaletteGroupsBuilder(deps) {
     // 6 ── Matchup (Vs) ───────────────────────────────────────────────────────────
     // T-F3: unaffected by `surface` — kept whole on "popup" (Team + every Matchup
     // entry stays). The profile-backed entries (vs bowling style / vs batting hand /
-    // Batting position) are MEN-ONLY (matchup coverage is ~0% for women). T-1 adds
-    // "vs opponent player", which is GENDER-AGNOSTIC + ball-engine-gated (see below),
-    // so the group can now surface on the women view too (opponent-only) when the
-    // ball engine is on.
+    // Batting position) are offered DATA-DRIVEN (owner "remove the hardcode
+    // everywhere", 2026-08-03) — via isFilterAvailable, not the old `!women` gate.
+    // Matchup rows key every bowler/batter through profiles, so today the mapped-
+    // style data exists for men only (women are all '(unmapped)') → men offered,
+    // women absent, identical to before; women's future profiles auto-restore it.
+    // T-1's "vs opponent player" is GENDER-AGNOSTIC + ball-engine-gated (see below),
+    // so the group can already surface on the women view (opponent-only) when on.
     {
       const vsItems = [];
-      if (!women) {
-        if (disc === "batting") {
+      if (disc === "batting") {
+        // vs bowling style — offered iff mapped bowling styles exist in scope.
+        if (isFilterAvailable("vsBowlingStyle", s)) {
           const vsTypes = getVsBowlingTypes() || [];
           vsItems.push(matchupVsFamily("vs bowling style", [
             ["Pace", preselectMatchupVs("group", "Pace")],
@@ -450,14 +470,19 @@ export function createPaletteGroupsBuilder(deps) {
           // so this branch's caller-side guard won't re-fire. Skipped when the family
           // isn't offered (popup non-empty row), so a matchup/slice row fires no load.
           if (surface !== "popup" || popupMatchupOffered) ensureVsBowlingTypesLoaded();
-        } else {
+        }
+      } else {
+        // vs batting hand — offered iff mapped batting hands exist in scope.
+        if (isFilterAvailable("vsBattingHand", s)) {
           vsItems.push(matchupVsFamily("vs batting hand", [
             ["Right-hand bat", preselectMatchupVs("hand", "Right-hand bat")],
             ["Left-hand bat", preselectMatchupVs("hand", "Left-hand bat")],
           ]));
         }
-        if (matchup) vsItems.push(leafSingle("strikerpos", "Batting position"));
       }
+      // Striker batting position — matchup-only (matchupVsActive already false for
+      // women, so this never surfaces there without a gender check).
+      if (matchup) vsItems.push(leafSingle("strikerpos", "Batting position"));
       // Opponent-player head-to-head (T-1, owner decision 70): "subject X vs opponent
       // Y" (bowler_id when batting / batter_id when bowling). BALL-ENGINE ONLY —
       // flag-gated exactly like the Ball Ranges group (per-delivery ids are absent

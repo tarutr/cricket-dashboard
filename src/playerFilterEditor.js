@@ -21,6 +21,7 @@
 
 import { createAddPalette, paletteSkeletonHTML } from "./addPalette.js";
 import { createPaletteGroupsBuilder } from "./paletteGroups.js";
+import { createFilterAvailability } from "./filterAvailability.js";
 import { OPERATORS } from "./advanced.js";
 import { createInitialState, emptyAdvancedBlock, FORMAT_BUCKETS } from "./state.js";
 import { query } from "./db.js";
@@ -242,6 +243,18 @@ export function openFilterRowEditor(hostDoc, deps) {
   // "Vs" family: pickSingleton("vs") + preselectMatchupVs set the row's matchupVs
   // draft (NOT a buildScope singleton). Fielding preselects stay no-ops (withheld).
   const noPreselect = () => () => {};
+
+  // Data-driven filter availability (owner "remove the hardcode everywhere") — the
+  // Matchup Vs family's offer is decided by whether the current gender's matchup
+  // data exists, not a gender check. Same shared probe as the leaderboard drawer.
+  // availabilityOnReady re-mounts the palette + re-renders the draft conditions once
+  // a probe resolves (rebuildPalette / renderConditions are hoisted function decls).
+  const availability = createFilterAvailability();
+  function availabilityOnReady() {
+    rebuildPalette();
+    renderConditions();
+  }
+
   const buildGroups = createPaletteGroupsBuilder({
     isPresent: scopeController ? (t) => scopeController.isRevealed(t.key) : () => false,
     SINGLETON_TYPES: scopeController ? scopeController.SINGLETON_TYPES : [],
@@ -259,6 +272,13 @@ export function openFilterRowEditor(hostDoc, deps) {
     getVsBowlingTypes,
     ensureVsBowlingTypesLoaded,
     metricSliceable: isPopupFilterMetric,
+    // Data-driven availability (owner "remove the hardcode everywhere") — the
+    // Matchup Vs family is offered iff the current gender's matchup data exists
+    // (men → yes, women → no today, future women's data → auto-shown). Same
+    // shared probe as the leaderboard; re-renders the palette + conditions once a
+    // probe resolves. (Profile leaves stay excluded on the popup regardless.)
+    isFilterAvailable: (key, s) => availability.isAvailable(key, s),
+    ensureFilterAvailabilityLoaded: (s) => availability.ensureLoaded(s, availabilityOnReady),
   });
   const palette = createAddPalette({
     buildGroups: (gi) => buildGroups(paletteState(), gi, { surface: "popup", popupLock: computePopupLock() }),

@@ -20,8 +20,10 @@
 //     row with a metric but no value BLOCKS Search (validate(), decision 42).
 //
 // Nothing here touches buildScopeClauses or the state schema — each editor just
-// calls store.set(...). Profiles are men-only (decision 21): Role/Hand/Bowling
-// are hidden on the Women view (R. Pos. is innings-derived, so it stays live).
+// calls store.set(...). Role/Hand/Bowling (+ Matchup Vs) are offered DATA-DRIVEN
+// (owner 2026-08-03): shown wherever their profile/matchup data exists — men today,
+// women when their profiles land — via filterAvailability, never a gender check.
+// (R. Pos. is innings-derived, so it stays live on both views regardless.)
 
 import { query } from "./db.js";
 import {
@@ -80,6 +82,7 @@ import {
 import { mountSearchSelect } from "./searchSelect.js";
 import { createAddPalette, paletteSkeletonHTML } from "./addPalette.js";
 import { createPaletteGroupsBuilder } from "./paletteGroups.js";
+import { createFilterAvailability, AVAIL_KEYS } from "./filterAvailability.js";
 import { escHtml, escAttr } from "./html.js";
 
 // Display order for the profile-filter option lists.
@@ -98,8 +101,12 @@ function orderBy(present, order) {
   return [...ranked, ...rest];
 }
 
-// The singleton (non-numeric) condition types. menOnly types are profile-sheet-
-// derived → hidden on the Women view (decision 21). R5 Wave 1a (item 7)
+// The singleton (non-numeric) condition types. The profile/matchup-backed rows
+// (Role / Batting hand / Bowling style / Matchup Vs / striker Batting position)
+// are offered DATA-DRIVEN now (owner "remove the hardcode everywhere", 2026-08-03):
+// isPresent gates them on filterAvailability, not the old `menOnly` gender flag —
+// so they show wherever their data exists (men today; women when their profiles
+// land) and stay absent otherwise. R5 Wave 1a (item 7)
 // restructured the "+ Add condition" dropdown: the old standalone "Team" subset
 // is dissolved into "Player" (Played for → "Team", Against opposition →
 // "Opposition"); Bowling style is no longer a standalone dropdown entry (it is
@@ -122,10 +129,10 @@ const SINGLETON_TYPES = [
   // gated to a single T20 / 50-over bucket (windowPhaseBallsAllowed); Over range +
   // Player balls apply in every format. They lead the array so their applied rows
   // render first among the singleton rows, grouped under the "Delivery" optgroup.
-  { key: "win_phase", label: "Phase", group: "Delivery", menOnly: false, ballOnly: true },
-  { key: "win_overs", label: "Over range", group: "Delivery", menOnly: false, ballOnly: true },
-  { key: "win_balls", label: "Ball range", group: "Delivery", menOnly: false, ballOnly: true },
-  { key: "win_player", label: "Player balls", group: "Delivery", menOnly: false, ballOnly: true },
+  { key: "win_phase", label: "Phase", group: "Delivery", ballOnly: true },
+  { key: "win_overs", label: "Over range", group: "Delivery", ballOnly: true },
+  { key: "win_balls", label: "Ball range", group: "Delivery", ballOnly: true },
+  { key: "win_player", label: "Player balls", group: "Delivery", ballOnly: true },
   // "Matchup (Vs)" (R3.2; relabelled Wave A1 item 1; R5-A #5 moved it to the
   // FIRST entry INSIDE the "Advanced metrics" optgroup, directly above Dot Ball
   // %): the matchup opponent selector, mirroring the toolbar's bonded Vs control
@@ -133,26 +140,26 @@ const SINGLETON_TYPES = [
   // buildPaletteGroups). Leads this array too, so its applied row renders
   // first among the singleton rows (SINGLETON_TYPES order also drives applied-row
   // order). Men-only (matchupVsActive hard-gates on male; coverage is ~0% for women).
-  { key: "vs", label: "Matchup (Vs)", group: "Basic", menOnly: true },
-  { key: "team", label: "Team", group: "Player", menOnly: false },
-  { key: "opposition", label: "Opposition", group: "Player", menOnly: false },
-  { key: "hand", label: "Batting hand", group: "Player", menOnly: true },
-  { key: "bowling", label: "Bowling style", group: "Player", menOnly: true },
-  { key: "role", label: "Role", group: "Player", menOnly: true },
-  { key: "rpos", label: "R. Pos.", group: "Basic", menOnly: false },
+  { key: "vs", label: "Matchup (Vs)", group: "Basic" },
+  { key: "team", label: "Team", group: "Player" },
+  { key: "opposition", label: "Opposition", group: "Player" },
+  { key: "hand", label: "Batting hand", group: "Player" },
+  { key: "bowling", label: "Bowling style", group: "Player" },
+  { key: "role", label: "Role", group: "Player" },
+  { key: "rpos", label: "R. Pos.", group: "Basic" },
   // Innings Number (filter-rejig Wave R2c): the REPLACEMENT for "Innings order" —
   // narrows to the innings the player batted/bowled in (1st/2nd white-ball, 1st–4th
   // red-ball; format-aware). A top-level scope filter (state.inningsNumber), both
   // disciplines + genders, every format — so no menOnly/ballOnly/matchup gate. Its
   // palette entry lives in Batting AND Bowling Basic Stats (see buildPaletteGroups).
-  { key: "inn_num", label: "Innings Number", group: "Basic", menOnly: false },
+  { key: "inn_num", label: "Innings Number", group: "Basic" },
   // Striker "Batting position" (R5-A #8): the MATCHUP-ONLY ball-level filter on
   // the batter-faced position (state.positions) — the one that powers the Bumrah-
   // vs-openers anchor. Split OUT of the R. Pos. row so it never auto-appears when
   // a Vs bucket is picked; its OWN addable "+ Add condition" entry, offered only
   // in matchup mode (isPresent gates it on matchupVsActive). Men-only in practice
   // (matchup coverage ~0% for women; matchupVsActive hard-gates on male anyway).
-  { key: "strikerpos", label: "Batting position", group: "Basic", menOnly: true },
+  { key: "strikerpos", label: "Batting position", group: "Basic" },
   // Opponent-player head-to-head (pop-up Tab-2 T-1, owner decision 70): "subject X
   // vs opponent Y" — restricts the counted balls to those against ONE opponent
   // (subject batting ⇒ bowler_id = Y; subject bowling ⇒ batter_id = Y). BALL-ENGINE
@@ -163,23 +170,23 @@ const SINGLETON_TYPES = [
   // it works for both genders (matching the Ball Ranges group's gender-agnostic
   // gate). Its palette leaf lives in the Matchup (Vs) group; its editor is the
   // reused player-search (drawerInnings.js mountOpponentPlayer).
-  { key: "vs_opp", label: "vs opponent player", group: "Basic", menOnly: false, ballOnly: true },
-  { key: "event", label: "Event", group: "Match", menOnly: false },
+  { key: "vs_opp", label: "vs opponent player", group: "Basic", ballOnly: true },
+  { key: "event", label: "Event", group: "Match" },
   // Stage (tournament round) moved OUT of the "Match context" group into "Match",
   // directly under Event and above Venue (owner, polish item 3) — it is a property
   // of the competition you are already picking, and its options now cross-filter by
   // the selected Event(s). Its position here also drives the APPLIED-row order, so
   // the Stage row renders next to the Event row it belongs with.
-  { key: "mc_stage", label: "Stage", group: "Match", menOnly: false },
-  { key: "venue", label: "Venue", group: "Match", menOnly: false },
+  { key: "mc_stage", label: "Stage", group: "Match" },
+  { key: "venue", label: "Venue", group: "Match" },
   // Fielding SLICE conditions (fielding rebuild): the fielding metric's OWN dims
   // — narrow WHICH wicket-events the Catches/Stumpings/Run-outs/Dismissals-
   // Effected columns count. PLAIN mode only (fielding has no matchup grain);
   // isPresent gates them on !matchupVsActive. Not menOnly — fielding works for
   // both genders. They sit in the "Fielding" dropdown optgroup, alongside the
   // fielding metric conditions.
-  { key: "fld_pos", label: "Dismissed position", group: "Fielding", menOnly: false },
-  { key: "fld_phase", label: "Fielding phase", group: "Fielding", menOnly: false },
+  { key: "fld_pos", label: "Dismissed position", group: "Fielding" },
+  { key: "fld_phase", label: "Fielding phase", group: "Fielding" },
   // Match-context singletons (Wave 6): categorical WHERE filters keyed off the
   // MATCH's context. Both genders; work in batting, bowling AND matchup views
   // (no matchup gate), so — unlike the fielding slices — isPresent has no Vs
@@ -188,9 +195,9 @@ const SINGLETON_TYPES = [
   // "Rain-affected matches" (mc_method) is gone — its method logic now lives in
   // the Result Condition sub-picker NESTED inside Result (state.resultCondition,
   // FIX B / polish item 4). Stage has moved up into the "Match" group (see above).
-  { key: "mc_result", label: "Result", group: "Match context", menOnly: false },
-  { key: "mc_toss_result", label: "Toss result", group: "Match context", menOnly: false },
-  { key: "mc_toss_decision", label: "Toss decision", group: "Match context", menOnly: false },
+  { key: "mc_result", label: "Result", group: "Match context" },
+  { key: "mc_toss_result", label: "Toss result", group: "Match context" },
+  { key: "mc_toss_decision", label: "Toss decision", group: "Match context" },
 ];
 
 // (The old per-group option-ORDER arrays — PLAYER_ADD_ORDER / MATCH_ADD_ORDER /
@@ -280,7 +287,20 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   }
   const numericEl = advancedHost.querySelector('[data-role="numeric-rows"]');
 
-  // ── Profile options + editors (men-only) ───────────────────────────────────
+  // ── Data-driven filter availability (owner "remove the hardcode everywhere") ──
+  // One instance per drawer: an async per-gender probe of matchup + profile DATA
+  // existence, cached behind a SYNC getter the palette builder + isPresent read.
+  // Replaces the old men-only gender gates — display/offer-logic only, no query
+  // builder touched (numbers sacred). availabilityOnReady re-renders the singleton
+  // rows + numeric groups (which host the palettes) once a probe resolves so the
+  // offered set settles for the new scope. (availabilityOnReady is a hoisted
+  // function declaration below — safe to reference here.)
+  const availability = createFilterAvailability();
+  // Warm the default gender's cache at mount (fires as soon as the DB is ready),
+  // so the offered set is settled before the user ever opens "+ Add condition".
+  availability.ensureLoaded(store.get(), availabilityOnReady);
+
+  // ── Profile options + editors ──────────────────────────────────────────────
   let profileOptions = { roleGroups: [], subByGroup: {}, bowlingTypes: [], battingHands: [] };
   let profileOptionsLoadToken = 0;
   let profileOptionsErrored = false;
@@ -676,8 +696,38 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
 
   const FIELDING_SLICE_KEYS = new Set(["fld_pos", "fld_phase"]);
 
+  // Profile/matchup-backed singleton rows are offered only where their DATA exists
+  // in the current scope (data-driven — owner "remove the hardcode everywhere",
+  // 2026-08-03; replaces the old `menOnly && gender === "female"` gate). Others
+  // are always eligible. "vs"/"strikerpos" resolve by discipline (bowling-style
+  // vs batting-hand matchup source). SYNC read of the async availability cache
+  // (optimistic true until loaded — see filterAvailability.js).
+  function singletonDataAvailable(key, s) {
+    switch (key) {
+      case "role": return availability.isAvailable("profileRole", s);
+      case "hand": return availability.isAvailable("profileHand", s);
+      case "bowling": return availability.isAvailable("profileBowling", s);
+      case "vs":
+      case "strikerpos":
+        return availability.isAvailable(s.discipline === "batting" ? "vsBowlingStyle" : "vsBattingHand", s);
+      default: return true;
+    }
+  }
+
+  // Re-render the singleton rows + numeric groups (the palette hosts) once an
+  // availability probe resolves, so a scope's offered set settles. Hoisted so the
+  // deps/availability wiring above can reference it.
+  function availabilityOnReady() {
+    syncSingletonRows();
+    renderNumeric(store.get(), true);
+  }
+
   function isPresent(t, s) {
-    if (t.menOnly && s.gender === "female") return false;
+    // Data-driven availability gate (see singletonDataAvailable) — replaces the old
+    // men-only gender hardcode. For men everything is available (unchanged); women's
+    // profile/matchup rows stay hidden because their data is absent (and their state
+    // carries no value anyway).
+    if (!singletonDataAvailable(t.key, s)) return false;
     // Delivery window (Wave 3): ball-engine-only — never shows, nor auto-appears,
     // while the flag is OFF (a window can't apply to the pre-summed parquet path).
     if (t.ballOnly && !ballEngineEnabled()) return false;
@@ -830,6 +880,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     preselectPhase, preselectFielding, preselectMatchupVs, preselectEdge, preselectInningsNumber,
     getVsBowlingTypes: () => vsBowlingTypes,
     ensureVsBowlingTypesLoaded,
+    // Data-driven availability (owner "remove the hardcode everywhere") — the
+    // profile leaves + Matchup Vs family are offered iff their data exists.
+    isFilterAvailable: (key, s) => availability.isAvailable(key, s),
+    ensureFilterAvailabilityLoaded: (s) => availability.ensureLoaded(s, availabilityOnReady),
   });
 
   // ── Palette component (portal + search + ▸ drill-down) — src/addPalette.js ────
@@ -908,7 +962,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   function structuralKey(s) {
     return JSON.stringify({
       ns: effectiveNamespace(s),
-      women: s.gender === "female",
+      // Data-driven availability signature (owner "remove the hardcode everywhere")
+      // — replaces the old `women: gender === "female"` field. Rebuilds the numeric
+      // groups (palette hosts) whenever the offered profile/matchup set flips, i.e.
+      // on a gender switch AND when an availability probe resolves. Gender is the
+      // probe axis, so this still changes on the men↔women switch it used to catch.
+      avail: AVAIL_KEYS.map((k) => availability.isAvailable(k, s)),
       present: SINGLETON_TYPES.filter((t) => isPresent(t, s)).map((t) => t.key),
       formats: s.formats,
       groups: renderGroups(s).map((g) => ({ op: g.op, conds: g.conds.map((c) => `${c.metricKey}|${c.operator}`) })),
@@ -1155,6 +1214,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
 
   function sync() {
     const s = store.get();
+    // Warm the data-driven availability cache for the current gender (idempotent —
+    // re-probes only when gender changes), so the offered filter set is settled by
+    // the time the user opens the "+ Add condition" palette.
+    availability.ensureLoaded(s, availabilityOnReady);
     syncSingletonRows();
     renderNumeric(s);
     syncKeepColumns();
@@ -1177,7 +1240,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // Opponent-player head-to-head (Tab-2 T-1): one when active (ball engine only).
     if (opponentPlayerActive(s)) n++;
     if ((s.teams || []).length > 0) n++;
-    if (s.gender !== "female") {
+    // Profile filters count when SET (data-driven, not gender-hardcoded — owner
+    // "remove the hardcode everywhere"): women's state carries no profile value
+    // (cleared on gender switch; the filters aren't offered), so this adds 0 for
+    // them exactly as the old `gender !== "female"` guard did.
+    {
       const p = s.profile;
       if (p.roleGroup) n++;
       if (p.roleSub) n++;
