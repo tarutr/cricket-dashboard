@@ -59,7 +59,13 @@
 // is T-2b-ii.
 
 import { query } from "./db.js";
-import { buildQuery, formatValue } from "./table.js";
+import {
+  buildQuery,
+  formatValue,
+  buildFieldingCteSql,
+  buildFieldingSliceClauses,
+} from "./table.js";
+import { buildScopeClausesTagged, whereWithPinExemption } from "./filters.js";
 import { getMetric, metricDisplayLabel, matchupBucketLabel, DISMISSAL_KINDS } from "./metrics.js";
 import {
   createInitialState,
@@ -311,6 +317,194 @@ function conditionsToInningsWhere(conditions, discipline) {
   return parts.length > 1 ? `(${parts.join(topJoiner)})` : parts[0];
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// FIELDING MODE (T-3a — the QUERY ENGINE only; the discipline control, the
+// editors and the columns/render are T-3b) ─────────────────────────────────────
+//
+// A FIELDING row is a slice of the ONE open player's FIELDING record — its OWN
+// event-grain source (`fielding_events`, view `fielding`), joined by fielder_id,
+// INDEPENDENT of the player's batting/bowling innings. Unlike a batting/bowling
+// row (which slices the innings-grain batting/bowling view through buildQuery), a
+// fielding row aggregates the fielding EVENTS directly.
+//
+// NUMBERS SACRED (CLAUDE.md Rule 1): the tallies come from table.js's EXPORTED,
+// UNCHANGED buildFieldingCteSql — the exact per-fielder CTE the leaderboard's own
+// fielding columns use — so a NO-FILTER fielding row equals that player's
+// leaderboard fielding numbers BY CONSTRUCTION. This module only (a) reuses that
+// CTE verbatim, (b) reuses buildFieldingSliceClauses for the slice dims, (c)
+// reuses buildScopeClausesTagged + whereWithPinExemption for scope, and (d) adds a
+// parallel per-fielder COUNT(DISTINCT match_id) "matches" CTE (buildFieldingCteSql
+// carries no match_id and must not be modified). buildQuery / buildMatchupQuery /
+// conditionToHaving are entirely untouched.
+//
+// SCOPE COVERAGE: buildFieldingCteSql applies core (gender / format / date / team
+// type) + team (fielding_team) + OPPOSITION + event + venue + innings-number scope.
+// It does NOT join `matches`, so match-CONTEXT singletons (Stage / Match Result /
+// Toss) are NOT honored — exactly as the leaderboard's fielding column ignores them
+// today. Whether to OFFER them on a fielding row is a T-3b design decision.
+//
+// The fielding SLICE dims live on `state.fielding = { positions, kinds, phases }`
+// (buildFieldingSliceClauses' contract): positions = the DISMISSED batter's batting
+// position; kinds = 'caught' / 'stumped' / 'run out' / 'caught and bowled'; phases =
+// the fielding-event phase (machinery still valid; whether to OFFER phase given the
+// phase-filter retirement is a T-3b question).
+
+/** The six fielding tallies a fielding row shows, in display order. Keys match the
+ * fielding metrics in metrics.js (source "fielding_events") + the derived "matches".
+ * The RENDER/columns treatment is T-3b; T-3a exposes this so a verifier/seed knows
+ * the shape fetchFieldingRow returns. */
+export const FIELDING_TALLY_KEYS = [
+  "catches",
+  "caught_and_bowled",
+  "stumpings",
+  "run_outs",
+  "dismissals_effected",
+  "matches",
+];
+
+/**
+ * Build the COMPLETE, CLEAN buildFieldingCteSql state for one fielding row — the
+ * fielding analog of buildRowState. A clean createInitialState (no pins / no search /
+ * no leaderboard filters) overlaid with ONLY the row's core scope + scope singletons
+ * + fielding slice dims, so a no-filter row is byte-identical to the leaderboard's
+ * fielding numbers for that player. See the block header for what scope
+ * buildFieldingCteSql does (and does NOT) honor.
+ */
+export function buildFieldingRowState(row, pageState) {
+  const base = createInitialState(null);
+  const scope = (row && row.scope) || {};
+  const singletons = (row && row.singletons) || {};
+  const ps = pageState || {};
+  return {
+    ...base,
+    // Honest but inert for the fielding source: the fielding CTE reads scope +
+    // state.fielding, not state.discipline. The outer id filter pins the player.
+    discipline: "fielding",
+    gender: ps.gender ?? base.gender,
+    formats: scope.formats ?? ps.formats ?? base.formats,
+    dateFrom: scope.dateFrom ?? ps.dateFrom ?? base.dateFrom,
+    dateTo: scope.dateTo ?? ps.dateTo ?? base.dateTo,
+    teamType: scope.teamType ?? ps.teamType ?? base.teamType,
+    // Scope singletons honored by buildFieldingCteSql (buildScopeClausesTagged):
+    // Team (fielding_team) / Opposition / Event / Venue / Innings Number. Each
+    // defaults to base's empty value, so an unset singleton emits no clause and the
+    // row stays byte-identical to the un-scoped case.
+    teams: singletons.teams ?? base.teams,
+    opposition: singletons.opposition ?? base.opposition,
+    event: singletons.event ?? base.event,
+    eventSeasons: singletons.eventSeasons ?? base.eventSeasons,
+    venue: singletons.venue ?? base.venue,
+    inningsNumber: singletons.inningsNumber ?? base.inningsNumber,
+    // NOTE: stage / result / tossResult / tossDecision are deliberately NOT copied
+    // — buildFieldingCteSql does not join `matches`, so match-context singletons are
+    // silently ignored by the fielding source (mirroring the leaderboard). A T-3b
+    // decision to support them would require touching the sacred CTE — out of scope.
+    // The fielding SLICE dims (positions / kinds / phases) buildFieldingSliceClauses
+    // reads. Missing lists ⇒ no slice clause ⇒ the full fielding record.
+    fielding: (row && row.fielding) || { positions: [], kinds: [], phases: [] },
+    advanced: emptyAdvancedBlock(),
+  };
+}
+
+/**
+ * Build ONE fielding row's whole-scope SQL (player-agnostic — fetchFieldingRow outer-
+ * wraps `WHERE id = '<player>'`, the established idiom). Returns SQL selecting, per
+ * fielder: id, catches, caught_and_bowled, stumpings, run_outs, dismissals_effected
+ * (= catches + stumpings + run_outs), matches (COUNT(DISTINCT match_id)).
+ *
+ * Tallies come from the SACRED buildFieldingCteSql UNCHANGED. The parallel
+ * fld_matches_cte's WHERE is rebuilt from the SAME exported primitives
+ * buildFieldingCteSql uses internally (buildScopeClausesTagged with the identical
+ * opts + whereWithPinExemption + "substitute IS NOT TRUE" + buildFieldingSliceClauses),
+ * so it is byte-identical to the sacred CTE's WHERE BY CONSTRUCTION.
+ *
+ * ⚠ COUPLING: this mirrors buildFieldingCteSql's scope construction (table.js). If
+ * that function's scope/slice/substitute construction ever changes, mirror it here —
+ * or the "matches" count could diverge from the four tallies. (The four tallies
+ * always track it automatically, since they come straight from the sacred CTE.)
+ */
+export function buildFieldingRowQuery(state) {
+  const cte = buildFieldingCteSql(state); // SACRED — unchanged tallies + scope + slice
+
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  const fldClauses = buildScopeClausesTagged(state, {
+    includeTeams: true,
+    teamColumn: "fielding_team",
+    idColumn: "fielder_id",
+    oppositionColumn: "opposition",
+  });
+  // The pop-up's clean state carries no search; buildFieldingCteSql's search clause
+  // (fielder_name ILIKE …) is therefore never emitted, so it is faithfully omitted
+  // here too. (If a future caller ever set state.search, the two WHEREs would need
+  // it added in both places — see the coupling note above.)
+  const fldScopeSql = whereWithPinExemption(fldClauses, "fielder_id", pins);
+  const matchesWhere = [fldScopeSql, "substitute IS NOT TRUE", ...buildFieldingSliceClauses(state)].join(" AND ");
+  const matchesCte = [
+    "fld_matches_cte AS (",
+    "  SELECT fielder_id AS fld_player_id, COUNT(DISTINCT match_id) AS matches",
+    "  FROM fielding",
+    `  WHERE ${matchesWhere}`,
+    "  GROUP BY fielder_id",
+    ")",
+  ].join("\n");
+
+  return [
+    `WITH ${cte},`,
+    matchesCte,
+    "SELECT fielding_cte.fld_player_id AS id,",
+    "       fielding_cte.catches AS catches,",
+    "       fielding_cte.caught_and_bowled AS caught_and_bowled,",
+    "       fielding_cte.stumpings AS stumpings,",
+    "       fielding_cte.run_outs AS run_outs,",
+    "       (fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs) AS dismissals_effected,",
+    "       fld_matches_cte.matches AS matches",
+    "FROM fielding_cte",
+    "LEFT JOIN fld_matches_cte ON fld_matches_cte.fld_player_id = fielding_cte.fld_player_id",
+  ].join("\n");
+}
+
+/**
+ * Run ONE fielding row's query for one player. buildFieldingRowState → the whole-
+ * scope buildFieldingRowQuery → outer-wrap `WHERE id = '<player>'` → db.query.
+ * Returns the single aggregate row object, or null when the player has no fielding
+ * events under the row's scope/slice. Fielding is NOT a ball-engine source, so it
+ * carries NO delivery-window / opponent-player predicates (those are batting/bowling
+ * ball filters); db.query is called plainly.
+ */
+export async function fetchFieldingRow(row, playerId, pageState) {
+  const state = buildFieldingRowState(row, pageState);
+  const sql = buildFieldingRowQuery(state);
+  const wrapped = `SELECT * FROM (\n${sql}\n) t\nWHERE id = '${esc(playerId)}'`;
+  const res = await query(wrapped);
+  return res.rows[0] || null;
+}
+
+/** Build a fielding row (T-3a seeds these in code; T-3b's editor will build them).
+ * `fielding` = { positions, kinds, phases } slice dims; `scope` / `singletons` as on
+ * batting/bowling rows. Carries no conditions / ball predicates / matchupVs — a
+ * fielding record is sliced only by its own dims + scope. */
+export function makeFieldingRow(fielding, scope, singletons) {
+  return {
+    id: nextRowId(),
+    discipline: "fielding",
+    scope: scope || { formats: null, dateFrom: null, dateTo: null, teamType: null },
+    fielding: fielding || { positions: [], kinds: [], phases: [] },
+    singletons: singletons || {},
+    pinned: false,
+  };
+}
+
+/** T-3a code-seeded fielding rows for verification (T-3b replaces with the editor):
+ * a NO-FILTER row (the player's full fielding record) + a positions {1,2,3} slice
+ * (catches/stumpings/run-outs where the DISMISSED batter batted 1–3). `scope` is the
+ * pop-up's effective scope so the no-filter row equals the leaderboard fielding row. */
+export function seedFieldingRows(scope) {
+  return [
+    makeFieldingRow({ positions: [], kinds: [], phases: [] }, scope, {}),
+    makeFieldingRow({ positions: [1, 2, 3], kinds: [], phases: [] }, scope, {}),
+  ];
+}
+
 // ── Row model (T-2b-ii — rows are USER-DEFINED via the editor) ───────────────
 // The T-2a/T-2b-i code-seeded proof rows are gone; every row now comes from the
 // "Add Filter Row" editor (playerFilterEditor.js). A row carries its own per-row
@@ -423,6 +617,10 @@ function rowLabel(row, discipline, formats) {
  * per-innings via buildQuery's `inningsWhere` (fetchRow), never HAVING — so the
  * advanced block stays EMPTY here (this keeps buildQuery's HAVING path off). */
 function buildRowState(row, pageState, discipline) {
+  // T-3a: a fielding row uses its own event-grain state builder (fielding is a
+  // separate source, not the batting/bowling innings view). Delegate before the
+  // batting/bowling path below.
+  if (discipline === "fielding") return buildFieldingRowState(row, pageState);
   const base = createInitialState(null); // complete neutral state; dateTo overridden below
   const scope = row.scope || {};
   const singletons = row.singletons || {};
@@ -478,6 +676,12 @@ function buildRowState(row, pageState, discipline) {
  * same per-call opts.
  */
 async function fetchRow(row, playerId, pageState, discipline, cols) {
+  // T-3a: a fielding row routes to the fielding source (fielding_events), not
+  // buildQuery. It has no per-innings slice / ball predicate / matches-secondary
+  // merge — buildFieldingRowQuery folds matches in via its own CTE. `cols` is
+  // unused by the fielding path (its output columns are fixed — T-3b picks which
+  // to show).
+  if (discipline === "fielding") return fetchFieldingRow(row, playerId, pageState);
   const rowState = buildRowState(row, pageState, discipline);
   const inningsWhere = conditionsToInningsWhere(row.conditions, discipline);
   // T-2d: a ball predicate (opponent-player / delivery window) restricts the view
