@@ -94,13 +94,46 @@ export function setOpponentPlayer(opp) {
 // queries where DIFFERENT rows may hold DIFFERENT opponents/windows concurrently
 // — a global would let one row's opponent leak into another's numbers. So query()
 // takes an OPTIONAL per-call spec that OVERRIDES the globals for THAT query only,
-// stored per-SQL below so every in-flight query resolves its OWN predicate.
+// stored per (SQL + spec signature) below so every in-flight query resolves its
+// OWN predicate — a slot keyed by SQL text ALONE would let two in-flight queries
+// with IDENTICAL SQL but DIFFERENT specs (e.g. a different opponent/window)
+// collide, and the burst-fold look-ahead (widenForPendingQueries) could then read
+// the wrong sibling's spec.
 // A spec key that is `undefined` falls back to the global (existing callers pass
 // no opts ⇒ spec === globals ⇒ byte-identical); an EXPLICIT value (incl. null)
 // wins, so a Tab-2 row can force "no opponent/window" independent of the
 // leaderboard's global state.
-/** sql -> { deliveryWindow, opponentPlayer } for the in-flight engine queries. */
+/** (SQL + spec signature) -> { sql, spec } for the in-flight engine queries.
+ * Keyed by BOTH the SQL and a signature of the per-call spec so identical-SQL /
+ * different-spec siblings never share a slot; the value carries the SQL back so
+ * the fold look-ahead can iterate (sql, spec) pairs. Look-ahead bookkeeping ONLY
+ * — the key never enters a query and each query still closure-captures its own
+ * spec for execution, so no number can move. */
 const pendingEngineSpecs = new Map();
+
+/** Discipline-independent signature of a per-call spec ({deliveryWindow,
+ * opponentPlayer}), capturing every field that changes the ball predicate in a
+ * fixed key order. Used ONLY to key pendingEngineSpecs (collision avoidance): an
+ * over-split (two equal specs → two slots) at worst misses a fold — a perf cost,
+ * never a wrong number. */
+function specSignature(spec) {
+  const w = (spec && spec.deliveryWindow) || null;
+  const oppId = (spec && spec.opponentPlayer && spec.opponentPlayer.id) || null;
+  return JSON.stringify({
+    phase: (w && w.phase) || null,
+    overs: (w && w.overs) || null,
+    balls: (w && w.balls) || null,
+    player: (w && w.player) || null,
+    opp: oppId,
+  });
+}
+
+/** The composite pendingEngineSpecs key for a query — the spec signature and
+ * the SQL wrapped in a JSON array, so the two parts are unambiguously delimited
+ * (the SQL is JSON-escaped and can never run into the signature). */
+function pendingSpecKey(sql, spec) {
+  return JSON.stringify([specSignature(spec), sql]);
+}
 
 /** Resolve a query's effective window/opponent spec: per-call opts where the key
  * is present, otherwise the module global. */
@@ -404,10 +437,6 @@ function playerScopeFor(discipline, sql, need) {
   return id == null ? "" : playerBasePredicate(discipline, id);
 }
 
-/** SQL strings currently queued or executing under the engine's serialiser —
- * the look-ahead widening below reads it. */
-const pendingEngineSqls = new Set();
-
 /**
  * Widen `need` with the column needs of the other queries already sitting in
  * the queue, when they resolve to the SAME (files, scopePredicate, player scope)
@@ -417,25 +446,28 @@ const pendingEngineSqls = new Set();
  * query is never mixed into a player-scoped one (or vice versa).
  */
 function widenForPendingQueries(need, discipline, sql, files, scopePredicate, windowPredicate, playerPredicate) {
-  if (pendingEngineSqls.size < 2) return need;
+  if (pendingEngineSpecs.size < 2) return need;
   // The window/opponent is now PER-CALL (T-2b-i): each in-flight query carries its
-  // OWN spec (pendingEngineSpecs), so a folded sibling must match on ITS OWN
-  // window predicate, not this query's. When every query shares the global spec
-  // (the leaderboard case), each otherWindow equals windowPredicate exactly, so
-  // fold behaviour is byte-identical to before; a Tab-2 row with a different
+  // OWN spec, so a folded sibling must match on ITS OWN window predicate, not this
+  // query's. pendingEngineSpecs is keyed by SQL + spec signature and its value
+  // carries the SQL back, so we iterate (sql, spec) PAIRS here — a sibling with
+  // IDENTICAL SQL but a different spec no longer overwrites the slot, so the fold
+  // reads each sibling's OWN spec. When every query shares the global spec (the
+  // leaderboard case), each otherWindow equals windowPredicate exactly, so fold
+  // behaviour is byte-identical to before; a Tab-2 row with a different
   // opponent/window simply gets a different signature and is never folded in
   // (safe: folding only ever adds columns, but a mismatched window must not fold).
   const signature = `${files.join("|")}::${scopePredicate}::${windowPredicate}::${playerPredicate}`;
   let columns = need.columns;
   let full = need.full;
   let reason = need.reason;
-  for (const other of pendingEngineSqls) {
+  for (const { sql: other, spec: otherSpec } of pendingEngineSpecs.values()) {
     if (other === sql || full) continue;
     if (!enginePlanDisciplines(other).includes(discipline)) continue;
     const otherScope = scopeForQuery(other);
     const otherNeed = neededViewColumns(discipline, other);
     const otherPlayer = playerScopeFor(discipline, other, otherNeed);
-    const otherWindow = windowPredicateFor(discipline, pendingEngineSpecs.get(other));
+    const otherWindow = windowPredicateFor(discipline, otherSpec);
     if (`${otherScope.files.join("|")}::${otherScope.scopePredicate}::${otherWindow}::${otherPlayer}` !== signature) continue;
     if (otherNeed.full) {
       full = true;
@@ -773,14 +805,15 @@ export async function query(sql, opts) {
   // widenForPendingQueries, which reads this queue to build for all of them at
   // once instead of once per member.
   // T-2b-i: resolve THIS query's effective window/opponent spec (per-call opts
-  // overriding the module globals) and record it per-SQL so the serialised
-  // execution + the look-ahead widening both read the right one.
+  // overriding the module globals) and record it under a (SQL + spec signature)
+  // key so the serialised execution + the look-ahead widening both read the right
+  // one — an identical-SQL sibling with a different spec now gets its own slot
+  // instead of overwriting this one.
   const spec = effectiveSpec(opts);
-  pendingEngineSqls.add(sql);
-  pendingEngineSpecs.set(sql, spec);
+  const pendingKey = pendingSpecKey(sql, spec);
+  pendingEngineSpecs.set(pendingKey, { sql, spec });
   return serializeEngineQuery(() => runQuery(sql, spec)).finally(() => {
-    pendingEngineSqls.delete(sql);
-    pendingEngineSpecs.delete(sql);
+    pendingEngineSpecs.delete(pendingKey);
   });
 }
 
