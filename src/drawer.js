@@ -139,7 +139,9 @@ const SINGLETON_TYPES = [
   // — both edit state.matchupVs, synced via the shared store (see
   // buildPaletteGroups). Leads this array too, so its applied row renders
   // first among the singleton rows (SINGLETON_TYPES order also drives applied-row
-  // order). Men-only (matchupVsActive hard-gates on male; coverage is ~0% for women).
+  // order). Availability is data-driven (matchupVsActive keys on state.dataAvail,
+  // not gender — Group 3); for today's data that means men-only (matchup coverage
+  // is ~0% for women, so the profile-backed Vs source is absent there).
   { key: "vs", label: "Matchup (Vs)", group: "Basic" },
   { key: "team", label: "Team", group: "Player" },
   { key: "opposition", label: "Opposition", group: "Player" },
@@ -158,7 +160,8 @@ const SINGLETON_TYPES = [
   // vs-openers anchor. Split OUT of the R. Pos. row so it never auto-appears when
   // a Vs bucket is picked; its OWN addable "+ Add condition" entry, offered only
   // in matchup mode (isPresent gates it on matchupVsActive). Men-only in practice
-  // (matchup coverage ~0% for women; matchupVsActive hard-gates on male anyway).
+  // (matchup coverage ~0% for women; matchupVsActive gates on data presence via
+  // state.dataAvail, not gender — Group 3 — which for today's data is men-only).
   { key: "strikerpos", label: "Batting position", group: "Basic" },
   // Opponent-player head-to-head (pop-up Tab-2 T-1, owner decision 70): "subject X
   // vs opponent Y" — restricts the counted balls to those against ONE opponent

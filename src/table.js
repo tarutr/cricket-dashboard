@@ -2499,10 +2499,25 @@ export function mountTable(
       presetSelectEl.title = matchupOn ? "Presets don't apply in matchup (Vs) mode — use Columns" : "";
     }
 
-    // Bonded Vs (pending) — Men's view only (matchupVsActive hard-gates on male
-    // regardless; the control is simply absent for women, per decision 21).
+    // Bonded Vs (pending) — visibility is DATA-DRIVEN (Group 3 sweep, owner
+    // 2026-08-07), no longer a gender hardcode: show iff the discipline-
+    // appropriate matchup data exists for the current gender. Mirrors the
+    // drawer's Vs-family gate (drawer.js singletonDataAvailable →
+    // availability.isAvailable "vsBowlingStyle"/"vsBattingHand"). table.js has no
+    // availability instance, so it reads the resolved per-gender map Group 3 put
+    // on the store (live.dataAvail = {matchupBatting, matchupBowling, …}).
+    // Optimistically SHOW while that map is null/unresolved — matchupVsActive is
+    // the number-critical gate and keys on the SAME map, so this control's
+    // visibility is display-only; a brief show that then hides can't move a
+    // number (mirrors the offer path's optimistic default in state.js
+    // dataAvailBool).
     if (vsWrapEl && vsSelectEl) {
-      if (live.gender === "female") {
+      const availKey = discipline === "batting" ? "matchupBatting" : "matchupBowling";
+      const av = live.dataAvail;
+      // Optimistic until resolved: show unless the map is present AND explicitly
+      // reports the discipline's matchup data absent for this gender.
+      const showVs = !av || typeof av[availKey] !== "boolean" || av[availKey];
+      if (!showVs) {
         vsWrapEl.hidden = true;
       } else {
         vsWrapEl.hidden = false;
