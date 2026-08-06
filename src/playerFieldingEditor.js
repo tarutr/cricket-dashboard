@@ -255,9 +255,14 @@ export function openFieldingRowEditor(hostDoc, deps) {
       loadDimOptions(dim.source, dim.column, scope)
         .then((vals) => {
           if (token !== optionsToken) return;
+          // Owner ruling (2026-08-06): the profile stores the LITERAL string
+          // "Unknown" for a player with no known role — hide that one tick-box
+          // on the Batter role dim specifically (loadDimOptions only strips
+          // NULL/""); every other dim keeps whatever values it loads.
+          const rawVals = dim.column === "out_role" ? vals.filter((v) => v !== "Unknown") : vals;
           dimOptions[dim.key] = dim.canonical
-            ? [...new Set(vals.map((v) => canonicalStage(v)))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((v) => ({ value: v, label: v }))
-            : vals.map((v) => ({ value: v, label: String(v) }));
+            ? [...new Set(rawVals.map((v) => canonicalStage(v)))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((v) => ({ value: v, label: v }))
+            : rawVals.map((v) => ({ value: v, label: String(v) }));
           rebuildPalette(); // the offered set / an open control's options may have changed
           if (activeDims.has(dim.key)) renderConditions();
         })
@@ -479,6 +484,17 @@ export function openFieldingRowEditor(hostDoc, deps) {
   // ── lifecycle ─────────────────────────────────────────────────────────────────
   function teardown() {
     palette.closeCurrent();
+    // Close any OPEN scope-singleton dropdown (Team/Opposition/Event/Venue's
+    // searchSelect.js portal, or Stage/Result/Toss*/Innings Number's
+    // wirePortalDropdown portal) before detaching the host below. Both portal a
+    // panel straight onto <body> while open and only their OWN toggle click
+    // restores it — detach() below just unmounts the (now panel-less) host, so a
+    // row closed/committed while one of these was still open would otherwise
+    // leave that panel floating, detached, on <body> forever (playerFilterScope.js
+    // exposes no close-all; its mounted editors' handles aren't surfaced here, so
+    // this is the only reach we have). A closed dropdown's toggle carries
+    // aria-expanded="false" and is skipped, so this is a no-op the rest of the time.
+    overlay.querySelectorAll('[aria-expanded="true"]').forEach((el) => el.click());
     if (scopeController) scopeController.detach();
     document.removeEventListener("keydown", onKey, true);
     overlay.remove();

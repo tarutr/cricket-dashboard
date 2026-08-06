@@ -81,7 +81,6 @@ import {
   inningsNumberLabel,
 } from "./state.js";
 import { createColumnsPicker } from "./columnsPicker.js";
-import { loadDimOptions } from "./dimOptions.js";
 import { openFilterRowEditor } from "./playerFilterEditor.js";
 import { openFieldingRowEditor } from "./playerFieldingEditor.js";
 import { getScopeSingletonsController, describeRowSingletons } from "./playerFilterScope.js";
@@ -365,7 +364,7 @@ function conditionsToInningsWhere(conditions, discipline) {
 // buildFieldingRowState just passes `row.fielding` straight through to
 // state.fielding, so wiring a new dim is a T-3b editor concern only — the query
 // engine already reads it. Availability of the profile-derived dims (out_hand /
-// out_role / bowler_style) is DATA-DRIVEN via loadFieldingDimOptions (no gender
+// out_role / bowler_style) is DATA-DRIVEN via loadDimOptions (no gender
 // hardcode): empty options ⇒ T-3b hides the filter.
 
 /** The six fielding tallies a fielding row shows, in display order. Keys match the
@@ -564,20 +563,6 @@ export async function fetchFieldingRow(row, playerId, pageState) {
   return res.rows[0] || null;
 }
 
-/**
- * DATA-DRIVEN availability probe for a fielding dim (T-3a-ext) — a thin, fielding-
- * scoped wrapper over the generic loadDimOptions. Returns the distinct non-null
- * values of `column` on the `fielding` source within the pop-up's scope. Its FIRST
- * use is the profile-derived dims (out_hand / out_role / bowler_style): a non-empty
- * result means T-3b OFFERS the filter, an empty result means it HIDES it. No gender
- * hardcode — men return values, women return [] (all NULL), and future women's
- * profiles will make the filter auto-appear. `scope` is a pageState-shaped object
- * ({ gender, formats, teamType, dateFrom, dateTo }).
- */
-export function loadFieldingDimOptions(column, scope) {
-  return loadDimOptions("fielding", column, scope || {});
-}
-
 /** Build a fielding row (T-3a seeds these in code; T-3b's editor will build them).
  * `fielding` carries the full T-3a-ext slice set — the original { positions, kinds,
  * phases } trio plus any of { hands, roles, outBatters, bowlers, bowlerStyles,
@@ -594,24 +579,6 @@ export function makeFieldingRow(fielding, scope, singletons) {
     singletons: singletons || {},
     pinned: false,
   };
-}
-
-/** Code-seeded fielding rows for verification (T-3b replaces with the editor):
- * a NO-FILTER row (the player's full fielding record — equals the leaderboard
- * fielding row) + a positions {1,2,3} slice, plus T-3a-ext demonstrators of the new
- * dims (a spin bowler-style slice and a Toss-decision match-context slice). `scope`
- * is the pop-up's effective scope so the no-filter row equals the leaderboard row. */
-export function seedFieldingRows(scope) {
-  return [
-    makeFieldingRow({ positions: [], kinds: [], phases: [] }, scope, {}),
-    makeFieldingRow({ positions: [1, 2, 3], kinds: [], phases: [] }, scope, {}),
-    makeFieldingRow(
-      { bowlerStyles: ["Legbreak", "Legbreak googly", "Slow left-arm orthodox", "Right-arm offbreak", "Left-arm wrist-spin", "Left-arm slow"] },
-      scope,
-      {}
-    ),
-    makeFieldingRow({ tossDecision: ["bat"] }, scope, {}),
-  ];
 }
 
 // ── Row model (T-2b-ii — rows are USER-DEFINED via the editor) ───────────────
@@ -1096,7 +1063,7 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
       rows = [];
       disciplineResetNotice = `Switching to ${disciplineWord(nextDisc)} cleared your filter rows — a ${disciplineWord(
         prev
-      ).toLowerCase()} filter can't slice ${disciplineWord(nextDisc).toLowerCase()}.`;
+      ).toLowerCase()} filter can't be applied to ${disciplineWord(nextDisc).toLowerCase()}.`;
     } else {
       disciplineResetNotice = null;
     }

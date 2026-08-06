@@ -34,25 +34,6 @@ export function fullDateLabel(yyyymmdd) {
   return `${d} ${MONTH_NAMES[m - 1]} ${y}`;
 }
 
-/** Same option-list shape as filters.js's monthOptionsHTML (duplicated on
- * purpose — that one is local to the scope strip and not exported; kept in
- * sync by hand, same precedent as state.js's CONDITION_OP_SYMBOLS comment). */
-export function monthOptionsHTML(minMonth, maxMonth, selected) {
-  if (!minMonth || !maxMonth) return "";
-  const [minY, minM] = minMonth.split("-").map(Number);
-  const [maxY, maxM] = maxMonth.split("-").map(Number);
-  const opts = [`<option value="">—</option>`];
-  for (let y = maxY; y >= minY; y--) {
-    const mFrom = y === maxY ? maxM : 12;
-    const mTo = y === minY ? minM : 1;
-    for (let m = mFrom; m >= mTo; m--) {
-      const val = `${y}-${String(m).padStart(2, "0")}`;
-      opts.push(`<option value="${val}" ${val === selected ? "selected" : ""}>${MONTH_NAMES[m - 1]} ${y}</option>`);
-    }
-  }
-  return opts.join("");
-}
-
 // ── Identity: initials + monogram medallion + headshot ──────────────────────
 
 export function initials(name) {
@@ -161,26 +142,6 @@ export function howOutHTML(dismissals) {
   return barsHTML(items, total, `Not out: ${notOut} of ${innings} innings`);
 }
 
-// matchup_batting's dismissal-kind columns (D4 R3 follow-up): bowler-credited
-// kinds ONLY — no run-out (never bowler-credited) and no not-out math (a
-// per-bowling-style "not out" isn't a real cricket quantity: being not out is
-// a whole-innings property, not a per-style one). This is why the vs-scoped
-// how-out gets its own caption instead of reusing howOutHTML's "Not out: N of
-// M" footnote (data-layer note, see playerData.js's fetchBattingCoreVs).
-const VS_DISMISSAL_KEYS = ["dis_bowled", "dis_lbw", "dis_caught", "dis_caught_and_bowled", "dis_stumped", "dis_hit_wicket"];
-
-/** Vs-scoped how-out: same bar shape, matchup_batting's dis_* columns, and an
- * honest caption naming exactly what's being counted (task 3's required
- * wording) instead of a "Not out" figure that doesn't exist in this view. */
-export function howOutVsHTML(vsRow, vsLabel) {
-  const total = Number(vsRow.dismissals) || 0;
-  const items = VS_DISMISSAL_KEYS.map((key) => ({
-    label: getMetric(key, "matchup_batting").label.replace(/^Out /, ""),
-    count: Number(vsRow[key]) || 0,
-  }));
-  return barsHTML(items, total, `Bowler-credited dismissals vs ${vsLabel}`);
-}
-
 export const WICKET_TYPE_KEYS = ["wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket"];
 
 export function wicketTypesHTML(wt) {
@@ -210,11 +171,9 @@ export function positionsTableHTML(rows) {
  * opponent the player has faced, no cap (decision 46's OPPOSITION_CAP=8
  * top-N-by-innings trim is REMOVED too — the popup scrolls freely now, so
  * a long list is no longer a layout problem). `rows` is always an array by
- * the time this renders (the one remaining refusal — opposition can't split
- * under a Vs/matchup scope — is handled one level up: battingGridHTML's isVs
- * branch never renders this section at all, so `rows` being empty here is
- * always the genuine "no opponents in this scope" case, which miniTableHTML
- * already renders honestly as "No rows in this scope"). */
+ * the time this renders, so an empty array here is always the genuine "no
+ * opponents in this scope" case, which miniTableHTML already renders
+ * honestly as "No rows in this scope". */
 export function oppositionSectionHTML(discipline, rows) {
   const keys = discipline === "batting" ? ["innings", "runs", "average", "strike_rate"] : ["innings", "wickets", "average", "economy"];
   const headers = discipline === "batting" ? ["Team", "Inns", "Runs", "Avg", "SR"] : ["Team", "Inns", "Wkts", "Avg", "Econ"];
@@ -406,9 +365,7 @@ function compositionPctCell(ns, compKey, balls, total) {
 // bucket` only, unlike coarseSql's `bowling_group AS bucket`), so this is a
 // static label map, not data-driven. Same 9 named styles + same pace/spin
 // split as table.js's BOWLING_TYPE_PREFERENCE / drawer.js's BOWLING_TYPE_ORDER
-// (kept in sync by hand — those two live in files outside this task's scope,
-// same "duplicated on purpose" precedent as this file's own monthOptionsHTML
-// comment above).
+// (kept in sync by hand — those two live in files outside this task's scope).
 const FINE_BOWLING_GROUP = {
   Fast: "Pace",
   "Fast-medium": "Pace",
@@ -527,52 +484,18 @@ export function bowlingMatchupsHTML(matchups) {
   return `${coverageHTML}${miniTableHTML(BOWLING_HAND_HEADERS, rows)}`;
 }
 
-// ── Honest refusal rendering ─────────────────────────────────────────────────
-// A section fetcher can return `{ unsupported: [dims] }` when a requested
-// dimension can't be honored by that source. We NEVER show a partially-
-// filtered number — the section greys out in place with a plain-English note
-// instead, exactly like the leaderboard matchup mode's coverage gate greys a
-// whole bucket table rather than show a misleading partial one. (This was
-// wired to the popup's now-retired "Player Filters" overlay — decision 70 —
-// which was the only thing that could ever set `unsupported`; every fetch in
-// playerData.js is unconditional now, so no live call site produces this
-// shape any more. Kept as dead-but-harmless scaffolding, unchanged by this
-// task's scope, since a later build may reuse the same refusal idiom.)
-const DIM_LABELS = { date: "date range", positions: "batting position", opposition: "opposition", vs: "Vs" };
+// ── Section rendering ────────────────────────────────────────────────────────
+// (The old "unsupported dim" refusal path — a section fetcher could once
+// return `{ unsupported: [dims] }` when the retired "Player Filters" overlay
+// — decision 70 — set a dim no source could honor — is gone along with that
+// overlay: every fetch in playerData.js is unconditional now, so no call site
+// ever produces that shape. sectionOrUnsupported keeps its name/signature as
+// the ONE call site every section already uses; it just always renders the
+// real content now.)
 
-export function dimDisplayLabel(dim) {
-  return DIM_LABELS[dim] || dim;
-}
-
-export function unsupportedNoteHTML(sectionTitle, dims) {
-  const dimLabel = (dims || []).map(dimDisplayLabel).join(" or ");
-  return `<p class="player-page__note player-page__note--muted">Can't split "${escHtml(sectionTitle)}" by ${escHtml(
-    dimLabel
-  )} here.</p>`;
-}
-
-/** Wrap a section's fetch result: `{unsupported}` greys in place, otherwise
- * `renderFn(result)` builds the real content. One call site for every
- * section that can be refused by the filters-drawer overlay. */
+/** Wrap a section's fetch result in the section shell. */
 export function sectionOrUnsupported(title, result, renderFn) {
-  if (result && Array.isArray(result.unsupported)) {
-    return sectionHTML(title, unsupportedNoteHTML(title, result.unsupported));
-  }
   return sectionHTML(title, renderFn(result));
-}
-
-/** Whole-tab refusal (bowling only in practice): the (now-retired, decision
- * 70) overlay could carry a dim that NO section on this tab could honor at
- * all (e.g. a Positions/Vs value set from the Batting tab, where bowling's
- * own core has no position/vs concept). Greys the entire tab with one note
- * rather than every section repeating itself. Dead-but-harmless since the
- * overlay's retirement — playerData.js's fetchBowlingCore never returns
- * `{unsupported}` any more — kept unchanged, per this task's scope. */
-export function wholeTabUnsupportedHTML(tabLabel, dims) {
-  const dimLabel = (dims || []).map(dimDisplayLabel).join(" and ");
-  return `<p class="player-page__note player-page__note--muted">${escHtml(
-    tabLabel
-  )} can't be shown with a ${escHtml(dimLabel)} filter active — remove it (Filters, or the pills above) to see this tab.</p>`;
 }
 
 // ── Scope line ────────────────────────────────────────────────────────────────
@@ -641,9 +564,7 @@ export function isRedBallOnly(state) {
  * return a `vs`-scoped `matchup_batting` composite (via a now-DELETED helper,
  * fetchBattingCoreVs, that only ever ran off the popup's "Player Filters"
  * overlay's `vs` control) — that overlay is retired (decision 70), so
- * `core.source` is always "batting" now and the `matchup_batting` branch
- * below, and every `isVs` branch downstream in this file, is unreachable.
- * Left in place, unchanged, as dead-but-harmless per this task's scope. */
+ * `core.source` is always "batting" now. */
 export function normalizeBattingCore(core) {
   if (!core) return null;
   if (core.source === "matchup_batting") return core; // { vs, source, coverage, summary, howout, progression }
@@ -652,91 +573,47 @@ export function normalizeBattingCore(core) {
 
 export function battingGridHTML(state, coreNorm, extra) {
   const summary = coreNorm?.summary;
-  const isVs = coreNorm?.source === "matchup_batting";
   if (!summary || Number(summary.innings) === 0) {
-    return isVs
-      ? `<p class="player-page__note">No innings vs ${escHtml(coreNorm.vs)} in this scope.</p>`
-      : `<p class="player-page__note">No batting in this scope.</p>`;
+    return `<p class="player-page__note">No batting in this scope.</p>`;
   }
   const redBall = isRedBallOnly(state);
-  let heroCardsHTML;
-  let coverageHTML = "";
-  if (isVs) {
-    // matchup_batting has no high_score column — the plain page's 5th tile
-    // (HS) has no analog here, so Boundary % takes its place (flagged: a
-    // judgment call, see the final report).
-    const dismissals = Number(summary.dismissals) || 0;
-    const bpd = dismissals > 0 ? Number(summary.balls) / dismissals : null;
-    heroCardsHTML = statCardsHTML([
-      ["Inns", getMetric("innings", "matchup_batting"), summary.innings],
-      ["Runs", getMetric("runs", "matchup_batting"), summary.runs],
-      ["Avg", getMetric("average", "matchup_batting"), summary.average],
-      redBall
-        ? ["BPD", getMetric("balls_per_dismissal", "matchup_batting"), bpd]
-        : ["SR", getMetric("strike_rate", "matchup_batting"), summary.strike_rate],
-      ["Bdry %", getMetric("boundary_pct", "matchup_batting"), summary.boundary_pct],
-    ]);
-    coverageHTML = matchupCoverageLine("Matchup data", "faced", coreNorm.coverage) || "";
-  } else {
-    const srKey = redBall ? "balls_per_dismissal" : "strike_rate";
-    const srLabel = redBall ? "BPD" : "SR";
-    heroCardsHTML = statCardsHTML([
-      ["Inns", getMetric("innings", "batting"), summary.innings],
-      ["Runs", getMetric("runs", "batting"), summary.runs],
-      ["Avg", getMetric("average", "batting"), summary.average],
-      [srLabel, getMetric(srKey, "batting"), summary[srKey]],
-      ["HS", getMetric("high_score", "batting"), summary.high_score],
-    ]);
-  }
+  const srKey = redBall ? "balls_per_dismissal" : "strike_rate";
+  const srLabel = redBall ? "BPD" : "SR";
+  const heroCardsHTML = statCardsHTML([
+    ["Inns", getMetric("innings", "batting"), summary.innings],
+    ["Runs", getMetric("runs", "batting"), summary.runs],
+    ["Avg", getMetric("average", "batting"), summary.average],
+    [srLabel, getMetric(srKey, "batting"), summary[srKey]],
+    ["HS", getMetric("high_score", "batting"), summary.high_score],
+  ]);
 
-  // "Wicket Type" (renamed from "How out", owner decision 46). Under a Vs
-  // bucket (now unreachable — see normalizeBattingCore's comment above) this
-  // was the ONLY per-section content besides the tiles above that could still
-  // split by Vs — its title adopts the vs label too, so the honesty the bars'
-  // own footnote already states ("Bowler-credited dismissals vs X") is
-  // visible in the section heading, not just the caption underneath.
-  const wicketTypeTitle = isVs ? `Wicket Type — bowler-credited vs ${coreNorm.vs}` : "Wicket Type";
-  const howOutBody = isVs ? howOutVsHTML(coreNorm.howout, coreNorm.vs) : howOutHTML(coreNorm.howout);
+  // "Wicket Type" (renamed from "How out", owner decision 46).
+  const howOutBody = howOutHTML(coreNorm.howout);
 
-  let bodyHTML;
-  if (isVs) {
-    // Position / opposition / progression couldn't split by Vs at all —
-    // owner decision 46 hid them outright instead of greying them out with
-    // "Can't split X by Vs here", so only what's actually splittable rendered:
-    // the tiles above, and Wicket Type here. No two-col grid, no dead gap
-    // where the hidden sections used to be. (This whole branch is unreachable
-    // now — see normalizeBattingCore's comment above.)
-    bodyHTML = sectionHTML(wicketTypeTitle, howOutBody);
-  } else {
-    // "Progressive Scoring" (renamed from "Scoring by balls faced", decision
-    // 46). Only reached when !isVs, where coreNorm.progression is always the
-    // plain core row (never the `{unsupported}` shape — that only exists on
-    // the isVs branch of fetchBattingCoreVs, handled above instead) — no
-    // refusal check needed here.
-    const progressionBody = statCardsHTML([
-      ["SR, balls 1–10", getMetric("sr_first10", "batting"), coreNorm.progression.sr_first10],
-      ["SR, balls 11–20", getMetric("sr_11_20", "batting"), coreNorm.progression.sr_11_20],
-      ["SR, balls 21+", getMetric("sr_21plus", "batting"), coreNorm.progression.sr_21plus],
-    ]);
-    // Column rebalance (decision 46): LEFT = position table, Wicket Type,
-    // Progressive Scoring stacked top-to-bottom; RIGHT = Vs opposition, now
-    // showing every opponent, uncapped (owner task #20 — the popup scrolls
-    // freely). Matchups (below, outside this grid) is unchanged.
-    const leftColHTML = `${sectionOrUnsupported("By batting position", extra.positions, positionsTableHTML)}
-      ${sectionHTML(wicketTypeTitle, howOutBody)}
-      ${sectionHTML("Progressive Scoring", progressionBody)}`;
-    const rightColHTML = sectionOrUnsupported("Vs opposition", extra.opposition, (rows) =>
-      oppositionSectionHTML("batting", rows)
-    );
-    bodyHTML = `<div class="player-page__two-col">
-      <div class="player-page__col">${leftColHTML}</div>
-      <div class="player-page__col">${rightColHTML}</div>
-    </div>`;
-  }
+  // "Progressive Scoring" (renamed from "Scoring by balls faced", decision 46).
+  const progressionBody = statCardsHTML([
+    ["SR, balls 1–10", getMetric("sr_first10", "batting"), coreNorm.progression.sr_first10],
+    ["SR, balls 11–20", getMetric("sr_11_20", "batting"), coreNorm.progression.sr_11_20],
+    ["SR, balls 21+", getMetric("sr_21plus", "batting"), coreNorm.progression.sr_21plus],
+  ]);
+  // Column rebalance (decision 46): LEFT = position table, Wicket Type,
+  // Progressive Scoring stacked top-to-bottom; RIGHT = Vs opposition, now
+  // showing every opponent, uncapped (owner task #20 — the popup scrolls
+  // freely). Matchups (below, outside this grid) is unchanged.
+  const leftColHTML = `${sectionOrUnsupported("By batting position", extra.positions, positionsTableHTML)}
+    ${sectionHTML("Wicket Type", howOutBody)}
+    ${sectionHTML("Progressive Scoring", progressionBody)}`;
+  const rightColHTML = sectionOrUnsupported("Vs opposition", extra.opposition, (rows) =>
+    oppositionSectionHTML("batting", rows)
+  );
+  const bodyHTML = `<div class="player-page__two-col">
+    <div class="player-page__col">${leftColHTML}</div>
+    <div class="player-page__col">${rightColHTML}</div>
+  </div>`;
 
   const matchupsHTML = sectionOrUnsupported("Matchups", extra.matchups, battingMatchupsHTML);
 
-  return `${heroCardsHTML}${coverageHTML}${bodyHTML}${matchupsHTML}`;
+  return `${heroCardsHTML}${bodyHTML}${matchupsHTML}`;
 }
 
 /** Bowling's tight grid has one fewer row than batting's — bowling has no
@@ -744,9 +621,6 @@ export function battingGridHTML(state, coreNorm, extra) {
  * matchups (flagged: the task's 4-row description was written with batting's
  * shape in mind; adapted here to bowling's actual 4 existing sections). */
 export function bowlingGridHTML(state, core, extra) {
-  if (core && Array.isArray(core.unsupported)) {
-    return wholeTabUnsupportedHTML("Bowling", core.unsupported);
-  }
   if (!core || Number(core.innings) === 0) {
     return `<p class="player-page__note">No bowling in this scope.</p>`;
   }
