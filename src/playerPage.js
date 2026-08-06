@@ -271,8 +271,17 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
     const filtersBodyEl = container.querySelector('[data-role="filters-body"]');
     if (disciplineBodyEl) disciplineBodyEl.hidden = activeTab !== "overview";
     if (filtersBodyEl) filtersBodyEl.hidden = activeTab !== "filters";
+    // T-3b: the header discipline toggle drives OVERVIEW (Batting|Bowling) only; it
+    // can't represent Fielding (owner: no fielding on Overview). The Filters tab has
+    // its OWN Batting|Bowling|Fielding control, so hide the header one while the
+    // Filters tab is active — exactly one discipline control on screen, no
+    // duplication, and Overview's own control is left unchanged.
+    const disciplineToggleEl = container.querySelector('[data-role="discipline-toggle"]');
+    if (disciplineToggleEl) disciplineToggleEl.hidden = activeTab === "filters";
+    // Push the current player/scope in; pass `null` discipline so the Filters tab
+    // KEEPS its own (owner: the Filters tab owns its discipline via its own control).
     if (activeTab === "filters" && filtersTab && current) {
-      filtersTab.show(current.id, activeDiscipline, effectiveState());
+      filtersTab.show(current.id, null, effectiveState());
     }
   }
 
@@ -327,9 +336,10 @@ export function mountPlayerPage(container, store, { onGraphPlayer } = {}) {
         activeDiscipline = btn.dataset.value;
         syncSegmented(toggleEl, activeDiscipline);
         loadDiscipline(activeDiscipline, { render: true });
-        if (activeTab === "filters" && filtersTab && current) {
-          filtersTab.show(current.id, activeDiscipline, effectiveState());
-        }
+        // T-3b: the header toggle no longer pushes discipline into the Filters tab —
+        // the tab owns its own discipline (its own control includes Fielding, which
+        // this toggle can't show). This toggle drives Overview only, and is hidden
+        // while the Filters tab is active (see applyActiveTab).
       });
     }
 

@@ -4533,6 +4533,17 @@ a { color: var(--color-accent); }
   gap: var(--space-2);
 }
 
+/* T-3b: the Add-Filter-Row button + the tab's own discipline control sit together
+   on the left; the column controls (batting/bowling only) on the right. */
+.filters-tab__toolbar-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* The tab's Batting|Bowling|Fielding control reuses the app's .segmented look. */
+.filters-tab__discipline { flex-shrink: 0; }
+
 /* T-2c: the discipline-reset warning (owner 2026-08-03) — a brief notice shown when
    a Batting↔Bowling switch clears the tab's rows. Muted-but-noticeable, not an error. */
 .filters-tab__reset-notice {
@@ -4709,6 +4720,45 @@ a { color: var(--color-accent); }
 }
 /* T-2e: the matchup-Vs (Option A) draft row — a bucket <select> + remove. */
 .pfe-cond--matchupvs .pfe-cond__ctrl { min-width: 8rem; }
+
+/* T-3b: a fielding editor dim row — a label + its control body (a checklist, a
+   player picker, or the over-range inputs) + a remove-×. Reuses the .pfe-cond shell. */
+.pfe-cond--fielding { align-items: flex-start; }
+.pfe-cond__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+}
+/* Checklist multi-select (batting-position style) shared by every categorical
+   fielding dim (Wicket type / Hand / Role / Bowler style / Phase / City / Season /
+   Stage / Result / Toss / Innings / Position). */
+.pfe-checklist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.pfe-checklist--scroll {
+  max-height: 11rem;
+  overflow-y: auto;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+.pfe-checklist__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+.pfe-checklist__filter { flex: 1 1 100%; margin-bottom: var(--space-1); }
 
 /* T-2c: reused scope-singleton value editors (Opposition / Event / Stage / window /
    opponent / …) mounted into the editor modal via the store-adapter controller. Each

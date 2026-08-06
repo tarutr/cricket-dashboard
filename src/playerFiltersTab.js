@@ -74,10 +74,16 @@ import {
   COLUMN_PRESET_DEFS,
   activePresetKey,
   escSql as esc,
+  FIELDING_PHASE_OPTIONS,
+  RESULT_OPTIONS,
+  TOSS_RESULT_OPTIONS,
+  TOSS_DECISION_OPTIONS,
+  inningsNumberLabel,
 } from "./state.js";
 import { createColumnsPicker } from "./columnsPicker.js";
 import { loadDimOptions } from "./dimOptions.js";
 import { openFilterRowEditor } from "./playerFilterEditor.js";
+import { openFieldingRowEditor } from "./playerFieldingEditor.js";
 import { getScopeSingletonsController, describeRowSingletons } from "./playerFilterScope.js";
 import { escHtml, escAttr } from "./html.js";
 
@@ -375,6 +381,68 @@ export const FIELDING_TALLY_KEYS = [
   "matches",
 ];
 
+// ── Fielding COLUMNS (T-3b) — a FIXED tally set, in the owner's display order ──
+// Fielding is not a picker discipline: its columns are the six tallies, always the
+// same, so there is no columns picker / preset in fielding mode. metrics.js registers
+// these ONLY under the "batting"/"bowling" disciplines (there is no "fielding"
+// discipline), so the metric objects are pulled from the "batting" catalogue (they
+// are identical under either) — key/label/shortLabel/format all resolve, and the
+// keys match the columns fetchFieldingRow returns (catches / stumpings / run_outs /
+// caught_and_bowled / dismissals_effected / matches).
+const FIELDING_COLUMN_KEYS = ["catches", "stumpings", "run_outs", "caught_and_bowled", "dismissals_effected", "matches"];
+let _fieldingColumnMetrics = null;
+function fieldingColumnMetrics() {
+  if (!_fieldingColumnMetrics) {
+    _fieldingColumnMetrics = FIELDING_COLUMN_KEYS.map((k) => getMetric(k, "batting")).filter(Boolean);
+  }
+  return _fieldingColumnMetrics;
+}
+
+// ── Fielding row LABELS (T-3b) — honest tokens for a fielding row's dims (§8.4) ──
+// The batting/bowling label path (rowAllLabels) describes per-innings conditions +
+// matchup; a fielding row instead carries state.fielding.* dims + the four scope
+// singletons. describeFieldingRow lists one token per applied fielding dim; the
+// scope singletons reuse describeRowSingletons (Team / Opposition / Event / Venue).
+const WICKET_TYPE_LABEL = { caught: "Caught", "caught and bowled": "Caught & bowled", stumped: "Stumped", "run out": "Run out" };
+const _optLabelMap = (opts) => Object.fromEntries((opts || []).map((o) => [o.value, o.label]));
+const PHASE_LABEL = _optLabelMap(FIELDING_PHASE_OPTIONS);
+const RESULT_LABEL = _optLabelMap(RESULT_OPTIONS);
+const TOSS_RESULT_LABEL = _optLabelMap(TOSS_RESULT_OPTIONS);
+const TOSS_DECISION_LABEL = _optLabelMap(TOSS_DECISION_OPTIONS);
+
+/** Honest, human tokens for a fielding row's state.fielding dims (display-only). */
+function describeFieldingRow(f) {
+  f = f || {};
+  const out = [];
+  const list = (vals, prefix, mapLabel) => {
+    const arr = (vals || []).filter((v) => v != null && v !== "");
+    if (!arr.length) return;
+    const labels = mapLabel ? arr.map(mapLabel) : arr.map(String);
+    out.push(labels.length <= 3 ? `${prefix}: ${labels.join(", ")}` : `${prefix}: ${labels.length}`);
+  };
+  list(f.kinds, "Wicket type", (k) => WICKET_TYPE_LABEL[k] || k);
+  list(f.positions, "Batting position");
+  list(f.hands, "Batting hand");
+  list(f.roles, "Role");
+  if (Array.isArray(f.outBatters) && f.outBatters.length) out.push(`Batter: ${f.outBatterName || f.outBatters[0]}`);
+  list(f.bowlerStyles, "Bowler style");
+  if (Array.isArray(f.bowlers) && f.bowlers.length) out.push(`Bowler: ${f.bowlerName || f.bowlers[0]}`);
+  list(f.phases, "Phase", (p) => PHASE_LABEL[p] || p);
+  if (Number.isFinite(Number(f.overFrom)) || Number.isFinite(Number(f.overTo))) {
+    const from = Number.isFinite(Number(f.overFrom)) ? Number(f.overFrom) + 1 : "…";
+    const to = Number.isFinite(Number(f.overTo)) ? Number(f.overTo) + 1 : "…";
+    out.push(`Overs: ${from}–${to}`);
+  }
+  list(f.inningsNumbers, "Innings", (n) => inningsNumberLabel(Number(n) + 1)); // stored 0-based → display
+  list(f.cities, "City");
+  list(f.seasons, "Season");
+  list(f.stage, "Stage");
+  list(f.result, "Result", (r) => RESULT_LABEL[r] || r);
+  list(f.tossResult, "Toss", (r) => TOSS_RESULT_LABEL[r] || r);
+  list(f.tossDecision, "Toss", (d) => TOSS_DECISION_LABEL[d] || d);
+  return out;
+}
+
 /**
  * Build the COMPLETE, CLEAN buildFieldingCteSql state for one fielding row — the
  * fielding analog of buildRowState. A clean createInitialState (no pins / no search /
@@ -640,6 +708,12 @@ function matchupVsLabel(matchupVs) {
  * a row filtered ONLY by a scope singleton reads e.g. "vs Australia", a matchup row
  * reads "vs Spin", never the misleading "No conditions". */
 function rowAllLabels(row, discipline, formats) {
+  // T-3b: a fielding row carries state.fielding.* dims (describeFieldingRow) + the
+  // four scope singletons (Team / Opposition / Event / Venue) — no matchup / numeric
+  // conditions / ball predicates. Its scope singletons reuse describeRowSingletons.
+  if (discipline === "fielding") {
+    return [...describeFieldingRow(row.fielding), ...describeRowSingletons(row.singletons, null, null, "fielding")];
+  }
   const matchup = matchupVsLabel(row.matchupVs);
   const numeric = allConditionLabels(row.conditions, discipline, formats);
   const scope = describeRowSingletons(row.singletons, row.deliveryWindow, row.opponentPlayer, discipline);
@@ -749,10 +823,17 @@ async function fetchRow(row, playerId, pageState, discipline, cols) {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+// T-3b: the Filters tab's OWN discipline set. Fielding is FILTERS-TAB-ONLY (owner:
+// no fielding on Overview) — the tab renders its own Batting|Bowling|Fielding control
+// (the pop-up header toggle stays Batting|Bowling and drives Overview only).
+const TAB_DISCIPLINES = new Set(["batting", "bowling", "fielding"]);
+const normDiscipline = (d, fallback = "batting") => (TAB_DISCIPLINES.has(d) ? d : fallback);
+const disciplineWord = (d) => (d === "bowling" ? "Bowling" : d === "fielding" ? "Fielding" : "Batting");
+
 export function mountPlayerFiltersTab(container, { store, playerId, discipline, pageState } = {}) {
   void store; // the tab is store-independent (per-row queries are self-contained)
   let curPlayerId = playerId ?? null;
-  let curDiscipline = discipline === "bowling" ? "bowling" : "batting";
+  let curDiscipline = normDiscipline(discipline);
   let curPageState = pageState || null;
   let rows = []; // user-defined via the editor; empty ⇒ "No filtered rows yet"
   let fetchToken = 0;
@@ -802,8 +883,19 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
   }
 
   function columnsFor(disc) {
+    // Fielding has a FIXED tally set (no picker / preset), so it isn't cached in
+    // tabColumns — return the fixed keys directly.
+    if (disc === "fielding") return FIELDING_COLUMN_KEYS;
     if (!tabColumns[disc]) tabColumns[disc] = defaultColumnsFor(disc, currentFormats());
     return tabColumns[disc];
+  }
+
+  /** Resolve a column key to its metric object for the CURRENT discipline. Fielding
+   * columns aren't in metrics.js under a "fielding" discipline, so they come from the
+   * fixed fielding metric list; batting/bowling use getMetric. */
+  function metricFor(key) {
+    if (curDiscipline === "fielding") return fieldingColumnMetrics().find((m) => m.key === key) || null;
+    return getMetric(key, curDiscipline);
   }
 
   // ONE shared columns picker instance (reused across refreshes; its popover
@@ -830,6 +922,40 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     }
     const initialScope =
       mode === "edit" ? { ...existingRow.scope } : lastScope ? { ...lastScope } : defaultScope();
+
+    // T-3b: a fielding row uses its own editor (the fielding dims live on a separate
+    // source/namespace — see playerFieldingEditor.js). It returns { fielding, scope,
+    // singletons }; the tab builds a fielding row via makeFieldingRow.
+    if (curDiscipline === "fielding") {
+      openFieldingRowEditor(document, {
+        mode,
+        initialFielding: mode === "edit" ? existingRow.fielding : null,
+        initialScope,
+        initialSingletons: mode === "edit" ? existingRow.singletons : null,
+        gender: curPageState && curPageState.gender,
+        formats: currentFormats(),
+        scopeController,
+        onCommit: ({ fielding, scope, singletons }) => {
+          lastScope = { ...scope }; // sticky
+          if (mode === "edit") {
+            existingRow.fielding = fielding;
+            existingRow.scope = scope;
+            existingRow.singletons = singletons || {};
+            rowData.delete(existingRow.id);
+            renderRows();
+            queryRow(existingRow);
+          } else {
+            const row = makeFieldingRow(fielding, scope, singletons);
+            rows.push(row);
+            rowData.set(row.id, undefined);
+            renderRows();
+            queryRow(row);
+          }
+        },
+      });
+      return;
+    }
+
     openFilterRowEditor(document, {
       mode,
       initialConditions: mode === "edit" ? existingRow.conditions : emptyAdvancedBlock(),
@@ -890,15 +1016,34 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     return `<option value="__custom" ${customSel} disabled hidden>Custom</option>${opts}`;
   }
 
+  /** The tab's OWN discipline control (T-3b) — Batting | Bowling | Fielding. Fielding
+   * is offered ONLY here (never on the pop-up header toggle / Overview — owner ruling);
+   * a switch RESETS the rows + warns (setDiscipline). Reuses the app's .segmented look. */
+  function disciplineToggleHTML() {
+    const btn = (v) =>
+      `<button type="button" class="segmented__btn${v === curDiscipline ? " is-active" : ""}" data-value="${v}">${disciplineWord(v)}</button>`;
+    return `<div class="segmented filters-tab__discipline" data-role="disc-toggle" role="group" aria-label="Discipline">${btn(
+      "batting"
+    )}${btn("bowling")}${btn("fielding")}</div>`;
+  }
+
   function renderShell() {
+    // Fielding has a FIXED column set → no preset / columns picker in fielding mode.
+    const columnsControlsHTML =
+      curDiscipline === "fielding"
+        ? ""
+        : `<div class="filters-tab__toolbar-right">
+            <select class="select filters-tab__preset" data-role="preset-select" aria-label="Column preset">${presetOptionsHTML()}</select>
+            <button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>
+          </div>`;
     container.innerHTML = `
       <div class="filters-tab">
         <div class="filters-tab__toolbar">
-          <button type="button" class="btn btn--primary filters-tab__add" data-role="add-filter-row">Add Filter Row</button>
-          <div class="filters-tab__toolbar-right">
-            <select class="select filters-tab__preset" data-role="preset-select" aria-label="Column preset">${presetOptionsHTML()}</select>
-            <button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>
+          <div class="filters-tab__toolbar-left">
+            <button type="button" class="btn btn--primary filters-tab__add" data-role="add-filter-row">Add Filter Row</button>
+            ${disciplineToggleHTML()}
           </div>
+          ${columnsControlsHTML}
         </div>
         <p class="filters-tab__reset-notice" data-role="reset-notice" role="status" hidden></p>
         <div class="filters-tab__table-host" data-role="table-host"></div>
@@ -906,6 +1051,15 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
 
     const addBtn = container.querySelector('[data-role="add-filter-row"]');
     if (addBtn) addBtn.addEventListener("click", () => openEditor("add", null));
+
+    const discToggle = container.querySelector('[data-role="disc-toggle"]');
+    if (discToggle) {
+      discToggle.addEventListener("click", (e) => {
+        const btn = e.target.closest(".segmented__btn");
+        if (!btn || btn.dataset.value === curDiscipline) return;
+        setDiscipline(btn.dataset.value, { fromUser: true });
+      });
+    }
 
     const presetSel = container.querySelector('[data-role="preset-select"]');
     if (presetSel) {
@@ -926,6 +1080,30 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     // per-row pin / edit / delete. Survives every innerHTML re-render of the host.
     const host = container.querySelector('[data-role="table-host"]');
     if (host) host.addEventListener("click", onHostClick);
+  }
+
+  /** Switch the tab's discipline (its own control, T-3b). A change RESETS the rows +
+   * WARNS (a batting-worded row can't slice bowling/fielding, etc.) — the T-2c reset
+   * behavior, generalised to three disciplines. Rebuilds the shell (the toolbar's
+   * column controls differ for fielding) and re-queries. `fromUser` is accepted for
+   * symmetry/telemetry; the behavior is identical whatever the trigger. */
+  function setDiscipline(nextDiscRaw, { fromUser = false } = {}) {
+    void fromUser;
+    const nextDisc = normDiscipline(nextDiscRaw, curDiscipline);
+    if (nextDisc === curDiscipline) return;
+    const prev = curDiscipline;
+    if (rows.length > 0) {
+      rows = [];
+      disciplineResetNotice = `Switching to ${disciplineWord(nextDisc)} cleared your filter rows — a ${disciplineWord(
+        prev
+      ).toLowerCase()} filter can't slice ${disciplineWord(nextDisc).toLowerCase()}.`;
+    } else {
+      disciplineResetNotice = null;
+    }
+    curDiscipline = nextDisc;
+    rowData.clear();
+    renderShell();
+    refreshData(true);
   }
 
   function onHostClick(e) {
@@ -994,7 +1172,7 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
         return sortState.dir === "asc" ? la.localeCompare(lb) : lb.localeCompare(la);
       };
     } else {
-      const metric = getMetric(sortState.key, curDiscipline);
+      const metric = metricFor(sortState.key);
       cmp = (a, b) => {
         const va = valForSort(rowData.get(a.id), metric);
         const vb = valForSort(rowData.get(b.id), metric);
@@ -1010,6 +1188,7 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
   // ---------- table render (cache-only; no queries fired here) ----------
 
   function metricColumns() {
+    if (curDiscipline === "fielding") return fieldingColumnMetrics();
     return columnsFor(curDiscipline)
       .map((key) => getMetric(key, curDiscipline))
       .filter(Boolean);
@@ -1150,29 +1329,23 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
   // ---------- public API ----------
 
   function show(nextPlayerId, nextDiscipline, nextPageState) {
-    const nextDisc = nextDiscipline === "bowling" ? "bowling" : "batting";
-    const disciplineChanged = nextDisc !== curDiscipline;
     const playerChanged = nextPlayerId != null && nextPlayerId !== curPlayerId;
-    // T-2c UX change 2 (owner 2026-08-03): a discipline switch RESETS the rows + WARNS.
-    // A batting-worded row (e.g. "6s ≥ 2") can't slice a bowling record, so rather
-    // than leave stale/meaningless rows, clear them and show a brief warning naming
-    // the target discipline. Only fires when there is actually something to clear.
-    if (disciplineChanged && rows.length > 0) {
-      rows = [];
-      disciplineResetNotice = `Switching to ${nextDisc === "bowling" ? "Bowling" : "Batting"} cleared your filter rows — a ${
-        nextDisc === "bowling" ? "batting" : "bowling"
-      } filter can't slice ${nextDisc}.`;
-    } else if (disciplineChanged) {
-      disciplineResetNotice = null; // nothing was cleared; no notice
-    }
     curPlayerId = nextPlayerId ?? curPlayerId;
-    curDiscipline = nextDisc;
     curPageState = nextPageState || curPageState;
-    // A discipline change swaps the column namespace + preset vocabulary, so the
-    // toolbar shell is rebuilt. A player OR discipline change invalidates every
-    // cached value (they're player/discipline-specific).
-    if (disciplineChanged || !container.querySelector(".filters-tab")) renderShell();
-    if (disciplineChanged || playerChanged) rowData.clear();
+    // T-3b: the Filters tab OWNS its discipline via its own control now (the pop-up
+    // header toggle drives Overview only, and can't represent Fielding). So an
+    // EXTERNAL show() passing `null` KEEPS the tab's current discipline; a non-null
+    // value (the initial discipline forwarded at mount) routes through setDiscipline,
+    // which does the reset+warn ONLY if it actually changes. Its own control's
+    // switches call setDiscipline directly.
+    const disciplineChanged =
+      nextDiscipline != null && normDiscipline(nextDiscipline, curDiscipline) !== curDiscipline;
+    if (disciplineChanged) {
+      setDiscipline(nextDiscipline); // owns renderShell + rowData.clear + refreshData
+      return;
+    }
+    if (!container.querySelector(".filters-tab")) renderShell();
+    if (playerChanged) rowData.clear();
     refreshData(true);
   }
 
