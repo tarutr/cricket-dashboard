@@ -315,6 +315,25 @@ export function createScopeSingletonsController() {
     }
   }
 
+  /** Close any OPEN portal dropdown across every mounted singleton editor
+   * (Team/Opposition/Event/Venue's searchSelect.js portal; Stage/Result/Toss
+   * Result/Toss Decision/Innings Number's wirePortalDropdown portal). Editors
+   * with no real close (the inline vs-opponent omnisearch, the numeric window
+   * ranges) are safely skipped via the optional chain; a closed editor's own
+   * close() is already a no-op. Called by the popup editors' teardown() in
+   * place of the old overlay-wide `[aria-expanded="true"]`.click() reach — this
+   * drives each editor's REAL close() method instead of faking a user click. */
+  function closeOpenPanels() {
+    for (const [, entry] of mounted) {
+      try {
+        entry.controller.close?.();
+      } catch (e) {
+        // One editor's close failing must not block closing the others.
+        console.error("[cricdb] scope-singleton editor close failed:", e);
+      }
+    }
+  }
+
   function ensureMounted(key) {
     if (mounted.has(key)) return mounted.get(key);
     const def = DEF_BY_KEY.get(key);
@@ -433,6 +452,7 @@ export function createScopeSingletonsController() {
     isRevealed,
     revealSingleton,
     removeSingleton,
+    closeOpenPanels,
     preselectPhase,
     preselectInningsNumber,
     preselectEdge,

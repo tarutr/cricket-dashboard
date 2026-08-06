@@ -525,7 +525,7 @@ function mountTokenMultiSelect(container, store, onChange, { field, options, any
   const updateLabel = () => {
     els.toggle.textContent = tokenSummary(get(), options, anyLabel);
   };
-  wirePortalDropdown(els.toggle, els.panel);
+  const dropdown = wirePortalDropdown(els.toggle, els.panel);
 
   els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
     cb.addEventListener("change", () => {
@@ -552,7 +552,7 @@ function mountTokenMultiSelect(container, store, onChange, { field, options, any
   }
 
   sync();
-  return { sync };
+  return { sync, close: () => dropdown.close() };
 }
 
 // ── "All + specifics" multi-select (FIX A/B; Stage joined it, polish item 3) ──
@@ -762,7 +762,7 @@ function mountAllMultiSelect(
   }
 
   sync();
-  return { sync, deadReport, invalidatePinned };
+  return { sync, deadReport, invalidatePinned, close: () => dropdown.close() };
 }
 
 // Result outcome options / Result Condition options WITHOUT their leading "All"
@@ -820,6 +820,10 @@ export function mountResult(container, store, onChange, opts = {}) {
     sync() {
       resultMs.sync();
       syncResultCondition();
+    },
+    close: () => {
+      resultMs.close();
+      rcMs.close();
     },
   };
 }
@@ -912,7 +916,7 @@ export function mountInningsNumber(container, store, onChange, { embedded = fals
     });
   }
 
-  wirePortalDropdown(els.toggle, els.panel, { onOpen: renderList });
+  const dropdown = wirePortalDropdown(els.toggle, els.panel, { onOpen: renderList });
 
   function sync() {
     updateLabel();
@@ -920,7 +924,7 @@ export function mountInningsNumber(container, store, onChange, { embedded = fals
   }
 
   sync();
-  return { sync };
+  return { sync, close: () => dropdown.close() };
 }
 
 // ── Stage picker (state.stage) ──────────────────────────────────────────────
@@ -1147,7 +1151,7 @@ export function mountStage(container, store, onChange, { embedded = false, onOpt
   }
 
   sync();
-  return { sync, deadReport: () => picker.deadReport("Stage") };
+  return { sync, deadReport: () => picker.deadReport("Stage"), close: () => picker.close() };
 }
 
 // ── Delivery window (ball-grain rebuild Wave 3, owner decision 67; UI-A REWORK) ─
@@ -1672,7 +1676,7 @@ function mountScopedMultiSelect(container, store, onChange, config) {
   }
 
   sync();
-  return { sync, deadReport };
+  return { sync, deadReport, close: () => handle.close() };
 }
 
 /** "Played for" — single gender + team-type-scoped team picker (state.teams).
@@ -2098,6 +2102,10 @@ export function mountEvent(container, store, onChange, { onOptionsLoaded = null 
     // Both halves of the Event row can go dead on their own: the event itself, or
     // (event still fine) its season narrowing. Report whichever applies.
     deadReport: () => msController.deadReport() || seasons.deadReport(),
+    // Only the Event multi-select itself portals via mountScopedMultiSelect
+    // (searchSelect.js); the per-event Season sub-dropdowns (mountEventSeasons)
+    // are a separate, not-in-scope portal mechanism — left untouched here.
+    close: () => msController.close(),
   };
 }
 

@@ -490,11 +490,11 @@ export function openFieldingRowEditor(hostDoc, deps) {
     // panel straight onto <body> while open and only their OWN toggle click
     // restores it — detach() below just unmounts the (now panel-less) host, so a
     // row closed/committed while one of these was still open would otherwise
-    // leave that panel floating, detached, on <body> forever (playerFilterScope.js
-    // exposes no close-all; its mounted editors' handles aren't surfaced here, so
-    // this is the only reach we have). A closed dropdown's toggle carries
-    // aria-expanded="false" and is skipped, so this is a no-op the rest of the time.
-    overlay.querySelectorAll('[aria-expanded="true"]').forEach((el) => el.click());
+    // leave that panel floating, detached, on <body> forever. Drives each mounted
+    // editor's REAL close() method (playerFilterScope.js's closeOpenPanels) rather
+    // than faking a click; a closed dropdown's close() is already a no-op, so this
+    // is a no-op the rest of the time.
+    if (scopeController) scopeController.closeOpenPanels();
     if (scopeController) scopeController.detach();
     document.removeEventListener("keydown", onKey, true);
     overlay.remove();
