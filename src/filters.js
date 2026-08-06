@@ -1178,14 +1178,22 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
   const genderToggle = wireSegmentedToggle(els.gender, (value) => {
     if (value === store.get().gender) return;
     // Switching gender clears the gender-specific selections: teams differ by
-    // gender; profile filters are men-only (decision 21); and Team/Event/Venue/
-    // opposition are gender-scoped vocabularies, so a stale pick would silently
-    // match nothing on the other gender — clear them so the option lists (which
-    // re-scope by gender) and any selection stay honest.
+    // gender; profile + matchupVs depend on profile/matchup data that (today)
+    // exists only for men, so a stale pick would apply the wrong gender's data on
+    // the other view; Team/Event/Venue/opposition are gender-scoped vocabularies,
+    // so a stale pick would silently match nothing — clear them so the option
+    // lists (which re-scope by gender) and any selection stay honest.
+    // matchupVs MUST be cleared here (Group 3): matchupVsActive now keys on the
+    // data-presence gate, not `gender`, and the GRAPH reads it WITHOUT awaiting the
+    // availability probe — so a men's Vs bucket left on the store could route a
+    // women's chart to the matchup namespace during/after an unresolved probe.
+    // Clearing it makes matchupVsActive's own `!state.matchupVs` guard hold for
+    // women unconditionally, exactly as the old gender hard-gate did.
     store.set({
       gender: value,
       teams: [],
       profile: emptyProfile(),
+      matchupVs: null,
       event: [],
       venue: [],
       opposition: [],
