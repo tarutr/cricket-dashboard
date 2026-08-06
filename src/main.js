@@ -6,6 +6,7 @@
 
 import { initDB, getManifest, prewarmBallEngine, setDeliveryWindow, setOpponentPlayer } from "./db.js";
 import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, pruneDeliveryWindowForFormats, effectiveNamespace } from "./state.js";
+import { resolveDataAvail, getResolvedDataAvail } from "./dataAvailability.js";
 import { isConditionComplete } from "./advanced.js";
 import { mountFilters } from "./filters.js";
 import { mountFilterDrawer } from "./drawer.js";
@@ -285,6 +286,50 @@ function applyView() {
 }
 
 /**
+ * Group 3 (owner directive 2026-08-06, "gate on DATA, never gender"): keep
+ * state.dataAvail — the resolved per-gender existence map that state.js's
+ * matchupVsActive / profileSemiJoinSql now gate on — in step with the current
+ * gender. resolveDataAvail (src/dataAvailability.js) probes once per gender and
+ * caches; these two helpers wire it into the store.
+ *
+ * syncDataAvailFromCache(): SYNCHRONOUS — if the current gender was already
+ * resolved (boot prewarms BOTH genders, so a switch normally hits the cache), push
+ * it onto the store in THIS tick. Called at the top of onFiltersChanged so any
+ * reader below — pills, and especially the graph's onScopeChanged, which builds a
+ * query synchronously — sees the right gender's value with no transient.
+ */
+function syncDataAvailFromCache() {
+  const gender = store.get().gender;
+  const avail = getResolvedDataAvail(gender);
+  if (avail && store.get().dataAvail !== avail) store.set({ dataAvail: avail });
+}
+
+/**
+ * mergeDataAvail(gender): ASYNC — resolve `gender` (cheap LIMIT-1 probe, usually
+ * already cached) and, if it is STILL the current gender, push it onto the store.
+ * A probe failure is swallowed so it never blocks Search / boot (the gate then
+ * stays optimistic — men behave as today, women are held correct by the secondary
+ * guards). Awaited by runSearch (the hard guarantee that no leaderboard query is
+ * built from an unresolved value) and kicked fire-and-forget on load + filter
+ * changes. When it lands while the graph is showing, re-run onScopeChanged — the
+ * store.subscribe hook does not drive the graph, so a late resolve would otherwise
+ * not reach an already-rendered chart.
+ */
+async function mergeDataAvail(gender) {
+  let avail = getResolvedDataAvail(gender);
+  if (!avail) {
+    try {
+      avail = await resolveDataAvail(gender);
+    } catch {
+      return; // leave dataAvail optimistic; see doc above
+    }
+  }
+  if (store.get().gender !== gender || store.get().dataAvail === avail) return;
+  store.set({ dataAvail: avail });
+  if (store.get().view === "graph" && graphController) graphController.onScopeChanged();
+}
+
+/**
  * R3.2 ("everything waits for Search"): any filter/control change — popup
  * filters, pill ×, pins, player search — is a PENDING edit. This refreshes the
  * derived views (pills/badge from the frozen applied snapshot, the popup while
@@ -301,6 +346,13 @@ function onFiltersChanged() {
   // for the same honesty reason — a phase window on red ball would silently empty
   // the board (phase IS NULL there). No-op flag-OFF (deliveryWindow is null).
   pruneDeliveryWindowForFormats(store);
+  // Group 3: keep the numbers-path availability gate (state.dataAvail) in step with
+  // the current gender. Sync from the boot-prewarmed cache SYNCHRONOUSLY so any
+  // reader below — pills and, critically, the graph's onScopeChanged (which builds
+  // a query in the same call) — sees the right gender's value with no transient;
+  // kick an async resolve for the rare not-yet-cached case (e.g. after Clear).
+  syncDataAvailFromCache();
+  mergeDataAvail(store.get().gender);
   // Sync the popup's filter content only while the popup is VISIBLE (Batch 3
   // fix 2): syncing hidden content is wasted work, and syncing while open used
   // to rebuild the advanced panel's innerHTML on each keystroke, killing focus.
@@ -618,6 +670,15 @@ function boot() {
       const initial = store.get();
       lastAppliedDefaults.batting = [...initial.columns.batting];
       lastAppliedDefaults.bowling = [...initial.columns.bowling];
+      // Group 3 (owner 2026-08-06): prewarm the data-availability gate. Resolve the
+      // CURRENT gender (male) and push it onto the store as soon as it lands
+      // (mergeDataAvail), and separately warm the OTHER gender's cache so a later
+      // gender switch reads a resolved value synchronously (syncDataAvailFromCache)
+      // — no transient. Cheap LIMIT-1 probes on tables the offer path already loads
+      // at boot; non-blocking (the Search path additionally awaits the current
+      // gender). Fire-and-forget: a probe failure leaves the gate optimistic.
+      mergeDataAvail("male");
+      resolveDataAvail("female").catch(() => {});
       // R3.2: appliedState is snapshotted AFTER setDateBounds (below) so the
       // default end date it fills is part of the applied baseline — otherwise
       // the toolbar's Search button would read "dirty" from boot on a date the
@@ -737,7 +798,7 @@ function boot() {
         filtersPopupEl.hidden = true;
         drawerController.onHide();
       }
-      function runSearch({ fromToolbar = false } = {}) {
+      async function runSearch({ fromToolbar = false } = {}) {
         // The ONE query trigger (R3.2: shared by BOTH the popup's "Search"
         // button AND the toolbar's SEARCH button). Date is REQUIRED (owner
         // 1B-2): block first and surface the message; then validate the advanced
@@ -756,6 +817,13 @@ function boot() {
           fpopSetSection("fpop-body-advanced", true); // surface the inline error
           return;
         }
+        // Group 3 (owner 2026-08-06): resolve the data-availability gate for the
+        // CURRENT gender BEFORE building any query, so the sync gates
+        // (matchupVsActive / profileSemiJoinSql) read a RESOLVED value — never the
+        // optimistic pre-resolve default. Cheap LIMIT-1 probe, usually already
+        // cached from the boot prewarm; on failure mergeDataAvail leaves dataAvail
+        // as-is and we proceed (men behave as today; women held by the guards).
+        await mergeDataAvail(store.get().gender);
         closePopup();
         // R5-B #3: a POPUP Search is a fresh filters-applied change → RESET pins
         // (and their no-innings flags); a TOOLBAR Search (fromToolbar) commits

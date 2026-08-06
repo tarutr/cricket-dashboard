@@ -28,60 +28,26 @@
 // scope handling (buildCoreScopeClauses) and its '(unmapped)' exclusion; the
 // distinct-values loaders that POPULATE the vs-style variants stay as they are.
 //
+// The probe SQL itself now lives in src/dataAvailability.js (ONE copy), shared with
+// the NUMBERS-path resolver (Group 3): the same existence check decides both whether
+// a filter is OFFERED (here) and — once resolved — how the query gates
+// (matchupVsActive / profileSemiJoinSql) route. This module keeps only the
+// offer-path caching/optimistic-getter that the palette + singleton-presence checks
+// read; it maps the shared probes to its own offer-path key names.
+//
 // MECHANISM mirrors the existing getVsBowlingTypes / ensureVsBowlingTypesLoaded
 // pattern: an async load fills a per-gender cache; a SYNCHRONOUS getter the (sync)
 // palette builder + singleton-presence check read. Each surface (the leaderboard
 // drawer + the player pop-up editor) creates ONE instance and wires its two hooks
 // into createPaletteGroupsBuilder.
 
-import { query } from "./db.js";
-import { buildCoreScopeClauses } from "./filters.js";
-import { FORMAT_BUCKETS } from "./state.js";
+import { probeMatchup, probeProfile } from "./dataAvailability.js";
 
 // The five availability keys the palette leaves + singleton rows consult.
 export const AVAIL_KEYS = ["vsBowlingStyle", "vsBattingHand", "profileRole", "profileHand", "profileBowling"];
 
-// All format buckets — the probes restrict by gender only (see AXIS note above).
-const ALL_FORMATS = FORMAT_BUCKETS.map((b) => b.key);
-
 // Cache/probe signature: gender is the only axis (formats fixed to ALL_FORMATS).
 const genderSig = (s) => (s && s.gender) || "male";
-
-// Core scope for the gender (gender + every format). buildCoreScopeClauses reads
-// only gender/match_type/date/team_type; here just gender + all formats apply.
-const coreFor = (gender) => buildCoreScopeClauses({ gender, formats: ALL_FORMATS }).join(" AND ");
-
-/**
- * A MATCHUP dim exists for the gender iff there is at least one MAPPED (non-
- * '(unmapped)') value in scope. Fast existence check; mirrors the drawer's
- * vs-bowling-type loader's '(unmapped)' exclusion. Women's matchup rows key every
- * bowler/batter to '(unmapped)' (no profiles), so this is false for them today.
- * `source`/`column` are trusted internal literals (never user input).
- */
-async function probeMatchup(source, column, gender) {
-  const sql =
-    `SELECT 1 FROM ${source} ` +
-    `WHERE ${coreFor(gender)} AND ${column} IS NOT NULL AND ${column} <> '(unmapped)' LIMIT 1`;
-  const { rows } = await query(sql);
-  return rows.length > 0;
-}
-
-/**
- * A PROFILE dim exists for the gender iff at least one player who played in the
- * gender's scope has a non-null value. `profiles` carries no gender/scope columns,
- * so it is gender-scoped via a `player_matches` semi-join (player_matches DOES
- * carry gender + the core-scope columns). `column` is a trusted internal literal
- * (never user input). Women have no profile rows today → false; when they do, this
- * returns true → the filter auto-appears.
- */
-async function probeProfile(column, gender) {
-  const sql =
-    `SELECT 1 FROM profiles p ` +
-    `WHERE p.${column} IS NOT NULL ` +
-    `AND p.player_id IN (SELECT DISTINCT player_id FROM player_matches WHERE ${coreFor(gender)}) LIMIT 1`;
-  const { rows } = await query(sql);
-  return rows.length > 0;
-}
 
 /**
  * One availability instance per surface. Returns:
