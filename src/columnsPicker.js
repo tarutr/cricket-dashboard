@@ -406,17 +406,69 @@ export function createColumnsPicker({
   }
 
   /** Which of the four dropdowns a COLUMN key belongs to, in namespace `ns`.
-   * Cross keys → their encoded discipline's dropdown; Impact → Match; Fielding →
-   * Fielding; everything else (Basic/Detailed/Dismissals/Phase) → the ns's own
-   * discipline bucket. Returns null for an unresolvable/stray key. */
+   * `matches` (Player Matches) and Impact → Match; Cross keys → their encoded
+   * discipline's dropdown; Fielding → Fielding; everything else (Basic/
+   * Detailed/Dismissals/Phase) → the ns's own discipline bucket. Returns null
+   * for an unresolvable/stray key. */
   function dropdownForColumnKey(key, ns) {
     const parsed = parseCrossKey(key);
     if (parsed) return parsed.discipline; // "batting" | "bowling"
     const m = getMetric(key, ns);
     if (!m) return null;
+    // Columns content rework Wave A (plain batting/bowling only — matchup's
+    // OWN "matches" metric, vsTableOnly, is untouched): Player Matches is
+    // display-consolidated into the MATCH dropdown as a single instance,
+    // alongside Impact — same rule shape as the existing impact→match case
+    // just below.
+    if ((ns === "batting" || ns === "bowling") && m.key === "matches") return "match";
     if (m.section === "impact") return "match";
     if (m.section === "fielding") return "fielding";
     return disciplineBucket(ns);
+  }
+
+  // ── Columns content rework Wave A (2026-08-07, display-only) ─────────────────
+  // Owner-approved v5 rename/regroup: (1) `player_of_match` (the Y/N flag) and
+  // `wickets_per_innings` are REMOVED from the columns picker only — they stay
+  // in metrics.js (filters/advanced conditions still reference potm_count's
+  // sibling def / wickets_per_innings) and are untouched everywhere else; (2)
+  // the surviving plain columns get an explicit v5 display order within their
+  // Basic/Detailed sections. Both are LOCAL to this module (picker-layout
+  // judgment calls, same posture as RARE_DISMISSAL_KINDS above) — no
+  // sqlExpression, no eligibleMetrics/state.js change, so filters/advanced
+  // conditions and the pop-up's own popover (buildPickerHTML, untouched) keep
+  // offering them exactly as before.
+  const HIDDEN_COLUMN_KEYS = new Set(["player_of_match", "wickets_per_innings"]);
+
+  const BATTING_BASIC_ORDER = [
+    "innings", "r_pos", "runs", "balls_faced", "high_score", "fours", "sixes",
+    "fifties", "hundreds", "ducks", "not_outs",
+  ];
+  const BATTING_DETAILED_ORDER = [
+    "average", "strike_rate", "running_sr", "balls_per_dismissal", "balls_per_boundary",
+    "balls_per_four", "balls_per_six", "balls_faced_share",
+  ];
+  const BOWLING_BASIC_ORDER = [
+    "innings", "wickets", "balls", "overs", "runs_conceded", "maidens",
+    "extras_wides", "extras_noballs", "best",
+  ];
+  const BOWLING_DETAILED_ORDER = ["economy", "average", "strike_rate"];
+
+  /** Reorder `list` so any metric whose key appears in `order` comes first (in
+   * `order`'s sequence); every other metric keeps its ORIGINAL relative order,
+   * appended after. Metrics not named in `order` are untouched siblings (the
+   * v5 audit's "leave untouched" set — phase %, dismissal-kind %, run-source %,
+   * wicket-haul counts, …) — this never drops or renames anything, purely a
+   * stable display sort. */
+  function orderByKeys(list, order) {
+    const rank = new Map(order.map((k, i) => [k, i]));
+    return list
+      .map((m, i) => ({ m, i }))
+      .sort((a, b) => {
+        const ra = rank.has(a.m.key) ? rank.get(a.m.key) : order.length + a.i;
+        const rb = rank.has(b.m.key) ? rank.get(b.m.key) : order.length + b.i;
+        return ra - rb;
+      })
+      .map((x) => x.m);
   }
 
   /** Per-dropdown count of columns currently SHOWN (the badge value). */
@@ -478,28 +530,51 @@ export function createColumnsPicker({
     const all = eligibleMetrics(ns, formats);
     const visible = new Set(getColumns());
     const isDetailed = (m) => m.kind === "rate" || m.kind === "percent";
+    // Columns content rework Wave A: scoped to the PLAIN batting/bowling
+    // namespaces only — matchup_batting/matchup_bowling (Vs mode) keep their
+    // pre-Wave-A layout untouched (their own "matches"/wickets_per_innings defs
+    // are separate catalogue entries this wave never renamed, see metrics.js).
+    const isPlainNs = ns === "batting" || ns === "bowling";
 
-    const impact = all.filter((m) => m.section === "impact");
+    const impact = all.filter(
+      (m) => m.section === "impact" && !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key))
+    );
     const fielding = all.filter((m) => m.section === "fielding");
     const dismissal = all.filter((m) => m.section === "dismissal");
+    // Wave A: Player Matches consolidates into the Match dropdown (single
+    // instance) instead of appearing in the discipline's own Basic section.
+    const matchesMetric = isPlainNs ? all.find((m) => m.key === "matches") || null : null;
     const core = all.filter(
-      (m) => !m.isPhaseMetric && m.section !== "dismissal" && m.section !== "fielding" && m.section !== "impact"
+      (m) =>
+        !m.isPhaseMetric &&
+        m.section !== "dismissal" &&
+        m.section !== "fielding" &&
+        m.section !== "impact" &&
+        !(isPlainNs && m.key === "matches") &&
+        !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key))
     );
-    const ownBasic = core.filter((m) => !isDetailed(m));
-    const ownDetailed = core.filter((m) => isDetailed(m));
+    const basicOrder = bucket === "bowling" ? BOWLING_BASIC_ORDER : BATTING_BASIC_ORDER;
+    const detailedOrder = bucket === "bowling" ? BOWLING_DETAILED_ORDER : BATTING_DETAILED_ORDER;
+    const coreBasic = core.filter((m) => !isDetailed(m));
+    const coreDetailed = core.filter((m) => isDetailed(m));
+    const ownBasic = isPlainNs ? orderByKeys(coreBasic, basicOrder) : coreBasic;
+    const ownDetailed = isPlainNs ? orderByKeys(coreDetailed, detailedOrder) : coreDetailed;
 
     // Cross columns (W3): the OTHER discipline's Basic/Detailed metrics, re-keyed
     // to their cross key. Plain batting/bowling only ([] in matchup namespaces).
     let crossBasic = [];
     let crossDetailed = [];
-    if (crossDiscipline && (ns === "batting" || ns === "bowling")) {
+    if (crossDiscipline && isPlainNs) {
       const other = OTHER_DISCIPLINE[ns];
-      const crossRows = eligibleCrossMetrics(ns, formats).map((base) => ({
-        ...base,
-        key: makeCrossKey(other, base.key),
-      }));
-      crossBasic = crossRows.filter((m) => !isDetailed(m));
-      crossDetailed = crossRows.filter((m) => isDetailed(m));
+      const otherBasicOrder = other === "bowling" ? BOWLING_BASIC_ORDER : BATTING_BASIC_ORDER;
+      const otherDetailedOrder = other === "bowling" ? BOWLING_DETAILED_ORDER : BATTING_DETAILED_ORDER;
+      const crossSource = eligibleCrossMetrics(ns, formats).filter((m) => !HIDDEN_COLUMN_KEYS.has(m.key));
+      // Order on the ORIGINAL key before re-keying to the cross-prefixed key,
+      // so the v5 order arrays (plain metric keys) still match.
+      const crossBasicSrc = orderByKeys(crossSource.filter((m) => !isDetailed(m)), otherBasicOrder);
+      const crossDetailedSrc = orderByKeys(crossSource.filter((m) => isDetailed(m)), otherDetailedOrder);
+      crossBasic = crossBasicSrc.map((base) => ({ ...base, key: makeCrossKey(other, base.key) }));
+      crossDetailed = crossDetailedSrc.map((base) => ({ ...base, key: makeCrossKey(other, base.key) }));
     }
 
     const ownSections =
@@ -511,8 +586,16 @@ export function createColumnsPicker({
       sectionHTML("Basic Stats", crossBasic, formats, visible) +
       sectionHTML("Detailed Stats", crossDetailed, formats, visible);
 
+    // Wave A: the Match dropdown's own "Basic Stats" mini-section holds the
+    // single consolidated Player Matches row (plain ns only — matchesMetric is
+    // null in matchup mode, rendering "" and leaving Match = Impact-only, the
+    // pre-Wave-A shape).
+    const matchHTML =
+      sectionHTML("Basic Stats", matchesMetric ? [matchesMetric] : [], formats, visible) +
+      sectionHTML("Impact", impact, formats, visible);
+
     const dropdowns = [
-      { id: "match", label: "Match", html: sectionHTML("Impact", impact, formats, visible) },
+      { id: "match", label: "Match", html: matchHTML },
       { id: "batting", label: "Batting", html: bucket === "batting" ? ownSections : crossSections },
       { id: "bowling", label: "Bowling", html: bucket === "bowling" ? ownSections : crossSections },
       { id: "fielding", label: "Fielding", html: sectionHTML("Fielding Stats", fielding, formats, visible) },

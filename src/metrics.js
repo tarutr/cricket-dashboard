@@ -122,7 +122,7 @@
 const BATTING_METRICS = [
   {
     key: "matches",
-    label: "Matches",
+    label: "Player Matches",
     shortLabel: "Mat",
     discipline: "batting",
     source: "player_matches",
@@ -134,8 +134,8 @@ const BATTING_METRICS = [
   },
   {
     key: "innings",
-    label: "Innings",
-    shortLabel: "Inns",
+    label: "Batting Innings",
+    shortLabel: "Bat Inns",
     discipline: "batting",
     source: "innings",
     sqlExpression: "COUNT(*)",
@@ -182,7 +182,7 @@ const BATTING_METRICS = [
   {
     key: "average",
     label: "Batting Average",
-    shortLabel: "Avg",
+    shortLabel: "Bat Avg",
     discipline: "batting",
     source: "innings",
     // Runs per dismissal. Not-outs (dismissed = 0) are excluded from the
@@ -194,8 +194,8 @@ const BATTING_METRICS = [
   },
   {
     key: "strike_rate",
-    label: "Strike Rate",
-    shortLabel: "SR",
+    label: "Batting Strike Rate",
+    shortLabel: "Bat SR",
     discipline: "batting",
     source: "innings",
     sqlExpression: "SUM(runs) * 100.0 / NULLIF(SUM(balls_faced), 0)",
@@ -206,7 +206,7 @@ const BATTING_METRICS = [
   {
     key: "balls_per_dismissal",
     label: "Balls per Dismissal",
-    shortLabel: "BPD",
+    shortLabel: "BpD",
     discipline: "batting",
     source: "innings",
     sqlExpression: "SUM(balls_faced) * 1.0 / NULLIF(SUM(dismissed), 0)",
@@ -243,7 +243,7 @@ const BATTING_METRICS = [
   {
     key: "balls_per_boundary",
     label: "Balls per Boundary",
-    shortLabel: "BPB",
+    shortLabel: "BpB",
     discipline: "batting",
     source: "innings",
     sqlExpression: "SUM(balls_faced) * 1.0 / NULLIF(SUM(fours_hit) + SUM(sixes_hit), 0)",
@@ -255,7 +255,7 @@ const BATTING_METRICS = [
   },
   {
     key: "fours",
-    label: "Fours",
+    label: "4s",
     shortLabel: "4s",
     discipline: "batting",
     source: "innings",
@@ -267,7 +267,7 @@ const BATTING_METRICS = [
   },
   {
     key: "sixes",
-    label: "Sixes",
+    label: "6s",
     shortLabel: "6s",
     discipline: "batting",
     source: "innings",
@@ -285,7 +285,7 @@ const BATTING_METRICS = [
   // diamond duck. Not Outs counts innings the batter finished undismissed.
   {
     key: "fifties",
-    label: "Fifties",
+    label: "50s",
     shortLabel: "50s",
     discipline: "batting",
     source: "innings",
@@ -297,7 +297,7 @@ const BATTING_METRICS = [
   },
   {
     key: "hundreds",
-    label: "Hundreds",
+    label: "100s",
     shortLabel: "100s",
     discipline: "batting",
     source: "innings",
@@ -485,8 +485,8 @@ const BATTING_METRICS = [
   // is_not_boundary rule, so they ARE the boundary balls).
   {
     key: "running_sr",
-    label: "Running Strike Rate",
-    shortLabel: "Run SR",
+    label: "Non-Boundary Strike Rate",
+    shortLabel: "NBSR",
     discipline: "batting",
     source: "innings",
     sqlExpression:
@@ -616,8 +616,8 @@ const BATTING_METRICS = [
   },
   {
     key: "balls_per_four",
-    label: "Balls per Four",
-    shortLabel: "BP4",
+    label: "Balls per 4",
+    shortLabel: "Bp4",
     discipline: "batting",
     source: "innings",
     sqlExpression: "SUM(balls_faced) * 1.0 / NULLIF(SUM(fours_hit), 0)",
@@ -628,8 +628,8 @@ const BATTING_METRICS = [
   },
   {
     key: "balls_per_six",
-    label: "Balls per Six",
-    shortLabel: "BP6",
+    label: "Balls per 6",
+    shortLabel: "Bp6",
     discipline: "batting",
     source: "innings",
     sqlExpression: "SUM(balls_faced) * 1.0 / NULLIF(SUM(sixes_hit), 0)",
@@ -640,8 +640,8 @@ const BATTING_METRICS = [
   },
   {
     key: "balls_faced_share",
-    label: "Balls-Faced Share",
-    shortLabel: "BF Share",
+    label: "Percentage of Balls Faced",
+    shortLabel: "BF%",
     discipline: "batting",
     source: "innings",
     // Share of the batting side's balls this player faced (team_inns_balls is the
@@ -670,8 +670,8 @@ const BATTING_METRICS = [
   // column picker.
   {
     key: "r_pos",
-    label: "R. Pos.",
-    shortLabel: "R. Pos.",
+    label: "Regular Batting Position",
+    shortLabel: "R. Pos",
     columnTitle: "Regular position — where this player most often bats",
     discipline: "batting",
     source: "innings",
@@ -738,7 +738,7 @@ for (const d of DISMISSAL_KINDS) {
 const BOWLING_METRICS = [
   {
     key: "matches",
-    label: "Matches",
+    label: "Player Matches",
     shortLabel: "Mat",
     discipline: "bowling",
     source: "player_matches",
@@ -750,8 +750,8 @@ const BOWLING_METRICS = [
   },
   {
     key: "innings",
-    label: "Innings",
-    shortLabel: "Inns",
+    label: "Bowling Innings",
+    shortLabel: "Bowl Inns",
     discipline: "bowling",
     source: "innings",
     sqlExpression: "COUNT(*)",
@@ -803,7 +803,7 @@ const BOWLING_METRICS = [
   {
     key: "runs_conceded",
     label: "Runs Conceded",
-    shortLabel: "Runs",
+    shortLabel: "Runs Con",
     discipline: "bowling",
     source: "innings",
     sqlExpression: "SUM(runs_conceded)",
@@ -815,7 +815,7 @@ const BOWLING_METRICS = [
   {
     key: "average",
     label: "Bowling Average",
-    shortLabel: "Avg",
+    shortLabel: "Bowl Avg",
     discipline: "bowling",
     source: "innings",
     sqlExpression: "SUM(runs_conceded) * 1.0 / NULLIF(SUM(wickets), 0)",
@@ -827,7 +827,7 @@ const BOWLING_METRICS = [
   },
   {
     key: "economy",
-    label: "Economy Rate",
+    label: "Economy",
     shortLabel: "Econ",
     discipline: "bowling",
     source: "innings",
@@ -841,7 +841,7 @@ const BOWLING_METRICS = [
   {
     key: "strike_rate",
     label: "Bowling Strike Rate",
-    shortLabel: "SR",
+    shortLabel: "Bowl SR",
     discipline: "bowling",
     source: "innings",
     sqlExpression: "SUM(balls) * 1.0 / NULLIF(SUM(wickets), 0)",
@@ -1013,7 +1013,7 @@ const BOWLING_METRICS = [
   },
   {
     key: "best",
-    label: "Best Bowling (Innings)",
+    label: "Best Bowling",
     shortLabel: "BBI",
     discipline: "bowling",
     source: "innings",
@@ -1291,7 +1291,7 @@ const FIELDING_METRIC_SPECS = [
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.stumpings)" },
   { key: "run_outs", label: "Run-outs", shortLabel: "RO", section: "fielding",
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.run_outs)" },
-  { key: "dismissals_effected", label: "Dismissals Effected", shortLabel: "Dis Eff", section: "fielding",
+  { key: "dismissals_effected", label: "Fielding Dismissals", shortLabel: "F. Wkts", section: "fielding",
     source: "fielding_events",
     sqlExpression: "MAX(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs)" },
   { key: "player_of_match", label: "Player of the Match", shortLabel: "PoM", section: "impact",
@@ -1309,7 +1309,7 @@ const FIELDING_METRIC_SPECS = [
   // not the outer projection. Value == player_of_match exactly (SA Yadav = 5 PotM,
   // independently verified). isPomMetric picks it up (source player_matches, key !=
   // matches), so it drives HAVING via the pom_cte join with no query-builder change.
-  { key: "potm_count", label: "PotM Count", shortLabel: "PotM", section: "impact",
+  { key: "potm_count", label: "Player of the Match Count", shortLabel: "PotM", section: "impact",
     source: "player_matches", sqlExpression: "MAX(pom_cte.player_of_match)" },
 ];
 for (const disc of ["batting", "bowling"]) {
