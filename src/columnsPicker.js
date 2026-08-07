@@ -41,8 +41,30 @@
 //     re-render its own table). Called with the full new array on every change.
 
 import { escHtml } from "./html.js";
-import { DISMISSAL_KINDS, metricDisplayLabel, makeCrossKey, OTHER_DISCIPLINE } from "./metrics.js";
+import { DISMISSAL_KINDS, metricDisplayLabel, makeCrossKey, parseCrossKey, getMetric, OTHER_DISCIPLINE } from "./metrics.js";
 import { eligibleMetrics, eligibleCrossMetrics } from "./state.js";
+
+// ── Phase×metric composer (columns-rejig W4) ─────────────────────────────────
+// The composer REPLACES the flat enumerated phase columns in the leaderboard's
+// picker with a family→variant control: pick a metric family (SR / Economy /
+// Wickets — the families that HAVE enumerated phase columns) + phase(s)
+// (Powerplay / Middle / Death). Each variant checkbox's data-key IS the existing
+// enumerated phase-metric key (pp_strike_rate, odi_death_economy, …), so the
+// emitted columns are byte-identical to the old Phase section — the equivalence
+// gate holds BY CONSTRUCTION (no new metric key is ever invented). phaseParts()
+// decomposes a phase key by stripping an optional `odi_` prefix then the leading
+// phase token; the enumerated phase metrics are the only keys carrying these
+// prefixes, so the split is unambiguous.
+const PHASE_ORDER = ["pp", "mid", "death"];
+const PHASE_LABEL = { pp: "Powerplay", mid: "Middle", death: "Death" };
+function phaseParts(key) {
+  const k = key.startsWith("odi_") ? key.slice(4) : key;
+  for (const ph of PHASE_ORDER) {
+    const pref = `${ph}_`;
+    if (k.startsWith(pref)) return { phase: ph, base: k.slice(pref.length) };
+  }
+  return null;
+}
 
 // A monochrome highlighter/marker glyph, filled via currentColor — mirrors the
 // pin toggle's PIN_GLYPH convention in src/table.js (owner fix: the old 🖍️
@@ -267,57 +289,46 @@ export function createColumnsPicker({
     </span>`;
   }
 
-  /** Build the picker's inner HTML for a namespace/format selection: the same
-   * Basic / Dismissals / Fielding / Impact / Phase sections the floating popover
-   * always rendered. Reads the CURRENT visible column list (getColumns) for
-   * checked state. Pure string builder — no DOM, no listeners. */
-  function buildPickerHTML(ns, formats) {
-    const all = eligibleMetrics(ns, formats);
-    const basic = all.filter(
-      (m) => !m.isPhaseMetric && m.section !== "dismissal" && m.section !== "fielding" && m.section !== "impact"
-    );
-    const dismissal = all.filter((m) => m.section === "dismissal");
-    // Fielding / Impact (Wave 3): their own sub-headers in BOTH views. Plain
-    // data-key checkboxes (same mechanics as Basic).
-    const fielding = all.filter((m) => m.section === "fielding");
-    const impact = all.filter((m) => m.section === "impact");
-    const phase = all.filter((m) => m.isPhaseMetric);
-    const visible = new Set(getColumns());
+  // ── Shared leaf/section builders (used by BOTH the pop-up's flat picker and
+  //    the leaderboard's four-dropdown layout, so the two render byte-identical
+  //    rows) ─────────────────────────────────────────────────────────────────
 
-    // One metric row: the checkbox label, optionally followed (W2, leaderboard
-    // only) by the per-column Sort-by + Highlight controls. The controls sit
-    // OUTSIDE the <label> so a click on them never toggles the checkbox. The
-    // batting Dismissals dual-key rows deliberately DON'T get these (they render
-    // via dismissalRowHTML, not this helper) — their active count/% variant is
-    // ambiguous from the row alone; those columns stay sortable via the table
-    // header. See the report's flagged follow-up.
-    const itemRow = (m) => {
-      const label = `<label class="columns-popover__item">
+  /** One metric row: the checkbox label, optionally followed (W2, leaderboard
+   * only) by the per-column Sort-by + Highlight controls. The controls sit
+   * OUTSIDE the <label> so a click on them never toggles the checkbox. The
+   * batting Dismissals dual-key rows deliberately DON'T get these (they render
+   * via dismissalRowHTML, not this helper) — their active count/% variant is
+   * ambiguous from the row alone; those columns stay sortable via the table
+   * header. */
+  function itemRowHTML(m, formats, visible) {
+    const label = `<label class="columns-popover__item">
         <input type="checkbox" data-key="${m.key}" ${visible.has(m.key) ? "checked" : ""} />
         <span>${metricDisplayLabel(m, formats)}</span>
       </label>`;
-      return controlsOn
-        ? `<div class="columns-popover__item-row">${label}${columnControlsHTML(m.key)}</div>`
-        : label;
-    };
+    return controlsOn
+      ? `<div class="columns-popover__item-row">${label}${columnControlsHTML(m.key)}</div>`
+      : label;
+  }
 
-    const section = (label, metrics) =>
-      metrics.length
-        ? `<div class="columns-popover__section-label">${label}</div>
+  /** A labelled section of metric rows, or "" when the section is empty. */
+  function sectionHTML(label, metrics, formats, visible) {
+    return metrics.length
+      ? `<div class="columns-popover__section-label">${label}</div>
            <div class="columns-popover__list">
-             ${metrics.map(itemRow).join("")}
+             ${metrics.map((m) => itemRowHTML(m, formats, visible)).join("")}
            </div>`
-        : "";
+      : "";
+  }
 
-    // Dismissals: the pruned real/rare + "Show as %" layout, batting ONLY (see
-    // the RARE_DISMISSAL_KINDS doc comment for why every other namespace keeps
-    // the plain `section()` list — they never had the 24-checkbox problem).
-    let dismissalHTML;
+  /** The Dismissals block: batting's pruned real/rare + "Show as %" layout
+   * (batting ONLY — see the RARE_DISMISSAL_KINDS doc comment for why every other
+   * namespace keeps the plain list), or a plain section for every other ns. */
+  function dismissalSectionHTML(ns, formats, visible, dismissal) {
     if (ns === "batting") {
       const showPct = computeInitialShowPct(getColumns());
       const realKinds = DISMISSAL_KINDS.filter((d) => !RARE_DISMISSAL_KINDS.has(d.kind));
       const rareKinds = DISMISSAL_KINDS.filter((d) => RARE_DISMISSAL_KINDS.has(d.kind));
-      dismissalHTML = `
+      return `
         <div class="columns-popover__section-label">Dismissals</div>
         <label class="columns-popover__pct-toggle">
           <input type="checkbox" data-role="dismissal-pct-toggle" ${showPct ? "checked" : ""} />
@@ -332,19 +343,38 @@ export function createColumnsPicker({
             ${rareKinds.map((d) => dismissalRowHTML(d, visible)).join("")}
           </div>
         </details>`;
-    } else {
-      dismissalHTML = section("Dismissals", dismissal);
     }
+    return sectionHTML("Dismissals", dismissal, formats, visible);
+  }
+
+  /** Build the picker's inner HTML for a namespace/format selection: the same
+   * Basic / Dismissals / Fielding / Impact / Phase sections the FLOATING POPOVER
+   * always rendered. Reads the CURRENT visible column list (getColumns) for
+   * checked state. Pure string builder — no DOM, no listeners.
+   *
+   * This is the POP-UP path (playerFiltersTab.js's popover), left byte-identical:
+   * that surface passes no W2 controls (controlsOn false) and crossDiscipline
+   * false, so it renders plain checkbox rows with a flat Phase section, exactly
+   * as before. The LEADERBOARD inline picker now renders via buildDropdownsHTML
+   * (the W4 four-dropdown layout) instead. */
+  function buildPickerHTML(ns, formats) {
+    const all = eligibleMetrics(ns, formats);
+    const basic = all.filter(
+      (m) => !m.isPhaseMetric && m.section !== "dismissal" && m.section !== "fielding" && m.section !== "impact"
+    );
+    const dismissal = all.filter((m) => m.section === "dismissal");
+    // Fielding / Impact (Wave 3): their own sub-headers in BOTH views. Plain
+    // data-key checkboxes (same mechanics as Basic).
+    const fielding = all.filter((m) => m.section === "fielding");
+    const impact = all.filter((m) => m.section === "impact");
+    const phase = all.filter((m) => m.isPhaseMetric);
+    const visible = new Set(getColumns());
 
     // Cross-discipline group (W3, interim): the OTHER discipline's columns, offered
     // only on a plain batting/bowling table when the host opted in. Each row's
-    // data-key is the CROSS key (x__<other>__<base>), so ticking it adds a cross
-    // column that buildQuery computes via xdisc_cte — but the checkbox + W2
-    // sort/highlight wiring is identical to every other row (itemRow), so no new
-    // handlers are needed. eligibleCrossMetrics(ns) already returns the small,
-    // interim set (other discipline's innings-grain Basic/Detailed, no phase, no
-    // dismissal breakdown). Never rendered in matchup namespaces (eligibleCrossMetrics
-    // returns [] there) or when the host didn't opt in.
+    // data-key is the CROSS key (x__<other>__<base>). Kept here for any host that
+    // still uses the flat popover with crossDiscipline on; the leaderboard's own
+    // cross columns now live in the W4 Batting/Bowling dropdown instead.
     let crossHTML = "";
     if (crossDiscipline && (ns === "batting" || ns === "bowling")) {
       const other = OTHER_DISCIPLINE[ns];
@@ -353,17 +383,167 @@ export function createColumnsPicker({
         key: makeCrossKey(other, base.key),
       }));
       const crossLabel = `${other === "bowling" ? "Bowling" : "Batting"} (other discipline)`;
-      crossHTML = section(crossLabel, crossRows);
+      crossHTML = sectionHTML(crossLabel, crossRows, formats, visible);
     }
 
     return (
-      section("Basic", basic) +
-      dismissalHTML +
-      section("Fielding", fielding) +
-      section("Impact", impact) +
-      section("Phase", phase) +
+      sectionHTML("Basic", basic, formats, visible) +
+      dismissalSectionHTML(ns, formats, visible, dismissal) +
+      sectionHTML("Fielding", fielding, formats, visible) +
+      sectionHTML("Impact", impact, formats, visible) +
+      sectionHTML("Phase", phase, formats, visible) +
       crossHTML
     );
+  }
+
+  // ── W4: four-dropdown layout (Match · Batting · Bowling · Fielding) + composer ─
+
+  /** The batting/bowling "bucket" a namespace belongs to (matchup namespaces
+   * fold onto their base discipline). Governs which physical dropdown holds the
+   * current discipline's OWN columns vs the cross-discipline columns. */
+  function disciplineBucket(ns) {
+    return ns === "bowling" || ns === "matchup_bowling" ? "bowling" : "batting";
+  }
+
+  /** Which of the four dropdowns a COLUMN key belongs to, in namespace `ns`.
+   * Cross keys → their encoded discipline's dropdown; Impact → Match; Fielding →
+   * Fielding; everything else (Basic/Detailed/Dismissals/Phase) → the ns's own
+   * discipline bucket. Returns null for an unresolvable/stray key. */
+  function dropdownForColumnKey(key, ns) {
+    const parsed = parseCrossKey(key);
+    if (parsed) return parsed.discipline; // "batting" | "bowling"
+    const m = getMetric(key, ns);
+    if (!m) return null;
+    if (m.section === "impact") return "match";
+    if (m.section === "fielding") return "fielding";
+    return disciplineBucket(ns);
+  }
+
+  /** Per-dropdown count of columns currently SHOWN (the badge value). */
+  function dropdownCounts(ns) {
+    const counts = { match: 0, batting: 0, bowling: 0, fielding: 0 };
+    for (const key of getColumns()) {
+      const dd = dropdownForColumnKey(key, ns);
+      if (dd && dd in counts) counts[dd] += 1;
+    }
+    return counts;
+  }
+
+  /** The phase×metric composer for the own-discipline dropdown: one family
+   * sub-block per metric family that has enumerated phase columns in scope, each
+   * listing its Powerplay/Middle/Death variants as normal itemRows (so they flow
+   * through the same checkbox + W2 controls). "" when no phase metric is eligible
+   * (red-ball / mixed formats). REPLACES the flat Phase section — same keys,
+   * same values (equivalence gate). */
+  function composerHTML(ns, formats, visible) {
+    const phaseMetrics = eligibleMetrics(ns, formats).filter((m) => m.isPhaseMetric);
+    if (!phaseMetrics.length) return "";
+    const families = []; // base keys in first-seen (catalogue) order
+    const byBase = new Map(); // base -> Map(phase -> metric)
+    for (const m of phaseMetrics) {
+      const parts = phaseParts(m.key);
+      if (!parts) continue;
+      if (!byBase.has(parts.base)) {
+        byBase.set(parts.base, new Map());
+        families.push(parts.base);
+      }
+      byBase.get(parts.base).set(parts.phase, m);
+    }
+    const blocks = families.map((base) => {
+      const phaseMap = byBase.get(base);
+      const baseMetric = getMetric(base, ns);
+      const famLabel = baseMetric ? metricDisplayLabel(baseMetric, formats) : base;
+      const rows = PHASE_ORDER.filter((ph) => phaseMap.has(ph))
+        // Label the row by PHASE only — the family sub-header carries the metric.
+        // Spreading the real metric keeps data-key = the enumerated phase key.
+        .map((ph) => itemRowHTML({ ...phaseMap.get(ph), label: PHASE_LABEL[ph] }, formats, visible))
+        .join("");
+      return `<div class="cols-composer__family">
+          <div class="cols-composer__family-label">${escHtml(famLabel)}</div>
+          <div class="columns-popover__list">${rows}</div>
+        </div>`;
+    });
+    return `<div class="columns-popover__section-label">Phases</div>
+      <div class="cols-composer">${blocks.join("")}</div>`;
+  }
+
+  /** Build the leaderboard's four-dropdown Columns UI (W4). Order is fixed —
+   * Match · Batting · Bowling · Fielding (Match first, OQ2). The current
+   * discipline's OWN columns (Basic/Detailed/Dismissals/Phase composer) fill its
+   * matching dropdown; the OTHER discipline's cross columns (Basic/Detailed) fill
+   * the sibling dropdown; Impact → Match; Fielding → Fielding. Each trigger shows
+   * a live count badge; an empty dropdown's trigger is disabled. */
+  function buildDropdownsHTML(ns, formats) {
+    const bucket = disciplineBucket(ns);
+    const all = eligibleMetrics(ns, formats);
+    const visible = new Set(getColumns());
+    const isDetailed = (m) => m.kind === "rate" || m.kind === "percent";
+
+    const impact = all.filter((m) => m.section === "impact");
+    const fielding = all.filter((m) => m.section === "fielding");
+    const dismissal = all.filter((m) => m.section === "dismissal");
+    const core = all.filter(
+      (m) => !m.isPhaseMetric && m.section !== "dismissal" && m.section !== "fielding" && m.section !== "impact"
+    );
+    const ownBasic = core.filter((m) => !isDetailed(m));
+    const ownDetailed = core.filter((m) => isDetailed(m));
+
+    // Cross columns (W3): the OTHER discipline's Basic/Detailed metrics, re-keyed
+    // to their cross key. Plain batting/bowling only ([] in matchup namespaces).
+    let crossBasic = [];
+    let crossDetailed = [];
+    if (crossDiscipline && (ns === "batting" || ns === "bowling")) {
+      const other = OTHER_DISCIPLINE[ns];
+      const crossRows = eligibleCrossMetrics(ns, formats).map((base) => ({
+        ...base,
+        key: makeCrossKey(other, base.key),
+      }));
+      crossBasic = crossRows.filter((m) => !isDetailed(m));
+      crossDetailed = crossRows.filter((m) => isDetailed(m));
+    }
+
+    const ownSections =
+      sectionHTML("Basic Stats", ownBasic, formats, visible) +
+      sectionHTML("Detailed Stats", ownDetailed, formats, visible) +
+      dismissalSectionHTML(ns, formats, visible, dismissal) +
+      composerHTML(ns, formats, visible);
+    const crossSections =
+      sectionHTML("Basic Stats", crossBasic, formats, visible) +
+      sectionHTML("Detailed Stats", crossDetailed, formats, visible);
+
+    const dropdowns = [
+      { id: "match", label: "Match", html: sectionHTML("Impact", impact, formats, visible) },
+      { id: "batting", label: "Batting", html: bucket === "batting" ? ownSections : crossSections },
+      { id: "bowling", label: "Bowling", html: bucket === "bowling" ? ownSections : crossSections },
+      { id: "fielding", label: "Fielding", html: sectionHTML("Fielding Stats", fielding, formats, visible) },
+    ];
+
+    const counts = dropdownCounts(ns);
+    const open = (inlineState && inlineState.openDropdown) || null;
+
+    const bar = dropdowns
+      .map((d) => {
+        const empty = !d.html;
+        const isOpen = open === d.id && !empty;
+        return `<button type="button" class="cols-dd-trigger${isOpen ? " is-open" : ""}" data-dd="${d.id}" aria-expanded="${isOpen ? "true" : "false"}" aria-controls="cols-dd-panel-${d.id}"${empty ? " disabled" : ""}>
+          <span class="cols-dd-name">${d.label}</span>
+          <span class="cols-dd-badge">${counts[d.id] || 0}</span>
+          <span class="cols-dd-caret" aria-hidden="true">▾</span>
+        </button>`;
+      })
+      .join("");
+
+    const panels = dropdowns
+      .map((d) => {
+        const isOpen = open === d.id && !!d.html;
+        return `<div class="cols-dd-panel" id="cols-dd-panel-${d.id}" data-dd-panel="${d.id}" role="region" aria-label="${d.label} columns"${isOpen ? "" : " hidden"}>${d.html || ""}</div>`;
+      })
+      .join("");
+
+    return `<div class="cols-dropdowns">
+        <div class="cols-dd-bar">${bar}</div>
+        <div class="cols-dd-panels">${panels}</div>
+      </div>`;
   }
 
   /** Wire every checkbox's change handler onto `rootEl` (the floating popover OR
@@ -491,6 +671,48 @@ export function createColumnsPicker({
     });
   }
 
+  /** W4: wire the four dropdown triggers (inline / leaderboard only — the pop-up
+   * popover has no such bar). Clicking a trigger opens its panel and closes the
+   * others (one open at a time); clicking the open one closes it. The open id is
+   * remembered on inlineState so a re-render (namespace/format change) reopens it. */
+  function wireDropdowns(rootEl) {
+    rootEl.querySelectorAll(".cols-dd-trigger[data-dd]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (btn.disabled) return;
+        const id = btn.dataset.dd;
+        const cur = (inlineState && inlineState.openDropdown) || null;
+        const next = cur === id ? null : id;
+        if (inlineState) inlineState.openDropdown = next;
+        applyOpenDropdown(rootEl, next);
+      });
+    });
+  }
+
+  /** Show `openId`'s panel + mark its trigger active; hide/close the rest. Pure
+   * DOM toggle — no re-render, so the wired checkboxes/controls survive. */
+  function applyOpenDropdown(rootEl, openId) {
+    rootEl.querySelectorAll(".cols-dd-trigger[data-dd]").forEach((btn) => {
+      const on = btn.dataset.dd === openId && !btn.disabled;
+      btn.classList.toggle("is-open", on);
+      btn.setAttribute("aria-expanded", on ? "true" : "false");
+    });
+    rootEl.querySelectorAll(".cols-dd-panel[data-dd-panel]").forEach((p) => {
+      p.hidden = p.dataset.ddPanel !== openId;
+    });
+  }
+
+  /** W4: refresh the four count badges from the live column list, WITHOUT
+   * rebuilding. No-op in popover mode (no `.cols-dropdowns` present). */
+  function updateBadges(rootEl) {
+    if (!rootEl.querySelector(".cols-dropdowns")) return;
+    const counts = dropdownCounts(getDiscipline());
+    rootEl.querySelectorAll(".cols-dd-trigger[data-dd]").forEach((btn) => {
+      const badge = btn.querySelector(".cols-dd-badge");
+      if (badge) badge.textContent = String(counts[btn.dataset.dd] || 0);
+    });
+  }
+
   /** Re-sync every checkbox's checked state from getColumns() WITHOUT rebuilding
    * — the host may have silently pruned a column out from under us. Two checkbox
    * shapes share this: plain data-key ones and the batting Dismissals dual-key
@@ -508,6 +730,8 @@ export function createColumnsPicker({
     });
     // W2: keep the Sort-by / Highlight buttons in step too (no-op in the pop-up).
     syncColumnControls(rootEl);
+    // W4: keep the four count badges in step too (no-op in the pop-up popover).
+    updateBadges(rootEl);
   }
 
   /** Shallow array equality for the format selection (used to decide whether an
@@ -520,11 +744,14 @@ export function createColumnsPicker({
     return true;
   }
 
-  /** Render the picker straight into an inline host (build + wire). */
+  /** Render the leaderboard's inline picker (W4 four-dropdown layout) straight
+   * into its host (build + wire). Inline-only: the pop-up popover renders via
+   * open() → buildPickerHTML, untouched. */
   function renderInline(container, ns, formats) {
-    container.innerHTML = buildPickerHTML(ns, formats);
+    container.innerHTML = buildDropdownsHTML(ns, formats);
     wireCheckboxes(container);
     wireColumnControls(container); // W2 (no-op unless the sort/highlight contract was supplied)
+    wireDropdowns(container); // W4
   }
 
   /**
@@ -532,14 +759,15 @@ export function createColumnsPicker({
    * leaderboard popup's "Columns" section) and remember it so refresh() keeps it
    * honest. Idempotent — re-mounting simply re-renders. Distinct from mount(),
    * which wires a trigger button to OPEN a floating popover; a given picker
-   * instance uses one mode or the other, never both.
+   * instance uses one mode or the other, never both. W4: the current discipline's
+   * OWN dropdown (Batting on a batting table) opens by default.
    */
   function mountInline(container) {
     if (!container) return;
     const ns = getDiscipline();
     const formats = getFormats();
+    inlineState = { el: container, ns, formats: formats.slice(), openDropdown: disciplineBucket(ns) };
     renderInline(container, ns, formats);
-    inlineState = { el: container, ns, formats: formats.slice() };
   }
 
   /** Called by the host to keep the picker honest after a re-render / store
@@ -559,6 +787,10 @@ export function createColumnsPicker({
       const ns = getDiscipline();
       const formats = getFormats();
       if (ns !== inlineState.ns || !sameFormats(formats, inlineState.formats)) {
+        // W4: a discipline switch flips which dropdown holds the OWN columns —
+        // default the newly-relevant own dropdown open (a format-only change
+        // keeps whatever was open).
+        if (ns !== inlineState.ns) inlineState.openDropdown = disciplineBucket(ns);
         renderInline(inlineState.el, ns, formats);
         inlineState.ns = ns;
         inlineState.formats = formats.slice();

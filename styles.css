@@ -2059,6 +2059,96 @@ a { color: var(--color-accent); }
   color: var(--color-muted);
 }
 
+/* Four-dropdown Columns layout (columns-rejig W4) — leaderboard inline picker
+   only (the pop-up popover keeps its flat list). A bar of four trigger buttons
+   (Match · Batting · Bowling · Fielding, each with a live count badge) sits above
+   one inline panel that opens below the bar (one at a time — an accordion, so it
+   never gets clipped by the popup's own scroll). One line on desktop; the bar
+   wraps and then stacks on narrow viewports. */
+.cols-dd-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.cols-dd-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 8rem;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-raised);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  color: var(--color-fg);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.cols-dd-trigger:hover:not(:disabled) { border-color: var(--color-accent); }
+.cols-dd-trigger.is-open {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-bg-raised));
+}
+.cols-dd-trigger:disabled { opacity: 0.5; cursor: default; }
+.cols-dd-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cols-dd-badge {
+  flex: 0 0 auto;
+  min-width: 1.5em;
+  text-align: center;
+  padding: 0 0.4em;
+  border-radius: 999px;
+  background: var(--color-line);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.cols-dd-trigger.is-open .cols-dd-badge {
+  background: var(--color-accent);
+  color: var(--color-bg-raised);
+}
+.cols-dd-caret {
+  flex: 0 0 auto;
+  color: var(--color-muted);
+  font-size: 0.75em;
+  transition: transform 0.15s ease;
+}
+.cols-dd-trigger.is-open .cols-dd-caret { transform: rotate(180deg); }
+.cols-dd-panel {
+  padding: var(--space-3);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-raised);
+}
+/* Phase×metric composer: metric family sub-blocks, each a small header + its
+   Powerplay/Middle/Death phase rows. */
+.cols-composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.cols-composer__family-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-fg);
+  margin-bottom: var(--space-2);
+}
+@media (max-width: 640px) {
+  .cols-dd-bar { flex-direction: column; }
+  .cols-dd-trigger { flex: 1 1 auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cols-dd-caret { transition: none; }
+}
+
 /* Loading overlay (task 6, R3 Wave 5 polish, preset-button page-jump fix) ───
    .table-body-wrap is the positioning context for the overlay: it wraps BOTH
    the overlay and .table-scroll, and — critically — .table-scroll is never
