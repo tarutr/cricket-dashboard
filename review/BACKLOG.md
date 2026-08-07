@@ -35,7 +35,7 @@ per phase (owner). Size note: matchup pair grew ~30% (feeds load-speed #13).
 format-sensitive AND multi-format-sensitive (T20/50-Over/Red Ball mix handling). Needs a detailed spec
 before build.
 
-## 5. Dropdown taxonomy — team + event categories, name normalization, Afghanistan footer — **owner-requested (owner 2026-07-24; do AFTER the current full-build data program — "we'll do it all together")**
+## 5. Dropdown taxonomy — team + event categories, name normalization, Afghanistan footer — **owner-requested (owner 2026-07-24). UNBLOCKED (2026-07-29): the NAME-normalization sub-part SHIPPED in the polish phase (`src/canonicalNames.js` + committed alias map, decision 65 — live in production); the broader full-build data layer is built on the `ball-layer` branch (NOT yet live). REMAINING scope = the team + event CATEGORY groupings, tri-series per-season-instance naming, and the Afghanistan footer.**
 [app] · One coherent "clean up the dropdowns" batch. Four parts:
 - **Team/Opposition category groupings EVERYWHERE** (Stats drawer, matchup Vs picker, graph filters,
   player-popup filters): selectable categories alongside individual teams — **Big Three** (India,
@@ -117,6 +117,13 @@ typefaces, spacing), apply to the entire UI + export card per §1 (CHART_SYSTEM.
 [app] · Split the 5 oversized files (graph.js ~3,960 lines, table.js ~2,750, metrics.js ~1,820,
 charts.js ~1,120, styles.css ~4,570) per FILE_SPLIT_PLAN.md. Staged split, no rush. **Owner note:** needs a
 discussion of how the system works to decide tweaks vs a complete overhaul.
+
+## 16. Chart-lib sourcemap 404 (console noise) — **defer to design/chart review (owner 2026-08-06)**
+[chart] · The vendored `vendor/chartjs/chart.umd.min.js` carries a trailing `//# sourceMappingURL=chart.umd.min.js.map`
+comment but no `.map` file is vendored, so the browser logs one 404 for `chart.umd.min.js.map` per page load. Cosmetic
+console-noise only — pre-existing, present in production, unrelated to any app code; surfaced while auditing "0 console
+errors" during the player-pop-up fix wave. Fix at the design/chart-review stage by either vendoring the `.map` or
+stripping the trailing `sourceMappingURL` comment from the vendored file.
 
 ---
 

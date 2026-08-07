@@ -63,8 +63,8 @@ second-guessing that ends in you doing what you decided anyway.
 - Product + cricket calculation rules: `SPEC.md` (§4.1 is calculation law), `SPEC_ADDENDUM_DATA.md`
 - Decision log (**the only one**): `review/owner_decisions.md`
 - Orchestration rules (models, effort, waves, reports, resume): `.orchestrator/ORCHESTRATION.md`
-- Live phase plan + wave status: `.orchestrator/harmonisation-rejig-plan.md` (current program) +
-  `.orchestrator/popup-ballengine-plan.md` (active Tab-2 thread), under the ball-layer umbrella
-  `.orchestrator/ball-layer-design.md` (decision 67); the SHIPPED polish phase is logged in
-  `.orchestrator/design-plan.md`. Per-task notes: `.orchestrator/progress/`
+- Live phase plan + wave status: the current focus and what's next live in the `.orchestrator/*-plan.md` program
+  docs and the decision log (`review/owner_decisions.md`) — NOT in this file (CLAUDE.md stays rules + stable
+  pointers, so it doesn't go stale). Ball-layer umbrella: `.orchestrator/ball-layer-design.md` (decision 67); the
+  SHIPPED polish phase: `.orchestrator/design-plan.md`. Per-task notes: `.orchestrator/progress/`
 - Data schema: `reference/db_reference.md`; chart system: `reference/CHART_SYSTEM.md`

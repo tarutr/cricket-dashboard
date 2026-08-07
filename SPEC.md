@@ -70,7 +70,7 @@ cricket.duckdb  (Cloudflare R2 bucket `cricket-db`, key `cricket.duckdb`)
    download DB → ingest new Cricsheet → fetch profiles sheet (Dropbox) →
    rebuild player_profiles → upload DB → run export_parquet.py → upload exports
       │
-      ▼  export_parquet.py writes 8 Parquet files + manifest.json to R2 prefix `explorer/`
+      ▼  export_parquet.py writes 9 Parquet files + manifest.json to R2 prefix `explorer/`
    explorer/players.parquet
    explorer/matches.parquet
    explorer/batting_innings.parquet
@@ -79,6 +79,7 @@ cricket.duckdb  (Cloudflare R2 bucket `cricket-db`, key `cricket.duckdb`)
    explorer/matchup_bowling.parquet
    explorer/player_matches.parquet
    explorer/player_profiles.parquet
+   explorer/fielding_events.parquet
    explorer/manifest.json      (generated_at, data date-range/match_count, profiles
                                 provenance, and per-file {rows, bytes, sha256_12})
       │
@@ -137,7 +138,13 @@ error. (Implemented in `src/db.js`.)
 
 ### 4.2 Parquet schemas (written by `export_parquet.py`)
 
-**Eight** Parquet files are exported (the v1 spec listed four). All aggregation is done
+> **STATUS — ball-layer branch, NOT yet live.** The 9-file schema below (incl. `fielding_events`, the
+> match-context columns, and the full-build column families: by-phase components, batting composition,
+> team-relative differentials, bowling spell aggregates) is BUILT + VERIFIED on the `ball-layer` branch but is
+> **not in production**. Production currently exports the **8-file** innings layer (no `fielding_events`, no
+> full-build families) and still shows the "Group rows" control. It all goes live at the ball-layer **cutover**.
+
+**Nine** Parquet files are exported (the v1 spec listed four). All aggregation is done
 from the `deliveries` base table per §4.1. Compression is **zstd**; row-group size is
 **~100 000**. The innings and matchup files (and `player_matches` / `matches`) are
 **sorted by `match_date` then `match_id`** (with finer key columns after, for a stable
@@ -173,6 +180,12 @@ death 76+) rather than over_number.
 - `match_id`, `match_type` (T20 | IT20 | ODI | ODM | Test | MDM), `gender` (male | female),
   `team_type` (international | club), `match_date` (DATE = `match_date_1`), `year` (INT),
   `month` (INT), `venue`, `city`, `event_name`, `team_1`, `team_2`, `winner`, `result_type`
+- Match-context columns (added in the full-build / polish phase; power the Wave-6 match
+  filters — result condition, toss, innings order, stage, event→season): `toss_winner`,
+  `toss_decision`, `result_margin`, `result_margin_type`, `method` (D/L, VJD, …; NULL =
+  normal result), `event_stage`, `event_group`, `event_match_number`, `season`,
+  `season_year_start`, `team_batting_first`, `match_winner`, `is_super_over` (BOOL,
+  COALESCEd to false so a "Normal" negation never drops rows — decision 65)
 
 **batting_innings.parquet** — one row per crease appearance
 (PK `match_id`, `innings_number`, `batter_id`). Includes 0-ball appearances (non-striker
@@ -247,7 +260,37 @@ position, keyed by the batter's `batting_style` (`Right-hand bat` / `Left-hand b
 `deliveries`/`wickets` but is missing from the XI). Powers matches-played counts and the
 "teams this player has played for" selector.
 - `match_id`, `player_id`, `player_name`, `team`, `match_type`, `gender`, `team_type`,
-  `match_date`, `year`, `month`
+  `match_date`, `year`, `month`, `player_of_match` (0/1 — powers the Player-of-Match count)
+
+**fielding_events.parquet** — one row per fielding credit on a wicket (the 9th file, added
+in the fielding rebuild). Powers the Catches / Stumpings / Run-outs / Dismissals-effected /
+Player-of-Match metrics — surfaced as a "Fielding" sub-group in BOTH the batting and bowling
+views — via a per-fielder pre-aggregated subquery in `table.js`. Fielding rule: caught &
+bowled counts as a catch; a run-out credits ALL listed fielders; substitute-fielder catches
+are flagged (`substitute`) and excluded from a player's record.
+- Keys + context: `match_id`, `innings_number`, `over_number`, `ball_index`, `wicket_index`,
+  `fielder_index`, `fielder_id`, `fielder_name`, `match_type`, `gender`, `team_type`,
+  `match_date`, `year`, `month`, `venue`, `city`, `event_name`, `fielding_team`, `opposition`
+- Event detail: `kind` (caught / caught and bowled / stumped / run out), `out_batter_id`,
+  `out_batter_name`, `out_batting_position`, `out_hand`, `out_role`, `bowler_id`,
+  `bowler_name`, `bowler_style`, `phase`, `substitute` (BOOL)
+
+**Additive full-build column families (built on the `ball-layer` branch 2026-07 — NOT yet live;
+`export_parquet.py` is the authoritative full list).** On top of the totals / phase / progression columns above, the
+innings and matchup files also carry:
+- **By-phase components** (decision 63) — for each phase (`pp_` / `mid_` / `death_` and the
+  `odi_` trio): `_dots`, `_fours`, `_sixes`, `_dismissals` on batting & matchup_batting;
+  `_dots`, `_fours_conceded`, `_sixes_conceded` on bowling & matchup_bowling (phase
+  `_wickets` already existed).
+- **Batting composition** (batting_innings + matchup_batting): `ones`, `twos`, `threes`,
+  `fives`, `nb_fours`, `nb_sixes`, `non_boundary_runs` (+ `team_inns_balls` on batting only).
+- **Team-relative per-innings differentials** (summed into "Net …" metrics): batting —
+  `team_rel_sr`, `team_rel_dot_pct`, `team_rel_bpb`, `team_rel_nbsr`; bowling —
+  `team_rel_econ`, `team_rel_pbe`, `team_rel_dot_pct`, `team_rel_sr` (same families on the
+  matchup files).
+- **Bowling spell aggregates** (bowling_innings): `spell_count`, `longest_spell_balls`,
+  `best_spell_wkts`, `best_spell_runs` (opening/closing-spell columns were built then
+  removed per owner ruling).
 
 **Validation gates in `export_parquet.py` (the build FAILS loudly if any is violated):**
 row count > 0 per file; no duplicate primary keys; batting `runs`/`balls_faced`, bowling
@@ -267,7 +310,7 @@ ingest new Cricsheet files (incremental, per-file transactions — ingestion log
 frozen/validated, never "improved" without owner sign-off) → fetch the profiles sheet
 from Dropbox (with last-good-copy fallback + owner alert emails) → rebuild the
 `player_profiles` table inside the DB → upload the DB back to R2 → run
-`export_parquet.py` and upload all 8 Parquet files **plus manifest.json LAST** (each data
+`export_parquet.py` and upload all 9 Parquet files **plus manifest.json LAST** (each data
 file retried up to 3× with backoff; a failed data upload skips the manifest so the browser
 never reads a manifest pointing at a missing object). Secrets (R2 keys, Dropbox URL, Gmail
 alert credentials) live only in GitHub Actions secrets. The Parquet files are never
@@ -381,8 +424,9 @@ decision 57). Some matchup-only stats (Matches, High Score, Best Bowling) carry
   control keeps the name "Columns" and never moves or vanishes, even in matchup mode).
   Sortable by any column, direction-aware (economy ascending = best). A filtered metric
   auto-adds its column.
-- **Row grouping** — a small "Group rows" toolbar control (discipline-aware; dismissal
-  grouping was cut, decision 42), off by default.
+- **Row grouping** — removed. The old "Group rows" / "Split by" toolbar control was
+  deleted (R3/R4; see `src/state.js`), so the table always shows one row per player.
+  Per-dimension breakdowns now live only on the Graph Builder's Line chart (its X-axis).
 - **Pins** — a **pin column** left of the rank column (there is no pin pill anymore,
   decision 61): click to pin/unpin, pinned rows float to the top, a searched-in player is
   automatically a pin, and a pin with no innings in scope shows its in-scope record or

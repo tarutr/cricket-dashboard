@@ -1045,3 +1045,30 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       choice is **INDEPENDENT** of the leaderboard's.
     - **Build plan approved; Wave A (foundations) authorised.** SPEC/BACKLOG doc updates HELD until the ball-layer
       cut (Option B).
+
+71. **PLAYER POP-UP OVERALL REVIEW + FIX WAVE — DONE (owner, 2026-08-06→07).** Follows #70. All on `ball-layer`,
+    flag-gated; NOTHING shipped. Docs (pointers-not-copies): `.orchestrator/popup-review-findings.md`,
+    `popup-fix-plan.md`, `gender-to-data-plan.md`, `popup-review-R5-group3.md`. Anchors held byte-identical
+    throughout, flag-off AND flag-on (2,813 / Karanbir 2,454 / SA Yadav 60·1,544·29.13·150.34; matchup vs Spin
+    38·454·140.99, Bumrah vs RHB 27·177·9).
+    - **Overall review** = 4 independent checks (fresh-eyes code; flag-off runtime; independent DuckDB recount;
+      flag-on `?engine=ball` runtime) → **0 blockers**, a short cleanup list.
+    - **Owner rulings this session:**
+      • **Hide the literal "Unknown" tick-box** from the fielding "Batter role" filter (out_role) — keep the filter
+        itself; matches the app-wide `playing_role==="Unknown"` drop (2026-08-06).
+      • **Gender hardcode removed END-TO-END → DATA-DRIVEN everywhere** (2026-08-06/07). Extends the offer-path
+        ruling ([[feedback-data-driven-filters-not-gender]]) into the **NUMBERS path** (`matchupVsActive` /
+        `profileSemiJoinSql` now key on a resolved per-gender `state.dataAvail` map — new `src/dataAvailability.js`,
+        wired in `main.js`; the Search commit awaits it; byte-identical today) AND the **DISPLAY path** (`table.js`
+        toolbar Vs control). Owner: "no reason for this to be men only — data only; a lot of MALE players also lack
+        this matchup/profile data." Women's matchup/profile features auto-appear when women's data lands.
+      • Fix set approved: Group A (cleanup: slice word, dead code, hidden Unknown, dropdown leak) + Group B (engine
+        cache key) + the toolbar-Vs sweep. Item-7 dropdown fix done **"properly, not later"** (real close() surfaced
+        on the shared drawer editors, not a click hack).
+      • Sourcemap-404 nit → **BACKLOG #16** (defer to the design/chart-review stage).
+    - **A fresh Opus review of the gender→data change caught 1 real BLOCKER** (the graph read stale availability for
+      women with a persisted matchupVs) → fixed (clear matchupVs on gender switch). Fix-wave commits `8064c3d`
+      `0ba0fef` `3b58acb` `ecb49ae` `a3a4332` `5aef338`.
+    - **NEXT (unchanged order):** columns rejig → columns-in-popup + presets → AND/OR → sweep → review → cutover
+      (LAST). SPEC/BACKLOG docs **UPDATED 2026-08-07** (owner lifted Option B, #70) — reworded "built on branch,
+      not yet live" + committed; no longer held.
