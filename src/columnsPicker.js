@@ -41,8 +41,8 @@
 //     re-render its own table). Called with the full new array on every change.
 
 import { escHtml } from "./html.js";
-import { DISMISSAL_KINDS, metricDisplayLabel } from "./metrics.js";
-import { eligibleMetrics } from "./state.js";
+import { DISMISSAL_KINDS, metricDisplayLabel, makeCrossKey, OTHER_DISCIPLINE } from "./metrics.js";
+import { eligibleMetrics, eligibleCrossMetrics } from "./state.js";
 
 // A monochrome highlighter/marker glyph, filled via currentColor — mirrors the
 // pin toggle's PIN_GLYPH convention in src/table.js (owner fix: the old 🖍️
@@ -175,6 +175,17 @@ export function createColumnsPicker({
   setSort,
   getHighlights,
   setHighlights,
+  // Columns-rejig W3 (2026-08-07): OPT-IN cross-discipline exposure. When true AND
+  // the current namespace is plain batting/bowling, the picker appends a small,
+  // clearly-interim group listing the OTHER discipline's columns (e.g. Bowling
+  // columns while batting) so they can be ADDED + sorted in TODAY's single-popover
+  // layout — the all-rounder view (OQ1). Only the leaderboard's picker passes this;
+  // the player pop-up's popover leaves it false, so it stays byte-identical (no
+  // cross group). This exposure is FUNCTIONAL-ONLY and DELIBERATELY THROWAWAY — W4
+  // replaces it with the four-dropdown layout (Match · Batting · Bowling · Fielding)
+  // + count badges. Cross keys flow through the SAME data-key checkbox + W2
+  // sort/highlight machinery as any other column (their key is x__<disc>__<base>).
+  crossDiscipline = false,
 }) {
   // Render the per-column Sort-by + Highlight controls only when the full W2
   // contract is supplied (leaderboard). Absent → the pop-up's plain checkbox
@@ -325,12 +336,33 @@ export function createColumnsPicker({
       dismissalHTML = section("Dismissals", dismissal);
     }
 
+    // Cross-discipline group (W3, interim): the OTHER discipline's columns, offered
+    // only on a plain batting/bowling table when the host opted in. Each row's
+    // data-key is the CROSS key (x__<other>__<base>), so ticking it adds a cross
+    // column that buildQuery computes via xdisc_cte — but the checkbox + W2
+    // sort/highlight wiring is identical to every other row (itemRow), so no new
+    // handlers are needed. eligibleCrossMetrics(ns) already returns the small,
+    // interim set (other discipline's innings-grain Basic/Detailed, no phase, no
+    // dismissal breakdown). Never rendered in matchup namespaces (eligibleCrossMetrics
+    // returns [] there) or when the host didn't opt in.
+    let crossHTML = "";
+    if (crossDiscipline && (ns === "batting" || ns === "bowling")) {
+      const other = OTHER_DISCIPLINE[ns];
+      const crossRows = eligibleCrossMetrics(ns, formats).map((base) => ({
+        ...base,
+        key: makeCrossKey(other, base.key),
+      }));
+      const crossLabel = `${other === "bowling" ? "Bowling" : "Batting"} (other discipline)`;
+      crossHTML = section(crossLabel, crossRows);
+    }
+
     return (
       section("Basic", basic) +
       dismissalHTML +
       section("Fielding", fielding) +
       section("Impact", impact) +
-      section("Phase", phase)
+      section("Phase", phase) +
+      crossHTML
     );
   }
 

@@ -2348,6 +2348,100 @@ export function getMetric(key, discipline) {
   return METRICS.find((m) => m.key === key) ?? null;
 }
 
+// ── Cross-discipline columns (columns-rejig W3, OQ1 — the all-rounder view) ────
+// On a plain batting/bowling leaderboard the user can ADD a column from the OTHER
+// discipline (e.g. Bowling SR on a batting table) and sort by it, so filtering
+// batting SR ≥ 140 then adding Bowling SR + sorting surfaces the all-rounders.
+// FILTERS stay discipline-scoped (OQ1) — only COLUMNS cross over. Fielding /
+// Impact / Match-context already cross via their own per-player CTEs; this is the
+// one missing case: batting metrics on a bowling table and vice versa.
+//
+// KEY-NAMESPACING HAZARD: batting and bowling share metric keys with DIFFERENT
+// meanings ("strike_rate", "average", "dot_pct", "innings", …). A cross column
+// therefore CANNOT reuse the bare key (it would collide with the current
+// discipline's own column of that key, in state.columns, in the SELECT alias, and
+// in getMetric resolution). It gets its own discipline-qualified identity:
+//   CROSS KEY = `x__<otherDiscipline>__<baseKey>`  e.g. `x__bowling__strike_rate`
+// Chosen because (a) it is identifier-safe (only letters/digits/underscore) so it
+// needs NO SQL-alias quoting, (b) it self-encodes the other discipline, and (c) no
+// real metric key starts with `x` or contains `__` (verified), so `startsWith(
+// "x__")` is an unambiguous discriminator and splitting on the FIRST `__` after
+// the prefix recovers {discipline, baseKey} exactly (base keys carry only single
+// underscores). The `__sort` shadow appends as usual (`x__bowling__best__sort`),
+// used only as a whole string, never re-split.
+export const OTHER_DISCIPLINE = { batting: "bowling", bowling: "batting" };
+const CROSS_KEY_PREFIX = "x__";
+
+/** Build the cross-discipline column key for `baseKey` measured in `otherDiscipline`. */
+export function makeCrossKey(otherDiscipline, baseKey) {
+  return `${CROSS_KEY_PREFIX}${otherDiscipline}__${baseKey}`;
+}
+
+/** Parse a cross-discipline column key → { discipline, baseKey }, or null if it is
+ * not a cross key (a plain key, name column, etc.). Split on the FIRST `__` after
+ * the prefix: the discipline token ("batting"/"bowling") carries no underscore, so
+ * everything after it is the base key verbatim. */
+export function parseCrossKey(key) {
+  if (typeof key !== "string" || !key.startsWith(CROSS_KEY_PREFIX)) return null;
+  const rest = key.slice(CROSS_KEY_PREFIX.length);
+  const sep = rest.indexOf("__");
+  if (sep <= 0) return null;
+  const discipline = rest.slice(0, sep);
+  const baseKey = rest.slice(sep + 2);
+  if ((discipline !== "batting" && discipline !== "bowling") || !baseKey) return null;
+  return { discipline, baseKey };
+}
+
+/** True iff `key` is a cross-discipline column key. */
+export function isCrossKey(key) {
+  return parseCrossKey(key) !== null;
+}
+
+// Short discipline tag prefixed onto a cross column's header (shortLabel) so a
+// "Bowl SR" column can never be mistaken for the batting "SR" alongside it.
+const CROSS_TAG = { batting: "Bat", bowling: "Bowl" };
+
+/** Build the VIRTUAL metric for a cross-discipline column: the OTHER discipline's
+ * real metric (so sqlExpression / sortExpression / format / higherIsBetter /
+ * zeroIsData all come from it, computed against ITS own view columns), re-badged
+ * with the cross key as its identity + a disambiguated label. `isCrossDiscipline`
+ * / `baseKey` / `xDiscipline` let buildQuery route it through the cross CTE instead
+ * of the verbatim-sqlExpression path. */
+function makeVirtualCrossMetric(base, crossKey, otherDiscipline) {
+  return {
+    ...base,
+    key: crossKey,
+    baseKey: base.key,
+    xDiscipline: otherDiscipline,
+    isCrossDiscipline: true,
+    // Header disambiguation lives in shortLabel (the "Bowl"/"Bat" tag), the only
+    // label the leaderboard header renders — so a "Bowl SR" column is never
+    // confused with the batting "SR" beside it. `label` stays the base metric's own
+    // label (no redundant prefix); columnTitle carries the fuller cross tooltip.
+    shortLabel: `${CROSS_TAG[otherDiscipline]} ${base.shortLabel}`,
+    columnTitle: `${base.label} — this player's ${otherDiscipline} record over the same match scope`,
+  };
+}
+
+/**
+ * Resolve a leaderboard COLUMN key to its metric, transparently handling both
+ * plain keys and cross-discipline keys. Plain keys behave EXACTLY like
+ * getMetric(key, ns) (byte-identical for every existing caller). A cross key
+ * resolves to a virtual metric via the OTHER discipline's catalogue — but ONLY on
+ * a plain batting/bowling table whose sibling discipline matches the key's encoded
+ * discipline; on a matchup namespace, or a mismatched/unknown discipline, it
+ * returns null so the stray key is safely dropped (filter(Boolean)) rather than
+ * mis-rendered. */
+export function resolveColumnMetric(key, ns) {
+  const parsed = parseCrossKey(key);
+  if (!parsed) return getMetric(key, ns);
+  if (ns !== "batting" && ns !== "bowling") return null;
+  if (parsed.discipline !== OTHER_DISCIPLINE[ns]) return null;
+  const base = getMetric(parsed.baseKey, parsed.discipline);
+  if (!base) return null;
+  return makeVirtualCrossMetric(base, key, parsed.discipline);
+}
+
 /**
  * §8.1 no-data test. Returns true if `value` is real data for `metric`.
  *   • rate/ratio metrics (zeroIsData false): 0 or NULL/undefined/NaN → no data.

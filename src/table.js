@@ -8,7 +8,14 @@
 // advanced-filter conditions on rate/ratio metrics and to render "—" for
 // no-data cells (NULL already renders "—"; this module never coalesces ratios).
 
-import { getMetric, hasMetricData, matchupBucketLabel, paramSqlExpression } from "./metrics.js";
+import {
+  getMetric,
+  hasMetricData,
+  matchupBucketLabel,
+  paramSqlExpression,
+  resolveColumnMetric,
+  OTHER_DISCIPLINE,
+} from "./metrics.js";
 import { query } from "./db.js";
 import {
   buildScopeClausesTagged,
@@ -24,7 +31,7 @@ import { activeGroups } from "./advanced.js";
 import { escHtml, escAttr } from "./html.js";
 import { createColumnsPicker } from "./columnsPicker.js";
 import {
-  eligibleMetrics,
+  eligibleColumnKeys,
   positionsFilterActive,
   oppositionFilterActive,
   inningsNumberFilterActive,
@@ -949,6 +956,69 @@ export function buildPomCteSql(state) {
 }
 
 /**
+ * Build the `xdisc_cte` definition (columns-rejig W3 — cross-discipline columns,
+ * OQ1) — same "CTE body without leading WITH" convention as buildFieldingCteSql /
+ * buildPomCteSql. ONE row per player over the OTHER discipline's innings-grain
+ * view (bowling when the table is batting, and vice versa), computing each
+ * requested other-discipline metric's OWN aggregate inside the GROUP BY, so a
+ * Bowling-SR column can bolt onto a batting table (the all-rounder view).
+ *
+ * SCOPE: mirrors buildScopeClausesTagged retargeted to the OTHER discipline's
+ * columns — the SAME core scope the fielding CTE honors (gender / format / date
+ * window / team-type + team + OPPOSITION + event/venue + profile + R. Pos.,
+ * pin-exempt) plus the name search, computed against the other discipline's
+ * teamColumn / OPP_COL / idColumn / view. It does NOT honor the current
+ * discipline's per-innings slices or stat-conditions (there is no cross condition
+ * to honor — cross columns can't be filtered on). Because the other discipline's
+ * team column is innings-grain, buildScopeClausesTagged ALSO applies an active
+ * Innings Number filter here (the fielding CTE can't, only because fielding_team
+ * is not innings-grain) — i.e. a cross column reflects the player's other-discipline
+ * record over the SAME match/innings scope the table covers.
+ *
+ * The join key `bowler_id`/`batter_id` (aliased `xd_player_id`) is the SAME unified
+ * player id the fielding_cte (fielder_id) and pom_cte (player_id) already join on,
+ * so `xdisc_cte.xd_player_id = <currentIdCol>` matches a player to their own other-
+ * discipline row. Each metric is aliased `xd_<baseKey>` inside the CTE (prefixed so
+ * it can never collide with a source column of the same name); a metric carrying a
+ * sortExpression also emits `xd_<baseKey>__sort`. buildQuery projects each as
+ * `MAX(xdisc_cte.xd_<baseKey>) AS <crossKey>` — exactly the fielding MAX pattern.
+ * Built ONLY when a cross-discipline column is requested, so with none the emitted
+ * SQL is byte-identical to today (the identical inert-guarantee fielding/PoM carry).
+ */
+export function buildCrossDisciplineCteSql(state, discipline, crossCols) {
+  const other = OTHER_DISCIPLINE[discipline];
+  const otherView = VIEW_FOR_DISCIPLINE[other];
+  const otherIdCol = ID_COL[other];
+  const otherNameCol = NAME_COL[other];
+  const otherTeamCol = TEAM_COL[other];
+  const otherOppCol = OPP_COL[other];
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  const clauses = buildScopeClausesTagged(state, {
+    includeTeams: true,
+    teamColumn: otherTeamCol,
+    idColumn: otherIdCol,
+    oppositionColumn: otherOppCol,
+  });
+  if (state.search && state.search.trim()) {
+    clauses.push(bypassableClause(`${otherNameCol} ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
+  }
+  const scopeSql = whereWithPinExemption(clauses, otherIdCol, pins);
+  const selectCols = [`${otherIdCol} AS xd_player_id`];
+  for (const m of crossCols) {
+    selectCols.push(`${m.sqlExpression} AS xd_${m.baseKey}`);
+    if (m.sortExpression) selectCols.push(`${m.sortExpression} AS xd_${m.baseKey}__sort`);
+  }
+  return [
+    "xdisc_cte AS (",
+    `  SELECT ${selectCols.join(", ")}`,
+    `  FROM ${otherView}`,
+    `  WHERE ${scopeSql}`,
+    `  GROUP BY ${otherIdCol}`,
+    ")",
+  ].join("\n");
+}
+
+/**
  * R. Pos. column support (task 5): a `WITH r_pos_cte AS (...)` fragment (the
  * "WITH " keyword itself is NOT included — the caller prepends it, since this
  * text is also useful standalone in error messages/tests) computing each
@@ -1102,6 +1172,27 @@ export function buildQuery(state, visibleColumns, opts = {}) {
     pomCols.length > 0 ||
     advancedReferencesMetric(state.advanced, discipline, isPomMetric);
 
+  // Cross-discipline columns (columns-rejig W3, OQ1 — the all-rounder view): a
+  // column keyed to the OTHER discipline (e.g. `x__bowling__strike_rate` on a
+  // batting table). resolveColumnMetric returns a VIRTUAL metric (isCrossDiscipline,
+  // baseKey, xDiscipline) for such keys and null for anything not valid in THIS
+  // plain namespace; plain keys were already handled above (getMetric returns null
+  // for a cross key, so they never entered inningsMetrics/fielding/pom). Each is
+  // computed per-player inside xdisc_cte over the other discipline's view and
+  // projected here as MAX(xdisc_cte.xd_<base>) — exactly the fielding MAX pattern.
+  // Cross STAT CONDITIONS are not creatable, so — unlike wantsFielding/wantsPom —
+  // there is no advancedReferencesMetric leg: the CTE is wanted iff a cross COLUMN
+  // is visible. With none, wantsCross is false and the emitted SQL is byte-identical
+  // to today.
+  const crossCols = visibleColumns
+    .map((key) => resolveColumnMetric(key, discipline))
+    .filter((m) => m && m.isCrossDiscipline && m.xDiscipline === OTHER_DISCIPLINE[discipline]);
+  for (const m of crossCols) {
+    selectParts.push(`MAX(xdisc_cte.xd_${m.baseKey}) AS ${m.key}`);
+    if (m.sortExpression) selectParts.push(`MAX(xdisc_cte.xd_${m.baseKey}__sort) AS ${m.key}__sort`);
+  }
+  const wantsCross = crossCols.length > 0;
+
   // Clauses arrive TAGGED for the pin exemption (filters.js
   // buildScopeClausesTagged): the builder marks its own three player-shortlisting
   // filters (team / profile / R. Pos.) bypassable, everything else
@@ -1169,6 +1260,14 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // the shared buildPomCteSql() helper (same output as the former inline block).
   let pomCteSql = null;
   if (wantsPom) pomCteSql = buildPomCteSql(state);
+
+  // Cross-discipline subquery (columns-rejig W3): pre-aggregate the OTHER
+  // discipline's view to ONE row per player, honoring the same core scope the
+  // fielding CTE honors (retargeted to that discipline's columns — see
+  // buildCrossDisciplineCteSql). Only built when a cross-discipline column is
+  // visible; with none, `sql` is byte-identical to before this wave.
+  let crossCteSql = null;
+  if (wantsCross) crossCteSql = buildCrossDisciplineCteSql(state, discipline, crossCols);
 
   // decision 44c: the BASE query applies NO minimum-innings gate — a player
   // appears if they have any qualifying innings row (equivalent to min 1). The
@@ -1241,6 +1340,7 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   if (wantsRPos) cteDefs.push(regularPositionCteSql(state));
   if (wantsFielding) cteDefs.push(fieldingCteSql);
   if (wantsPom) cteDefs.push(pomCteSql);
+  if (wantsCross) cteDefs.push(crossCteSql);
 
   let fromSql = view;
   // Match-context (Wave 6): 1:1 LEFT JOIN by match_id (see matchContextJoinSql).
@@ -1251,6 +1351,10 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   if (wantsRPos) fromSql += ` LEFT JOIN r_pos_cte ON r_pos_cte.pos_batter_id = ${idCol}`;
   if (wantsFielding) fromSql += ` LEFT JOIN fielding_cte ON fielding_cte.fld_player_id = ${idCol}`;
   if (wantsPom) fromSql += ` LEFT JOIN pom_cte ON pom_cte.pom_player_id = ${idCol}`;
+  // Cross-discipline (columns-rejig W3): 1:1 LEFT JOIN by the unified player id —
+  // xd_player_id is the other discipline's batter_id/bowler_id, the same id space
+  // fielding_cte/pom_cte join on, so it never multiplies innings rows.
+  if (wantsCross) fromSql += ` LEFT JOIN xdisc_cte ON xdisc_cte.xd_player_id = ${idCol}`;
 
   const sql = [
     ...(cteDefs.length ? [`WITH ${cteDefs.join(",\n")}`] : []),
@@ -1432,7 +1536,10 @@ const NAME_METRIC = { key: "name", label: "Player", shortLabel: "Player", higher
  * to validate/resolve the CURRENT SORT key must go through this instead, so
  * sorting by name resolves rather than silently falling back to nothing. */
 function resolveSortMetric(key, ns) {
-  return key === "name" ? NAME_METRIC : getMetric(key, ns);
+  // resolveColumnMetric handles both plain keys (byte-identical to getMetric) and
+  // cross-discipline column keys (a virtual metric whose key/__sort alias match the
+  // projected columns), so sorting by an added Bowling-SR column resolves correctly.
+  return key === "name" ? NAME_METRIC : resolveColumnMetric(key, ns);
 }
 
 /** Sort value accessor: uses the __sort shadow column when present; NULL sorts last always. */
@@ -1598,6 +1705,9 @@ export function mountTable(
       return (s.highlightedColumns && s.highlightedColumns[effectiveDiscipline(s)]) || [];
     },
     setHighlights: (keys) => applyHighlightsInstant(effectiveDiscipline(store.get()), keys),
+    // W3: expose the OTHER discipline's columns as an interim cross-discipline
+    // group (the all-rounder view) — leaderboard only; the pop-up leaves it off.
+    crossDiscipline: true,
   });
   // Columns-rejig W1: the leaderboard's picker now lives INLINE inside the
   // leaderboard popup's "Columns" section (index.html #fpop-columns-host), not as
@@ -1697,7 +1807,11 @@ export function mountTable(
     const ns = effectiveDiscipline(state);
     const formats = state.formats;
     const cols = state.columns[ns];
-    const allowedKeys = new Set(eligibleMetrics(ns, formats).map((m) => m.key));
+    // W3: allow cross-discipline column keys too (eligibleColumnKeys = plain ∪
+    // cross). Byte-identical when no cross column is present. eligibleColumnKeys
+    // returns only the plain keys for matchup namespaces, so matchup pruning is
+    // unchanged.
+    const allowedKeys = eligibleColumnKeys(ns, formats);
     const pruned = cols.filter((k) => allowedKeys.has(k));
     if (pruned.length !== cols.length) {
       store.set({ columns: { ...state.columns, [ns]: pruned } });
@@ -2227,7 +2341,9 @@ export function mountTable(
     store.set({ columns: { ...live.columns, [baseNs]: cols } });
     // Prune to the frozen scope's eligible columns — a phase column only valid
     // under a still-pending format change can't apply to the frozen result set.
-    const allowed = new Set(eligibleMetrics(baseNs, base.formats).map((m) => m.key));
+    // W3: eligibleColumnKeys includes cross-discipline keys (plain ∪ cross), so an
+    // added Bowling column survives this prune; byte-identical with none present.
+    const allowed = eligibleColumnKeys(baseNs, base.formats);
     const frozenCols = cols.filter((k) => allowed.has(k));
     const frozen = { ...base, columns: { ...base.columns, [baseNs]: frozenCols } };
     // R5-A #4: toggling a column is a toolbar-only change — preserve the current
@@ -2768,7 +2884,10 @@ export function mountTable(
 
     const ns = effectiveDiscipline(state);
     const colKeys = state.columns[ns];
-    const cols = colKeys.map((key) => getMetric(key, ns)).filter(Boolean);
+    // resolveColumnMetric resolves plain keys exactly like getMetric AND
+    // cross-discipline column keys (columns-rejig W3) to their virtual metric, so a
+    // Bowling column on a batting table renders/sorts with the right label + format.
+    const cols = colKeys.map((key) => resolveColumnMetric(key, ns)).filter(Boolean);
 
     // W2 highlight set: the display-only, per-namespace metric keys the user has
     // 🖍️-toggled. Read from the LIVE store (not the frozen `state`) because a

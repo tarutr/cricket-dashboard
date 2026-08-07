@@ -27,7 +27,15 @@
 // match_type values — "T20" here means the T20-bucket (T20 + IT20), matching the
 // Phase 2 brief's owner decision that Cricsheet mislabels internationals.
 
-import { metricsFor, matchupBucketLabel, getMetric, metricDisplayLabel, INNINGS_NUMBER_FILTER } from "./metrics.js";
+import {
+  metricsFor,
+  matchupBucketLabel,
+  getMetric,
+  metricDisplayLabel,
+  INNINGS_NUMBER_FILTER,
+  OTHER_DISCIPLINE,
+  makeCrossKey,
+} from "./metrics.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 
 /**
@@ -888,6 +896,40 @@ export function eligibleMetrics(discipline, formats) {
 }
 
 /**
+ * Cross-discipline columns (columns-rejig W3, OQ1): the OTHER discipline's metrics
+ * a plain batting/bowling leaderboard may ADD as columns and sort by. Deliberately
+ * a SMALL, interim set — the core innings-grain "Basic + Detailed" stats of the
+ * other discipline: excludes phase metrics (W4's phase×metric composer owns those),
+ * the batting Dismissals breakdown (a batting-specific fingerprint, not an
+ * all-rounder column), the `matches`/PoM/fielding sources (source !== "innings" —
+ * PoM/fielding already cross via their own CTEs), and `r_pos` (a placeholder
+ * sqlExpression that only the batting main query can special-case). Returns [] for
+ * matchup namespaces (cross columns are a plain-discipline concept). */
+export function eligibleCrossMetrics(discipline, formats) {
+  const other = OTHER_DISCIPLINE[discipline];
+  if (!other) return [];
+  return eligibleMetrics(other, formats).filter(
+    (m) => m.source === "innings" && m.key !== "r_pos" && !m.isPhaseMetric && m.section !== "dismissal"
+  );
+}
+
+/**
+ * The full set of VALID leaderboard COLUMN keys for a namespace right now — the
+ * plain eligible metric keys PLUS the cross-discipline column keys. The three
+ * column-prune sites (pruneIneligibleState here, plus table.js's
+ * pruneInvalidColumns / applyColumnsInstant) filter against this so a cross column
+ * survives a re-render / format tweak instead of being silently dropped as
+ * "invalid". Advanced-CONDITION pruning keeps its own (plain) allow-set — cross
+ * conditions are not creatable. */
+export function eligibleColumnKeys(discipline, formats) {
+  const keys = new Set(eligibleMetrics(discipline, formats).map((m) => m.key));
+  for (const m of eligibleCrossMetrics(discipline, formats)) {
+    keys.add(makeCrossKey(OTHER_DISCIPLINE[discipline], m.key));
+  }
+  return keys;
+}
+
+/**
  * Remove columns AND advanced-filter conditions whose metric is no longer
  * eligible under the current discipline+formats (phase gating per §8.9, or a
  * discipline switch orphaning e.g. an "economy" condition while batting).
@@ -897,7 +939,12 @@ export function eligibleMetrics(discipline, formats) {
  */
 export function pruneIneligibleState(store) {
   const s = store.get();
-  const allowed = new Set(eligibleMetrics(s.discipline, s.formats).map((m) => m.key));
+  // Columns-rejig W3: cross-discipline column keys (x__<disc>__<base>) are valid
+  // columns too, so the plain-namespace prune uses eligibleColumnKeys (plain ∪
+  // cross), not eligibleMetrics alone — otherwise an added Bowling-SR column would
+  // be silently dropped on the next discipline/format sync. Byte-identical when no
+  // cross column is present (the extra keys just never match).
+  const allowed = eligibleColumnKeys(s.discipline, s.formats);
 
   const cols = s.columns[s.discipline];
   const prunedCols = cols.filter((k) => allowed.has(k));
