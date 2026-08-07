@@ -749,6 +749,18 @@ export function createInitialState(maxMonth) {
       matchup_batting: [...DEFAULT_MATCHUP_COLUMNS.matchup_batting],
       matchup_bowling: [...DEFAULT_MATCHUP_COLUMNS.matchup_bowling],
     },
+    // Highlighted columns (columns-rejig W2, 2026-08-07): the set of metric keys
+    // the leaderboard tints with a soft accent wash — a purely COSMETIC emphasis
+    // toggled from the Columns section's 🖍️ control, per discipline exactly like
+    // `columns` above. DISPLAY-ONLY: never read by any query builder, never in
+    // serializeQueryState (so a highlight never lights Search), and a stale key
+    // for a hidden column simply matches no rendered cell (harmless, not pruned).
+    highlightedColumns: {
+      batting: [],
+      bowling: [],
+      matchup_batting: [],
+      matchup_bowling: [],
+    },
     // Numeric stat conditions (SPEC §5.2). R5-A #7 (decision 50) made them
     // PER-DISCIPLINE: `advanced` always holds the CURRENT discipline's conditions
     // (shape unchanged — { op, groups } — so every reader stays byte-identical:

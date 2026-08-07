@@ -1860,6 +1860,20 @@ a { color: var(--color-accent); }
 
 .data-table__th.is-sorted .data-table__sort-btn:hover { color: var(--color-accent-strong); }
 
+/* Highlighted columns (columns-rejig W2): a SOFT accent wash on the cells of a
+   column whose 🖍️ toggle is on in the Columns section. Display-only (the
+   `is-highlighted` class comes from table.js's highlightedColumns display state,
+   never a query). Body cells get a low-opacity accent over the (transparent)
+   row background; the sticky header band is OPAQUE (rows scroll under it), so its
+   highlighted cell mixes the same accent INTO the band colour to stay opaque.
+   Composes with .is-sorted (text colour) and the column separators (border). */
+.data-table__td.is-highlighted {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.data-table__th.is-highlighted {
+  background: color-mix(in srgb, var(--color-accent) 14%, var(--color-line));
+}
+
 /* Drag-to-reorder columns (task 2, B1 polish): mouse/pen only (see table.js's
    wireColumnDrag doc comment) — every OTHER metric header shows a grab
    cursor as the drag affordance; the header currently being dragged dims;
@@ -1958,6 +1972,91 @@ a { color: var(--color-accent); }
 
 @media (prefers-reduced-motion: reduce) {
   .columns-popover__disclosure-arrow { transition: none; }
+}
+
+/* Per-column Sort-by + Highlight controls (columns-rejig W2) — leaderboard
+   Columns section only (the pop-up popover renders none). The row splits into
+   the checkbox label (left, growing) and the two controls (right). */
+.columns-popover__item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.columns-popover__item-row .columns-popover__item {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.columns-popover__item-row .columns-popover__item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.columns-popover__item-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+}
+
+/* Sort-by control: a glyph button (↕ idle, ▲/▼ when this column IS the active
+   sort) — muted, brightening on hover, accent when active (mirrors the table
+   header's own .is-sorted accent). Disabled while the column is hidden. */
+.col-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5em;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: var(--space-1);
+  color: var(--color-muted);
+  opacity: 0.55;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 0.85em;
+  line-height: 1;
+}
+.col-sort-btn:hover { opacity: 1; color: var(--color-fg); }
+.col-sort-btn.is-active { opacity: 1; color: var(--color-accent); }
+.col-sort-btn.is-active:hover { color: var(--color-accent-strong); }
+
+/* Highlight control: a monochrome SVG glyph (HIGHLIGHT_GLYPH in
+   columnsPicker.js) styled IDENTICALLY to the leaderboard's .pin-toggle — same
+   muted/faint off, brighten-on-hover, solid accent (pin-red) when on, NO
+   background/chip. (Replaces the old 🖍️ emoji, which couldn't take a CSS
+   `color` and so faked its "on" state with a solid chip background.) */
+.col-hl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: var(--space-1);
+  color: var(--color-muted);
+  opacity: 0.45;
+  border-radius: var(--radius-sm, 4px);
+}
+.col-hl-btn svg {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+  display: block;
+}
+.col-hl-btn:hover { opacity: 1; color: var(--color-fg); }
+.col-hl-btn.is-active { opacity: 1; color: var(--color-accent); }
+.col-hl-btn.is-active:hover { color: var(--color-accent-strong); }
+
+/* Both controls: disabled while their column is hidden (you sort/highlight what
+   you can see — checking the box enables them). */
+.col-sort-btn:disabled,
+.col-hl-btn:disabled {
+  opacity: 0.2;
+  cursor: default;
+  pointer-events: none;
+  background: none;
+  color: var(--color-muted);
 }
 
 /* Loading overlay (task 6, R3 Wave 5 polish, preset-button page-jump fix) ───

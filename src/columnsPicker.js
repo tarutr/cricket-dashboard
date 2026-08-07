@@ -44,6 +44,15 @@ import { escHtml } from "./html.js";
 import { DISMISSAL_KINDS, metricDisplayLabel } from "./metrics.js";
 import { eligibleMetrics } from "./state.js";
 
+// A monochrome highlighter/marker glyph, filled via currentColor — mirrors the
+// pin toggle's PIN_GLYPH convention in src/table.js (owner fix: the old 🖍️
+// emoji couldn't take a CSS `color`, so its "on" state was faked with a solid
+// chip background; that chip is gone, this SVG lets .col-hl-btn recolour it
+// exactly like .pin-toggle does). Defined locally rather than imported from
+// table.js to avoid a circular import (table.js already imports this module).
+const HIGHLIGHT_GLYPH =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g transform="rotate(45 12 12)"><rect x="9" y="2" width="6" height="12" rx="1"/><polygon points="9,14 15,14 12,19"/></g><rect x="4" y="19" width="10" height="2" rx="1"/></svg>';
+
 // ── Dismissals column-picker grouping (decision 44/42, B2R wave 3) ───────────
 // The plain "batting" namespace is the ONLY one where metrics.js's dismissal
 // taxonomy produces a count+% pair per kind (12 kinds x 2 = 24 checkboxes,
@@ -144,7 +153,33 @@ function computeInitialShowPct(cols) {
  *     column out from under it), and repositions. `anchorEl` null/absent (the
  *     trigger no longer exists, e.g. an error state) closes the popover.
  */
-export function createColumnsPicker({ getColumns, setColumns, getDiscipline, getFormats }) {
+export function createColumnsPicker({
+  getColumns,
+  setColumns,
+  getDiscipline,
+  getFormats,
+  // Columns-rejig W2 (2026-08-07): OPTIONAL per-column Sort-by + Highlight
+  // contract. The leaderboard's inline picker passes all four; the player pop-up
+  // popover (playerFiltersTab.js) passes none, so `controlsOn` is false there and
+  // the picker renders EXACTLY as before (checkboxes only — byte-identical).
+  //   getSort()  -> { key, dir, active } — the table's LIVE sort state (the same
+  //     one column-header clicks read/write; `active` == orderIsActiveSort, so a
+  //     column only shows as "the sort" while it's actually ordering the rows).
+  //   setSort(key) -> void — route through the host's sort path (toggle dir on
+  //     the active key, default dir on a new one). Two-way bound with the header.
+  //   getHighlights() -> string[] — the display-only highlighted metric keys for
+  //     the effective namespace.
+  //   setHighlights(keys) -> void — apply a new highlighted-key set (repaints the
+  //     table's tint class; never a query change).
+  getSort,
+  setSort,
+  getHighlights,
+  setHighlights,
+}) {
+  // Render the per-column Sort-by + Highlight controls only when the full W2
+  // contract is supplied (leaderboard). Absent → the pop-up's plain checkbox
+  // picker, unchanged.
+  const controlsOn = !!(getSort && setSort && getHighlights && setHighlights);
   // The currently-open FLOATING popover for THIS picker, if any (Batch 3 fix 3).
   // Tracked here (not just a DOM query) so the host's refresh() can find and
   // re-sync it after every re-render — see open()'s doc comment. NULL for a
@@ -191,6 +226,36 @@ export function createColumnsPicker({ getColumns, setColumns, getDiscipline, get
   // ── Shared content: build + wire (used by BOTH the floating popover and the
   //    inline host, so the two surfaces render byte-identical) ────────────────
 
+  /** W2: the per-column Sort-by + Highlight controls for one metric `key`.
+   * Rendered only when controlsOn (leaderboard). Both controls act on the actual
+   * TABLE column, so they're DISABLED while the column is hidden (unchecked) —
+   * you sort/highlight what you can see; checking the box enables them. Sort is
+   * radio-like (only the active sort column shows ▲/▼, others show ↕); Highlight
+   * is a multi-select toggle. syncColumnControls keeps these states honest after
+   * every refresh without a re-render. */
+  function columnControlsHTML(key) {
+    const isVisible = new Set(getColumns()).has(key);
+    const sort = getSort();
+    const isActiveSort = !!(sort && sort.active && sort.key === key);
+    const sortArrow = isActiveSort ? (sort.dir === "asc" ? "▲" : "▼") : "↕";
+    const hlOn = new Set(getHighlights()).has(key);
+    const dis = isVisible ? "" : " disabled";
+    const sortTitle = !isVisible
+      ? "Show this column to sort by it"
+      : isActiveSort
+        ? "Sorted by this column — click to reverse direction"
+        : "Sort the table by this column";
+    const hlTitle = !isVisible
+      ? "Show this column to highlight it"
+      : hlOn
+        ? "Remove highlight"
+        : "Highlight this column";
+    return `<span class="columns-popover__item-controls">
+      <button type="button" class="col-sort-btn${isActiveSort ? " is-active" : ""}" data-sort-key="${key}" aria-pressed="${isActiveSort ? "true" : "false"}" title="${sortTitle}" aria-label="${sortTitle}"${dis}>${sortArrow}</button>
+      <button type="button" class="col-hl-btn${hlOn ? " is-active" : ""}" data-hl-key="${key}" aria-pressed="${hlOn ? "true" : "false"}" title="${hlTitle}" aria-label="${hlTitle}"${dis}>${HIGHLIGHT_GLYPH}</button>
+    </span>`;
+  }
+
   /** Build the picker's inner HTML for a namespace/format selection: the same
    * Basic / Dismissals / Fielding / Impact / Phase sections the floating popover
    * always rendered. Reads the CURRENT visible column list (getColumns) for
@@ -208,18 +273,28 @@ export function createColumnsPicker({ getColumns, setColumns, getDiscipline, get
     const phase = all.filter((m) => m.isPhaseMetric);
     const visible = new Set(getColumns());
 
+    // One metric row: the checkbox label, optionally followed (W2, leaderboard
+    // only) by the per-column Sort-by + Highlight controls. The controls sit
+    // OUTSIDE the <label> so a click on them never toggles the checkbox. The
+    // batting Dismissals dual-key rows deliberately DON'T get these (they render
+    // via dismissalRowHTML, not this helper) — their active count/% variant is
+    // ambiguous from the row alone; those columns stay sortable via the table
+    // header. See the report's flagged follow-up.
+    const itemRow = (m) => {
+      const label = `<label class="columns-popover__item">
+        <input type="checkbox" data-key="${m.key}" ${visible.has(m.key) ? "checked" : ""} />
+        <span>${metricDisplayLabel(m, formats)}</span>
+      </label>`;
+      return controlsOn
+        ? `<div class="columns-popover__item-row">${label}${columnControlsHTML(m.key)}</div>`
+        : label;
+    };
+
     const section = (label, metrics) =>
       metrics.length
         ? `<div class="columns-popover__section-label">${label}</div>
            <div class="columns-popover__list">
-             ${metrics
-               .map(
-                 (m) => `<label class="columns-popover__item">
-                   <input type="checkbox" data-key="${m.key}" ${visible.has(m.key) ? "checked" : ""} />
-                   <span>${metricDisplayLabel(m, formats)}</span>
-                 </label>`
-               )
-               .join("")}
+             ${metrics.map(itemRow).join("")}
            </div>`
         : "";
 
@@ -326,6 +401,64 @@ export function createColumnsPicker({ getColumns, setColumns, getDiscipline, get
     }
   }
 
+  /** W2: wire the per-column Sort-by + Highlight buttons (leaderboard only). No-op
+   * when controlsOn is false (the pop-up popover has no such buttons). Each button
+   * stops the click from reaching the surrounding row / label, and bails if it's
+   * disabled (column hidden). Sort routes through setSort (the two-way-bound host
+   * sort path); Highlight toggles the key in the display-only highlighted set. */
+  function wireColumnControls(rootEl) {
+    if (!controlsOn) return;
+    rootEl.querySelectorAll(".col-sort-btn[data-sort-key]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (btn.disabled) return;
+        setSort(btn.dataset.sortKey);
+      });
+    });
+    rootEl.querySelectorAll(".col-hl-btn[data-hl-key]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (btn.disabled) return;
+        const key = btn.dataset.hlKey;
+        const cur = getHighlights().slice();
+        const idx = cur.indexOf(key);
+        if (idx >= 0) cur.splice(idx, 1);
+        else cur.push(key);
+        setHighlights(cur);
+      });
+    });
+  }
+
+  /** W2: re-sync the Sort-by + Highlight buttons' state (active / direction /
+   * disabled) from the live host state, WITHOUT rebuilding — the counterpart to
+   * syncCheckedState for the controls. Called from syncCheckedState so every
+   * refresh path keeps them honest (e.g. a header click that moved the sort, or a
+   * column newly shown/hidden). No-op when controlsOn is false. */
+  function syncColumnControls(rootEl) {
+    if (!controlsOn) return;
+    const visible = new Set(getColumns());
+    const sort = getSort();
+    const hl = new Set(getHighlights());
+    rootEl.querySelectorAll(".col-sort-btn[data-sort-key]").forEach((btn) => {
+      const key = btn.dataset.sortKey;
+      const isVisible = visible.has(key);
+      btn.disabled = !isVisible;
+      const isActiveSort = !!(sort && sort.active && sort.key === key);
+      btn.classList.toggle("is-active", isActiveSort);
+      btn.setAttribute("aria-pressed", isActiveSort ? "true" : "false");
+      btn.textContent = isActiveSort ? (sort.dir === "asc" ? "▲" : "▼") : "↕";
+    });
+    rootEl.querySelectorAll(".col-hl-btn[data-hl-key]").forEach((btn) => {
+      const key = btn.dataset.hlKey;
+      btn.disabled = !visible.has(key);
+      const on = hl.has(key);
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+
   /** Re-sync every checkbox's checked state from getColumns() WITHOUT rebuilding
    * — the host may have silently pruned a column out from under us. Two checkbox
    * shapes share this: plain data-key ones and the batting Dismissals dual-key
@@ -341,6 +474,8 @@ export function createColumnsPicker({ getColumns, setColumns, getDiscipline, get
         cb.checked = visible.has(cb.dataset.countKey) || visible.has(cb.dataset.pctKey);
       }
     });
+    // W2: keep the Sort-by / Highlight buttons in step too (no-op in the pop-up).
+    syncColumnControls(rootEl);
   }
 
   /** Shallow array equality for the format selection (used to decide whether an
@@ -357,6 +492,7 @@ export function createColumnsPicker({ getColumns, setColumns, getDiscipline, get
   function renderInline(container, ns, formats) {
     container.innerHTML = buildPickerHTML(ns, formats);
     wireCheckboxes(container);
+    wireColumnControls(container); // W2 (no-op unless the sort/highlight contract was supplied)
   }
 
   /**
@@ -445,6 +581,7 @@ export function createColumnsPicker({ getColumns, setColumns, getDiscipline, get
     // host so both surfaces behave identically (see wireCheckboxes). The popover
     // lives on document.body and survives an instant-apply requery via refresh().
     wireCheckboxes(popover);
+    wireColumnControls(popover); // W2 (no-op for the pop-up — no sort/highlight contract)
 
     const onDocClick = (e) => {
       if (popover.contains(e.target) || e.target === anchor || anchor.contains?.(e.target)) return;

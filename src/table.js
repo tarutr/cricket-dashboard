@@ -135,7 +135,7 @@ function serializeQueryState(state) {
     pinnedPlayers: state.pinnedPlayers,
     search: state.search,
     // R4 Wave 4a (A1): `sort` is deliberately EXCLUDED. Clicking a column header
-    // now re-sorts the loaded rows INSTANTLY (applySortKey below) and must NOT
+    // now re-sorts the loaded rows INSTANTLY (sortByColumn) and must NOT
     // light the Search button — since nothing PENDING ever changes the sort key
     // on its own (a discipline change lights Search via `discipline` here
     // regardless), leaving sort out of the dirty comparison is the whole fix.
@@ -1400,13 +1400,16 @@ export function formatValue(metric, value) {
  * (Batch B1 Wave 5, owner decision): every value — however thin its backing
  * sample — renders identically, plain and un-greyed. §8.1's hasMetricData
  * still governs "—" for genuine no-data; that's a different, still-live rule. */
-function dataCellHTML(metric, row) {
+function dataCellHTML(metric, row, isHighlighted = false) {
   const value = row[metric.key];
   const text = formatValue(metric, value);
   // data-key (task 9): lets the live drag-reorder preview find "the cell in
   // THIS row belonging to column X" without any index arithmetic — see
   // wireColumnDrag's onMove.
-  return `<td class="data-table__td" data-key="${metric.key}">${text}</td>`;
+  // W2: `is-highlighted` gives the cell the soft accent wash when its column's
+  // 🖍️ toggle is on — display-only (highlightedColumns), never a query change.
+  const hlClass = isHighlighted ? " is-highlighted" : "";
+  return `<td class="data-table__td${hlClass}" data-key="${metric.key}">${text}</td>`;
 }
 
 // The Columns picker's dismissal-% / rare-dismissals grouping + rendering
@@ -1526,7 +1529,7 @@ export function mountTable(
   // The sort ▲/▼ arrow + `is-sorted` styling appear ONLY when this is true AND
   // state.sort.key matches the column (see headerCellHTML + the Player header),
   // so a column that isn't actually sorting the rows carries no arrow. Set at the
-  // sort/preserve sites in load() and true in applySortKey(); a pure column
+  // sort/preserve sites in load() and true in sortByColumn(); a pure column
   // drag-reorder, a tab switch, and Show More re-render without touching it (they
   // don't change row order), so the flag survives them. A pin float/reset does
   // NOT flip it either (pins float on top AFTER ordering — the non-pinned rows
@@ -1573,6 +1576,28 @@ export function mountTable(
       return s.columns[effectiveDiscipline(s)];
     },
     setColumns: (cols) => applyColumnsInstant(effectiveDiscipline(store.get()), cols),
+    // Columns-rejig W2 (2026-08-07): the leaderboard's inline picker also drives
+    // the per-column Sort-by + Highlight controls. Presence of this quartet is
+    // what makes the picker RENDER those controls — the player pop-up's popover
+    // (playerFiltersTab.js) passes none, so it stays byte-identical (no controls).
+    //   • getSort → the SAME sort state the header clicks read/write
+    //     (store.sort + orderIsActiveSort), so the popup control and the table
+    //     header are ONE two-way-bound sort, never a fork.
+    //   • setSort → routes through sortByColumn, the exact code path a header
+    //     click uses (toggle dir on the active key, default dir otherwise).
+    //   • getHighlights/setHighlights → the display-only highlightedColumns set
+    //     for the effective namespace; setHighlights repaints the table with the
+    //     tint class and never touches the query.
+    getSort: () => {
+      const s = store.get();
+      return { key: s.sort.key, dir: s.sort.dir, active: orderIsActiveSort };
+    },
+    setSort: (key) => sortByColumn(key),
+    getHighlights: () => {
+      const s = store.get();
+      return (s.highlightedColumns && s.highlightedColumns[effectiveDiscipline(s)]) || [];
+    },
+    setHighlights: (keys) => applyHighlightsInstant(effectiveDiscipline(store.get()), keys),
   });
   // Columns-rejig W1: the leaderboard's picker now lives INLINE inside the
   // leaderboard popup's "Columns" section (index.html #fpop-columns-host), not as
@@ -2041,7 +2066,7 @@ export function mountTable(
     if (btn) btn.addEventListener("click", retryFn);
   }
 
-  function headerCellHTML(metric, state) {
+  function headerCellHTML(metric, state, isHighlighted = false) {
     // R5-B #0: the arrow + is-sorted styling show ONLY when the displayed order
     // is an active column sort (orderIsActiveSort) AND this is the sort column.
     // After an order-preserving toolbar-only commit, orderIsActiveSort is false,
@@ -2057,7 +2082,10 @@ export function mountTable(
     // `columnTitle` (task 5, R. Pos.): an optional metrics.js field for a
     // header hover title beyond the plain label — most metrics omit it.
     const titleAttr = metric.columnTitle ? ` title="${escAttr(metric.columnTitle)}"` : "";
-    return `<th data-key="${metric.key}" class="data-table__th data-table__th--draggable ${isSorted ? "is-sorted" : ""}" scope="col"${titleAttr}>
+    // W2: `is-highlighted` paints this column's header with the soft accent wash
+    // when its 🖍️ toggle is on (display-only — highlightedColumns, not a query).
+    const hlClass = isHighlighted ? " is-highlighted" : "";
+    return `<th data-key="${metric.key}" class="data-table__th data-table__th--draggable ${isSorted ? "is-sorted" : ""}${hlClass}" scope="col"${titleAttr}>
       <button type="button" class="data-table__sort-btn">${metric.shortLabel}${arrow}</button>
     </th>`;
   }
@@ -2205,6 +2233,65 @@ export function mountTable(
     // R5-A #4: toggling a column is a toolbar-only change — preserve the current
     // row order (values swap in place; a dropped sort-column doesn't reshuffle).
     load(frozen, { resort: false });
+  }
+
+  /** Columns-rejig W2: re-sort the loaded rows by `key` INSTANTLY — the ONE sort
+   * path shared by the table's column-header clicks and the Columns section's
+   * per-column Sort-by control (so the two are two-way bound: either entry point
+   * updates store.sort + orderIsActiveSort, then both the header arrow and the
+   * picker's active-sort indicator recompute from that single state). Hoisted to
+   * mountTable scope (it used to be nested in renderLoaded as `applySortKey`) so
+   * the columnsPicker contract, created above, can call it via setSort.
+   *
+   * Sorting is "how the loaded rows are displayed," not "which rows" — a pure
+   * client-side re-sort (no requery; every sortable column's values are already
+   * in lastRows) that must NOT light Search (`sort` is excluded from
+   * serializeQueryState). Same key ⇒ flip direction; a new key ⇒ that metric's
+   * default direction (higherIsBetter===false ⇒ asc, e.g. economy). The frozen
+   * SCOPE is untouched: lastLoadedState only has its `sort` replaced. */
+  function sortByColumn(key) {
+    const cur = store.get().sort;
+    const frozen = lastLoadedState || store.get();
+    let sort;
+    if (cur.key === key) {
+      sort = { key, dir: cur.dir === "asc" ? "desc" : "asc" };
+    } else {
+      const metric = resolveSortMetric(key, effectiveDiscipline(frozen));
+      sort = { key, dir: metric && metric.higherIsBetter === false ? "asc" : "desc" };
+    }
+    store.set({ sort }); // pending store (excluded from dirty → no Search light)
+    // R5-B #0: a sort IS an active column sort — the arrow shows on this column
+    // and the rows re-order by it (in the table AND the picker).
+    orderIsActiveSort = true;
+    if (lastLoadedState) {
+      lastLoadedState = { ...lastLoadedState, sort };
+      lastQueryStateKey = serializeQueryState(lastLoadedState);
+      lastRows = applySort(lastRows, lastLoadedState);
+      visibleRowCount = PAGE_SIZE; // a new sort order is "a new view" — page 1
+      renderLoaded(lastRows, lastLoadedState, lastBowlingTypes);
+    } else {
+      syncToolbar();
+    }
+  }
+
+  /** Columns-rejig W2: toggle the soft-accent highlight on a set of columns,
+   * INSTANTLY and DISPLAY-ONLY. Highlight is a CSS class on the column's cells
+   * (see headerCellHTML / dataCellHTML) — it never enters a query, never changes
+   * which rows or numbers show, and never lights Search (highlightedColumns is
+   * absent from serializeQueryState). So this only rewrites the store's display
+   * field and repaints the already-cached lastRows in place (no requery, no
+   * re-sort, no pagination reset — renderLoaded reads highlightedColumns from the
+   * live store, so the fresh set is picked up). `ns` is the effective namespace
+   * the picker built its rows for, matching the frozen table's columns. */
+  function applyHighlightsInstant(ns, keys) {
+    const live = store.get();
+    store.set({ highlightedColumns: { ...live.highlightedColumns, [ns]: keys } });
+    if (lastLoadedState) {
+      renderLoaded(lastRows, lastLoadedState, lastBowlingTypes);
+    } else {
+      // No table yet — still re-sync the picker's 🖍️ buttons to the new set.
+      syncToolbar();
+    }
   }
 
   /** R4 Wave 4a ADDENDUM (owner ruling 2026-07-17): *picking* a player from the
@@ -2683,6 +2770,16 @@ export function mountTable(
     const colKeys = state.columns[ns];
     const cols = colKeys.map((key) => getMetric(key, ns)).filter(Boolean);
 
+    // W2 highlight set: the display-only, per-namespace metric keys the user has
+    // 🖍️-toggled. Read from the LIVE store (not the frozen `state`) because a
+    // highlight is a pure cosmetic class, decoupled from the query snapshot —
+    // applyHighlightsInstant repaints via this same renderLoaded, so the fresh
+    // set is picked up. Keyed by the rendered columns' own `ns`, so it always
+    // matches the columns on screen. Never enters buildQuery — numbers untouched.
+    const highlightSet = new Set(
+      (store.get().highlightedColumns && store.get().highlightedColumns[ns]) || []
+    );
+
     // Coverage-breakdown wave: the old fixed "Coverage" column is gone —
     // matchup rows now carry the per-group composition %s (comp_*) as ordinary
     // columns within `cols` (default far-right, in the restricted picker), so
@@ -2717,7 +2814,7 @@ export function mountTable(
         ${pinTh}
         ${rankTh}
         ${playerTh}
-        ${cols.map((m) => headerCellHTML(m, state)).join("")}
+        ${cols.map((m) => headerCellHTML(m, state, highlightSet.has(m.key))).join("")}
       </tr>`;
 
     // R5-B #3: float pinned players to the top for DISPLAY only; `rows` (lastRows)
@@ -2742,7 +2839,7 @@ export function mountTable(
         // "Show More" reveal — no query, pure display.
         const rk = rankById.get(String(row.id));
         const rankTd = `<td class="data-table__td data-table__td--rank">${rk != null ? rk.toLocaleString() : "—"}</td>`;
-        const cells = cols.map((m) => dataCellHTML(m, row)).join("");
+        const cells = cols.map((m) => dataCellHTML(m, row, highlightSet.has(m.key))).join("");
         // Player names link to the player page (R2, decision 29). The full
         // name is now always the rendered text (task 4 replaced JS
         // pre-truncation with a dynamically-sized column — see
@@ -2780,48 +2877,15 @@ export function mountTable(
 
     syncToolbar();
 
-    /** R4 Wave 4a (A1): clicking a column header re-sorts the already-loaded
-     * rows INSTANTLY — the header arrow moves and the body re-orders NOW, not at
-     * Search. Sorting is "how the loaded rows are displayed," not "which rows,"
-     * so it's a pure client-side re-sort (no requery — every sortable column's
-     * values are already in lastRows) and it must NOT light the Search button
-     * (`sort` is excluded from serializeQueryState). The new key/dir is still
-     * persisted to the store so a later Search / the graph seed keep it. The
-     * frozen SCOPE is untouched: lastLoadedState only has its `sort` replaced,
-     * never `= store.get()` (which would fold in un-searched pending edits).
-     * Shared by the metric-header clicks and the Player-header sort. */
-    function applySortKey(key) {
-      const cur = store.get().sort;
-      const frozen = lastLoadedState || store.get();
-      let sort;
-      if (cur.key === key) {
-        sort = { key, dir: cur.dir === "asc" ? "desc" : "asc" };
-      } else {
-        const metric = resolveSortMetric(key, effectiveDiscipline(frozen));
-        sort = { key, dir: metric && metric.higherIsBetter === false ? "asc" : "desc" };
-      }
-      store.set({ sort }); // pending store (excluded from dirty → no Search light)
-      // R5-B #0: a column-header click IS a sort — the arrow shows on the clicked
-      // column and the rows re-order by it.
-      orderIsActiveSort = true;
-      if (lastLoadedState) {
-        lastLoadedState = { ...lastLoadedState, sort };
-        lastQueryStateKey = serializeQueryState(lastLoadedState);
-        lastRows = applySort(lastRows, lastLoadedState);
-        visibleRowCount = PAGE_SIZE; // a new sort order is "a new view" — page 1
-        renderLoaded(lastRows, lastLoadedState, lastBowlingTypes);
-      } else {
-        syncToolbar();
-      }
-    }
-
-    // Sorting: click header to set the PENDING sort (applied on Search). The
-    // sort-state class (is-sorted / arrow) reflects the FROZEN `state` and is
-    // recomputed on every renderLoaded, so it stays on the applied sort until
-    // the next Search. The sticky Player header is EXCLUDED here (task 6/7) —
-    // it needs its own single-click-sort vs double-click-expand handling.
+    // Sorting: clicking a column header re-sorts the loaded rows INSTANTLY via
+    // sortByColumn (hoisted to mountTable scope, W2 — the SAME path the Columns
+    // section's per-column Sort-by control uses, so the two are two-way bound).
+    // The sort-state class (is-sorted / arrow) reflects the FROZEN `state` and is
+    // recomputed on every renderLoaded, so it stays on the applied sort until the
+    // next re-sort. The sticky Player header is EXCLUDED here (task 6/7) — it
+    // needs its own single-click-sort vs double-click-expand handling.
     theadEl.querySelectorAll(".data-table__th[data-key]:not(.data-table__th--sticky)").forEach((th) => {
-      th.addEventListener("click", () => applySortKey(th.dataset.key));
+      th.addEventListener("click", () => sortByColumn(th.dataset.key));
     });
 
     // Player header (tasks 6 + 7 / #13 + #11): single click sorts by name;
@@ -2839,7 +2903,7 @@ export function mountTable(
       nameTh.addEventListener("click", () => {
         const mobile = window.matchMedia("(max-width: 640px)").matches;
         if (!mobile) {
-          applySortKey("name");
+          sortByColumn("name");
           return;
         }
         if (nameClickTimer) {
@@ -2848,7 +2912,7 @@ export function mountTable(
         }
         nameClickTimer = setTimeout(() => {
           nameClickTimer = null;
-          applySortKey("name");
+          sortByColumn("name");
         }, 250);
       });
       nameTh.addEventListener("dblclick", () => {
@@ -2956,8 +3020,9 @@ export function mountTable(
       // R5-A #4: a fresh re-sort (popup Search, or a first load with no prior
       // rows) uses applySort; a toolbar-only commit (resort:false — a Vs / preset
       // / column change) preserves the prior visual order via
-      // reorderPreservingPrevious. Column-header clicks re-sort client-side
-      // elsewhere (applySortKey), untouched by this.
+      // reorderPreservingPrevious. Column-header clicks (and the Columns
+      // section's Sort-by control) re-sort client-side elsewhere (sortByColumn),
+      // untouched by this.
       const doSort = resort || !prevRows || prevRows.length === 0;
       const sorted = doSort ? applySort(merged, state) : reorderPreservingPrevious(merged, prevRows, state);
 
