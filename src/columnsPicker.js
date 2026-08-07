@@ -145,13 +145,23 @@ function computeInitialShowPct(cols) {
  *     trigger no longer exists, e.g. an error state) closes the popover.
  */
 export function createColumnsPicker({ getColumns, setColumns, getDiscipline, getFormats }) {
-  // The currently-open popover for THIS picker, if any (Batch 3 fix 3). Tracked
-  // here (not just a DOM query) so the host's refresh() can find and re-sync it
-  // after every re-render — see open()'s doc comment.
+  // The currently-open FLOATING popover for THIS picker, if any (Batch 3 fix 3).
+  // Tracked here (not just a DOM query) so the host's refresh() can find and
+  // re-sync it after every re-render — see open()'s doc comment. NULL for a
+  // picker used in INLINE mode (mountInline), which uses inlineState instead.
   let openState = null;
   // The last button mount() wired, so open() can be called with no explicit
   // anchor (the click handler passes it explicitly regardless).
   let lastTrigger = null;
+  // W1 (columns rejig, 2026-08-07): the leaderboard mounts this picker INLINE
+  // inside the leaderboard popup's "Columns" section (a fixed host element)
+  // rather than as a floating popover off a toolbar button. In that mode there is
+  // no anchor / positioning / close-on-outside-click; the SAME content and the
+  // SAME checkbox handlers render straight into the host, and refresh() keeps it
+  // in step with the (possibly pending) store. The two modes are mutually
+  // exclusive per instance: the leaderboard is inline-only, the player pop-up
+  // popover-only. { el, ns, formats } for the inline host, or null.
+  let inlineState = null;
 
   function positionColumnsPopover(popover, anchor) {
     const rect = anchor.getBoundingClientRect();
@@ -178,35 +188,226 @@ export function createColumnsPicker({ getColumns, setColumns, getDiscipline, get
     openState = null;
   }
 
-  /** Called by the host after every re-render while the popover is open:
-   * re-anchors to the (possibly recreated) trigger, repositions, and re-syncs
-   * checkbox checked state from getColumns() — the host may have silently
-   * dropped a phase column out from under it, and the checkboxes must stay
-   * honest about what's actually visible. Closes if the anchor no longer exists
-   * (e.g. the toolbar mode changed under it, so the host passes null). */
-  function refresh(anchor) {
-    if (!openState) return;
-    if (!anchor) {
-      close();
-      return;
-    }
-    openState.anchor = anchor;
+  // ── Shared content: build + wire (used by BOTH the floating popover and the
+  //    inline host, so the two surfaces render byte-identical) ────────────────
+
+  /** Build the picker's inner HTML for a namespace/format selection: the same
+   * Basic / Dismissals / Fielding / Impact / Phase sections the floating popover
+   * always rendered. Reads the CURRENT visible column list (getColumns) for
+   * checked state. Pure string builder — no DOM, no listeners. */
+  function buildPickerHTML(ns, formats) {
+    const all = eligibleMetrics(ns, formats);
+    const basic = all.filter(
+      (m) => !m.isPhaseMetric && m.section !== "dismissal" && m.section !== "fielding" && m.section !== "impact"
+    );
+    const dismissal = all.filter((m) => m.section === "dismissal");
+    // Fielding / Impact (Wave 3): their own sub-headers in BOTH views. Plain
+    // data-key checkboxes (same mechanics as Basic).
+    const fielding = all.filter((m) => m.section === "fielding");
+    const impact = all.filter((m) => m.section === "impact");
+    const phase = all.filter((m) => m.isPhaseMetric);
     const visible = new Set(getColumns());
-    openState.el.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-      // Two shapes of checkbox share this popover: the plain data-key ones
-      // (Basic/Fielding/Impact/Phase, and Dismissals in every namespace except
-      // batting) and the batting Dismissals section's dual-key rows
-      // (data-count-key/data-pct-key — see dismissalRowHTML), checked iff EITHER
-      // of their two underlying columns is visible. The "Show as %" toggle
-      // itself has neither dataset key and is skipped here — its own checked
-      // state is plain UI state (not derived from `visible`) and untouched by
-      // reloads.
+
+    const section = (label, metrics) =>
+      metrics.length
+        ? `<div class="columns-popover__section-label">${label}</div>
+           <div class="columns-popover__list">
+             ${metrics
+               .map(
+                 (m) => `<label class="columns-popover__item">
+                   <input type="checkbox" data-key="${m.key}" ${visible.has(m.key) ? "checked" : ""} />
+                   <span>${metricDisplayLabel(m, formats)}</span>
+                 </label>`
+               )
+               .join("")}
+           </div>`
+        : "";
+
+    // Dismissals: the pruned real/rare + "Show as %" layout, batting ONLY (see
+    // the RARE_DISMISSAL_KINDS doc comment for why every other namespace keeps
+    // the plain `section()` list — they never had the 24-checkbox problem).
+    let dismissalHTML;
+    if (ns === "batting") {
+      const showPct = computeInitialShowPct(getColumns());
+      const realKinds = DISMISSAL_KINDS.filter((d) => !RARE_DISMISSAL_KINDS.has(d.kind));
+      const rareKinds = DISMISSAL_KINDS.filter((d) => RARE_DISMISSAL_KINDS.has(d.kind));
+      dismissalHTML = `
+        <div class="columns-popover__section-label">Dismissals</div>
+        <label class="columns-popover__pct-toggle">
+          <input type="checkbox" data-role="dismissal-pct-toggle" ${showPct ? "checked" : ""} />
+          <span>Show as %</span>
+        </label>
+        <div class="columns-popover__list">
+          ${realKinds.map((d) => dismissalRowHTML(d, visible)).join("")}
+        </div>
+        <details class="columns-popover__disclosure">
+          <summary><span class="columns-popover__disclosure-arrow">▸</span> Rare dismissals</summary>
+          <div class="columns-popover__list">
+            ${rareKinds.map((d) => dismissalRowHTML(d, visible)).join("")}
+          </div>
+        </details>`;
+    } else {
+      dismissalHTML = section("Dismissals", dismissal);
+    }
+
+    return (
+      section("Basic", basic) +
+      dismissalHTML +
+      section("Fielding", fielding) +
+      section("Impact", impact) +
+      section("Phase", phase)
+    );
+  }
+
+  /** Wire every checkbox's change handler onto `rootEl` (the floating popover OR
+   * the inline host). Behaviour-identical to the pre-extraction inline handlers:
+   * every mutation runs through the caller's setColumns with the full new
+   * column-key array — INSTANT apply, numbers sacred (no SQL here). */
+  function wireCheckboxes(rootEl) {
+    // Plain data-key checkboxes: Basic, Fielding, Impact, Phase, and (outside
+    // batting) Dismissals.
+    rootEl.querySelectorAll('input[type="checkbox"][data-key]').forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const cols = getColumns().slice();
+        if (cb.checked) {
+          if (!cols.includes(cb.dataset.key)) cols.push(cb.dataset.key);
+        } else {
+          const idx = cols.indexOf(cb.dataset.key);
+          if (idx >= 0) cols.splice(idx, 1);
+        }
+        // R4 Wave 4a (A1): INSTANT column change — the host's setColumns applies
+        // it now (re-rendering / requerying the same rows) without lighting Search.
+        setColumns(cols);
+      });
+    });
+
+    // Batting Dismissals rows: each checkbox stands for whichever variant (count
+    // vs %) the toggle currently selects. Ticking adds THAT variant; unticking
+    // removes BOTH (defensive against a legacy mixed-state save).
+    const toggleEl = rootEl.querySelector('[data-role="dismissal-pct-toggle"]');
+    rootEl.querySelectorAll('input[type="checkbox"][data-count-key]').forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const cols = getColumns().slice();
+        const countKey = cb.dataset.countKey;
+        const pctKey = cb.dataset.pctKey;
+        if (cb.checked) {
+          const activeKey = toggleEl.checked ? pctKey : countKey;
+          if (!cols.includes(activeKey)) cols.push(activeKey);
+        } else {
+          [countKey, pctKey].forEach((k) => {
+            const idx = cols.indexOf(k);
+            if (idx >= 0) cols.splice(idx, 1);
+          });
+        }
+        setColumns(cols); // A1: INSTANT, no Search light
+      });
+    });
+
+    // Section-level "Show as %" toggle: on every flip, normalise EVERY
+    // currently-checked dismissal row onto the new variant (decision 44c —
+    // "normalise on first interaction", never merely on open).
+    if (toggleEl) {
+      toggleEl.addEventListener("change", () => {
+        const cols = getColumns().slice();
+        const showPct = toggleEl.checked;
+        for (const d of DISMISSAL_KINDS) {
+          const countKey = d.key;
+          const pctKey = `${d.key}_pct`;
+          const wasChecked = cols.includes(countKey) || cols.includes(pctKey);
+          if (!wasChecked) continue;
+          [countKey, pctKey].forEach((k) => {
+            const idx = cols.indexOf(k);
+            if (idx >= 0) cols.splice(idx, 1);
+          });
+          cols.push(showPct ? pctKey : countKey);
+        }
+        setColumns(cols); // A1: INSTANT, no Search light
+      });
+    }
+  }
+
+  /** Re-sync every checkbox's checked state from getColumns() WITHOUT rebuilding
+   * — the host may have silently pruned a column out from under us. Two checkbox
+   * shapes share this: plain data-key ones and the batting Dismissals dual-key
+   * rows (checked iff EITHER underlying column is visible). The "Show as %"
+   * toggle has neither dataset key and is skipped (its own state is plain UI
+   * state, untouched by reloads). Shared by the popover and inline refresh. */
+  function syncCheckedState(rootEl) {
+    const visible = new Set(getColumns());
+    rootEl.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
       if (cb.dataset.key) {
         cb.checked = visible.has(cb.dataset.key);
       } else if (cb.dataset.countKey) {
         cb.checked = visible.has(cb.dataset.countKey) || visible.has(cb.dataset.pctKey);
       }
     });
+  }
+
+  /** Shallow array equality for the format selection (used to decide whether an
+   * inline refresh needs a full re-render — a format change swaps per-format
+   * metric labels / eligibility — or just a cheap checked-state re-sync). */
+  function sameFormats(a, b) {
+    if (a === b) return true;
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  /** Render the picker straight into an inline host (build + wire). */
+  function renderInline(container, ns, formats) {
+    container.innerHTML = buildPickerHTML(ns, formats);
+    wireCheckboxes(container);
+  }
+
+  /**
+   * INLINE mount (W1): render the picker into a fixed host element (the
+   * leaderboard popup's "Columns" section) and remember it so refresh() keeps it
+   * honest. Idempotent — re-mounting simply re-renders. Distinct from mount(),
+   * which wires a trigger button to OPEN a floating popover; a given picker
+   * instance uses one mode or the other, never both.
+   */
+  function mountInline(container) {
+    if (!container) return;
+    const ns = getDiscipline();
+    const formats = getFormats();
+    renderInline(container, ns, formats);
+    inlineState = { el: container, ns, formats: formats.slice() };
+  }
+
+  /** Called by the host to keep the picker honest after a re-render / store
+   * change. INLINE mode (leaderboard): re-render on a namespace/format change,
+   * else just re-sync checked state (the `anchor` arg is ignored). POPOVER mode
+   * (player pop-up): re-anchor to the (possibly recreated) trigger, reposition,
+   * and re-sync checked state — the host may have silently dropped a column out
+   * from under it. A null anchor in popover mode means the trigger is gone (e.g.
+   * the toolbar mode changed under it), so the popover closes. */
+  function refresh(anchor) {
+    // Inline mode (leaderboard, W1): the picker lives permanently in the popup's
+    // Columns section — no anchor / reposition / close-on-null. Keep it honest
+    // with the (possibly pending) store: a discipline or format change swaps the
+    // whole metric vocabulary → full re-render; otherwise just re-sync checked
+    // state (cheap, no focus loss).
+    if (inlineState) {
+      const ns = getDiscipline();
+      const formats = getFormats();
+      if (ns !== inlineState.ns || !sameFormats(formats, inlineState.formats)) {
+        renderInline(inlineState.el, ns, formats);
+        inlineState.ns = ns;
+        inlineState.formats = formats.slice();
+      } else {
+        syncCheckedState(inlineState.el);
+      }
+      return;
+    }
+    // Popover mode (player pop-up): re-anchor, re-sync checked state, reposition;
+    // a null anchor means the trigger is gone (e.g. an error state), so close.
+    if (!openState) return;
+    if (!anchor) {
+      close();
+      return;
+    }
+    openState.anchor = anchor;
+    syncCheckedState(openState.el);
     positionColumnsPopover(openState.el, anchor);
   }
 
@@ -234,142 +435,16 @@ export function createColumnsPicker({ getColumns, setColumns, getDiscipline, get
     close();
     const ns = getDiscipline();
     const formats = getFormats();
-    const all = eligibleMetrics(ns, formats);
-    const basic = all.filter(
-      (m) => !m.isPhaseMetric && m.section !== "dismissal" && m.section !== "fielding" && m.section !== "impact"
-    );
-    const dismissal = all.filter((m) => m.section === "dismissal");
-    // Fielding / Impact (Wave 3): their own sub-headers in BOTH views. Plain
-    // data-key checkboxes (same mechanics as Basic) — the generic
-    // [data-key] change handler below already wires them.
-    const fielding = all.filter((m) => m.section === "fielding");
-    const impact = all.filter((m) => m.section === "impact");
-    const phase = all.filter((m) => m.isPhaseMetric);
-    const visible = new Set(getColumns());
-
     const popover = document.createElement("div");
     popover.className = "columns-popover";
-    const section = (label, metrics) =>
-      metrics.length
-        ? `<div class="columns-popover__section-label">${label}</div>
-           <div class="columns-popover__list">
-             ${metrics
-               .map(
-                 (m) => `<label class="columns-popover__item">
-                   <input type="checkbox" data-key="${m.key}" ${visible.has(m.key) ? "checked" : ""} />
-                   <span>${metricDisplayLabel(m, formats)}</span>
-                 </label>`
-               )
-               .join("")}
-           </div>`
-        : "";
-
-    // Dismissals: the pruned real/rare + "Show as %" layout, batting ONLY
-    // (see the RARE_DISMISSAL_KINDS doc comment for why every other namespace
-    // keeps the plain `section()` list above — they never had the 24-checkbox
-    // problem this solves).
-    let dismissalHTML;
-    if (ns === "batting") {
-      const showPct = computeInitialShowPct(getColumns());
-      const realKinds = DISMISSAL_KINDS.filter((d) => !RARE_DISMISSAL_KINDS.has(d.kind));
-      const rareKinds = DISMISSAL_KINDS.filter((d) => RARE_DISMISSAL_KINDS.has(d.kind));
-      dismissalHTML = `
-        <div class="columns-popover__section-label">Dismissals</div>
-        <label class="columns-popover__pct-toggle">
-          <input type="checkbox" data-role="dismissal-pct-toggle" ${showPct ? "checked" : ""} />
-          <span>Show as %</span>
-        </label>
-        <div class="columns-popover__list">
-          ${realKinds.map((d) => dismissalRowHTML(d, visible)).join("")}
-        </div>
-        <details class="columns-popover__disclosure">
-          <summary><span class="columns-popover__disclosure-arrow">▸</span> Rare dismissals</summary>
-          <div class="columns-popover__list">
-            ${rareKinds.map((d) => dismissalRowHTML(d, visible)).join("")}
-          </div>
-        </details>`;
-    } else {
-      dismissalHTML = section("Dismissals", dismissal);
-    }
-
-    popover.innerHTML =
-      section("Basic", basic) +
-      dismissalHTML +
-      section("Fielding", fielding) +
-      section("Impact", impact) +
-      section("Phase", phase);
+    popover.innerHTML = buildPickerHTML(ns, formats);
     document.body.appendChild(popover);
     positionColumnsPopover(popover, anchor);
 
-    // Plain data-key checkboxes: Basic, Fielding, Impact, Phase, and (outside
-    // batting) Dismissals — unchanged mechanics from before the extraction.
-    popover.querySelectorAll('input[type="checkbox"][data-key]').forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const cols = getColumns().slice();
-        if (cb.checked) {
-          if (!cols.includes(cb.dataset.key)) cols.push(cb.dataset.key);
-        } else {
-          const idx = cols.indexOf(cb.dataset.key);
-          if (idx >= 0) cols.splice(idx, 1);
-        }
-        // R4 Wave 4a (A1): INSTANT column change — the host's setColumns applies
-        // it to the frozen table now (re-rendering / requerying the same rows)
-        // without lighting Search. The checkbox already reflects the pick; the
-        // popover (on document.body) survives the requery via refresh().
-        setColumns(cols);
-      });
-    });
-
-    // Batting Dismissals rows: each checkbox stands for whichever variant
-    // (count vs %) the toggle currently selects. Ticking a previously-unchecked
-    // row adds THAT variant; unticking removes BOTH (defensive against a
-    // legacy mixed-state save carrying the "wrong" one — see
-    // computeInitialShowPct's doc comment).
-    const toggleEl = popover.querySelector('[data-role="dismissal-pct-toggle"]');
-    popover.querySelectorAll('input[type="checkbox"][data-count-key]').forEach((cb) => {
-      cb.addEventListener("change", () => {
-        // getColumns() is the effective-ns list — always "batting" here, since
-        // this section only renders when ns === "batting".
-        const cols = getColumns().slice();
-        const countKey = cb.dataset.countKey;
-        const pctKey = cb.dataset.pctKey;
-        if (cb.checked) {
-          const activeKey = toggleEl.checked ? pctKey : countKey;
-          if (!cols.includes(activeKey)) cols.push(activeKey);
-        } else {
-          [countKey, pctKey].forEach((k) => {
-            const idx = cols.indexOf(k);
-            if (idx >= 0) cols.splice(idx, 1);
-          });
-        }
-        setColumns(cols); // A1: INSTANT, no Search light
-      });
-    });
-
-    // Section-level "Show as %" toggle: on every flip, normalise EVERY
-    // currently-checked dismissal row onto the new variant (drop whichever
-    // key is present, push the toggle's own key) — this is the "normalise on
-    // first interaction" rule (decision 44c): opening the popover never
-    // rewrites a legacy mixed-state column list by itself, only an actual
-    // toggle flip (or a row check/uncheck, handled above) does.
-    if (toggleEl) {
-      toggleEl.addEventListener("change", () => {
-        const cols = getColumns().slice();
-        const showPct = toggleEl.checked;
-        for (const d of DISMISSAL_KINDS) {
-          const countKey = d.key;
-          const pctKey = `${d.key}_pct`;
-          const wasChecked = cols.includes(countKey) || cols.includes(pctKey);
-          if (!wasChecked) continue;
-          [countKey, pctKey].forEach((k) => {
-            const idx = cols.indexOf(k);
-            if (idx >= 0) cols.splice(idx, 1);
-          });
-          cols.push(showPct ? pctKey : countKey);
-        }
-        setColumns(cols); // A1: INSTANT, no Search light
-      });
-    }
+    // Same checkbox handlers the popover always had — now shared with the inline
+    // host so both surfaces behave identically (see wireCheckboxes). The popover
+    // lives on document.body and survives an instant-apply requery via refresh().
+    wireCheckboxes(popover);
 
     const onDocClick = (e) => {
       if (popover.contains(e.target) || e.target === anchor || anchor.contains?.(e.target)) return;
@@ -411,5 +486,5 @@ export function createColumnsPicker({ getColumns, setColumns, getDiscipline, get
     });
   }
 
-  return { mount, open, close, refresh };
+  return { mount, mountInline, open, close, refresh };
 }

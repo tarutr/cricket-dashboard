@@ -1515,7 +1515,7 @@ function floatPinsToTop(rows, state) {
 export function mountTable(
   container,
   store,
-  { onPlayerClick, onOpenFilters, onClear, onSearch, onDateChange, getAppliedState, onColumnsApplied, onSkeletonReady, onTogglePin } = {}
+  { onPlayerClick, onOpenFilters, onOpenColumns, onClear, onSearch, onDateChange, getAppliedState, onColumnsApplied, onSkeletonReady, onTogglePin } = {}
 ) {
   let lastRows = [];
   let loadToken = 0;
@@ -1574,6 +1574,16 @@ export function mountTable(
     },
     setColumns: (cols) => applyColumnsInstant(effectiveDiscipline(store.get()), cols),
   });
+  // Columns-rejig W1: the leaderboard's picker now lives INLINE inside the
+  // leaderboard popup's "Columns" section (index.html #fpop-columns-host), not as
+  // a floating popover off the toolbar button. Mounted ONCE here — the host is a
+  // static element in index.html, present from load and persistent across every
+  // table-skeleton rebuild (so it never needs re-mounting). syncToolbar() +
+  // load()/enterView() call columnsPicker.refresh() to keep it in step with the
+  // (possibly pending) store; the toolbar "Columns" button is now a SHORTCUT that
+  // opens the popup to this section (onOpenColumns, wired in ensureSkeleton).
+  const columnsHostEl = document.getElementById("fpop-columns-host");
+  if (columnsHostEl) columnsPicker.mountInline(columnsHostEl);
   // In-progress column drag (task 2), or null. Tracked at this scope (not
   // inside wireColumnDrag's own closure) purely so onUp() can read where the
   // pointer last was over — see wireColumnDrag's doc comment.
@@ -1844,10 +1854,12 @@ export function mountTable(
       });
     }
 
-    // Wire the "Columns" trigger to the shared picker. mount() adds the same
-    // stopPropagation + open-on-click the inline handler used to; each skeleton
-    // rebuild makes a fresh button, so re-mounting it never double-binds.
-    if (columnsBtnEl) columnsPicker.mount(columnsBtnEl);
+    // Columns-rejig W1: the "Columns" toolbar button is now a SHORTCUT — it opens
+    // the leaderboard popup with the Columns section expanded (main.js's
+    // onOpenColumns), where the picker lives inline (mounted once above). It no
+    // longer opens a floating popover. A fresh button is made on each skeleton
+    // rebuild, so binding here (not once) is correct and never double-binds.
+    if (columnsBtnEl && onOpenColumns) columnsBtnEl.addEventListener("click", () => onOpenColumns());
 
     // SEARCH button (R3.2): replaces the old toolbar "Graph" button and is the
     // ONE query trigger from the toolbar — main.js's runSearch commits pending
@@ -2526,7 +2538,10 @@ export function mountTable(
       }
     }
 
-    if (columnsBtnEl) columnsBtnEl.disabled = !results;
+    // Columns button (owner, W1 fix 2): always enabled — it's a shortcut into
+    // the popup's Columns section, configurable before the first search runs.
+    // Every OTHER toolbar control's enabled/disabled logic is untouched.
+    if (columnsBtnEl) columnsBtnEl.disabled = false;
 
     // Search button — dirty iff pending ≠ applied; enabled iff dirty AND
     // searchable (both dates present). Mirrors the graph's Update-chart button:
@@ -2602,6 +2617,15 @@ export function mountTable(
       blockedNoteEl.hidden = !showNote;
       blockedNoteEl.textContent = showNote ? "Pick a start and end date to search." : "";
     }
+
+    // Columns-rejig W1: the Columns picker now lives INLINE in the leaderboard
+    // popup, so — like every other toolbar control here — it must track the
+    // (possibly pending) store: a pending discipline/Vs/format change swaps its
+    // metric vocabulary, a preset/column edit changes which boxes are ticked.
+    // refresh() re-renders on a namespace/format change, else just re-syncs
+    // checked state (cheap, no-op when nothing moved). The anchor arg is unused
+    // in inline mode. Numbers untouched — this only redraws checkboxes.
+    columnsPicker.refresh();
   }
 
   /** Mid-query state: the toolbar stays mounted and fully interactive-looking

@@ -798,6 +798,24 @@ function boot() {
         filtersPopupEl.hidden = true;
         drawerController.onHide();
       }
+      // Columns-rejig W1: the two toolbar entry points open the SAME popup to
+      // different sections. The Filters button/prompt opens with the two filter
+      // sections expanded + Columns collapsed; the Columns button does the
+      // reverse. Both funnel through openPopup() (which re-syncs the shared
+      // controls) and then set the collapsible sections explicitly, so whichever
+      // was open last never leaks into the other entry point.
+      function openPopupToFilters() {
+        openPopup();
+        fpopSetSection("fpop-body-conditions", true);
+        fpopSetSection("fpop-body-advanced", true);
+        fpopSetSection("fpop-body-columns", false);
+      }
+      function openPopupToColumns() {
+        openPopup();
+        fpopSetSection("fpop-body-conditions", false);
+        fpopSetSection("fpop-body-advanced", false);
+        fpopSetSection("fpop-body-columns", true);
+      }
       async function runSearch({ fromToolbar = false } = {}) {
         // The ONE query trigger (R3.2: shared by BOTH the popup's "Search"
         // button AND the toolbar's SEARCH button). Date is REQUIRED (owner
@@ -994,8 +1012,13 @@ function boot() {
         // results-search pin uses.
         onTogglePin: (id, name) => togglePin(id, name),
         // The empty-state prompt's "Open filters" button + the toolbar Filters
-        // button open the Filters popup (the query runs from Search).
-        onOpenFilters: () => openFiltersPopup(),
+        // button open the leaderboard popup to the FILTER sections (Columns
+        // collapsed); the query still runs only from Search.
+        onOpenFilters: () => openPopupToFilters(),
+        // Columns-rejig W1: the toolbar "Columns" button is a shortcut that opens
+        // the SAME popup to the Columns section (filter sections collapsed), where
+        // the picker now lives inline. Pure UI navigation — no query, no numbers.
+        onOpenColumns: () => openPopupToColumns(),
         // The toolbar's red "Clear" button — the same full reset as everywhere
         // else clearAll() is wired.
         onClear: () => clearAll(),

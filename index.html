@@ -63,6 +63,25 @@
             <div id="popup-advanced-host"></div>
           </div>
         </section>
+
+        <!-- Section 3: Columns (columns-rejig W1) — the leaderboard's column
+             picker, RELOCATED here from its old toolbar pop-over. table.js mounts
+             the SAME shared columnsPicker (createColumnsPicker → mountInline) into
+             the host below; ticking/unticking a column applies INSTANTLY (frozen-
+             scope requery, no Search). The toolbar "Columns" button is now a
+             shortcut that opens this popup with THIS section expanded (main.js's
+             onOpenColumns); the Filters button opens it with the two filter
+             sections expanded / Columns collapsed. Defaults collapsed so a plain
+             open lands on the familiar filters-first layout. Numbers untouched. -->
+        <section class="filters-popup__section">
+          <div class="filters-popup__section-header">
+            <span class="filters-popup__section-name">Columns</span>
+            <button type="button" class="filters-popup__chevron" data-role="fpop-section-toggle" aria-expanded="false" aria-controls="fpop-body-columns" aria-label="Show or hide Columns"><span aria-hidden="true">▾</span></button>
+          </div>
+          <div class="filters-popup__section-body" id="fpop-body-columns" hidden>
+            <div id="fpop-columns-host"></div>
+          </div>
+        </section>
       </div>
 
       <!-- "This will come back empty" notice. A pick that the rest of your filters
