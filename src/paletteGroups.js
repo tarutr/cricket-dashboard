@@ -359,12 +359,14 @@ export function createPaletteGroupsBuilder(deps) {
         metricFamily("Dismissal Type", parts.dismissal.map(dismissalVariant)),
         leafMetric("ducks", "Ducks"),
         leafMetric("not_outs", "Not Outs"),
-        // Matchup-namespace restore (Wave R2c): "Dismissals" is a matchup_batting
-        // metric only — leafMetric resolves it just in matchup-batting mode (ns =
-        // matchup_batting) and returns null (skipped) in plain batting. Restores a
-        // filter R2b's catch-all removal dropped; "Balls Faced" above already sits
-        // in this group and likewise resolves against the active namespace.
-        leafMetric("dismissals", "Dismissals"),
+        // Matchup-namespace restore (Wave R2c): "Dismissals" is offered as a FILTER
+        // only in matchup-batting mode (ns = matchup_batting). It USED to be
+        // matchup-only implicitly (plain batting had no "dismissals" metric, so
+        // leafMetric returned null). Columns content rework Wave B ADDED a plain
+        // batting `dismissals` COLUMN of the same key; the explicit `matchup` gate
+        // KEEPS this filter matchup-only, so the filter palette stays byte-identical
+        // (the plain Dismissals FILTER is a separate later filter-parity task).
+        matchup ? leafMetric("dismissals", "Dismissals") : null,
         leafMetric("high_score", "High Score"),
         leafMetric("fifties", "50s"),
         leafMetric("hundreds", "100s"),
@@ -399,11 +401,14 @@ export function createPaletteGroupsBuilder(deps) {
         leafMetric("runs_conceded", "Runs Conceded"),
         leafMetric("wickets", "Wickets"),
         // Matchup-namespace restore (Wave R2c): "Fours Conceded" / "Sixes Conceded"
-        // are matchup_bowling metrics only — leafMetric resolves them in matchup-
-        // bowling mode (ns = matchup_bowling) and returns null (skipped) in plain
-        // bowling. Restores two filters R2b's catch-all removal dropped.
-        leafMetric("fours_conceded", "Fours Conceded"),
-        leafMetric("sixes_conceded", "Sixes Conceded"),
+        // are offered as FILTERS only in matchup-bowling mode (ns = matchup_bowling).
+        // They USED to be matchup-only implicitly (plain bowling had no such metric,
+        // so leafMetric returned null). Columns content rework Wave B ADDED plain
+        // bowling `fours_conceded` / `sixes_conceded` COLUMNS of the same keys; the
+        // explicit `matchup` gate KEEPS these filters matchup-only, so the filter
+        // palette stays byte-identical (the plain filters are a later parity task).
+        matchup ? leafMetric("fours_conceded", "Fours Conceded") : null,
+        matchup ? leafMetric("sixes_conceded", "Sixes Conceded") : null,
         metricFamily("Wicket Types", parts.dismissal.map((m) => [m.key, metricDisplayLabel(m, s.formats)])),
         leafMetric("best", "Best Bowling"),
         // 4-WI / 5-WI removed (R2b): the fixed exactly-4 / 5-plus haul leaves are

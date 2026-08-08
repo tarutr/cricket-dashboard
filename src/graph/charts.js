@@ -23,7 +23,7 @@ import {
   buildMatchContextClauses,
   matchContextJoinSql,
 } from "../filters.js";
-import { buildQuery, buildFieldingCteSql, buildPomCteSql, isFieldingEventMetric, isPomMetric } from "../table.js";
+import { buildQuery, buildFieldingCteSql, buildPomCteSql, buildResultCteSql, isFieldingEventMetric, isPomMetric, isResultMetric } from "../table.js";
 import { escSql as esc, matchupVsActive, matchContextActive } from "../state.js";
 
 const ID_COL = { batting: "batter_id", bowling: "bowler_id" };
@@ -94,6 +94,11 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   // then byte-identical to before this change (non-fielding charts untouched).
   const wantsFielding = metrics.some(isFieldingEventMetric);
   const wantsPom = metrics.some(isPomMetric);
+  // Result-family metrics (Wave B) exist only through the LEFT-JOINed result_cte
+  // (sqlExpression MAX(result_cte.…)), so charting one needs the SAME CTE the
+  // Stats table builds — attach it via the shared builder with the SAME predicate
+  // buildQuery uses, so a charted Result value is byte-for-byte the table's.
+  const wantsResult = metrics.some(isResultMetric);
 
   // Opposition + batting-position filters (D4 Piece 3) apply here too — the
   // card's scope line describes them, so the charted numbers must honor them.
@@ -157,6 +162,7 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   const cteDefs = [];
   if (wantsFielding) cteDefs.push(buildFieldingCteSql(state));
   if (wantsPom) cteDefs.push(buildPomCteSql(state));
+  if (wantsResult) cteDefs.push(buildResultCteSql(state));
 
   let fromSql = view;
   // Match-context 1:1 LEFT JOIN by match_id (added first so the mctx alias exists
@@ -164,6 +170,7 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   if (wantsMatchContext) fromSql += matchContextJoinSql(view);
   if (wantsFielding) fromSql += ` LEFT JOIN fielding_cte ON fielding_cte.fld_player_id = ${idCol}`;
   if (wantsPom) fromSql += ` LEFT JOIN pom_cte ON pom_cte.pom_player_id = ${idCol}`;
+  if (wantsResult) fromSql += ` LEFT JOIN result_cte ON result_cte.res_player_id = ${idCol}`;
 
   const sql = [
     ...(cteDefs.length ? [`WITH ${cteDefs.join(",\n")}`] : []),

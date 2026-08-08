@@ -747,6 +747,11 @@ export const isFieldingEventMetric = (m) => m && m.source === "fielding_events";
  * JS-merged `matches`) — surfaced via the parallel `pom_cte` join. Exported
  * for the same graph-fetch reuse as isFieldingEventMetric. */
 export const isPomMetric = (m) => m && m.source === "player_matches" && m.key !== "matches";
+/** Result-family metric(s) (Matches Won/Lost/Tied/No-result/Toss Won, source
+ * "result", columns content rework Wave B) — surfaced via the per-player
+ * `result_cte` join. Exported so the Graph Builder's per-player fetch
+ * (graph/charts.js) attaches the IDENTICAL join with the SAME predicate. */
+export const isResultMetric = (m) => m && m.source === "result";
 
 /** SQL WHERE predicates for the fielding SLICE conditions (fielding rebuild) —
  * the fielding metric's OWN dims, applied inside `fielding_cte` so the
@@ -956,6 +961,53 @@ export function buildPomCteSql(state) {
 }
 
 /**
+ * Build the `result_cte` definition (columns content rework Wave B) — per-player
+ * counts of MATCH OUTCOMES relative to the player's own team (Matches Won / Lost /
+ * Tied / No-result / Toss Won). Same "CTE body without leading WITH" convention as
+ * buildPomCteSql. A whole-MATCH fact, so it sits on `player_matches` (one row per
+ * match the player played, carrying their own `team`) with the SAME scope options
+ * pom_cte / the "matches" query use — core (gender/format/date/team-type) + team +
+ * event/venue + profile + R. Pos., pin-exempt, plus the name search — so Result
+ * columns partition Player Matches and never diverge from PoM/matches on scope.
+ *
+ * The outcome fields come from a 1:1 LEFT JOIN of the SHARED matchContextSubselectSql()
+ * (aliased `mctx`, with match_id RENAMED → mctx_match_id — the same collision-safe
+ * key r_pos_cte/fielding_cte/pom_cte use). NONE of mctx's projected columns
+ * (match_winner/result_type/toss_winner/…) shares a name with any player_matches
+ * column, and match_id is renamed, so every unqualified scope-clause column
+ * (player_id/team/gender/match_type/match_date/match_id) resolves unambiguously to
+ * player_matches. The join is 1 match per match_id, so it never multiplies rows.
+ *
+ * The five CASE predicates are byte-for-byte the "Match Result" / "Toss Result"
+ * FILTER comparisons (filters.js buildMatchContextClauses, comparing the row's own
+ * team to the match fields), so a Result column and its filter reconcile by
+ * construction. Built ONLY when a Result column/condition is present (buildQuery's
+ * wantsResult gate); with none, buildQuery emits byte-identical SQL.
+ */
+export function buildResultCteSql(state) {
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  const resClauses = buildScopeClausesTagged(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
+  if (state.search && state.search.trim()) {
+    resClauses.push(bypassableClause(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
+  }
+  const resWhereSql = whereWithPinExemption(resClauses, "player_id", pins);
+  return [
+    "result_cte AS (",
+    "  SELECT player_id AS res_player_id,",
+    "         SUM(CASE WHEN team = mctx.match_winner THEN 1 ELSE 0 END) AS won,",
+    "         SUM(CASE WHEN mctx.match_winner IS NOT NULL AND mctx.match_winner <> team THEN 1 ELSE 0 END) AS lost,",
+    "         SUM(CASE WHEN mctx.result_type = 'tie' THEN 1 ELSE 0 END) AS tied,",
+    "         SUM(CASE WHEN mctx.result_type = 'no result' THEN 1 ELSE 0 END) AS no_result,",
+    "         SUM(CASE WHEN team = mctx.toss_winner THEN 1 ELSE 0 END) AS toss_won",
+    "  FROM player_matches",
+    `  LEFT JOIN ${matchContextSubselectSql()} ON mctx.mctx_match_id = player_matches.match_id`,
+    `  WHERE ${resWhereSql}`,
+    "  GROUP BY player_id",
+    ")",
+  ].join("\n");
+}
+
+/**
  * Build the `xdisc_cte` definition (columns-rejig W3 — cross-discipline columns,
  * OQ1) — same "CTE body without leading WITH" convention as buildFieldingCteSql /
  * buildPomCteSql. ONE row per player over the OTHER discipline's innings-grain
@@ -1107,7 +1159,7 @@ export function buildQuery(state, visibleColumns, opts = {}) {
 
   const inningsMetrics = visibleColumns
     .map((key) => getMetric(key, discipline))
-    .filter((m) => m && m.source !== "player_matches" && m.source !== "fielding_events");
+    .filter((m) => m && m.source !== "player_matches" && m.source !== "fielding_events" && m.source !== "result");
 
   // R. Pos. column (task 5, B1 Wave 5 polish): batting-only, opts this ONE
   // metric out of the generic "interpolate metric.sqlExpression verbatim"
@@ -1162,7 +1214,14 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   const pomCols = visibleColumns
     .map((key) => getMetric(key, discipline))
     .filter(isPomMetric);
-  for (const m of [...fieldingEventCols, ...pomCols]) {
+  // Result-family (Wave B): Matches Won/Lost/Tied/No-result/Toss Won — a per-player
+  // whole-match count surfaced via `result_cte` (source "result"), the same
+  // per-player LEFT-JOIN + MAX() projection shape as pom_cte/fielding_cte. Excluded
+  // from inningsMetrics above (not innings columns).
+  const resultCols = visibleColumns
+    .map((key) => getMetric(key, discipline))
+    .filter(isResultMetric);
+  for (const m of [...fieldingEventCols, ...pomCols, ...resultCols]) {
     selectParts.push(`${m.sqlExpression} AS ${m.key}`);
   }
   const wantsFielding =
@@ -1171,6 +1230,11 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   const wantsPom =
     pomCols.length > 0 ||
     advancedReferencesMetric(state.advanced, discipline, isPomMetric);
+  // Gated exactly like wantsPom: a Result COLUMN visible OR a Result STAT CONDITION
+  // active. With neither, result_cte is never built/joined → SQL byte-identical.
+  const wantsResult =
+    resultCols.length > 0 ||
+    advancedReferencesMetric(state.advanced, discipline, isResultMetric);
 
   // Cross-discipline columns (columns-rejig W3, OQ1 — the all-rounder view): a
   // column keyed to the OTHER discipline (e.g. `x__bowling__strike_rate` on a
@@ -1261,6 +1325,12 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   let pomCteSql = null;
   if (wantsPom) pomCteSql = buildPomCteSql(state);
 
+  // Result subquery (Wave B): per-player match-outcome counts over player_matches +
+  // a 1:1 matches join, built by buildResultCteSql (same scope options + inert
+  // guarantee as pom_cte). Only built when a Result column/condition is present.
+  let resultCteSql = null;
+  if (wantsResult) resultCteSql = buildResultCteSql(state);
+
   // Cross-discipline subquery (columns-rejig W3): pre-aggregate the OTHER
   // discipline's view to ONE row per player, honoring the same core scope the
   // fielding CTE honors (retargeted to that discipline's columns — see
@@ -1340,6 +1410,7 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   if (wantsRPos) cteDefs.push(regularPositionCteSql(state));
   if (wantsFielding) cteDefs.push(fieldingCteSql);
   if (wantsPom) cteDefs.push(pomCteSql);
+  if (wantsResult) cteDefs.push(resultCteSql);
   if (wantsCross) cteDefs.push(crossCteSql);
 
   let fromSql = view;
@@ -1351,6 +1422,9 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   if (wantsRPos) fromSql += ` LEFT JOIN r_pos_cte ON r_pos_cte.pos_batter_id = ${idCol}`;
   if (wantsFielding) fromSql += ` LEFT JOIN fielding_cte ON fielding_cte.fld_player_id = ${idCol}`;
   if (wantsPom) fromSql += ` LEFT JOIN pom_cte ON pom_cte.pom_player_id = ${idCol}`;
+  // Result (Wave B): 1:1 LEFT JOIN by the unified player id — res_player_id is the
+  // same id space pom_cte joins on, so it never multiplies innings rows.
+  if (wantsResult) fromSql += ` LEFT JOIN result_cte ON result_cte.res_player_id = ${idCol}`;
   // Cross-discipline (columns-rejig W3): 1:1 LEFT JOIN by the unified player id —
   // xd_player_id is the other discipline's batter_id/bowler_id, the same id space
   // fielding_cte/pom_cte join on, so it never multiplies innings rows.

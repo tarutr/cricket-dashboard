@@ -440,18 +440,28 @@ export function createColumnsPicker({
   const HIDDEN_COLUMN_KEYS = new Set(["player_of_match", "wickets_per_innings"]);
 
   const BATTING_BASIC_ORDER = [
-    "innings", "r_pos", "runs", "balls_faced", "high_score", "fours", "sixes",
-    "fifties", "hundreds", "ducks", "not_outs",
+    "innings", "r_pos", "runs", "balls_faced", "dismissals", "high_score", "fours", "sixes",
+    "dot_balls", "fifties", "hundreds", "ducks", "not_outs",
   ];
   const BATTING_DETAILED_ORDER = [
     "average", "strike_rate", "running_sr", "balls_per_dismissal", "balls_per_boundary",
-    "balls_per_four", "balls_per_six", "balls_faced_share",
+    "boundary_balls", "boundary_runs", "balls_per_four", "balls_per_six", "balls_faced_share",
   ];
   const BOWLING_BASIC_ORDER = [
     "innings", "wickets", "balls", "overs", "runs_conceded", "maidens",
-    "extras_wides", "extras_noballs", "best",
+    "extras_wides", "extras_noballs", "fours_conceded", "sixes_conceded", "dot_balls_conceded", "best",
   ];
   const BOWLING_DETAILED_ORDER = ["economy", "average", "strike_rate"];
+
+  // Columns content rework Wave B: the owner-approved v5 layout (columns-content-
+  // audit) places two COUNTING totals — Boundary Balls / Boundary Runs — in the
+  // batting Detailed sub-section (alongside the rate/% stats), not Basic. The
+  // kind-based Basic/Detailed split below (isDetailed) can't express that on its own
+  // (they're kind:"total"), so this DISPLAY-ONLY set lists the total keys the
+  // four-dropdown layout treats as Detailed. metrics.js `kind` is untouched (charts/
+  // donut/additivity unaffected) — this is purely picker sub-grouping, the same
+  // posture as the order arrays / HIDDEN_COLUMN_KEYS above.
+  const DETAILED_TOTAL_KEYS = new Set(["boundary_balls", "boundary_runs"]);
 
   /** Reorder `list` so any metric whose key appears in `order` comes first (in
    * `order`'s sequence); every other metric keeps its ORIGINAL relative order,
@@ -529,7 +539,7 @@ export function createColumnsPicker({
     const bucket = disciplineBucket(ns);
     const all = eligibleMetrics(ns, formats);
     const visible = new Set(getColumns());
-    const isDetailed = (m) => m.kind === "rate" || m.kind === "percent";
+    const isDetailed = (m) => m.kind === "rate" || m.kind === "percent" || DETAILED_TOTAL_KEYS.has(m.key);
     // Columns content rework Wave A: scoped to the PLAIN batting/bowling
     // namespaces only — matchup_batting/matchup_bowling (Vs mode) keep their
     // pre-Wave-A layout untouched (their own "matches"/wickets_per_innings defs

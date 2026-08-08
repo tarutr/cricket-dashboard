@@ -368,6 +368,70 @@ const BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
   },
+  // ── Columns content rework Wave B (2026-08-08): new PLAIN counting metrics ────
+  // Additive counting totals that surface, as their OWN columns, the sub-totals
+  // the existing rate/% metrics already compute internally — so each new column and
+  // its sibling rate/% can never disagree (each reuses the EXACT sub-expression):
+  //   • Dismissals   = SUM(dismissed) — the DENOMINATOR of `average`
+  //     (SUM(runs)/NULLIF(SUM(dismissed),0)), so Runs / Dismissals == Batting
+  //     Average by construction. (matchup_batting has its own `dismissals`; this is
+  //     the plain-batting sibling with the identical aggregate.)
+  //   • Dot Balls    = SUM(dots) — the NUMERATOR of `dot_pct`.
+  //   • Boundary Balls = SUM(fours_hit)+SUM(sixes_hit) — the boundary-ball count the
+  //     boundary_pct / balls_per_boundary defs use (fours_hit/sixes_hit already
+  //     apply the is_not_boundary rule in the view, so they ARE the boundary balls).
+  //   • Boundary Runs  = 4*SUM(fours_hit)+6*SUM(sixes_hit) — the boundary-run
+  //     numerator of boundary_runs_pct.
+  // Counting totals: kind "total", additive, zeroIsData true (0 is a real value).
+  {
+    key: "dismissals",
+    label: "Dismissals",
+    shortLabel: "Dis",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(dismissed)",
+    higherIsBetter: false, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  {
+    key: "dot_balls",
+    label: "Dot Balls",
+    shortLabel: "Dots",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(dots)",
+    higherIsBetter: false, // batting: fewer dots is better (mirrors dot_pct)
+    format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  {
+    key: "boundary_balls",
+    label: "Boundary Balls",
+    shortLabel: "Bdry Balls",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(fours_hit) + SUM(sixes_hit)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  {
+    key: "boundary_runs",
+    label: "Boundary Runs",
+    shortLabel: "Bdry Runs",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "4 * SUM(fours_hit) + 6 * SUM(sixes_hit)",
+    higherIsBetter: true, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
   // Faced-ball progression strike rates (D4): how a batter scores across the
   // first 10 balls faced in an innings, then balls 11–20, then 21+. These are
   // ball-count buckets (not over-based), so they are format-agnostic and NOT
@@ -1251,6 +1315,52 @@ const BOWLING_METRICS = [
     additive: true,
     kind: "total",
   },
+  // ── Columns content rework Wave B (2026-08-08): plain BOWLING counting metrics ──
+  // The bowling analogues of the batting Wave B counts — a bowler's boundaries and
+  // dot balls conceded — today available only in the matchup_bowling namespace
+  // (fours_conceded / sixes_conceded) or as a %'s numerator:
+  //   • 4s Conceded = SUM(fours_conceded) — matchup_bowling's aggregate, as plain bowling.
+  //   • 6s Conceded = SUM(sixes_conceded) — matchup_bowling's aggregate, as plain bowling.
+  //   • Dot Balls Conceded = SUM(dots) — the NUMERATOR of the bowling `dot_pct`.
+  // fours_conceded/sixes_conceded already apply the is_not_boundary boundary rule
+  // in the view. Counting totals: kind "total", additive, zeroIsData true.
+  {
+    key: "fours_conceded",
+    label: "4s Conceded",
+    shortLabel: "4s Con",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(fours_conceded)",
+    higherIsBetter: false, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  {
+    key: "sixes_conceded",
+    label: "6s Conceded",
+    shortLabel: "6s Con",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(sixes_conceded)",
+    higherIsBetter: false, format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
+  {
+    key: "dot_balls_conceded",
+    label: "Dot Balls Conceded",
+    shortLabel: "Dots Con",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(dots)",
+    higherIsBetter: true, // bowling: MORE dots is better (mirrors dot_pct)
+    format: "int",
+    isPhaseMetric: null, zeroIsData: true,
+    additive: true,
+    kind: "total",
+  },
 ];
 
 // ── Fielding + Impact (fielding rebuild) ────────────────────────────────────
@@ -1323,6 +1433,52 @@ for (const disc of ["batting", "bowling"]) {
       section: f.section,
       sqlExpression: f.sqlExpression,
       higherIsBetter: true, format: "int",
+      isPhaseMetric: null, zeroIsData: true,
+      additive: true,
+      kind: "total",
+    });
+  }
+}
+
+// ── Result family (columns content rework Wave B, 2026-08-08) ────────────────
+// Per-player counts of MATCH OUTCOMES relative to the player's own team — Matches
+// Won / Lost / Tied / No-result and Toss Won. Like Player-of-the-Match, these are
+// whole-MATCH facts, not innings aggregates, so they live in a per-player CTE
+// (`result_cte`, built by table.js's buildResultCteSql over player_matches +
+// matches) LEFT-JOINed onto the batting/bowling GROUP BY and projected with MAX()
+// (one row per player, constant across the group — the same functionally-dependent
+// -join shape pom_cte/fielding_cte use). A DEDICATED `source: "result"` (NOT
+// "player_matches", which isPomMetric would claim, routing them through the wrong
+// CTE) makes table.js gate + join result_cte only when a Result column/condition
+// is shown — so with none, the emitted SQL is byte-identical.
+//
+// The five outcome predicates INSIDE result_cte are the SAME fields + comparisons
+// the "Match Result" / "Toss Result" FILTERS use (filters.js buildMatchContext-
+// Clauses): team = match_winner (won) / match_winner IS NOT NULL AND <> team
+// (lost) / result_type = 'tie' (tied) / result_type = 'no result' / team =
+// toss_winner (toss won). So a Result column reconciles with the matching filter
+// by construction. `section: "impact"` routes them to the Match dropdown right
+// after Player of the Match Count (the same rule potm_count uses). Defined once
+// and pushed into BOTH disciplines (a match fact is discipline-agnostic, exactly
+// like PoM). Counting totals: kind "total", additive, zeroIsData true.
+const RESULT_METRIC_SPECS = [
+  { key: "res_won", label: "Matches Won", shortLabel: "Won", col: "won", higherIsBetter: true },
+  { key: "res_lost", label: "Matches Lost", shortLabel: "Lost", col: "lost", higherIsBetter: false },
+  { key: "res_tied", label: "Matches Tied", shortLabel: "Tied", col: "tied", higherIsBetter: null },
+  { key: "res_no_result", label: "No Result", shortLabel: "NR", col: "no_result", higherIsBetter: null },
+  { key: "res_toss_won", label: "Toss Won", shortLabel: "Toss", col: "toss_won", higherIsBetter: null },
+];
+for (const disc of ["batting", "bowling"]) {
+  for (const r of RESULT_METRIC_SPECS) {
+    (disc === "batting" ? BATTING_METRICS : BOWLING_METRICS).push({
+      key: r.key,
+      label: r.label,
+      shortLabel: r.shortLabel,
+      discipline: disc,
+      source: "result",
+      section: "impact",
+      sqlExpression: `MAX(result_cte.${r.col})`,
+      higherIsBetter: r.higherIsBetter, format: "int",
       isPhaseMetric: null, zeroIsData: true,
       additive: true,
       kind: "total",
