@@ -2102,6 +2102,69 @@ a { color: var(--color-accent); }
   color: var(--color-muted);
 }
 
+/* Multi-instance "copies" layout (columns content rework E1b) — leaderboard inline
+   picker only. A column identity renders as an OFFER header (.cols-offer, the
+   append-checkbox + label) followed by one .cols-instance row PER copy shown, each
+   carrying that copy's count/% toggle + Sort-by / Highlight / Duplicate / Remove.
+   The instance rows are indented under the header so they read as "this column's
+   copies". The pop-up popover never renders these (it stays a flat checkbox list). */
+.cols-metric {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.cols-instances {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  /* Indent past the header checkbox so the copy controls line up under the label. */
+  margin-left: calc(1em + var(--space-2));
+}
+.cols-instance {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* The copy's controls sit at the LEFT of its (label-less) row and share the
+   .columns-popover__item-controls flex box with a left auto-margin removed. */
+.cols-instance .columns-popover__item-controls {
+  flex: 0 0 auto;
+}
+
+/* Duplicate control: the two-overlapping-cards copy glyph, styled like the Sort-by
+   button (muted, brightening on hover) but STROKED (the front card must occlude the
+   back one to read as "duplicate"). */
+.col-dup-btn,
+.col-remove-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5em;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: var(--space-1);
+  color: var(--color-muted);
+  opacity: 0.55;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 0.85em;
+  line-height: 1;
+}
+.col-dup-btn svg {
+  width: 1em;
+  height: 1em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  display: block;
+}
+.col-dup-btn:hover { opacity: 1; color: var(--color-fg); }
+/* Remove control: a plain ✕, brightening to the accent (pin-red) on hover so it
+   reads as the destructive per-copy action. */
+.col-remove-btn:hover { opacity: 1; color: var(--color-accent); }
+
 /* Four-dropdown Columns layout (columns-rejig W4) — leaderboard inline picker
    only (the pop-up popover keeps its flat list). A bar of four trigger buttons
    (Match · Batting · Bowling · Fielding, each with a live count badge) sits above

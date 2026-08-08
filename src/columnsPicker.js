@@ -55,7 +55,7 @@ import {
   // Columns content rework D4 (parametric Innings Score Range + Wicket Haul composers).
   composedParamDescriptor, makeComposedParamKey, parseComposedParamKey, COMPOSED_PARAM_OP_TOKEN,
 } from "./metrics.js";
-import { eligibleMetrics, eligibleCrossMetrics } from "./state.js";
+import { eligibleMetrics, eligibleCrossMetrics, makeSlot } from "./state.js";
 // D4: the composer's operator <select> reuses the SAME operator vocabulary as the
 // pop-up / advanced filter (advanced.js is import-cycle-free — pure data model).
 import { OPERATORS } from "./advanced.js";
@@ -135,6 +135,16 @@ function activeToggleKey(pair, visible) {
 // table.js to avoid a circular import (table.js already imports this module).
 const HIGHLIGHT_GLYPH =
   '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g transform="rotate(45 12 12)"><rect x="9" y="2" width="6" height="12" rx="1"/><polygon points="9,14 15,14 12,19"/></g><rect x="4" y="19" width="10" height="2" rx="1"/></svg>';
+
+// Columns content rework E1b: the "duplicate this column" glyph — the standard
+// duplicate/copy symbol of two overlapping rectangles ("two cards, one in front of
+// the other"). Drawn STROKED (fill:none; stroke:currentColor via .col-dup-btn svg)
+// rather than filled like HIGHLIGHT_GLYPH/PIN_GLYPH, because two solid rectangles
+// wouldn't read as overlapping cards — the front card must occlude the back one,
+// which the outline shows cleanly and still recolours exactly like the sibling
+// controls. Same 24×24 viewBox + monochrome-currentColor convention as the others.
+const DUPLICATE_GLYPH =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M6 15H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v1"/></svg>';
 
 // ── Dismissals column-picker grouping (decision 44/42, B2R wave 3) ───────────
 // The plain "batting" namespace is the ONLY one where metrics.js's dismissal
@@ -282,6 +292,27 @@ export function createColumnsPicker({
   setSort,
   getHighlights,
   setHighlights,
+  // Columns content rework E1b (2026-08-08): OPT-IN multi-instance ("copies")
+  // contract. When getSlots + applySlots are BOTH supplied (leaderboard only), the
+  // inline picker renders per-COPY: a stat shown twice lists as two rows, each with
+  // its own count/%, Sort-by, Highlight, duplicate and remove — and a metric's
+  // offer checkbox APPENDS a fresh copy instead of toggling one on/off (owner: "no
+  // longer binary on/off — re-picking appends a new instance"). The player pop-up
+  // popover passes NEITHER, so multiInstance is false there and it keeps its
+  // byte-identical key-based flat list. All of this is DISPLAY-only: the sacred
+  // query builders never see slots (load() dedups to distinct keys; buildMatchupQuery
+  // dedups internally), so two copies of a stat compute it exactly once.
+  //   getSlots() -> Slot[]   the ordered {id,key} column slots for the effective ns.
+  //   applySlots(slots) -> void   apply a freshly-built Slot[] (instant, no Search
+  //     light) — add / remove / duplicate a copy, or swap one copy's count/% variant
+  //     (a copy's variant IS its slot.key; its id is preserved so sort/highlight
+  //     follow it across the swap).
+  //   getHighlightIds() -> string[]   the highlighted SLOT IDS (per-copy highlight).
+  //   setHighlightIds(ids) -> void    apply a new highlighted-slot-id set.
+  getSlots,
+  applySlots,
+  getHighlightIds,
+  setHighlightIds,
   // Columns-rejig W3 (2026-08-07): OPT-IN cross-discipline exposure. When true AND
   // the current namespace is plain batting/bowling, the picker appends a small,
   // clearly-interim group listing the OTHER discipline's columns (e.g. Bowling
@@ -298,6 +329,11 @@ export function createColumnsPicker({
   // contract is supplied (leaderboard). Absent → the pop-up's plain checkbox
   // picker, unchanged.
   const controlsOn = !!(getSort && setSort && getHighlights && setHighlights);
+  // E1b: the per-copy "instances" layout is active only when the host supplies the
+  // slot-native contract (leaderboard). It implies controlsOn (the leaderboard
+  // passes both quartets). The pop-up popover supplies neither → false → its flat
+  // key-based rendering is untouched.
+  const multiInstance = !!(getSlots && applySlots && getHighlightIds && setHighlightIds);
   // The currently-open FLOATING popover for THIS picker, if any (Batch 3 fix 3).
   // Tracked here (not just a DOM query) so the host's refresh() can find and
   // re-sync it after every re-render — see open()'s doc comment. NULL for a
@@ -339,6 +375,107 @@ export function createColumnsPicker({
     window.removeEventListener("scroll", onScroll, true);
     window.removeEventListener("resize", onResize);
     openState = null;
+  }
+
+  // ── E1b multi-instance ("copies") rendering (leaderboard only, multiInstance) ─
+  // A leaderboard column identity is either a plain metric key or a count/% (count/
+  // per-match) PAIR whose canonical is its count key. Each identity renders as an
+  // OFFER header (a checkbox that APPENDS a copy — re-picking never toggles off,
+  // owner's "no longer binary" ruling) followed by one INSTANCE row per slot that
+  // currently shows it. An instance row carries the per-copy controls: the count/%
+  // segmented toggle (pairs only), Sort-by, Highlight, Duplicate, Remove — all keyed
+  // by the slot's stable id so each copy acts independently. Numbers are never
+  // touched here (display-only; the query dedups copies).
+
+  /** The count/% pair a key belongs to (whether the key is the COUNT variant, the
+   * ALT variant, or a composed run-source/wicket-type variant), or null for a plain
+   * column. Lets a copy's count/% toggle resolve the pair from whichever variant the
+   * slot currently shows. */
+  function pairForAnyKey(key, ns) {
+    const asCount = togglePairByCount(key, ns);
+    if (asCount) return asCount; // key IS a count variant
+    const altSet = _TOGGLE_ALTS_BY_NS[ns];
+    if (altSet && altSet.has(key)) {
+      for (const p of COLUMN_TOGGLE_PAIRS[ns] || []) if (p.alt === key) return p;
+    }
+    const rs = parseComposedRunSourceKey(key);
+    if (rs) return { count: makeComposedRunSourceKey(rs.token, "runs"), alt: makeComposedRunSourceKey(rs.token, "pct"), mode: "pct" };
+    const wt = parseComposedWicketTypeKey(key);
+    if (wt) return { count: makeComposedWicketTypeKey(wt.token, "count"), alt: makeComposedWicketTypeKey(wt.token, "pct"), mode: "pct" };
+    return null;
+  }
+
+  /** The slots (in column order) belonging to a column identity `canonKey` (its
+   * count key for a pair, its own key otherwise): a plain identity matches slots
+   * whose key === canonKey; a pair matches slots whose key is EITHER variant. */
+  function slotsForCanon(canonKey, ns) {
+    const pair = togglePairByCount(canonKey, ns);
+    const keys = pair ? new Set([pair.count, pair.alt]) : new Set([canonKey]);
+    return (getSlots ? getSlots() : []).filter((s) => keys.has(s.key));
+  }
+
+  /** E1b: the count/% (count/per-match) segmented toggle for ONE copy — the per-slot
+   * twin of modeToggleHTML. The active segment is whichever variant this slot's key
+   * currently is; clicking a segment swaps THIS slot's key (preserving its id). */
+  function modeToggleInstanceHTML(slot, pair) {
+    const isAlt = slot.key === pair.alt;
+    const isPerMatch = pair.mode === "permatch";
+    const altGlyph = isPerMatch ? "/M" : "%";
+    const altTitle = isPerMatch ? "Show as per match" : "Show as percentage";
+    const groupLabel = isPerMatch ? "Show as count or per match" : "Show as count or percentage";
+    return `<span class="col-mode-toggle" role="group" aria-label="${groupLabel}">
+      <button type="button" class="col-mode-seg${!isAlt ? " is-active" : ""}" data-mode-slot="${slot.id}" data-mode-target="count" aria-pressed="${!isAlt ? "true" : "false"}" title="Show as count">#</button>
+      <button type="button" class="col-mode-seg${isAlt ? " is-active" : ""}" data-mode-slot="${slot.id}" data-mode-target="alt" aria-pressed="${isAlt ? "true" : "false"}" title="${altTitle}">${altGlyph}</button>
+    </span>`;
+  }
+
+  /** E1b: one INSTANCE row for a single column copy (`slot`). `pair` is the copy's
+   * count/% pair (null for a plain column). Left→right: the count/% toggle (pairs
+   * only), then Sort-by / Highlight / Duplicate / Remove. Sort + Highlight attach to
+   * the slot's id so they act on exactly this copy; Duplicate appends another copy of
+   * this copy's CURRENT variant; Remove drops just this copy. */
+  function instanceRowHTML(slot, pair) {
+    const id = slot.id;
+    const key = slot.key; // the copy's active variant
+    const sort = getSort ? getSort() : null;
+    const isActiveSort = !!(sort && sort.active && (sort.slotId != null ? sort.slotId === id : sort.key === key));
+    const sortArrow = isActiveSort ? (sort.dir === "asc" ? "▲" : "▼") : "↕";
+    const sortTitle = isActiveSort ? "Sorted by this copy — click to reverse direction" : "Sort the table by this copy";
+    const hlOn = getHighlightIds ? new Set(getHighlightIds()).has(id) : false;
+    const hlTitle = hlOn ? "Remove highlight" : "Highlight this copy";
+    const mode = pair ? modeToggleInstanceHTML(slot, pair) : "";
+    return `<div class="cols-instance" data-slot-id="${id}">
+      ${mode}
+      <span class="columns-popover__item-controls">
+        <button type="button" class="col-sort-btn${isActiveSort ? " is-active" : ""}" data-sort-slot="${id}" data-sort-key="${key}" aria-pressed="${isActiveSort ? "true" : "false"}" title="${sortTitle}" aria-label="${sortTitle}">${sortArrow}</button>
+        <button type="button" class="col-hl-btn${hlOn ? " is-active" : ""}" data-hl-slot="${id}" aria-pressed="${hlOn ? "true" : "false"}" title="${hlTitle}" aria-label="${hlTitle}">${HIGHLIGHT_GLYPH}</button>
+        <button type="button" class="col-dup-btn" data-dup-slot="${id}" title="Add another copy of this column" aria-label="Add another copy of this column">${DUPLICATE_GLYPH}</button>
+        <button type="button" class="col-remove-btn" data-remove-slot="${id}" title="Remove this copy" aria-label="Remove this copy">✕</button>
+      </span>
+    </div>`;
+  }
+
+  /** E1b: render one column identity as an OFFER header (append-checkbox + label) +
+   * its instance rows. `canonKey` is the identity (count key for a pair, plain key
+   * otherwise); `label` is the already-resolved display label. Ticking the header
+   * appends a fresh copy (re-picking an already-shown column adds ANOTHER — owner's
+   * non-binary ruling); the checkbox shows checked whenever ≥1 copy exists. With 0
+   * copies only the header renders. */
+  function metricGroupHTML(canonKey, label) {
+    const ns = getDiscipline();
+    const pair = togglePairByCount(canonKey, ns);
+    const slots = slotsForCanon(canonKey, ns);
+    const hasSlots = slots.length > 0;
+    const header = `<label class="columns-popover__item cols-offer">
+        <input type="checkbox" class="cols-offer-cb" data-add-key="${canonKey}" ${hasSlots ? "checked" : ""} />
+        <span>${label}</span>
+      </label>`;
+    if (!hasSlots) return `<div class="cols-metric" data-col-canon="${canonKey}">${header}</div>`;
+    const instances = slots.map((s) => instanceRowHTML(s, pair)).join("");
+    return `<div class="cols-metric" data-col-canon="${canonKey}">
+        ${header}
+        <div class="cols-instances">${instances}</div>
+      </div>`;
   }
 
   // ── Shared content: build + wire (used by BOTH the floating popover and the
@@ -409,6 +546,10 @@ export function createColumnsPicker({
    * the batting Dismissals dual-key row, but per-column and with a per-row mode toggle
    * instead of a section-level "Show as %". */
   function toggleRowHTML(m, pair, formats, visible) {
+    // E1b: on the leaderboard the pair renders as an OFFER header + per-copy instance
+    // rows (each copy independently count/%), keyed by pair.count. The pre-E1b single
+    // toggle row is kept for any controlsOn-without-multiInstance host.
+    if (multiInstance) return metricGroupHTML(pair.count, metricDisplayLabel(m, formats));
     const shown = visible.has(pair.count) || visible.has(pair.alt);
     const active = activeToggleKey(pair, visible);
     const label = `<label class="columns-popover__item">
@@ -435,6 +576,16 @@ export function createColumnsPicker({
     // plain batting/bowling by COLUMN_TOGGLE_PAIRS (matchup namespaces have no entry).
     // getDiscipline() == the ns this render was built for. Cross-discipline rows carry
     // a prefixed key that never matches a pair, so they render as normal rows.
+    // E1b: on the leaderboard, every column renders as an OFFER header + per-copy
+    // instance rows — a count/% pair under its count canonical, a plain metric under
+    // its own key. (toggleRowHTML itself already forwards to metricGroupHTML under
+    // multiInstance; this branch covers the plain columns + composed phase/ball/
+    // innings rows that reach itemRowHTML directly.)
+    if (multiInstance) {
+      const pair = togglePairByCount(m.key, getDiscipline());
+      const canon = pair ? pair.count : m.key;
+      return metricGroupHTML(canon, metricDisplayLabel(m, formats));
+    }
     if (controlsOn) {
       const pair = togglePairByCount(m.key, getDiscipline());
       if (pair) return toggleRowHTML(m, pair, formats, visible);
@@ -861,11 +1012,27 @@ export function createColumnsPicker({
       const p = parseComposedParamKey(k);
       return p && p.prefix === desc.prefix;
     });
-    const rows = added
-      .map((k) => getMetric(k, ns))
-      .filter(Boolean)
-      .map((m) => paramColumnRowHTML(m, formats))
-      .join("");
+    let rows;
+    if (multiInstance) {
+      // E1b: a param column can now have several copies. List each DISTINCT param key
+      // (first-occurrence order) as an OFFER header + its per-copy instance rows —
+      // same layout as every other column. The builder's Add and the header/duplicate
+      // both append copies (below); Remove drops one copy.
+      const seen = new Set();
+      rows = added
+        .filter((k) => (seen.has(k) ? false : (seen.add(k), true)))
+        .map((k) => {
+          const m = getMetric(k, ns);
+          return m ? metricGroupHTML(k, metricDisplayLabel(m, formats)) : "";
+        })
+        .join("");
+    } else {
+      rows = added
+        .map((k) => getMetric(k, ns))
+        .filter(Boolean)
+        .map((m) => paramColumnRowHTML(m, formats))
+        .join("");
+    }
     const addedHTML = rows ? `<div class="columns-popover__list">${rows}</div>` : "";
     return `<div class="columns-popover__section-label">${escHtml(desc.sectionLabel)}</div>
       ${builder}${addedHTML}`;
@@ -1218,9 +1385,16 @@ export function createColumnsPicker({
             values = [v1];
           }
           const key = makeComposedParamKey(prefix, opToken, values);
-          const cols = getColumns().slice();
-          if (!cols.includes(key)) cols.push(key);
-          setColumns(cols); // INSTANT, no Search light (like every other column change)
+          if (multiInstance) {
+            // E1b: Add always APPENDS a copy (like every other column's offer) — so
+            // building the same threshold twice, or building one already shown, adds
+            // another copy rather than being a no-op.
+            applySlots([...(getSlots() || []), makeSlot(key)]);
+          } else {
+            const cols = getColumns().slice();
+            if (!cols.includes(key)) cols.push(key);
+            setColumns(cols); // INSTANT, no Search light (like every other column change)
+          }
           rerenderInline(); // value-dynamic row list → rebuild so the new row shows
         });
     });
@@ -1233,6 +1407,119 @@ export function createColumnsPicker({
         setColumns(cols); // INSTANT
         rerenderInline(); // drop the removed row
       });
+    });
+  }
+
+  /** E1b: wire the multi-instance ("copies") controls — the leaderboard's inline
+   * picker only. Every mutation is INSTANT + display-only (applySlots dedups copies
+   * before the query, so numbers never move); the ones that change the NUMBER of rows
+   * (add / duplicate / remove) rerenderInline so the copy list rebuilds, exactly like
+   * the D4 param builder. A count/% swap keeps the row count, so it just applies +
+   * lets the store subscription re-sync the segments. */
+  function wireMultiInstance(rootEl) {
+    // OFFER header checkbox: APPEND a fresh copy (default count variant) — whether the
+    // column is currently shown or not (owner's non-binary re-pick). A new column goes
+    // to the end of the list; to HIDE a column, remove its copy/copies via the ✕.
+    rootEl.querySelectorAll(".cols-offer-cb[data-add-key]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const key = cb.dataset.addKey;
+        applySlots([...(getSlots() || []), makeSlot(key)]);
+        rerenderInline();
+      });
+    });
+    // DUPLICATE: append another copy of THIS copy's current variant, right after it
+    // (so copies group together). data-dup-slot identifies the source copy.
+    rootEl.querySelectorAll(".col-dup-btn[data-dup-slot]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const id = btn.dataset.dupSlot;
+        const slots = (getSlots() || []).slice();
+        const i = slots.findIndex((s) => s.id === id);
+        if (i < 0) return;
+        slots.splice(i + 1, 0, makeSlot(slots[i].key));
+        applySlots(slots);
+        rerenderInline();
+      });
+    });
+    // REMOVE: drop just this copy; any other copy of the same stat stays.
+    rootEl.querySelectorAll(".col-remove-btn[data-remove-slot]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const id = btn.dataset.removeSlot;
+        applySlots((getSlots() || []).filter((s) => s.id !== id));
+        rerenderInline();
+      });
+    });
+    // Per-copy SORT: route through the host's sort path with THIS copy's slot id, so
+    // the arrow lands on this copy (two-way bound with the table header).
+    rootEl.querySelectorAll(".col-sort-btn[data-sort-slot]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setSort(btn.dataset.sortKey, btn.dataset.sortSlot);
+      });
+    });
+    // Per-copy HIGHLIGHT: toggle this copy's slot id in the display-only highlight set.
+    rootEl.querySelectorAll(".col-hl-btn[data-hl-slot]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const id = btn.dataset.hlSlot;
+        const cur = (getHighlightIds ? getHighlightIds() : []).slice();
+        const idx = cur.indexOf(id);
+        if (idx >= 0) cur.splice(idx, 1);
+        else cur.push(id);
+        setHighlightIds(cur);
+      });
+    });
+    // Per-copy count/% (count/per-match) SWAP: change THIS copy's variant in place
+    // (preserving its slot id so its sort/highlight follow), then rebuild so the row's
+    // controls reflect the new variant. No number moves (display-only variant).
+    rootEl.querySelectorAll(".col-mode-seg[data-mode-slot]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const id = btn.dataset.modeSlot;
+        const target = btn.dataset.modeTarget; // "count" | "alt"
+        const slots = (getSlots() || []).slice();
+        const i = slots.findIndex((s) => s.id === id);
+        if (i < 0) return;
+        const pair = pairForAnyKey(slots[i].key, getDiscipline());
+        if (!pair) return;
+        const wantKey = target === "alt" ? pair.alt : pair.count;
+        if (slots[i].key === wantKey) return; // already showing that variant
+        slots[i] = { ...slots[i], key: wantKey }; // id preserved → sort/highlight follow
+        applySlots(slots);
+        rerenderInline();
+      });
+    });
+  }
+
+  /** E1b: re-sync the per-copy Sort-by + Highlight indicators from the live host
+   * state WITHOUT rebuilding — the multi-instance counterpart to syncColumnControls,
+   * called from syncCheckedState so an EXTERNAL sort change (e.g. a table-header
+   * click while the popup is open) or a highlight repaint keeps the copy rows honest.
+   * Instance rows only ever exist for shown copies, so there is no disabled state;
+   * the data-keys are always fresh (a variant swap rebuilds the row). */
+  function syncInstanceControls(rootEl) {
+    const sort = getSort ? getSort() : null;
+    const hlSet = new Set(getHighlightIds ? getHighlightIds() : []);
+    const slotById = new Map((getSlots ? getSlots() : []).map((s) => [s.id, s]));
+    rootEl.querySelectorAll(".col-sort-btn[data-sort-slot]").forEach((btn) => {
+      const id = btn.dataset.sortSlot;
+      const slot = slotById.get(id);
+      const key = slot ? slot.key : btn.dataset.sortKey;
+      const isActive = !!(sort && sort.active && (sort.slotId != null ? sort.slotId === id : sort.key === key));
+      btn.classList.toggle("is-active", isActive);
+      btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+      btn.textContent = isActive ? (sort.dir === "asc" ? "▲" : "▼") : "↕";
+    });
+    rootEl.querySelectorAll(".col-hl-btn[data-hl-slot]").forEach((btn) => {
+      const on = hlSet.has(btn.dataset.hlSlot);
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
     });
   }
 
@@ -1339,7 +1626,10 @@ export function createColumnsPicker({
   function syncCheckedState(rootEl) {
     const visible = new Set(getColumns());
     rootEl.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-      if (cb.dataset.key) {
+      if (cb.dataset.addKey) {
+        // E1b offer header: checked iff this column identity has ≥1 copy shown.
+        cb.checked = slotsForCanon(cb.dataset.addKey, getDiscipline()).length > 0;
+      } else if (cb.dataset.key) {
         cb.checked = visible.has(cb.dataset.key);
       } else if (cb.dataset.countKey) {
         cb.checked = visible.has(cb.dataset.countKey) || visible.has(cb.dataset.pctKey);
@@ -1348,8 +1638,10 @@ export function createColumnsPicker({
         cb.checked = visible.has(cb.dataset.toggleCount) || visible.has(cb.dataset.toggleAlt);
       }
     });
-    // W2: keep the Sort-by / Highlight buttons in step too (no-op in the pop-up).
-    syncColumnControls(rootEl);
+    // E1b: keep the per-copy Sort-by/Highlight indicators honest; W2: the pre-E1b
+    // per-column controls (no-op in the pop-up). One or the other applies per host.
+    if (multiInstance) syncInstanceControls(rootEl);
+    else syncColumnControls(rootEl);
     // W4: keep the four count badges in step too (no-op in the pop-up popover).
     updateBadges(rootEl);
   }
@@ -1369,10 +1661,20 @@ export function createColumnsPicker({
    * open() → buildPickerHTML, untouched. */
   function renderInline(container, ns, formats) {
     container.innerHTML = buildDropdownsHTML(ns, formats);
-    wireCheckboxes(container);
-    wireColumnControls(container); // W2 (no-op unless the sort/highlight contract was supplied)
-    wireModeToggles(container); // Wave C count/% (count/per-match) segmented controls
-    wireParamComposers(container); // D4 Innings Score Range / Wicket Haul builders
+    if (multiInstance) {
+      // E1b: the leaderboard's per-copy layout. wireMultiInstance owns every
+      // add/remove/duplicate/sort/highlight/count-% control; the pre-E1b
+      // wireCheckboxes/wireColumnControls/wireModeToggles find no matching elements
+      // here (their checkbox/control shapes aren't rendered), so they'd be no-ops —
+      // skipped for clarity. The param BUILDER (Add) still wires via wireParamComposers.
+      wireMultiInstance(container);
+      wireParamComposers(container); // D4 builder (Add appends a copy under multiInstance)
+    } else {
+      wireCheckboxes(container);
+      wireColumnControls(container); // W2 (no-op unless the sort/highlight contract was supplied)
+      wireModeToggles(container); // Wave C count/% (count/per-match) segmented controls
+      wireParamComposers(container); // D4 Innings Score Range / Wicket Haul builders
+    }
     wireDropdowns(container); // W4
   }
 
