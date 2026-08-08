@@ -41,7 +41,12 @@
 //     re-render its own table). Called with the full new array on every change.
 
 import { escHtml } from "./html.js";
-import { DISMISSAL_KINDS, metricDisplayLabel, makeCrossKey, parseCrossKey, getMetric, OTHER_DISCIPLINE, COLUMN_TOGGLE_PAIRS } from "./metrics.js";
+import {
+  DISMISSAL_KINDS, metricDisplayLabel, makeCrossKey, parseCrossKey, getMetric,
+  OTHER_DISCIPLINE, COLUMN_TOGGLE_PAIRS,
+  // Columns content rework D1 (phase composer): the composed-key scheme + pool.
+  makeComposedPhaseKey, composedPhasePool, composedPhaseTokensForFormats, COMPOSED_PHASE_LABEL,
+} from "./metrics.js";
 import { eligibleMetrics, eligibleCrossMetrics } from "./state.js";
 
 // ── Per-column count/% (+ count/per-match) toggle (columns content rework Wave C) ─
@@ -81,27 +86,19 @@ function activeToggleKey(pair, visible) {
   return visible.has(pair.alt) ? pair.alt : pair.count;
 }
 
-// ── Phase×metric composer (columns-rejig W4) ─────────────────────────────────
+// ── Phase×metric composer (columns content rework D1) ────────────────────────
 // The composer REPLACES the flat enumerated phase columns in the leaderboard's
-// picker with a family→variant control: pick a metric family (SR / Economy /
-// Wickets — the families that HAVE enumerated phase columns) + phase(s)
-// (Powerplay / Middle / Death). Each variant checkbox's data-key IS the existing
-// enumerated phase-metric key (pp_strike_rate, odi_death_economy, …), so the
-// emitted columns are byte-identical to the old Phase section — the equivalence
-// gate holds BY CONSTRUCTION (no new metric key is ever invented). phaseParts()
-// decomposes a phase key by stripping an optional `odi_` prefix then the leading
-// phase token; the enumerated phase metrics are the only keys carrying these
-// prefixes, so the split is unambiguous.
-const PHASE_ORDER = ["pp", "mid", "death"];
-const PHASE_LABEL = { pp: "Powerplay", mid: "Middle", death: "Death" };
-function phaseParts(key) {
-  const k = key.startsWith("odi_") ? key.slice(4) : key;
-  for (const ph of PHASE_ORDER) {
-    const pref = `${ph}_`;
-    if (k.startsWith(pref)) return { phase: ph, base: k.slice(pref.length) };
-  }
-  return null;
-}
+// picker with a family→phase matrix over a REAL metric pool: one sub-block per
+// base metric the discipline can re-scope to a phase (Strike Rate, Average, Runs,
+// … for batting; Economy, Wickets, … for bowling — see composedPhasePool in
+// metrics.js), each listing the format-eligible phase(s) (Powerplay / Middle /
+// Death, or their ODI-range variants) as checkbox rows. Each row's data-key is a
+// COMPOSED key (`ph__<phase>__<base>`) whose sqlExpression getMetric rebuilds from
+// the phase-prefixed raw components — so the picker no longer offers the enumerated
+// keys (pp_strike_rate, …), the composer does. The equivalence gate (composed SQL
+// == the retiring enumerated SQL for the overlapping SR/Economy/Wickets families)
+// is enforced in metrics.js's spec templates. Rows flow through the SAME checkbox +
+// W2 Sort-by/Highlight wiring as any other column (itemRowHTML).
 
 // A monochrome highlighter/marker glyph, filled via currentColor — mirrors the
 // pin toggle's PIN_GLYPH convention in src/table.js (owner fix: the old 🖍️
@@ -581,34 +578,28 @@ export function createColumnsPicker({
     return counts;
   }
 
-  /** The phase×metric composer for the own-discipline dropdown: one family
-   * sub-block per metric family that has enumerated phase columns in scope, each
-   * listing its Powerplay/Middle/Death variants as normal itemRows (so they flow
-   * through the same checkbox + W2 controls). "" when no phase metric is eligible
-   * (red-ball / mixed formats). REPLACES the flat Phase section — same keys,
-   * same values (equivalence gate). */
+  /** The phase×metric composer for the own-discipline dropdown (D1): one family
+   * sub-block per base metric in the discipline's composed pool (whose components
+   * all exist), each listing the format-eligible phase(s) — Powerplay / Middle /
+   * Death, or the ODI-range variants — as normal itemRows (so they flow through the
+   * SAME checkbox + W2 controls). Each row's data-key is a COMPOSED key
+   * (`ph__<phase>__<base>`) resolved by getMetric to a virtual metric with a
+   * generated sqlExpression. "" when no phase is eligible (red-ball / mixed / no
+   * single T20 or 50 Over format) or the pool is empty. REPLACES the flat
+   * enumerated Phase section (the enumerated keys stay in the catalogue for the
+   * pop-up popover + filters, but are no longer OFFERED here). */
   function composerHTML(ns, formats, visible) {
-    const phaseMetrics = eligibleMetrics(ns, formats).filter((m) => m.isPhaseMetric);
-    if (!phaseMetrics.length) return "";
-    const families = []; // base keys in first-seen (catalogue) order
-    const byBase = new Map(); // base -> Map(phase -> metric)
-    for (const m of phaseMetrics) {
-      const parts = phaseParts(m.key);
-      if (!parts) continue;
-      if (!byBase.has(parts.base)) {
-        byBase.set(parts.base, new Map());
-        families.push(parts.base);
-      }
-      byBase.get(parts.base).set(parts.phase, m);
-    }
-    const blocks = families.map((base) => {
-      const phaseMap = byBase.get(base);
-      const baseMetric = getMetric(base, ns);
-      const famLabel = baseMetric ? metricDisplayLabel(baseMetric, formats) : base;
-      const rows = PHASE_ORDER.filter((ph) => phaseMap.has(ph))
+    if (ns !== "batting" && ns !== "bowling") return "";
+    const phaseTokens = composedPhaseTokensForFormats(formats);
+    if (!phaseTokens.length) return "";
+    const pool = composedPhasePool(ns);
+    if (!pool.length) return "";
+    const blocks = pool.map((base) => {
+      const famLabel = metricDisplayLabel(base, formats);
+      const rows = phaseTokens
         // Label the row by PHASE only — the family sub-header carries the metric.
-        // Spreading the real metric keeps data-key = the enumerated phase key.
-        .map((ph) => itemRowHTML({ ...phaseMap.get(ph), label: PHASE_LABEL[ph] }, formats, visible))
+        // data-key is the composed key; itemRowHTML wires the checkbox + controls.
+        .map((ph) => itemRowHTML({ key: makeComposedPhaseKey(ph, base.key), label: COMPOSED_PHASE_LABEL[ph] }, formats, visible))
         .join("");
       return `<div class="cols-composer__family">
           <div class="cols-composer__family-label">${escHtml(famLabel)}</div>

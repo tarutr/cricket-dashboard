@@ -35,6 +35,7 @@ import {
   INNINGS_NUMBER_FILTER,
   OTHER_DISCIPLINE,
   makeCrossKey,
+  eligibleComposedPhaseKeys,
 } from "./metrics.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 
@@ -925,6 +926,14 @@ export function eligibleColumnKeys(discipline, formats) {
   const keys = new Set(eligibleMetrics(discipline, formats).map((m) => m.key));
   for (const m of eligibleCrossMetrics(discipline, formats)) {
     keys.add(makeCrossKey(OTHER_DISCIPLINE[discipline], m.key));
+  }
+  // Columns content rework D1: composed phase×metric column keys (ph__<phase>__
+  // <base>) are valid columns too, so they must survive a re-render — but drop the
+  // moment the format no longer permits their phase (eligibleComposedPhaseKeys
+  // returns [] off a single T20 / 50 Over selection). Byte-identical when no
+  // composed column is present (the extra keys just never match).
+  for (const key of eligibleComposedPhaseKeys(discipline, formats)) {
+    keys.add(key);
   }
   return keys;
 }

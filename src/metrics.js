@@ -2631,7 +2631,20 @@ export function metricsFor(discipline) {
  * returns the first metric with that key (batting wins, then bowling).
  */
 export function getMetric(key, discipline) {
-  if (discipline) return _byDisciplineKey.get(`${discipline}:${key}`) ?? null;
+  if (discipline) {
+    const hit = _byDisciplineKey.get(`${discipline}:${key}`);
+    if (hit) return hit;
+    // Columns content rework D1 (2026-08-08): composed phase-metric keys
+    // (ph__<phase>__<base>) are DYNAMIC virtual metrics — never in the static
+    // catalogue — whose sqlExpression is rebuilt from phase-prefixed raw
+    // components. Resolve them HERE so the leaderboard's buildQuery inningsMetrics
+    // path (which calls getMetric) projects them through the NORMAL selectParts
+    // loop with NO query-builder change. Byte-identical for every catalogued key
+    // (the map hit returns first); resolveComposedPhaseMetric returns null for
+    // plain/cross keys and for the matchup disciplines, so those callers are
+    // unchanged (same `?? null` result as before).
+    return resolveComposedPhaseMetric(key, discipline);
+  }
   return METRICS.find((m) => m.key === key) ?? null;
 }
 
@@ -2727,6 +2740,224 @@ export function resolveColumnMetric(key, ns) {
   const base = getMetric(parsed.baseKey, parsed.discipline);
   if (!base) return null;
   return makeVirtualCrossMetric(base, key, parsed.discipline);
+}
+
+// ── Composed PHASE×metric columns (columns content rework D1, 2026-08-08) ──────
+// The leaderboard's Phase composer generates a column for ANY metric in the
+// discipline's pool re-scoped to ANY format-eligible phase (Powerplay / Middle /
+// Death, and their ODI-range variants) — REPLACING the small enumerated phase
+// family (pp_strike_rate / pp_economy / pp_wickets / mid_* / death_* / odi_*).
+// It mirrors the W3 cross-discipline dynamic-key scheme (makeCrossKey /
+// parseCrossKey / resolveColumnMetric): a NON-static column key resolves to a
+// VIRTUAL metric whose sqlExpression is generated on the fly — here, by rebuilding
+// the base metric's formula from the PHASE-PREFIXED raw components the batting /
+// bowling innings views carry (`<phase>_runs`, `<phase>_balls`, …; confirmed
+// present flag-off via DESCRIBE for all six phase tokens).
+//
+// EQUIVALENCE GATE (Rule 1): for every (phase, metric) that HAD an enumerated
+// column, the generated sqlExpression is BYTE-IDENTICAL to the retiring one, so
+// the on-screen value is unchanged. That holds by construction — the spec
+// templates below reproduce the enumerated forms exactly when {P} is substituted
+// (Strike Rate ⇒ pp_strike_rate; Economy ⇒ pp_economy; Wickets ⇒ pp_wickets;
+// and the mid_/death_/odi_ variants). Metrics WITHOUT an enumerated phase column
+// (Average, Dots, Boundary %, …) follow the SAME formula shape as their base
+// metric, with phase-prefixed component columns.
+//
+// KEY = `ph__<phaseToken>__<baseKey>`  e.g. `ph__pp__strike_rate`,
+// `ph__odi_death__balls_per_dismissal`. Identifier-safe (needs no SQL-alias
+// quoting); `__` is the field separator; phase tokens carry only single
+// underscores (`odi_pp`) and no catalogued key starts with `ph__` (verified), so
+// splitting on the FIRST `__` after the prefix recovers {phaseToken, baseKey}.
+const COMPOSED_PHASE_PREFIX = "ph__";
+// The T20 phase ranges (pp 0–5, mid 6–14, death 15–19) and the ODI ranges
+// (pp 0–9, mid 10–39, death 40–49) — the exact phase-column prefixes the views use.
+const COMPOSED_PHASE_TOKENS_T20 = ["pp", "mid", "death"];
+const COMPOSED_PHASE_TOKENS_ODI = ["odi_pp", "odi_mid", "odi_death"];
+const _PHASE_TOKEN_SET = new Set([...COMPOSED_PHASE_TOKENS_T20, ...COMPOSED_PHASE_TOKENS_ODI]);
+// Row label (the composer labels each row by phase; the family header carries the
+// metric) and header short tag (prefixed onto the base shortLabel in the column head).
+export const COMPOSED_PHASE_LABEL = {
+  pp: "Powerplay", mid: "Middle Overs", death: "Death Overs",
+  odi_pp: "ODI Powerplay", odi_mid: "ODI Middle Overs", odi_death: "ODI Death Overs",
+};
+const COMPOSED_PHASE_SHORT = {
+  pp: "PP", mid: "Mid", death: "Death",
+  odi_pp: "ODI PP", odi_mid: "ODI Mid", odi_death: "ODI Death",
+};
+
+// Which phase-prefixed component SUFFIXES each view actually carries (confirmed
+// flag-off via DESCRIBE batting / DESCRIBE bowling, uniform across all six phase
+// tokens). A pool metric is offered ONLY when ALL its components (`needs`) are in
+// this set — the task's "offer only where every component exists" guard, so if a
+// component ever disappears from the pipeline the metric auto-drops rather than
+// generating SQL against a missing column.
+const COMPOSED_PHASE_COMPONENTS = {
+  batting: new Set(["runs", "balls", "dots", "fours", "sixes", "dismissals"]),
+  bowling: new Set(["balls", "runs_conceded", "wickets", "dots", "fours_conceded", "sixes_conceded"]),
+};
+
+// Per-discipline COMPONENT SPEC: for each base metric, the aggregate template (a
+// `{P}` token stands for the phase prefix) + the raw component suffixes it reads.
+// The template is the base metric's own formula re-expressed over `<phase>_<comp>`
+// columns. `runs`/`balls`/`dots`/… here are the PHASE component names, which differ
+// from the base view columns (e.g. batting SR's base uses `balls_faced` but the
+// phase column is `<phase>_balls`; Average's base uses `dismissed` but the phase
+// column is `<phase>_dismissals`) — hence explicit templates, not string rewriting.
+const COMPOSED_PHASE_SPECS = {
+  batting: {
+    strike_rate: { sql: "SUM({P}_runs) * 100.0 / NULLIF(SUM({P}_balls), 0)", needs: ["runs", "balls"] },
+    average: { sql: "SUM({P}_runs) * 1.0 / NULLIF(SUM({P}_dismissals), 0)", needs: ["runs", "dismissals"] },
+    runs: { sql: "SUM({P}_runs)", needs: ["runs"] },
+    balls_faced: { sql: "SUM({P}_balls)", needs: ["balls"] },
+    dot_balls: { sql: "SUM({P}_dots)", needs: ["dots"] },
+    fours: { sql: "SUM({P}_fours)", needs: ["fours"] },
+    sixes: { sql: "SUM({P}_sixes)", needs: ["sixes"] },
+    dismissals: { sql: "SUM({P}_dismissals)", needs: ["dismissals"] },
+    dot_pct: { sql: "SUM({P}_dots) * 100.0 / NULLIF(SUM({P}_balls), 0)", needs: ["dots", "balls"] },
+    boundary_pct: { sql: "(SUM({P}_fours) + SUM({P}_sixes)) * 100.0 / NULLIF(SUM({P}_balls), 0)", needs: ["fours", "sixes", "balls"] },
+    balls_per_dismissal: { sql: "SUM({P}_balls) * 1.0 / NULLIF(SUM({P}_dismissals), 0)", needs: ["balls", "dismissals"] },
+    boundary_balls: { sql: "SUM({P}_fours) + SUM({P}_sixes)", needs: ["fours", "sixes"] },
+    boundary_runs: { sql: "4 * SUM({P}_fours) + 6 * SUM({P}_sixes)", needs: ["fours", "sixes"] },
+  },
+  bowling: {
+    economy: { sql: "SUM({P}_runs_conceded) * 6.0 / NULLIF(SUM({P}_balls), 0)", needs: ["runs_conceded", "balls"] },
+    wickets: { sql: "SUM({P}_wickets)", needs: ["wickets"] },
+    runs_conceded: { sql: "SUM({P}_runs_conceded)", needs: ["runs_conceded"] },
+    balls: { sql: "SUM({P}_balls)", needs: ["balls"] },
+    dot_balls_conceded: { sql: "SUM({P}_dots)", needs: ["dots"] },
+    average: { sql: "SUM({P}_runs_conceded) * 1.0 / NULLIF(SUM({P}_wickets), 0)", needs: ["runs_conceded", "wickets"] },
+    strike_rate: { sql: "SUM({P}_balls) * 1.0 / NULLIF(SUM({P}_wickets), 0)", needs: ["balls", "wickets"] },
+    dot_pct: { sql: "SUM({P}_dots) * 100.0 / NULLIF(SUM({P}_balls), 0)", needs: ["dots", "balls"] },
+    fours_conceded: { sql: "SUM({P}_fours_conceded)", needs: ["fours_conceded"] },
+    sixes_conceded: { sql: "SUM({P}_sixes_conceded)", needs: ["sixes_conceded"] },
+    boundary_pct_conceded: { sql: "(SUM({P}_fours_conceded) + SUM({P}_sixes_conceded)) * 100.0 / NULLIF(SUM({P}_balls), 0)", needs: ["fours_conceded", "sixes_conceded", "balls"] },
+    boundary_runs_pct: { sql: "(4 * SUM({P}_fours_conceded) + 6 * SUM({P}_sixes_conceded)) * 100.0 / NULLIF(SUM({P}_runs_conceded), 0)", needs: ["fours_conceded", "sixes_conceded", "runs_conceded"] },
+  },
+};
+
+// Display order of the metric pool inside each discipline's Phase composer (v5
+// audit order: rates/counts then percents/detailed). Only keys with a spec AND all
+// components present are offered — see composedPhasePool().
+const COMPOSED_PHASE_POOL_ORDER = {
+  batting: [
+    "strike_rate", "average", "runs", "balls_faced", "dot_balls", "fours", "sixes",
+    "dismissals", "dot_pct", "boundary_pct", "balls_per_dismissal", "boundary_balls", "boundary_runs",
+  ],
+  bowling: [
+    "economy", "wickets", "runs_conceded", "balls", "dot_balls_conceded", "average",
+    "strike_rate", "dot_pct", "fours_conceded", "sixes_conceded", "boundary_pct_conceded", "boundary_runs_pct",
+  ],
+};
+
+/** Build the composed-phase column key for `baseKey` re-scoped to `phaseToken`. */
+export function makeComposedPhaseKey(phaseToken, baseKey) {
+  return `${COMPOSED_PHASE_PREFIX}${phaseToken}__${baseKey}`;
+}
+
+/** Parse a composed-phase column key → { phaseToken, baseKey }, or null if it is
+ * not one. Split on the FIRST `__` after the `ph__` prefix (phase tokens carry no
+ * `__`; base keys carry only single underscores). */
+export function parseComposedPhaseKey(key) {
+  if (typeof key !== "string" || !key.startsWith(COMPOSED_PHASE_PREFIX)) return null;
+  const rest = key.slice(COMPOSED_PHASE_PREFIX.length);
+  const sep = rest.indexOf("__");
+  if (sep <= 0) return null;
+  const phaseToken = rest.slice(0, sep);
+  const baseKey = rest.slice(sep + 2);
+  if (!_PHASE_TOKEN_SET.has(phaseToken) || !baseKey) return null;
+  return { phaseToken, baseKey };
+}
+
+/** True iff `key` is a composed-phase column key. */
+export function isComposedPhaseKey(key) {
+  return parseComposedPhaseKey(key) !== null;
+}
+
+/** True iff every component the `baseKey` spec needs exists in `discipline`'s view. */
+function composedComponentsPresent(discipline, spec) {
+  const have = COMPOSED_PHASE_COMPONENTS[discipline];
+  return !!have && spec.needs.every((c) => have.has(c));
+}
+
+/** Build the VIRTUAL metric for a composed-phase column: the base metric's own
+ * format / higherIsBetter / zeroIsData / kind / additive / source ("innings"),
+ * re-badged with the composed key + a phase-prefixed label, and with a freshly
+ * GENERATED sqlExpression (base formula over `<phase>_<component>` columns). Its
+ * source stays "innings", so buildQuery's inningsMetrics loop projects it exactly
+ * like any real innings metric — no query-builder change. Returns null when the
+ * base metric / spec is unknown or a component is missing. */
+function buildComposedPhaseMetric(phaseToken, baseKey, discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return null;
+  if (!_PHASE_TOKEN_SET.has(phaseToken)) return null;
+  const specMap = COMPOSED_PHASE_SPECS[discipline];
+  const spec = specMap && specMap[baseKey];
+  if (!spec || !composedComponentsPresent(discipline, spec)) return null;
+  const base = getMetric(baseKey, discipline);
+  if (!base) return null;
+  return {
+    ...base,
+    key: makeComposedPhaseKey(phaseToken, baseKey),
+    baseKey,
+    phaseToken,
+    isComposedPhase: true,
+    sqlExpression: spec.sql.split("{P}").join(phaseToken),
+    label: `${COMPOSED_PHASE_LABEL[phaseToken]} ${base.label}`,
+    shortLabel: `${COMPOSED_PHASE_SHORT[phaseToken]} ${base.shortLabel}`,
+    // Phase-gated exactly like the enumerated phase metrics (§8.9): T20 ranges show
+    // only when the single selected format is T20, ODI ranges only for 50 Over.
+    isPhaseMetric: phaseToken.startsWith("odi_") ? "odi" : "t20",
+  };
+}
+
+/** Resolve a composed-phase COLUMN key to its virtual metric, or null when it is
+ * not a composed key / the discipline can't compose it. Called by getMetric (so
+ * resolveColumnMetric picks it up for free too — a composed key is not a cross
+ * key, so resolveColumnMetric falls through to getMetric). */
+export function resolveComposedPhaseMetric(key, discipline) {
+  const parsed = parseComposedPhaseKey(key);
+  if (!parsed) return null;
+  return buildComposedPhaseMetric(parsed.phaseToken, parsed.baseKey, discipline);
+}
+
+/** The active phase tokens for the current format selection, matching
+ * phaseMetricAllowed's §8.9 gate exactly: T20 ranges only when the SINGLE selected
+ * format is T20; ODI ranges only when it is 50 Over; [] for any mixed / red-ball /
+ * empty selection (so the composer hides, like the enumerated phase family). */
+export function composedPhaseTokensForFormats(formats) {
+  const f = formats || [];
+  if (f.length === 1 && f[0] === "T20") return COMPOSED_PHASE_TOKENS_T20;
+  if (f.length === 1 && f[0] === "50 Over") return COMPOSED_PHASE_TOKENS_ODI;
+  return [];
+}
+
+/** The ordered base metrics the `discipline` Phase composer offers (each resolved
+ * from the catalogue), filtered to those with a spec AND all components present. */
+export function composedPhasePool(discipline) {
+  const order = COMPOSED_PHASE_POOL_ORDER[discipline];
+  const specMap = COMPOSED_PHASE_SPECS[discipline];
+  if (!order || !specMap) return [];
+  const pool = [];
+  for (const baseKey of order) {
+    const spec = specMap[baseKey];
+    if (!spec || !composedComponentsPresent(discipline, spec)) continue;
+    const base = getMetric(baseKey, discipline);
+    if (base) pool.push(base);
+  }
+  return pool;
+}
+
+/** Every VALID composed-phase column key for the current discipline + formats —
+ * the pool × the format-eligible phase tokens. Folded into eligibleColumnKeys
+ * (state.js) so a composed column survives a re-render but is pruned the moment the
+ * format no longer permits its phase (exactly like the enumerated phase columns). */
+export function eligibleComposedPhaseKeys(discipline, formats) {
+  const phaseTokens = composedPhaseTokensForFormats(formats);
+  if (!phaseTokens.length) return [];
+  const keys = [];
+  for (const base of composedPhasePool(discipline)) {
+    for (const ph of phaseTokens) keys.push(makeComposedPhaseKey(ph, base.key));
+  }
+  return keys;
 }
 
 /**
