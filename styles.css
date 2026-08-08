@@ -2320,11 +2320,14 @@ a { color: var(--color-accent); }
 .cols-composer-row__head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-2);
   margin-bottom: var(--space-2);
 }
-.cols-composer-row__title { font-weight: 600; font-size: 0.9rem; }
+.cols-composer-row__title { font-weight: 600; font-size: 0.9rem; flex: 0 0 auto; }
+/* One-metric-per-row model (owner ruling): the row's single metric-or-count/%
+   <select> sits after the title; the × is pushed to the far right. */
+.cols-composer-row__metric { flex: 0 1 auto; min-width: 0; max-width: 60%; }
+.cols-composer-row__head .cols-composer-remove { margin-left: auto; }
 .cols-composer-row__empty { color: var(--color-muted); font-size: 0.9rem; }
 
 /* Add menus. */

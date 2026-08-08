@@ -42,7 +42,7 @@
 
 import { escHtml } from "./html.js";
 import {
-  DISMISSAL_KINDS, metricDisplayLabel, makeCrossKey, parseCrossKey, getMetric,
+  DISMISSAL_KINDS, metricDisplayLabel, makeCrossKey, getMetric,
   resolveColumnMetric,
   OTHER_DISCIPLINE, COLUMN_TOGGLE_PAIRS,
   // Columns content rework D1 (phase composer): the composed-key scheme + pool.
@@ -110,11 +110,6 @@ function togglePairByCount(key, ns) {
 /** The set of ALTERNATE (%/per-match) keys hidden from the picker listing in `ns`. */
 function toggleAltKeys(ns) {
   return _TOGGLE_ALTS_BY_NS[ns] || new Set();
-}
-/** Which key of a toggle pair is CURRENTLY shown for `visible` — the alternate when
- * present, else the count key (the default). */
-function activeToggleKey(pair, visible) {
-  return visible.has(pair.alt) ? pair.alt : pair.count;
 }
 
 // ── Phase×metric composer (columns content rework D1) ────────────────────────
@@ -418,9 +413,9 @@ export function createColumnsPicker({
     return (getSlots ? getSlots() : []).filter((s) => keys.has(s.key));
   }
 
-  /** E1b: the count/% (count/per-match) segmented toggle for ONE copy — the per-slot
-   * twin of modeToggleHTML. The active segment is whichever variant this slot's key
-   * currently is; clicking a segment swaps THIS slot's key (preserving its id). */
+  /** E1b: the count/% (count/per-match) segmented toggle for ONE copy. The active
+   * segment is whichever variant this slot's key currently is; clicking a segment
+   * swaps THIS slot's key (preserving its id). */
   function modeToggleInstanceHTML(slot, pair) {
     const isAlt = slot.key === pair.alt;
     const isPerMatch = pair.mode === "permatch";
@@ -458,157 +453,22 @@ export function createColumnsPicker({
       </span>`;
   }
 
-  /** E1b: one INSTANCE row for a single column copy (`slot`) — retained for any
-   * offer-header/instance host (metricGroupHTML). `pair` is the copy's count/% pair
-   * (null for a plain column). Now delegates its controls to instanceControlsMarkup. */
-  function instanceRowHTML(slot, pair) {
-    return `<div class="cols-instance" data-slot-id="${slot.id}">
-      ${instanceControlsMarkup(slot, pair)}
-    </div>`;
-  }
-
-  /** E1b: render one column identity as an OFFER header (append-checkbox + label) +
-   * its instance rows. `canonKey` is the identity (count key for a pair, plain key
-   * otherwise); `label` is the already-resolved display label. Ticking the header
-   * appends a fresh copy (re-picking an already-shown column adds ANOTHER — owner's
-   * non-binary ruling); the checkbox shows checked whenever ≥1 copy exists. With 0
-   * copies only the header renders. */
-  function metricGroupHTML(canonKey, label) {
-    const ns = getDiscipline();
-    const pair = togglePairByCount(canonKey, ns);
-    const slots = slotsForCanon(canonKey, ns);
-    const hasSlots = slots.length > 0;
-    const header = `<label class="columns-popover__item cols-offer">
-        <input type="checkbox" class="cols-offer-cb" data-add-key="${canonKey}" ${hasSlots ? "checked" : ""} />
-        <span>${label}</span>
-      </label>`;
-    if (!hasSlots) return `<div class="cols-metric" data-col-canon="${canonKey}">${header}</div>`;
-    const instances = slots.map((s) => instanceRowHTML(s, pair)).join("");
-    return `<div class="cols-metric" data-col-canon="${canonKey}">
-        ${header}
-        <div class="cols-instances">${instances}</div>
-      </div>`;
-  }
-
-  // ── Shared content: build + wire (used by BOTH the floating popover and the
-  //    inline host, so the two surfaces render byte-identical) ────────────────
-
-  /** W2: the per-column Sort-by + Highlight controls for one metric `key`.
-   * Rendered only when controlsOn (leaderboard). Both controls act on the actual
-   * TABLE column, so they're DISABLED while the column is hidden (unchecked) —
-   * you sort/highlight what you can see; checking the box enables them. Sort is
-   * radio-like (only the active sort column shows ▲/▼, others show ↕); Highlight
-   * is a multi-select toggle. syncColumnControls keeps these states honest after
-   * every refresh without a re-render. */
-  function columnControlsHTML(key, toggleCountKey = null) {
-    const isVisible = new Set(getColumns()).has(key);
-    const sort = getSort();
-    const isActiveSort = !!(sort && sort.active && sort.key === key);
-    const sortArrow = isActiveSort ? (sort.dir === "asc" ? "▲" : "▼") : "↕";
-    const hlOn = new Set(getHighlights()).has(key);
-    const dis = isVisible ? "" : " disabled";
-    const sortTitle = !isVisible
-      ? "Show this column to sort by it"
-      : isActiveSort
-        ? "Sorted by this column — click to reverse direction"
-        : "Sort the table by this column";
-    const hlTitle = !isVisible
-      ? "Show this column to highlight it"
-      : hlOn
-        ? "Remove highlight"
-        : "Highlight this column";
-    // Wave C: on a count/% (or count/per-match) toggle row, the sort/highlight
-    // controls must operate on WHICHEVER form is currently shown (`key` is the
-    // ACTIVE key here). data-toggle-count lets syncColumnControls re-derive the
-    // active key + repoint data-sort-key/data-hl-key when the shown form changes
-    // (e.g. a preset swaps the variant) WITHOUT a full re-render.
-    const tc = toggleCountKey ? ` data-toggle-count="${toggleCountKey}"` : "";
-    return `<span class="columns-popover__item-controls">
-      <button type="button" class="col-sort-btn${isActiveSort ? " is-active" : ""}" data-sort-key="${key}"${tc} aria-pressed="${isActiveSort ? "true" : "false"}" title="${sortTitle}" aria-label="${sortTitle}"${dis}>${sortArrow}</button>
-      <button type="button" class="col-hl-btn${hlOn ? " is-active" : ""}" data-hl-key="${key}"${tc} aria-pressed="${hlOn ? "true" : "false"}" title="${hlTitle}" aria-label="${hlTitle}"${dis}>${HIGHLIGHT_GLYPH}</button>
-    </span>`;
-  }
-
-  /** Wave C: the count/% (or count/per-match) segmented control for a toggle pair.
-   * Two segments — count ("#") + alternate ("%" or "/M") — the active one carrying
-   * `is-active`. DISABLED while the column is hidden (neither variant shown), matching
-   * the sort/highlight "show it to act on it" convention. The click handler
-   * (wireModeToggles) swaps the shown key in the column list. */
-  function modeToggleHTML(pair) {
-    const visible = new Set(getColumns());
-    const shownAlt = visible.has(pair.alt);
-    const shown = visible.has(pair.count) || shownAlt;
-    const dis = shown ? "" : " disabled";
-    const countActive = shown && !shownAlt;
-    const altActive = shown && shownAlt;
-    const isPerMatch = pair.mode === "permatch";
-    const altGlyph = isPerMatch ? "/M" : "%";
-    const altTitle = isPerMatch ? "Show as per match" : "Show as percentage";
-    const groupLabel = isPerMatch ? "Show as count or per match" : "Show as count or percentage";
-    return `<span class="col-mode-toggle" role="group" aria-label="${groupLabel}">
-      <button type="button" class="col-mode-seg${countActive ? " is-active" : ""}" data-mode-count="${pair.count}" data-mode-alt="${pair.alt}" data-mode-target="count" aria-pressed="${countActive ? "true" : "false"}" title="Show as count"${dis}>#</button>
-      <button type="button" class="col-mode-seg${altActive ? " is-active" : ""}" data-mode-count="${pair.count}" data-mode-alt="${pair.alt}" data-mode-target="alt" aria-pressed="${altActive ? "true" : "false"}" title="${altTitle}"${dis}>${altGlyph}</button>
-    </span>`;
-  }
-
-  /** Wave C: one toggle-pair row (leaderboard only). A DUAL-KEY checkbox (checked iff
-   * EITHER variant is shown; ticking adds the count variant — default count; unticking
-   * removes both), the count metric's stable label, then the mode segmented control +
-   * the Sort-by/Highlight controls bound to whichever form is currently shown. Mirrors
-   * the batting Dismissals dual-key row, but per-column and with a per-row mode toggle
-   * instead of a section-level "Show as %". */
-  function toggleRowHTML(m, pair, formats, visible) {
-    // E1b: on the leaderboard the pair renders as an OFFER header + per-copy instance
-    // rows (each copy independently count/%), keyed by pair.count. The pre-E1b single
-    // toggle row is kept for any controlsOn-without-multiInstance host.
-    if (multiInstance) return metricGroupHTML(pair.count, metricDisplayLabel(m, formats));
-    const shown = visible.has(pair.count) || visible.has(pair.alt);
-    const active = activeToggleKey(pair, visible);
-    const label = `<label class="columns-popover__item">
-        <input type="checkbox" data-toggle-count="${pair.count}" data-toggle-alt="${pair.alt}" ${shown ? "checked" : ""} />
-        <span>${metricDisplayLabel(m, formats)}</span>
-      </label>`;
-    return `<div class="columns-popover__item-row">${label}${modeToggleHTML(pair)}${columnControlsHTML(active, pair.count)}</div>`;
-  }
 
   // ── Shared leaf/section builders (used by BOTH the pop-up's flat picker and
   //    the leaderboard's four-dropdown layout, so the two render byte-identical
   //    rows) ─────────────────────────────────────────────────────────────────
 
-  /** One metric row: the checkbox label, optionally followed (W2, leaderboard
-   * only) by the per-column Sort-by + Highlight controls. The controls sit
-   * OUTSIDE the <label> so a click on them never toggles the checkbox. The
-   * batting Dismissals dual-key rows deliberately DON'T get these (they render
-   * via dismissalRowHTML, not this helper) — their active count/% variant is
-   * ambiguous from the row alone; those columns stay sortable via the table
-   * header. */
+  /** One metric row: a plain checkbox label. Used ONLY by the pop-up popover's flat
+   * picker (buildPickerHTML) — that surface passes neither the multi-instance nor the
+   * Sort-by/Highlight contract, so it always renders the bare checkbox. The batting
+   * Dismissals dual-key rows render via dismissalRowHTML, not this helper. (The
+   * leaderboard's inline picker no longer routes through here — it renders the
+   * filter-style chosen-rows list; the W2/E1b checkbox layout has been retired.) */
   function itemRowHTML(m, formats, visible) {
-    // Wave C: on the leaderboard (controlsOn), a count/% (or count/per-match) toggle
-    // PRIMARY renders as a single toggle row instead of a plain checkbox. Scoped to
-    // plain batting/bowling by COLUMN_TOGGLE_PAIRS (matchup namespaces have no entry).
-    // getDiscipline() == the ns this render was built for. Cross-discipline rows carry
-    // a prefixed key that never matches a pair, so they render as normal rows.
-    // E1b: on the leaderboard, every column renders as an OFFER header + per-copy
-    // instance rows — a count/% pair under its count canonical, a plain metric under
-    // its own key. (toggleRowHTML itself already forwards to metricGroupHTML under
-    // multiInstance; this branch covers the plain columns + composed phase/ball/
-    // innings rows that reach itemRowHTML directly.)
-    if (multiInstance) {
-      const pair = togglePairByCount(m.key, getDiscipline());
-      const canon = pair ? pair.count : m.key;
-      return metricGroupHTML(canon, metricDisplayLabel(m, formats));
-    }
-    if (controlsOn) {
-      const pair = togglePairByCount(m.key, getDiscipline());
-      if (pair) return toggleRowHTML(m, pair, formats, visible);
-    }
-    const label = `<label class="columns-popover__item">
+    return `<label class="columns-popover__item">
         <input type="checkbox" data-key="${m.key}" ${visible.has(m.key) ? "checked" : ""} />
         <span>${metricDisplayLabel(m, formats)}</span>
       </label>`;
-    return controlsOn
-      ? `<div class="columns-popover__item-row">${label}${columnControlsHTML(m.key)}</div>`
-      : label;
   }
 
   /** A labelled section of metric rows, or "" when the section is empty. */
@@ -656,8 +516,8 @@ export function createColumnsPicker({
    * This is the POP-UP path (playerFiltersTab.js's popover), left byte-identical:
    * that surface passes no W2 controls (controlsOn false) and crossDiscipline
    * false, so it renders plain checkbox rows with a flat Phase section, exactly
-   * as before. The LEADERBOARD inline picker now renders via buildDropdownsHTML
-   * (the W4 four-dropdown layout) instead. */
+   * as before. The LEADERBOARD inline picker renders the filter-style chosen-rows
+   * list instead (buildInlineHTML / renderInline). */
   function buildPickerHTML(ns, formats) {
     const all = eligibleMetrics(ns, formats);
     const basic = all.filter(
@@ -704,27 +564,6 @@ export function createColumnsPicker({
    * current discipline's OWN columns vs the cross-discipline columns. */
   function disciplineBucket(ns) {
     return ns === "bowling" || ns === "matchup_bowling" ? "bowling" : "batting";
-  }
-
-  /** Which of the four dropdowns a COLUMN key belongs to, in namespace `ns`.
-   * `matches` (Player Matches) and Impact → Match; Cross keys → their encoded
-   * discipline's dropdown; Fielding → Fielding; everything else (Basic/
-   * Detailed/Dismissals/Phase) → the ns's own discipline bucket. Returns null
-   * for an unresolvable/stray key. */
-  function dropdownForColumnKey(key, ns) {
-    const parsed = parseCrossKey(key);
-    if (parsed) return parsed.discipline; // "batting" | "bowling"
-    const m = getMetric(key, ns);
-    if (!m) return null;
-    // Columns content rework Wave A (plain batting/bowling only — matchup's
-    // OWN "matches" metric, vsTableOnly, is untouched): Player Matches is
-    // display-consolidated into the MATCH dropdown as a single instance,
-    // alongside Impact — same rule shape as the existing impact→match case
-    // just below.
-    if ((ns === "batting" || ns === "bowling") && m.key === "matches") return "match";
-    if (m.section === "impact") return "match";
-    if (m.section === "fielding") return "fielding";
-    return disciplineBucket(ns);
   }
 
   // ── Columns content rework Wave A (2026-08-07, display-only) ─────────────────
@@ -821,376 +660,6 @@ export function createColumnsPicker({
       .map((x) => x.m);
   }
 
-  /** Per-dropdown count of columns currently SHOWN (the badge value). */
-  function dropdownCounts(ns) {
-    const counts = { match: 0, batting: 0, bowling: 0, fielding: 0 };
-    for (const key of getColumns()) {
-      const dd = dropdownForColumnKey(key, ns);
-      if (dd && dd in counts) counts[dd] += 1;
-    }
-    return counts;
-  }
-
-  /** The phase×metric composer for the own-discipline dropdown (D1): one family
-   * sub-block per base metric in the discipline's composed pool (whose components
-   * all exist), each listing the format-eligible phase(s) — Powerplay / Middle /
-   * Death, or the ODI-range variants — as normal itemRows (so they flow through the
-   * SAME checkbox + W2 controls). Each row's data-key is a COMPOSED key
-   * (`ph__<phase>__<base>`) resolved by getMetric to a virtual metric with a
-   * generated sqlExpression. "" when no phase is eligible (red-ball / mixed / no
-   * single T20 or 50 Over format) or the pool is empty. REPLACES the flat
-   * enumerated Phase section (the enumerated keys stay in the catalogue for the
-   * pop-up popover + filters, but are no longer OFFERED here). */
-  function composerHTML(ns, formats, visible) {
-    if (ns !== "batting" && ns !== "bowling") return "";
-    const phaseTokens = composedPhaseTokensForFormats(formats);
-    if (!phaseTokens.length) return "";
-    const pool = composedPhasePool(ns);
-    if (!pool.length) return "";
-    const blocks = pool.map((base) => {
-      const famLabel = metricDisplayLabel(base, formats);
-      const rows = phaseTokens
-        // Label the row by PHASE only — the family sub-header carries the metric.
-        // data-key is the composed key; itemRowHTML wires the checkbox + controls.
-        .map((ph) => itemRowHTML({ key: makeComposedPhaseKey(ph, base.key), label: COMPOSED_PHASE_LABEL[ph] }, formats, visible))
-        .join("");
-      return `<div class="cols-composer__family">
-          <div class="cols-composer__family-label">${escHtml(famLabel)}</div>
-          <div class="columns-popover__list">${rows}</div>
-        </div>`;
-    });
-    return `<div class="columns-popover__section-label">Phases</div>
-      <div class="cols-composer">${blocks.join("")}</div>`;
-  }
-
-  /** The ball-range×metric composer (D2): one family sub-block per base metric in
-   * the discipline's composed ball-range pool (Strike Rate / Runs / Balls Faced —
-   * whatever the faced-ball buckets carry), each listing the buckets (First 10
-   * Balls / Balls 11–20 / 21+ Balls) as normal itemRows. Each row's data-key is a
-   * COMPOSED ball key (`bl__<bucket>__<base>`) resolved by getMetric to a virtual
-   * metric with a generated sqlExpression. "" for the pop-up namespaces, and ""
-   * for bowling (no fb* bucket columns → empty pool). Faced-ball buckets are
-   * FORMAT-AGNOSTIC, so — unlike Phases — this shows for every format. REPLACES the
-   * enumerated sr_first10/sr_11_20/sr_21plus rows in the leaderboard picker. */
-  function ballComposerHTML(ns, formats, visible) {
-    if (ns !== "batting" && ns !== "bowling") return "";
-    const pool = composedBallPool(ns);
-    if (!pool.length) return "";
-    const tokens = composedBallTokens();
-    const blocks = pool.map((base) => {
-      const famLabel = metricDisplayLabel(base, formats);
-      const rows = tokens
-        .map((tok) => itemRowHTML({ key: makeComposedBallKey(tok, base.key), label: COMPOSED_BALL_LABEL[tok] }, formats, visible))
-        .join("");
-      return `<div class="cols-composer__family">
-          <div class="cols-composer__family-label">${escHtml(famLabel)}</div>
-          <div class="columns-popover__list">${rows}</div>
-        </div>`;
-    });
-    return `<div class="columns-popover__section-label">Ball Range</div>
-      <div class="cols-composer">${blocks.join("")}</div>`;
-  }
-
-  /** The innings-range×metric composer (D2): one family sub-block per base metric in
-   * the discipline's composed innings pool, each listing the format-eligible innings
-   * (1st / 2nd, plus 3rd / 4th when Red Ball is in scope) as normal itemRows. Each
-   * row's data-key is a COMPOSED innings key (`in__<iToken>__<base>`) resolved by
-   * getMetric to a virtual metric whose sqlExpression is conditional aggregation
-   * over innings_number. "" for the pop-up namespaces / an empty pool. Offered for
-   * BOTH batting and bowling (both views carry innings_number). */
-  function inningsComposerHTML(ns, formats, visible) {
-    if (ns !== "batting" && ns !== "bowling") return "";
-    const tokens = composedInningsTokensForFormats(formats);
-    if (!tokens.length) return "";
-    const pool = composedInningsPool(ns);
-    if (!pool.length) return "";
-    const blocks = pool.map((base) => {
-      const famLabel = metricDisplayLabel(base, formats);
-      const rows = tokens
-        .map((tok) => itemRowHTML({ key: makeComposedInningsKey(tok, base.key), label: COMPOSED_INNINGS_LABEL[tok] }, formats, visible))
-        .join("");
-      return `<div class="cols-composer__family">
-          <div class="cols-composer__family-label">${escHtml(famLabel)}</div>
-          <div class="columns-popover__list">${rows}</div>
-        </div>`;
-    });
-    return `<div class="columns-popover__section-label">Innings Range</div>
-      <div class="cols-composer">${blocks.join("")}</div>`;
-  }
-
-  /** The runs-by-source × count/% composer (D3, batting only): a flat list of run
-   * sources (1s / 2s / 3s / 4s-run / 4s-boundary / 5s / 6s-run / 6s-boundary /
-   * Boundaries), each a Wave-C count/% TOGGLE row so the user picks the run total OR
-   * its % of the batter's runs per source. The 8 fine sources use composed keys
-   * (rs__<src>__runs / __pct); "Boundaries" reuses the catalogued boundary_runs /
-   * boundary_runs_pct pair (composedRunSourceRows). "" for every non-batting ns.
-   * REPLACES the enumerated runs_<source>_pct columns in the leaderboard picker. */
-  function runSourceComposerHTML(ns, formats, visible) {
-    if (ns !== "batting") return "";
-    const rows = composedRunSourceRows()
-      .map((r) =>
-        toggleRowHTML(
-          { label: r.rowLabel },
-          { count: r.countKey, alt: r.pctKey, mode: "pct" },
-          formats,
-          visible
-        )
-      )
-      .join("");
-    return `<div class="columns-popover__section-label">Runs by Source</div>
-      <div class="columns-popover__list">${rows}</div>`;
-  }
-
-  /** The wicket-type × count/% composer (D3, both disciplines): a list of dismissal
-   * types, each a Wave-C count/% TOGGLE row (count of that type OR its share).
-   * Batting = the 12 dismissal kinds (common rows + a Rare disclosure, split/ordered
-   * exactly like the pop-up's Dismissals section); bowling = the 6 bowler-credited
-   * kinds. Each row's pair is composed keys (wt__<token>__count / __pct) resolved by
-   * getMetric. REPLACES the batting Dismissals section + the bowling wkt_* columns in
-   * the leaderboard picker. "" for the matchup namespaces. */
-  function wicketTypeComposerHTML(ns, formats, visible) {
-    const rowFor = (token, rowLabel) =>
-      toggleRowHTML(
-        { label: rowLabel },
-        {
-          count: makeComposedWicketTypeKey(token, "count"),
-          alt: makeComposedWicketTypeKey(token, "pct"),
-          mode: "pct",
-        },
-        formats,
-        visible
-      );
-    if (ns === "batting") {
-      const common = DISMISSAL_KINDS.filter((d) => !RARE_DISMISSAL_KINDS.has(d.kind));
-      const rare = DISMISSAL_KINDS.filter((d) => RARE_DISMISSAL_KINDS.has(d.kind));
-      const rowForKind = (d) =>
-        rowFor(d.kind.replace(/ /g, "_"), DISMISSAL_ROW_LABEL[d.key] ?? d.label);
-      const rareHTML = rare.length
-        ? `<details class="columns-popover__disclosure">
-            <summary><span class="columns-popover__disclosure-arrow">▸</span> Rare dismissals</summary>
-            <div class="columns-popover__list">${rare.map(rowForKind).join("")}</div>
-          </details>`
-        : "";
-      return `<div class="columns-popover__section-label">Wicket Type</div>
-        <div class="columns-popover__list">${common.map(rowForKind).join("")}</div>
-        ${rareHTML}`;
-    }
-    if (ns === "bowling") {
-      const rows = BOWLING_WICKET_TYPE_ROWS.map((r) => rowFor(r.token, r.rowLabel)).join("");
-      return `<div class="columns-popover__section-label">Wicket Type</div>
-        <div class="columns-popover__list">${rows}</div>`;
-    }
-    return "";
-  }
-
-  /** D4: one row for an already-added parametric column (Innings Score Range /
-   * Wicket Haul). A CHECKED checkbox whose only action is REMOVE (unchecking drops the
-   * column); the concrete label ("Innings Score ≥ 100") comes from the resolved virtual
-   * metric, and the W2 Sort-by/Highlight controls follow (leaderboard). Marked
-   * data-param-remove-key so the generic data-key checkbox handler never touches it —
-   * wireParamComposers owns add/remove + the inline re-render. */
-  function paramColumnRowHTML(m, formats) {
-    const label = `<label class="columns-popover__item">
-        <input type="checkbox" data-param-remove-key="${m.key}" checked />
-        <span>${metricDisplayLabel(m, formats)}</span>
-      </label>`;
-    return controlsOn
-      ? `<div class="columns-popover__item-row">${label}${columnControlsHTML(m.key)}</div>`
-      : label;
-  }
-
-  /** The parametric composer (D4): Innings Score Range (batting) / Wicket Haul
-   * (bowling). A BUILDER — an operator <select> (reusing advanced.js OPERATORS so the
-   * column agrees with the pop-up filter) + a value input, a second value input +
-   * "and" for the "between" operator, a unit tag, and an Add button — followed by the
-   * list of param columns already added (each a paramColumnRowHTML). Each added
-   * column's data-key is a composed param key (`isr__…` / `wh__…`) resolved by
-   * getMetric to a virtual metric with a generated sqlExpression whose ≥ N case is
-   * byte-identical to the retiring innings_score_ge / wicket_hauls_ge. "" outside plain
-   * batting/bowling. REPLACES the enumerated ≥-N-only picker rows. */
-  function paramComposerHTML(ns, formats) {
-    const desc = composedParamDescriptor(ns);
-    if (!desc) return "";
-    const opts = OPERATORS.map((o) => `<option value="${o.key}">${escHtml(o.label)}</option>`).join("");
-    const builder = `<div class="cols-param-builder" data-param-prefix="${desc.prefix}" data-param-min="${desc.min}">
-        <select class="select cols-param__op" data-role="param-op" aria-label="${escHtml(desc.noun)} operator">${opts}</select>
-        <input type="number" class="input cols-param__val" data-role="param-v1" value="${desc.default}" min="${desc.min}" step="${desc.step}" aria-label="${escHtml(desc.noun)} value" />
-        <span class="cols-param__and" data-role="param-and" hidden>and</span>
-        <input type="number" class="input cols-param__val" data-role="param-v2" value="${desc.default}" min="${desc.min}" step="${desc.step}" aria-label="${escHtml(desc.noun)} upper value" hidden />
-        <span class="cols-param__unit">${escHtml(desc.unit)}</span>
-        <button type="button" class="btn cols-param__add" data-role="param-add">Add</button>
-      </div>`;
-    const added = getColumns().filter((k) => {
-      const p = parseComposedParamKey(k);
-      return p && p.prefix === desc.prefix;
-    });
-    let rows;
-    if (multiInstance) {
-      // E1b: a param column can now have several copies. List each DISTINCT param key
-      // (first-occurrence order) as an OFFER header + its per-copy instance rows —
-      // same layout as every other column. The builder's Add and the header/duplicate
-      // both append copies (below); Remove drops one copy.
-      const seen = new Set();
-      rows = added
-        .filter((k) => (seen.has(k) ? false : (seen.add(k), true)))
-        .map((k) => {
-          const m = getMetric(k, ns);
-          return m ? metricGroupHTML(k, metricDisplayLabel(m, formats)) : "";
-        })
-        .join("");
-    } else {
-      rows = added
-        .map((k) => getMetric(k, ns))
-        .filter(Boolean)
-        .map((m) => paramColumnRowHTML(m, formats))
-        .join("");
-    }
-    const addedHTML = rows ? `<div class="columns-popover__list">${rows}</div>` : "";
-    return `<div class="columns-popover__section-label">${escHtml(desc.sectionLabel)}</div>
-      ${builder}${addedHTML}`;
-  }
-
-  /** Build the leaderboard's four-dropdown Columns UI (W4). Order is fixed —
-   * Match · Batting · Bowling · Fielding (Match first, OQ2). The current
-   * discipline's OWN columns (Basic/Detailed/Dismissals/Phase composer) fill its
-   * matching dropdown; the OTHER discipline's cross columns (Basic/Detailed) fill
-   * the sibling dropdown; Impact → Match; Fielding → Fielding. Each trigger shows
-   * a live count badge; an empty dropdown's trigger is disabled. */
-  function buildDropdownsHTML(ns, formats) {
-    const bucket = disciplineBucket(ns);
-    const all = eligibleMetrics(ns, formats);
-    const visible = new Set(getColumns());
-    const isDetailed = (m) => m.kind === "rate" || m.kind === "percent" || DETAILED_TOTAL_KEYS.has(m.key);
-    // Columns content rework Wave A: scoped to the PLAIN batting/bowling
-    // namespaces only — matchup_batting/matchup_bowling (Vs mode) keep their
-    // pre-Wave-A layout untouched (their own "matches"/wickets_per_innings defs
-    // are separate catalogue entries this wave never renamed, see metrics.js).
-    const isPlainNs = ns === "batting" || ns === "bowling";
-    // Wave C: the ALTERNATE (%/per-match) key of every count/% (count/per-match)
-    // toggle pair is consolidated INTO its count row's toggle — never its own picker
-    // row. Hide those alt keys from every section's listing (they still reach the
-    // visible column list via the toggle). Plain ns only (matchup has no pairs).
-    const hiddenAlts = isPlainNs ? toggleAltKeys(ns) : new Set();
-
-    const impact = all.filter(
-      (m) => m.section === "impact" && !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key)) && !hiddenAlts.has(m.key)
-    );
-    const fielding = all.filter((m) => m.section === "fielding" && !hiddenAlts.has(m.key));
-    const dismissal = all.filter((m) => m.section === "dismissal");
-    // Wave A: Player Matches consolidates into the Match dropdown (single
-    // instance) instead of appearing in the discipline's own Basic section.
-    const matchesMetric = isPlainNs ? all.find((m) => m.key === "matches") || null : null;
-    const core = all.filter(
-      (m) =>
-        !m.isPhaseMetric &&
-        m.section !== "dismissal" &&
-        m.section !== "fielding" &&
-        m.section !== "impact" &&
-        !(isPlainNs && m.key === "matches") &&
-        !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key)) &&
-        !(isPlainNs && BALL_RANGE_ENUMERATED_KEYS.has(m.key)) &&
-        !(isPlainNs && D3_ENUMERATED_HIDDEN_KEYS.has(m.key)) &&
-        !(isPlainNs && D4_ENUMERATED_HIDDEN_KEYS.has(m.key)) &&
-        !hiddenAlts.has(m.key)
-    );
-    const basicOrder = bucket === "bowling" ? BOWLING_BASIC_ORDER : BATTING_BASIC_ORDER;
-    const detailedOrder = bucket === "bowling" ? BOWLING_DETAILED_ORDER : BATTING_DETAILED_ORDER;
-    const coreBasic = core.filter((m) => !isDetailed(m));
-    const coreDetailed = core.filter((m) => isDetailed(m));
-    const ownBasic = isPlainNs ? orderByKeys(coreBasic, basicOrder) : coreBasic;
-    const ownDetailed = isPlainNs ? orderByKeys(coreDetailed, detailedOrder) : coreDetailed;
-
-    // Cross columns (W3): the OTHER discipline's Basic/Detailed metrics, re-keyed
-    // to their cross key. Plain batting/bowling only ([] in matchup namespaces).
-    let crossBasic = [];
-    let crossDetailed = [];
-    if (crossDiscipline && isPlainNs) {
-      const other = OTHER_DISCIPLINE[ns];
-      const otherBasicOrder = other === "bowling" ? BOWLING_BASIC_ORDER : BATTING_BASIC_ORDER;
-      const otherDetailedOrder = other === "bowling" ? BOWLING_DETAILED_ORDER : BATTING_DETAILED_ORDER;
-      const crossSource = eligibleCrossMetrics(ns, formats).filter((m) => !HIDDEN_COLUMN_KEYS.has(m.key));
-      // Order on the ORIGINAL key before re-keying to the cross-prefixed key,
-      // so the v5 order arrays (plain metric keys) still match.
-      const crossBasicSrc = orderByKeys(crossSource.filter((m) => !isDetailed(m)), otherBasicOrder);
-      const crossDetailedSrc = orderByKeys(crossSource.filter((m) => isDetailed(m)), otherDetailedOrder);
-      crossBasic = crossBasicSrc.map((base) => ({ ...base, key: makeCrossKey(other, base.key) }));
-      crossDetailed = crossDetailedSrc.map((base) => ({ ...base, key: makeCrossKey(other, base.key) }));
-    }
-
-    // Columns content rework D3: on the PLAIN namespaces the batting Dismissals
-    // section + bowling wkt_* are replaced by the Runs by Source / Wicket Type
-    // composers, placed AFTER the Phase/Ball/Innings composers (v5 audit order). The
-    // MATCHUP namespaces (Vs mode) keep their plain "Dismissals" section exactly where
-    // it was — the D3 composers return "" for matchup, so Vs mode stays byte-identical.
-    // D4 parametric composer (Innings Score Range / Wicket Haul), placed per the v5
-    // audit order: batting → after Innings Range, before Runs by Source; bowling →
-    // after Wicket Type (last). paramComposerHTML self-selects isr (batting) / wh
-    // (bowling) from ns and returns "" otherwise.
-    const paramHTML = paramComposerHTML(ns, formats);
-    const ownSections = isPlainNs
-      ? sectionHTML("Basic Stats", ownBasic, formats, visible) +
-        sectionHTML("Detailed Stats", ownDetailed, formats, visible) +
-        composerHTML(ns, formats, visible) +
-        ballComposerHTML(ns, formats, visible) +
-        inningsComposerHTML(ns, formats, visible) +
-        (ns === "batting"
-          ? paramHTML +
-            runSourceComposerHTML(ns, formats, visible) +
-            wicketTypeComposerHTML(ns, formats, visible)
-          : wicketTypeComposerHTML(ns, formats, visible) + paramHTML)
-      : sectionHTML("Basic Stats", ownBasic, formats, visible) +
-        sectionHTML("Detailed Stats", ownDetailed, formats, visible) +
-        dismissalSectionHTML(ns, formats, visible, dismissal) +
-        composerHTML(ns, formats, visible) +
-        ballComposerHTML(ns, formats, visible) +
-        inningsComposerHTML(ns, formats, visible);
-    const crossSections =
-      sectionHTML("Basic Stats", crossBasic, formats, visible) +
-      sectionHTML("Detailed Stats", crossDetailed, formats, visible);
-
-    // Wave A: the Match dropdown's own "Basic Stats" mini-section holds the
-    // single consolidated Player Matches row (plain ns only — matchesMetric is
-    // null in matchup mode, rendering "" and leaving Match = Impact-only, the
-    // pre-Wave-A shape).
-    const matchHTML =
-      sectionHTML("Basic Stats", matchesMetric ? [matchesMetric] : [], formats, visible) +
-      sectionHTML("Impact", impact, formats, visible);
-
-    const dropdowns = [
-      { id: "match", label: "Match", html: matchHTML },
-      { id: "batting", label: "Batting", html: bucket === "batting" ? ownSections : crossSections },
-      { id: "bowling", label: "Bowling", html: bucket === "bowling" ? ownSections : crossSections },
-      { id: "fielding", label: "Fielding", html: sectionHTML("Fielding Stats", fielding, formats, visible) },
-    ];
-
-    const counts = dropdownCounts(ns);
-    const open = (inlineState && inlineState.openDropdown) || null;
-
-    const bar = dropdowns
-      .map((d) => {
-        const empty = !d.html;
-        const isOpen = open === d.id && !empty;
-        return `<button type="button" class="cols-dd-trigger${isOpen ? " is-open" : ""}" data-dd="${d.id}" aria-expanded="${isOpen ? "true" : "false"}" aria-controls="cols-dd-panel-${d.id}"${empty ? " disabled" : ""}>
-          <span class="cols-dd-name">${d.label}</span>
-          <span class="cols-dd-badge">${counts[d.id] || 0}</span>
-          <span class="cols-dd-caret" aria-hidden="true">▾</span>
-        </button>`;
-      })
-      .join("");
-
-    const panels = dropdowns
-      .map((d) => {
-        const isOpen = open === d.id && !!d.html;
-        return `<div class="cols-dd-panel" id="cols-dd-panel-${d.id}" data-dd-panel="${d.id}" role="region" aria-label="${d.label} columns"${isOpen ? "" : " hidden"}>${d.html || ""}</div>`;
-      })
-      .join("");
-
-    return `<div class="cols-dropdowns">
-        <div class="cols-dd-bar">${bar}</div>
-        <div class="cols-dd-panels">${panels}</div>
-      </div>`;
-  }
-
   /** Wire every checkbox's change handler onto `rootEl` (the floating popover OR
    * the inline host). Behaviour-identical to the pre-extraction inline handlers:
    * every mutation runs through the caller's setColumns with the full new
@@ -1281,146 +750,6 @@ export function createColumnsPicker({
     }
   }
 
-  /** W2: wire the per-column Sort-by + Highlight buttons (leaderboard only). No-op
-   * when controlsOn is false (the pop-up popover has no such buttons). Each button
-   * stops the click from reaching the surrounding row / label, and bails if it's
-   * disabled (column hidden). Sort routes through setSort (the two-way-bound host
-   * sort path); Highlight toggles the key in the display-only highlighted set. */
-  function wireColumnControls(rootEl) {
-    if (!controlsOn) return;
-    rootEl.querySelectorAll(".col-sort-btn[data-sort-key]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (btn.disabled) return;
-        setSort(btn.dataset.sortKey);
-      });
-    });
-    rootEl.querySelectorAll(".col-hl-btn[data-hl-key]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (btn.disabled) return;
-        const key = btn.dataset.hlKey;
-        const cur = getHighlights().slice();
-        const idx = cur.indexOf(key);
-        if (idx >= 0) cur.splice(idx, 1);
-        else cur.push(key);
-        setHighlights(cur);
-      });
-    });
-  }
-
-  /** Wave C: wire the count/% (count/per-match) segmented mode controls (leaderboard
-   * only). Clicking a segment swaps the shown key of that pair to the segment's form
-   * (count or alternate), preserving the column's position, and MIGRATES any active
-   * highlight onto the shown form so Highlight keeps working on whichever form is
-   * shown. Disabled while the column is hidden (add it first). Sync immediately so
-   * the segs + sort/highlight reflect the change before the async requery lands. */
-  function wireModeToggles(rootEl) {
-    if (!controlsOn) return;
-    rootEl.querySelectorAll(".col-mode-seg[data-mode-count]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (btn.disabled) return;
-        const countKey = btn.dataset.modeCount;
-        const altKey = btn.dataset.modeAlt;
-        const wantKey = btn.dataset.modeTarget === "alt" ? altKey : countKey;
-        const cols = getColumns().slice();
-        const iCount = cols.indexOf(countKey);
-        const iAlt = cols.indexOf(altKey);
-        const present = [iCount, iAlt].filter((i) => i >= 0);
-        if (present.length === 0) return; // hidden — disabled anyway
-        const oldKey = iAlt >= 0 ? altKey : countKey;
-        if (wantKey === oldKey) return; // already showing that form
-        // Replace in place: drop both variants, insert the wanted one at the earliest
-        // index so the column keeps its position (order-sensitive for preset matching).
-        const at = Math.min(...present);
-        const next = cols.filter((k) => k !== countKey && k !== altKey);
-        next.splice(at, 0, wantKey);
-        // Migrate an active highlight onto the shown form (Highlight keeps working on
-        // whichever form is shown). Display-only — never a query change. E1a: highlight
-        // is stored per-SLOT now, so CAPTURE the migrated key set BEFORE the column
-        // change (the old form's slot is dropped by setColumns), then apply columns,
-        // THEN re-apply the highlight so it maps onto the wanted form's freshly-created
-        // slot. (In the key-array era the order was the reverse; this reorder is
-        // leaderboard-only — wireModeToggles no-ops when controlsOn is false.)
-        let migratedHls = null;
-        if (getHighlights && setHighlights) {
-          const hls = getHighlights();
-          if (hls.includes(oldKey)) migratedHls = hls.map((k) => (k === oldKey ? wantKey : k));
-        }
-        setColumns(next);
-        if (migratedHls) setHighlights(migratedHls);
-        syncCheckedState(rootEl);
-      });
-    });
-  }
-
-  /** D4: wire the parametric composers (Innings Score Range / Wicket Haul —
-   * leaderboard inline only; the pop-up popover has no such builder). The BUILDER's
-   * operator <select> toggles the second "between" value input; Add reads operator +
-   * value(s), builds the composed param key (byte-identical ≥ N to the retiring
-   * enumerated column), appends it, and re-renders inline so the new row appears. A
-   * param column's data-param-remove-key checkbox removes it (unchecking) + re-renders.
-   * A full inline re-render is needed on add/remove because the param-column LIST is
-   * value-dynamic — syncCheckedState alone can't create/destroy those rows. */
-  function wireParamComposers(rootEl) {
-    rootEl.querySelectorAll(".cols-param-builder[data-param-prefix]").forEach((builder) => {
-      const opEl = builder.querySelector('[data-role="param-op"]');
-      const v1El = builder.querySelector('[data-role="param-v1"]');
-      const v2El = builder.querySelector('[data-role="param-v2"]');
-      const andEl = builder.querySelector('[data-role="param-and"]');
-      const addBtn = builder.querySelector('[data-role="param-add"]');
-      const prefix = builder.dataset.paramPrefix;
-      const min = Number(builder.dataset.paramMin) || 0;
-      const syncBetween = () => {
-        const between = opEl && opEl.value === "between";
-        if (v2El) v2El.hidden = !between;
-        if (andEl) andEl.hidden = !between;
-      };
-      if (opEl) opEl.addEventListener("change", syncBetween);
-      if (addBtn)
-        addBtn.addEventListener("click", (e) => {
-          e.preventDefault();
-          const opToken = COMPOSED_PARAM_OP_TOKEN[opEl ? opEl.value : "gte"];
-          if (!opToken) return;
-          const v1 = Math.max(min, Math.trunc(Number(v1El && v1El.value)));
-          if (!Number.isFinite(v1)) return;
-          let values;
-          if (opToken === "bt") {
-            const v2 = Math.max(min, Math.trunc(Number(v2El && v2El.value)));
-            if (!Number.isFinite(v2)) return;
-            values = [v1, v2];
-          } else {
-            values = [v1];
-          }
-          const key = makeComposedParamKey(prefix, opToken, values);
-          if (multiInstance) {
-            // E1b: Add always APPENDS a copy (like every other column's offer) — so
-            // building the same threshold twice, or building one already shown, adds
-            // another copy rather than being a no-op.
-            applySlots([...(getSlots() || []), makeSlot(key)]);
-          } else {
-            const cols = getColumns().slice();
-            if (!cols.includes(key)) cols.push(key);
-            setColumns(cols); // INSTANT, no Search light (like every other column change)
-          }
-          rerenderInline(); // value-dynamic row list → rebuild so the new row shows
-        });
-    });
-    rootEl.querySelectorAll('input[type="checkbox"][data-param-remove-key]').forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const key = cb.dataset.paramRemoveKey;
-        const cols = getColumns().slice();
-        const idx = cols.indexOf(key);
-        if (idx >= 0) cols.splice(idx, 1);
-        setColumns(cols); // INSTANT
-        rerenderInline(); // drop the removed row
-      });
-    });
-  }
 
   /** E1b: wire the multi-instance ("copies") controls — the leaderboard's inline
    * picker only. Every mutation is INSTANT + display-only (applySlots dedups copies
@@ -1510,11 +839,10 @@ export function createColumnsPicker({
   }
 
   /** E1b: re-sync the per-copy Sort-by + Highlight indicators from the live host
-   * state WITHOUT rebuilding — the multi-instance counterpart to syncColumnControls,
-   * called from syncCheckedState so an EXTERNAL sort change (e.g. a table-header
-   * click while the popup is open) or a highlight repaint keeps the copy rows honest.
-   * Instance rows only ever exist for shown copies, so there is no disabled state;
-   * the data-keys are always fresh (a variant swap rebuilds the row). */
+   * state WITHOUT rebuilding — called from syncInline so an EXTERNAL sort change
+   * (e.g. a table-header click while the popup is open) or a highlight repaint keeps
+   * the copy rows honest. Instance rows only ever exist for shown copies, so there is
+   * no disabled state; the data-keys are always fresh (a variant swap rebuilds the row). */
   function syncInstanceControls(rootEl) {
     const sort = getSort ? getSort() : null;
     const hlSet = new Set(getHighlightIds ? getHighlightIds() : []);
@@ -1535,57 +863,6 @@ export function createColumnsPicker({
     });
   }
 
-  /** W2: re-sync the Sort-by + Highlight buttons' state (active / direction /
-   * disabled) from the live host state, WITHOUT rebuilding — the counterpart to
-   * syncCheckedState for the controls. Called from syncCheckedState so every
-   * refresh path keeps them honest (e.g. a header click that moved the sort, or a
-   * column newly shown/hidden). No-op when controlsOn is false. */
-  function syncColumnControls(rootEl) {
-    if (!controlsOn) return;
-    const visible = new Set(getColumns());
-    const sort = getSort();
-    const hl = new Set(getHighlights());
-    const ns = getDiscipline();
-    // For a toggle row, the sort/highlight controls act on WHICHEVER form is shown:
-    // re-derive the active key from the current column list and repoint the button's
-    // data-key so a variant swap (e.g. a preset) keeps the controls honest without a
-    // full re-render. `data-toggle-count` marks such buttons; the count key is stable.
-    const activeKeyFor = (btn, fallback) => {
-      const countKey = btn.dataset.toggleCount;
-      if (!countKey) return fallback;
-      const pair = togglePairByCount(countKey, ns);
-      return pair ? activeToggleKey(pair, visible) : fallback;
-    };
-    rootEl.querySelectorAll(".col-sort-btn[data-sort-key]").forEach((btn) => {
-      const key = activeKeyFor(btn, btn.dataset.sortKey);
-      btn.dataset.sortKey = key;
-      const isVisible = visible.has(key);
-      btn.disabled = !isVisible;
-      const isActiveSort = !!(sort && sort.active && sort.key === key);
-      btn.classList.toggle("is-active", isActiveSort);
-      btn.setAttribute("aria-pressed", isActiveSort ? "true" : "false");
-      btn.textContent = isActiveSort ? (sort.dir === "asc" ? "▲" : "▼") : "↕";
-    });
-    rootEl.querySelectorAll(".col-hl-btn[data-hl-key]").forEach((btn) => {
-      const key = activeKeyFor(btn, btn.dataset.hlKey);
-      btn.dataset.hlKey = key;
-      btn.disabled = !visible.has(key);
-      const on = hl.has(key);
-      btn.classList.toggle("is-active", on);
-      btn.setAttribute("aria-pressed", on ? "true" : "false");
-    });
-    // Wave C: keep the count/% (count/per-match) segmented controls in step too.
-    rootEl.querySelectorAll(".col-mode-seg[data-mode-count]").forEach((btn) => {
-      const countKey = btn.dataset.modeCount;
-      const altKey = btn.dataset.modeAlt;
-      const shownAlt = visible.has(altKey);
-      const shown = visible.has(countKey) || shownAlt;
-      btn.disabled = !shown;
-      const active = shown && (btn.dataset.modeTarget === "alt" ? shownAlt : !shownAlt);
-      btn.classList.toggle("is-active", active);
-      btn.setAttribute("aria-pressed", active ? "true" : "false");
-    });
-  }
 
   /** W4: wire the four dropdown triggers (inline / leaderboard only — the pop-up
    * popover has no such bar). Clicking a trigger opens its panel and closes the
@@ -1618,16 +895,6 @@ export function createColumnsPicker({
     });
   }
 
-  /** W4: refresh the four count badges from the live column list, WITHOUT
-   * rebuilding. No-op in popover mode (no `.cols-dropdowns` present). */
-  function updateBadges(rootEl) {
-    if (!rootEl.querySelector(".cols-dropdowns")) return;
-    const counts = dropdownCounts(getDiscipline());
-    rootEl.querySelectorAll(".cols-dd-trigger[data-dd]").forEach((btn) => {
-      const badge = btn.querySelector(".cols-dd-badge");
-      if (badge) badge.textContent = String(counts[btn.dataset.dd] || 0);
-    });
-  }
 
   /** Re-sync every checkbox's checked state from getColumns() WITHOUT rebuilding
    * — the host may have silently pruned a column out from under us. Two checkbox
@@ -1650,12 +917,6 @@ export function createColumnsPicker({
         cb.checked = visible.has(cb.dataset.toggleCount) || visible.has(cb.dataset.toggleAlt);
       }
     });
-    // E1b: keep the per-copy Sort-by/Highlight indicators honest; W2: the pre-E1b
-    // per-column controls (no-op in the pop-up). One or the other applies per host.
-    if (multiInstance) syncInstanceControls(rootEl);
-    else syncColumnControls(rootEl);
-    // W4: keep the four count badges in step too (no-op in the pop-up popover).
-    updateBadges(rootEl);
   }
 
   /** Shallow array equality for the format selection (used to decide whether an
@@ -1697,6 +958,13 @@ export function createColumnsPicker({
     Object.entries(COMPOSED_PARAM_OP_TOKEN).map(([k, v]) => [v, k])
   );
 
+  // A monotonic id for a PENDING (empty, no-column-yet) parametric composer row —
+  // the owner's "starts empty" ruling: adding Innings Score Range / Wicket Haul
+  // opens a blank op+value editor that mints a real column only once a valid value
+  // is entered. A pending row has no slot, so it needs its own transient id.
+  let pendingParamSeq = 0;
+  const nextPendingId = () => `pending-${++pendingParamSeq}`;
+
   function slotsForNs() {
     return getSlots ? getSlots() : [];
   }
@@ -1711,6 +979,90 @@ export function createColumnsPicker({
     if (parseComposedRunSourceKey(key)) return "runsource";
     if (parseComposedWicketTypeKey(key)) return "wickettype";
     return null;
+  }
+
+  // ── One-metric-per-row composer model (owner ruling 2026-08-07) ──────────────
+  // A dimension/category composer row now carries a SINGLE selection + dimension
+  // tick-boxes (NOT the full metric matrix). For Phase/Ball/Innings the selection
+  // is ONE base metric (Strike Rate, Average, …); for Runs by Source / Wicket Type
+  // it is the count-or-% AXIS. The row's columns = the selection × its ticked
+  // dimension/category values. A second metric/axis = adding the composer again
+  // (another row). A composer row is identified by (kind, sel).
+
+  /** The row selection (base metric key, or count/% axis) a composed slot key
+   * belongs to — the value we group slots by into rows. null for a non-composed key. */
+  function composerSelForKey(kind, key) {
+    if (kind === "phase") { const p = parseComposedPhaseKey(key); return p ? p.baseKey : null; }
+    if (kind === "ball") { const p = parseComposedBallKey(key); return p ? p.baseKey : null; }
+    if (kind === "innings") { const p = parseComposedInningsKey(key); return p ? p.baseKey : null; }
+    if (kind === "runsource") { const p = parseComposedRunSourceKey(key); return p ? p.axis : null; }
+    if (kind === "wickettype") { const p = parseComposedWicketTypeKey(key); return p ? p.axis : null; }
+    return null;
+  }
+
+  /** The <select> options for a composer row's single selection: the metric pool
+   * (Phase/Ball/Innings) or the count/% axis (Runs by Source / Wicket Type), as
+   * [{ value, label }]. "" pool ⇒ the composer is not offered for this ns/format. */
+  function composerSelectOptions(kind, ns, formats) {
+    if (kind === "phase") return composedPhasePool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
+    if (kind === "ball") return composedBallPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
+    if (kind === "innings") return composedInningsPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
+    if (kind === "runsource") return ns === "batting" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
+    if (kind === "wickettype") return (ns === "batting" || ns === "bowling") ? [{ value: "count", label: "Count" }, { value: "pct", label: "%" }] : [];
+    return [];
+  }
+
+  /** The dimension/category tick-box rows for a composer row's selection `sel`:
+   * [{ label, key, rare }]. `key` is the composed (or, for Boundaries, catalogued)
+   * column key ticking that value produces. rare = the batting-Dismissals rare split. */
+  function composerValueRows(kind, ns, formats, sel) {
+    if (kind === "phase") {
+      return composedPhaseTokensForFormats(formats).map((ph) => ({ label: COMPOSED_PHASE_LABEL[ph], key: makeComposedPhaseKey(ph, sel), rare: false }));
+    }
+    if (kind === "ball") {
+      return composedBallTokens().map((tok) => ({ label: COMPOSED_BALL_LABEL[tok], key: makeComposedBallKey(tok, sel), rare: false }));
+    }
+    if (kind === "innings") {
+      return composedInningsTokensForFormats(formats).map((tok) => ({ label: COMPOSED_INNINGS_LABEL[tok], key: makeComposedInningsKey(tok, sel), rare: false }));
+    }
+    if (kind === "runsource") {
+      if (ns !== "batting") return [];
+      // sel = "runs" (count) | "pct". Each source's key is its count OR % variant;
+      // "Boundaries" reuses the catalogued boundary_runs / boundary_runs_pct pair.
+      return composedRunSourceRows().map((r) => ({ label: r.rowLabel, key: sel === "pct" ? r.pctKey : r.countKey, rare: false }));
+    }
+    if (kind === "wickettype") {
+      if (ns === "batting") {
+        return DISMISSAL_KINDS.map((d) => ({
+          label: DISMISSAL_ROW_LABEL[d.key] ?? d.label,
+          key: makeComposedWicketTypeKey(d.kind.replace(/ /g, "_"), sel),
+          rare: RARE_DISMISSAL_KINDS.has(d.kind),
+        }));
+      }
+      if (ns === "bowling") {
+        return BOWLING_WICKET_TYPE_ROWS.map((r) => ({ label: r.rowLabel, key: makeComposedWicketTypeKey(r.token, sel), rare: false }));
+      }
+      return [];
+    }
+    return [];
+  }
+
+  /** True iff a composer `kind` is offerable for the current ns/format (≥1 metric/axis
+   * option AND ≥1 tick-box value for the first option) — the add-menu gate. */
+  function composerAvailable(kind, ns, formats) {
+    const opts = composerSelectOptions(kind, ns, formats);
+    if (!opts.length) return false;
+    return composerValueRows(kind, ns, formats, opts[0].value).length > 0;
+  }
+
+  /** The default selection for a freshly-added composer row of `kind`: the first
+   * option NOT already shown as a row of that kind (so "add again" lands on a new
+   * metric/axis), else the first option. null when the kind is unavailable. */
+  function defaultComposerSel(kind, ns, formats) {
+    const opts = composerSelectOptions(kind, ns, formats).map((o) => o.value);
+    if (!opts.length) return null;
+    const used = new Set(shownComposerRows(ns, formats).filter((r) => r.kind === kind).map((r) => r.sel));
+    return opts.find((v) => !used.has(v)) ?? opts[0];
   }
 
   /** True iff `key` is the OWN-discipline parametric composed column for `ns`. */
@@ -1765,6 +1117,27 @@ export function createColumnsPicker({
     </div>`;
   }
 
+  /** A PENDING parametric composer row (owner ruling: parametric composers START
+   * EMPTY). Same op-select + value input(s) + unit + × layout as paramRowHTML, but
+   * the value input is BLANK (placeholder = the base default) and NO column exists
+   * yet — the column is minted only once a valid value is entered (wireParamRows). */
+  function pendingParamRowHTML(id, ns) {
+    const desc = composedParamDescriptor(ns);
+    if (!desc) return "";
+    const opts = OPERATORS.map(
+      (o) => `<option value="${o.key}"${o.key === "gte" ? " selected" : ""}>${escHtml(o.label)}</option>`
+    ).join("");
+    return `<div class="cols-param-row cols-param-row--pending" data-param-pending="${id}" data-param-prefix="${desc.prefix}" data-param-min="${desc.min}">
+      <span class="cols-param-row__noun">${escHtml(desc.noun)}</span>
+      <select class="select cols-param__op" data-role="param-op" aria-label="${escHtml(desc.noun)} operator">${opts}</select>
+      <input type="number" class="input cols-param__val" data-role="param-v1" value="" placeholder="${escHtml(String(desc.default))}" min="${desc.min}" step="${desc.step}" aria-label="${escHtml(desc.noun)} value" />
+      <span class="cols-param__and" data-role="param-and" hidden>and</span>
+      <input type="number" class="input cols-param__val" data-role="param-v2" value="" placeholder="${escHtml(String(desc.default))}" min="${desc.min}" step="${desc.step}" aria-label="${escHtml(desc.noun)} upper value" hidden />
+      <span class="cols-param__unit">${escHtml(desc.unit)}</span>
+      <button type="button" class="col-remove-btn cols-param-row__remove" data-param-pending-remove="${id}" title="Remove this row" aria-label="Remove this row">✕</button>
+    </div>`;
+  }
+
   /** One dimension tick-box row for a composer editor (Phase/Ball/Innings): a simple
    * checkbox standing for the composed column `key`, checked iff it is shown. */
   function composedCheckRowHTML(key, label, visible) {
@@ -1774,133 +1147,115 @@ export function createColumnsPicker({
     </label>`;
   }
 
-  /** One category row for a count/% composer editor (Runs by Source / Wicket Type):
-   * an on/off checkbox (ticking shows the COUNT variant; unticking removes both) +
-   * a count/% segmented toggle that swaps the shown variant. */
-  function composedToggleRowHTML(rowLabel, countKey, altKey, visible) {
-    const shownAlt = visible.has(altKey);
-    const shown = visible.has(countKey) || shownAlt;
-    const dis = shown ? "" : " disabled";
-    const countActive = shown && !shownAlt;
-    const altActive = shown && shownAlt;
-    return `<div class="columns-popover__item-row cols-comp-toggle-row">
-      <label class="columns-popover__item">
-        <input type="checkbox" class="cols-comp-toggle-check" data-toggle-count="${countKey}" data-toggle-alt="${altKey}" ${shown ? "checked" : ""} />
-        <span>${escHtml(rowLabel)}</span>
-      </label>
-      <span class="col-mode-toggle" role="group" aria-label="Show as count or percentage">
-        <button type="button" class="col-mode-seg cols-comp-mode-seg${countActive ? " is-active" : ""}" data-comp-mode-count="${countKey}" data-comp-mode-alt="${altKey}" data-comp-mode-target="count" aria-pressed="${countActive ? "true" : "false"}" title="Show as count"${dis}>#</button>
-        <button type="button" class="col-mode-seg cols-comp-mode-seg${altActive ? " is-active" : ""}" data-comp-mode-count="${countKey}" data-comp-mode-alt="${altKey}" data-comp-mode-target="alt" aria-pressed="${altActive ? "true" : "false"}" title="Show as percentage"${dis}>%</button>
-      </span>
-    </div>`;
+  /** The editor BODY for one composer row (kind + its single selection `sel`): a
+   * flat list of dimension/category tick-boxes (checked iff their column is shown).
+   * Reuses the D1-D4 composed-key helpers (byte-identical column generation). The
+   * batting Wicket Type body keeps the common + Rare-disclosure split. Per-column
+   * sort/highlight comes from the table header (E2), not these rows. Returns
+   * { html, empty }. */
+  function composerBody(kind, ns, formats, sel, visible) {
+    const rows = composerValueRows(kind, ns, formats, sel);
+    if (!rows.length) return { html: "", empty: true };
+    const check = (r) => composedCheckRowHTML(r.key, r.label, visible);
+    if (rows.some((r) => r.rare)) {
+      const common = rows.filter((r) => !r.rare);
+      const rare = rows.filter((r) => r.rare);
+      const rareHTML = rare.length
+        ? `<details class="columns-popover__disclosure"><summary><span class="columns-popover__disclosure-arrow">▸</span> Rare dismissals</summary><div class="columns-popover__list">${rare.map(check).join("")}</div></details>`
+        : "";
+      return { html: `<div class="columns-popover__list">${common.map(check).join("")}</div>${rareHTML}`, empty: false };
+    }
+    return { html: `<div class="columns-popover__list">${rows.map(check).join("")}</div>`, empty: false };
   }
 
-  /** The editor BODY for one dimension/category composer kind. Returns
-   * { html, empty }. Reuses the D1-D4 composed-key helpers (byte-identical column
-   * generation) but renders SIMPLE tick-boxes / count-% toggles — no offer/instance
-   * layer, no per-column sort/highlight (that comes from the table header in E2). */
-  function dimComposerBody(kind, ns, formats, visible) {
-    if (kind === "phase") {
-      const phaseTokens = composedPhaseTokensForFormats(formats);
-      const pool = composedPhasePool(ns);
-      if (!phaseTokens.length || !pool.length) return { html: "", empty: true };
-      const blocks = pool
-        .map((base) => {
-          const rows = phaseTokens
-            .map((ph) => composedCheckRowHTML(makeComposedPhaseKey(ph, base.key), COMPOSED_PHASE_LABEL[ph], visible))
-            .join("");
-          return `<div class="cols-composer__family"><div class="cols-composer__family-label">${escHtml(metricDisplayLabel(base, formats))}</div><div class="columns-popover__list">${rows}</div></div>`;
-        })
-        .join("");
-      return { html: `<div class="cols-composer">${blocks}</div>`, empty: false };
-    }
-    if (kind === "ball") {
-      const pool = composedBallPool(ns);
-      if (!pool.length) return { html: "", empty: true };
-      const tokens = composedBallTokens();
-      const blocks = pool
-        .map((base) => {
-          const rows = tokens
-            .map((tok) => composedCheckRowHTML(makeComposedBallKey(tok, base.key), COMPOSED_BALL_LABEL[tok], visible))
-            .join("");
-          return `<div class="cols-composer__family"><div class="cols-composer__family-label">${escHtml(metricDisplayLabel(base, formats))}</div><div class="columns-popover__list">${rows}</div></div>`;
-        })
-        .join("");
-      return { html: `<div class="cols-composer">${blocks}</div>`, empty: false };
-    }
-    if (kind === "innings") {
-      const tokens = composedInningsTokensForFormats(formats);
-      const pool = composedInningsPool(ns);
-      if (!tokens.length || !pool.length) return { html: "", empty: true };
-      const blocks = pool
-        .map((base) => {
-          const rows = tokens
-            .map((tok) => composedCheckRowHTML(makeComposedInningsKey(tok, base.key), COMPOSED_INNINGS_LABEL[tok], visible))
-            .join("");
-          return `<div class="cols-composer__family"><div class="cols-composer__family-label">${escHtml(metricDisplayLabel(base, formats))}</div><div class="columns-popover__list">${rows}</div></div>`;
-        })
-        .join("");
-      return { html: `<div class="cols-composer">${blocks}</div>`, empty: false };
-    }
-    if (kind === "runsource") {
-      if (ns !== "batting") return { html: "", empty: true };
-      const rows = composedRunSourceRows()
-        .map((r) => composedToggleRowHTML(r.rowLabel, r.countKey, r.pctKey, visible))
-        .join("");
-      return { html: `<div class="columns-popover__list">${rows}</div>`, empty: false };
-    }
-    if (kind === "wickettype") {
-      const rowFor = (token, rowLabel) =>
-        composedToggleRowHTML(rowLabel, makeComposedWicketTypeKey(token, "count"), makeComposedWicketTypeKey(token, "pct"), visible);
-      if (ns === "batting") {
-        const common = DISMISSAL_KINDS.filter((d) => !RARE_DISMISSAL_KINDS.has(d.kind));
-        const rare = DISMISSAL_KINDS.filter((d) => RARE_DISMISSAL_KINDS.has(d.kind));
-        const rowForKind = (d) => rowFor(d.kind.replace(/ /g, "_"), DISMISSAL_ROW_LABEL[d.key] ?? d.label);
-        const rareHTML = rare.length
-          ? `<details class="columns-popover__disclosure"><summary><span class="columns-popover__disclosure-arrow">▸</span> Rare dismissals</summary><div class="columns-popover__list">${rare.map(rowForKind).join("")}</div></details>`
-          : "";
-        return { html: `<div class="columns-popover__list">${common.map(rowForKind).join("")}</div>${rareHTML}`, empty: false };
-      }
-      if (ns === "bowling") {
-        const rows = BOWLING_WICKET_TYPE_ROWS.map((r) => rowFor(r.token, r.rowLabel)).join("");
-        return { html: `<div class="columns-popover__list">${rows}</div>`, empty: false };
-      }
-      return { html: "", empty: true };
-    }
-    return { html: "", empty: true };
-  }
-
-  /** One dimension/category composer chosen row: title + × + the inline editor body. */
-  function composerRowHTML(kind, ns, formats, visible) {
-    const body = dimComposerBody(kind, ns, formats, visible);
+  /** One dimension/category composer chosen row (owner ruling: ONE metric/axis per
+   * row): title + a single metric-or-count/% <select> + × in the head, dimension
+   * tick-boxes in the body. The row drives the columns = selection × ticked values;
+   * × removes the row and every column it made. Add the composer again for another
+   * metric/axis. */
+  function composerRowHTML(kind, sel, ns, formats, visible) {
+    const label = COMPOSER_KIND_LABEL[kind];
+    const options = composerSelectOptions(kind, ns, formats);
+    const selectHTML = options.length
+      ? `<select class="select cols-composer-row__metric" data-composer-metric="${kind}" data-composer-sel="${escHtml(sel)}" aria-label="${escHtml(label)} metric">${options
+          .map((o) => `<option value="${escHtml(o.value)}"${o.value === sel ? " selected" : ""}>${escHtml(o.label)}</option>`)
+          .join("")}</select>`
+      : "";
+    const body = composerBody(kind, ns, formats, sel, visible);
     const bodyHTML = body.empty
       ? `<div class="cols-composer-row__empty">No options for the current format.</div>`
       : body.html;
-    const label = COMPOSER_KIND_LABEL[kind];
-    return `<div class="cols-composer-row" data-composer-kind="${kind}">
+    return `<div class="cols-composer-row" data-composer-kind="${kind}" data-composer-sel="${escHtml(sel)}">
       <div class="cols-composer-row__head">
         <span class="cols-composer-row__title">${escHtml(label)}</span>
-        <button type="button" class="col-remove-btn cols-composer-remove" data-composer-remove="${kind}" title="Remove ${escHtml(label)} and its columns" aria-label="Remove ${escHtml(label)} and its columns">✕</button>
+        ${selectHTML}
+        <button type="button" class="col-remove-btn cols-composer-remove" data-composer-remove-kind="${kind}" data-composer-remove-sel="${escHtml(sel)}" title="Remove ${escHtml(label)} and its columns" aria-label="Remove ${escHtml(label)} and its columns">✕</button>
       </div>
       <div class="cols-composer-row__body">${bodyHTML}</div>
     </div>`;
   }
 
-  /** The dimension/category composer kinds to SHOW: those manually added this session
-   * (inlineState.composers) UNION those with ≥1 composed slot present (so presets,
-   * reloads and a discipline switch-back all surface their composer row robustly). */
-  function shownComposerKinds(ns) {
-    const manual = new Set((inlineState && inlineState.composers) || []);
-    const withSlots = new Set();
-    for (const s of slotsForNs()) {
-      const k = composerKindForKey(s.key);
-      if (k) withSlots.add(k);
+  /** Remap a composer row from `oldSel` to `newSel` (a metric-or-count/% <select>
+   * change): every ticked value under oldSel becomes the same value under newSel
+   * (slot ids preserved), so the ticks carry over. Values align 1:1 across selections
+   * (same dimension/category order). Updates the manual-row bookkeeping too. */
+  function changeComposerSel(kind, oldSel, newSel) {
+    if (oldSel === newSel) return;
+    const ns = getDiscipline();
+    const formats = getFormats();
+    const oldRows = composerValueRows(kind, ns, formats, oldSel);
+    const newRows = composerValueRows(kind, ns, formats, newSel);
+    const remap = new Map();
+    for (let i = 0; i < oldRows.length && i < newRows.length; i++) remap.set(oldRows[i].key, newRows[i].key);
+    const slots = (getSlots() || []).map((s) => (remap.has(s.key) ? { ...s, key: remap.get(s.key) } : s));
+    applySlots(slots);
+    if (inlineState) {
+      const entry = inlineState.composers.find((c) => c.kind === kind && c.sel === oldSel);
+      if (entry) {
+        if (inlineState.composers.some((c) => c.kind === kind && c.sel === newSel)) {
+          inlineState.composers = inlineState.composers.filter((c) => c !== entry);
+        } else {
+          entry.sel = newSel;
+        }
+      }
     }
-    return DIM_COMPOSER_KINDS.filter((k) => manual.has(k) || withSlots.has(k));
+    rerenderInline();
+  }
+
+  /** The dimension/category composer ROWS to SHOW, as [{ kind, sel }]: manually-added
+   * empty rows (inlineState.composers) UNIONed with rows derived from the current
+   * slots, grouped by (kind, selection) — so presets, reloads and a discipline
+   * switch-back all surface each metric/axis as its own row. Ordered by DIM_COMPOSER_
+   * KINDS, then by each kind's select-option order (a leftover derived sel appended). */
+  function shownComposerRows(ns, formats) {
+    const manual = (inlineState && inlineState.composers) || [];
+    const derived = {};
+    for (const k of DIM_COMPOSER_KINDS) derived[k] = new Set();
+    for (const s of slotsForNs()) {
+      const kind = composerKindForKey(s.key);
+      if (!kind) continue;
+      const sel = composerSelForKey(kind, s.key);
+      if (sel != null) derived[kind].add(sel);
+    }
+    const rows = [];
+    for (const kind of DIM_COMPOSER_KINDS) {
+      const wanted = new Set([
+        ...manual.filter((c) => c.kind === kind).map((c) => c.sel),
+        ...derived[kind],
+      ]);
+      if (!wanted.size) continue;
+      const optOrder = composerSelectOptions(kind, ns, formats).map((o) => o.value);
+      const ordered = [
+        ...optOrder.filter((v) => wanted.has(v)),
+        ...[...wanted].filter((v) => !optOrder.includes(v)),
+      ];
+      for (const sel of ordered) rows.push({ kind, sel });
+    }
+    return rows;
   }
 
   /** Build the CHOSEN-columns rows list: plain + parametric rows in slot order, then
-   * the dimension/category composer rows. */
+   * any pending (empty) parametric rows, then the dimension/category composer rows. */
   function buildChosenHTML(ns, formats) {
     const slots = slotsForNs();
     const visible = new Set(slots.map((s) => s.key));
@@ -1910,7 +1265,8 @@ export function createColumnsPicker({
       if (isParamComposerKey(s.key, ns)) rows.push(paramRowHTML(s));
       else rows.push(chosenPlainRowHTML(s));
     }
-    for (const kind of shownComposerKinds(ns)) rows.push(composerRowHTML(kind, ns, formats, visible));
+    for (const p of (inlineState && inlineState.pendingParams) || []) rows.push(pendingParamRowHTML(p.id, ns));
+    for (const r of shownComposerRows(ns, formats)) rows.push(composerRowHTML(r.kind, r.sel, ns, formats, visible));
     const body = rows.filter(Boolean).join("");
     const empty = body ? "" : `<div class="cols-chosen__empty">No columns yet — add some from the menus below.</div>`;
     return `<div class="cols-chosen" data-role="cols-chosen">${empty}${body}</div>`;
@@ -1929,10 +1285,10 @@ export function createColumnsPicker({
       : "";
   }
 
-  /** Build the four click-to-add MENUS (Match · Batting · Bowling · Fielding). Reuses
-   * the SAME column partitioning as the retiring buildDropdownsHTML, but renders
-   * clickable NAMES (+ composer entries) instead of checkbox rows, and drops the
-   * count badges. Clicking a name appends a slot; a composer entry adds its row. */
+  /** Build the four click-to-add MENUS (Match · Batting · Bowling · Fielding),
+   * partitioning the discipline's columns across the dropdowns and rendering clickable
+   * NAMES (+ composer entries). Clicking a name appends a slot; a composer entry adds
+   * its row. */
   function buildAddMenuHTML(ns, formats) {
     const bucket = disciplineBucket(ns);
     const all = eligibleMetrics(ns, formats);
@@ -1984,9 +1340,8 @@ export function createColumnsPicker({
     let composerSection = "";
     if (isPlainNs) {
       const items = [];
-      const dummy = new Set();
       for (const kind of DIM_COMPOSER_KINDS) {
-        if (!dimComposerBody(kind, ns, formats, dummy).empty) {
+        if (composerAvailable(kind, ns, formats)) {
           items.push(`<button type="button" class="cols-add-item" data-add-composer-kind="${kind}">${escHtml(COMPOSER_KIND_LABEL[kind])}</button>`);
         }
       }
@@ -2052,24 +1407,31 @@ export function createColumnsPicker({
         e.preventDefault();
         const kind = btn.dataset.addComposerKind;
         if (!inlineState) return;
-        if (!inlineState.composers.includes(kind)) inlineState.composers.push(kind);
+        // Owner ruling: ONE metric/axis per row. Add a manual empty row with the
+        // first metric/axis not already shown for this kind (so "add again" lands on
+        // a new metric). No-op if that (kind, sel) already has a row.
+        const sel = defaultComposerSel(kind, getDiscipline(), getFormats());
+        if (sel == null) return;
+        if (!inlineState.composers.some((c) => c.kind === kind && c.sel === sel)) {
+          inlineState.composers.push({ kind, sel });
+        }
         rerenderInline();
       });
     });
     rootEl.querySelectorAll(".cols-add-item[data-add-param-prefix]").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.preventDefault();
-        const desc = composedParamDescriptor(getDiscipline());
-        if (!desc) return;
-        const key = makeComposedParamKey(desc.prefix, "ge", [desc.default]);
-        applySlots([...(getSlots() || []), makeSlot(key)]);
+        // Owner ruling: parametric composers START EMPTY — add a blank pending row,
+        // NOT a seeded column. The column is minted once the user enters a valid value.
+        if (!inlineState) return;
+        inlineState.pendingParams.push({ id: nextPendingId() });
         rerenderInline();
       });
     });
   }
 
   function wireComposerEditors(rootEl) {
-    // Dimension tick-box: add / remove the composed slot.
+    // Dimension/category tick-box: add / remove the composed slot for its value.
     rootEl.querySelectorAll(".cols-comp-check[data-composed-key]").forEach((cb) => {
       cb.addEventListener("change", () => {
         const key = cb.dataset.composedKey;
@@ -2078,54 +1440,82 @@ export function createColumnsPicker({
         rerenderInline();
       });
     });
-    // Category on/off (Runs by Source / Wicket Type): tick shows the count variant;
-    // untick removes both variants.
-    rootEl.querySelectorAll(".cols-comp-toggle-check[data-toggle-count]").forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const countKey = cb.dataset.toggleCount;
-        const altKey = cb.dataset.toggleAlt;
-        let slots = getSlots() || [];
-        if (cb.checked) {
-          if (!slots.some((s) => s.key === countKey || s.key === altKey)) slots = [...slots, makeSlot(countKey)];
-        } else {
-          slots = slots.filter((s) => s.key !== countKey && s.key !== altKey);
-        }
-        applySlots(slots);
-        rerenderInline();
+    // Metric / count-% <select>: change the row's single selection, remapping its
+    // ticked values onto the new metric/axis (see changeComposerSel).
+    rootEl.querySelectorAll(".cols-composer-row__metric[data-composer-metric]").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        changeComposerSel(sel.dataset.composerMetric, sel.dataset.composerSel, sel.value);
       });
     });
-    // Category count/% segment: swap the shown variant in place (preserve slot id).
-    rootEl.querySelectorAll(".cols-comp-mode-seg[data-comp-mode-count]").forEach((btn) => {
+    // Composer row × : drop the manual entry (kind, sel) + remove every column that
+    // (kind, sel) made — the "× removes all its columns" behaviour, now per row.
+    rootEl.querySelectorAll(".cols-composer-remove[data-composer-remove-kind]").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (btn.disabled) return;
-        const countKey = btn.dataset.compModeCount;
-        const altKey = btn.dataset.compModeAlt;
-        const wantKey = btn.dataset.compModeTarget === "alt" ? altKey : countKey;
-        const slots = (getSlots() || []).slice();
-        const i = slots.findIndex((s) => s.key === countKey || s.key === altKey);
-        if (i < 0) return;
-        if (slots[i].key === wantKey) return;
-        slots[i] = { ...slots[i], key: wantKey };
-        applySlots(slots);
-        rerenderInline();
-      });
-    });
-    // Composer row × : drop the manual entry + remove every column of that kind.
-    rootEl.querySelectorAll(".cols-composer-remove[data-composer-remove]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const kind = btn.dataset.composerRemove;
-        if (inlineState) inlineState.composers = inlineState.composers.filter((k) => k !== kind);
-        applySlots((getSlots() || []).filter((s) => composerKindForKey(s.key) !== kind));
+        const kind = btn.dataset.composerRemoveKind;
+        const sel = btn.dataset.composerRemoveSel;
+        if (inlineState) inlineState.composers = inlineState.composers.filter((c) => !(c.kind === kind && c.sel === sel));
+        applySlots((getSlots() || []).filter((s) => !(composerKindForKey(s.key) === kind && composerSelForKey(kind, s.key) === sel)));
         rerenderInline();
       });
     });
   }
 
   function wireParamRows(rootEl) {
+    // Pending (empty) parametric rows: mint the real column only when a valid value
+    // is entered (owner ruling: start empty, no default column on add). × drops the
+    // pending row.
+    rootEl.querySelectorAll(".cols-param-row[data-param-pending]").forEach((row) => {
+      const id = row.dataset.paramPending;
+      const prefix = row.dataset.paramPrefix;
+      const min = Number(row.dataset.paramMin) || 0;
+      const opEl = row.querySelector('[data-role="param-op"]');
+      const v1El = row.querySelector('[data-role="param-v1"]');
+      const v2El = row.querySelector('[data-role="param-v2"]');
+      const andEl = row.querySelector('[data-role="param-and"]');
+      const tryCommit = () => {
+        const opToken = COMPOSED_PARAM_OP_TOKEN[opEl ? opEl.value : "gte"];
+        if (!opToken) return;
+        const raw1 = v1El ? v1El.value : "";
+        if (raw1 === "" || raw1 == null) return; // value unset → no column yet
+        const v1 = Math.max(min, Math.trunc(Number(raw1)));
+        if (!Number.isFinite(v1)) return;
+        let values;
+        if (opToken === "bt") {
+          const raw2 = v2El ? v2El.value : "";
+          if (raw2 === "" || raw2 == null) return; // second value unset → no column yet
+          const v2 = Math.max(min, Math.trunc(Number(raw2)));
+          if (!Number.isFinite(v2)) return;
+          values = [v1, v2];
+        } else {
+          values = [v1];
+        }
+        const key = makeComposedParamKey(prefix, opToken, values);
+        applySlots([...(getSlots() || []), makeSlot(key)]);
+        if (inlineState) inlineState.pendingParams = inlineState.pendingParams.filter((p) => p.id !== id);
+        rerenderInline();
+      };
+      if (opEl)
+        opEl.addEventListener("change", () => {
+          const between = opEl.value === "between";
+          if (v2El) v2El.hidden = !between;
+          if (andEl) andEl.hidden = !between;
+          tryCommit();
+        });
+      if (v1El) v1El.addEventListener("change", tryCommit);
+      if (v2El) v2El.addEventListener("change", tryCommit);
+    });
+    rootEl.querySelectorAll("[data-param-pending-remove]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const id = btn.dataset.paramPendingRemove;
+        if (inlineState) inlineState.pendingParams = inlineState.pendingParams.filter((p) => p.id !== id);
+        rerenderInline();
+      });
+    });
+    // Live (already-added) parametric rows: editing op/value swaps THIS slot's key.
     rootEl.querySelectorAll(".cols-param-row[data-slot-id]").forEach((row) => {
       const id = row.dataset.slotId;
       const prefix = row.dataset.paramPrefix;
@@ -2169,15 +1559,17 @@ export function createColumnsPicker({
   }
 
   /** A structural signature of the inline render — the effective ns, formats, the
-   * ordered slot ids+keys, and the shown composer kinds. A change means the chosen
-   * list / menus must be REBUILT (an external column change, e.g. a preset); an
-   * unchanged signature lets the sync path do only a cheap sort/highlight re-sync. */
+   * ordered slot ids+keys, the shown composer rows (kind + selection), and any pending
+   * empty parametric rows. A change means the chosen list / menus must be REBUILT (an
+   * external column change, e.g. a preset); an unchanged signature lets the sync path
+   * do only a cheap sort/highlight re-sync. */
   function inlineSignature(ns, formats) {
     return JSON.stringify({
       ns,
       formats,
       slots: slotsForNs().map((s) => `${s.id}:${s.key}`),
-      composers: shownComposerKinds(ns),
+      composers: shownComposerRows(ns, formats).map((r) => `${r.kind}:${r.sel}`),
+      pending: ((inlineState && inlineState.pendingParams) || []).map((p) => p.id),
     });
   }
 
@@ -2197,29 +1589,20 @@ export function createColumnsPicker({
 
   /** Render the leaderboard's inline picker (filter-style: chosen rows + add menus)
    * straight into its host (build + wire). Inline-only: the pop-up popover renders
-   * via open() → buildPickerHTML, untouched. */
+   * via open() → buildPickerHTML, untouched. The inline host is always the multi-
+   * instance (slot-native) leaderboard picker — the pre-rework four-dropdown checkbox
+   * layout has been retired. */
   function renderInline(container, ns, formats) {
-    if (multiInstance) {
-      container.innerHTML = buildInlineHTML(ns, formats);
-      // Plain chosen-row controls (count/% · sort · highlight · duplicate · ×) reuse
-      // the E1b per-slot wiring (data-*-slot markup); its offer-checkbox handler finds
-      // none here. Param-row × also uses data-remove-slot, so it wires here too.
-      wireMultiInstance(container);
-      wireAddMenus(container);
-      wireComposerEditors(container);
-      wireParamRows(container);
-      wireDropdowns(container);
-      if (inlineState) inlineState.sig = inlineSignature(ns, formats);
-      return;
-    }
-    // Legacy non-multiInstance inline host (no current surface uses this) — keep the
-    // pre-rework four-dropdown checkbox layout so nothing silently breaks.
-    container.innerHTML = buildDropdownsHTML(ns, formats);
-    wireCheckboxes(container);
-    wireColumnControls(container);
-    wireModeToggles(container);
-    wireParamComposers(container);
+    container.innerHTML = buildInlineHTML(ns, formats);
+    // Plain chosen-row controls (count/% · sort · highlight · duplicate · ×) reuse
+    // the E1b per-slot wiring (data-*-slot markup). Param-row × also uses
+    // data-remove-slot, so it wires here too.
+    wireMultiInstance(container);
+    wireAddMenus(container);
+    wireComposerEditors(container);
+    wireParamRows(container);
     wireDropdowns(container);
+    if (inlineState) inlineState.sig = inlineSignature(ns, formats);
   }
 
   /** D4: re-render the inline picker in place (preserving the open dropdown). Called
@@ -2242,11 +1625,13 @@ export function createColumnsPicker({
     const ns = getDiscipline();
     const formats = getFormats();
     // `composers` = the dimension/category composer rows manually added this session
-    // that don't yet have any ticked columns (empty rows); once a composer has ≥1
-    // column it's re-derived from the slots, so this only tracks the pending-empty
-    // set. Reset on a discipline switch (refresh). `sig` caches the last render's
+    // as { kind, sel } (one metric/axis per row) that don't yet have any ticked
+    // columns (empty rows); once a (kind, sel) has ≥1 column it's re-derived from the
+    // slots, so this only tracks the pending-empty set. `pendingParams` = added-but-
+    // unset parametric rows ({ id }; owner ruling: parametric composers start empty).
+    // Both reset on a discipline switch (refresh). `sig` caches the last render's
     // structural signature for the sync fast-path.
-    inlineState = { el: container, ns, formats: formats.slice(), openDropdown: disciplineBucket(ns), composers: [], sig: null };
+    inlineState = { el: container, ns, formats: formats.slice(), openDropdown: disciplineBucket(ns), composers: [], pendingParams: [], sig: null };
     renderInline(container, ns, formats);
   }
 
@@ -2269,12 +1654,13 @@ export function createColumnsPicker({
       if (ns !== inlineState.ns || !sameFormats(formats, inlineState.formats)) {
         // A discipline switch flips which dropdown holds the OWN columns — default
         // the newly-relevant own dropdown open (a format-only change keeps whatever
-        // was open) — and DROPS any pending-empty composer rows (their metric
+        // was open) — and DROPS any pending-empty composer/param rows (their metric
         // vocabulary belongs to the old discipline; a composer with real columns
         // re-derives from the new ns's slots).
         if (ns !== inlineState.ns) {
           inlineState.openDropdown = disciplineBucket(ns);
           inlineState.composers = [];
+          inlineState.pendingParams = [];
         }
         renderInline(inlineState.el, ns, formats);
         inlineState.ns = ns;
@@ -2326,11 +1712,11 @@ export function createColumnsPicker({
     document.body.appendChild(popover);
     positionColumnsPopover(popover, anchor);
 
-    // Same checkbox handlers the popover always had — now shared with the inline
-    // host so both surfaces behave identically (see wireCheckboxes). The popover
-    // lives on document.body and survives an instant-apply requery via refresh().
+    // Same checkbox handlers the popover always had (see wireCheckboxes). The popover
+    // lives on document.body and survives an instant-apply requery via refresh(). The
+    // pop-up passes no Sort-by/Highlight contract (controlsOn false), so there are no
+    // per-column controls to wire here — its picker is the flat checkbox list.
     wireCheckboxes(popover);
-    wireColumnControls(popover); // W2 (no-op for the pop-up — no sort/highlight contract)
 
     const onDocClick = (e) => {
       if (popover.contains(e.target) || e.target === anchor || anchor.contains?.(e.target)) return;
