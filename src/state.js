@@ -603,6 +603,87 @@ export function expandFormats(formatKeys) {
   return [...set];
 }
 
+// ── Column slots (E1a multi-instance foundation, 2026-08-08) ─────────────────
+// A leaderboard column is a SLOT — one displayed column carrying its own stable
+// identity (`id`) and the metric `key` it currently shows. `state.columns[ns]`
+// is an ordered Slot[] (per plain AND matchup namespace); the SAME metric key
+// may repeat across slots (the E1b multi-instance capability — INVISIBLE today:
+// the picker still adds each key once, so in practice every key still appears
+// once and the table is byte-identical to the key-array era). A slot's count/%
+// (or per-match) MODE is carried by its `key` (the active variant, e.g.
+// `dot_balls` vs `dot_pct` — exactly as the key-array list encoded it); its
+// HIGHLIGHT and the active SORT attach to the slot's `id`; its POSITION is its
+// index. The stable id lets highlight/sort follow a slot across reorder /
+// mode-flip / preset changes instead of a fragile by-key or positional guess.
+//
+// The SACRED query builders never see slot objects: load() dedups slots →
+// DISTINCT keys (distinctSlotKeys) before buildQuery, and buildMatchupQuery reads
+// slotKeys() (byte-identical — it already dedups keys + preserves order). So two
+// slots showing the SAME stat emit that stat's SQL ONCE (no double alias, no
+// double work, no risk to the numbers) and both render the one computed value —
+// the numbers-safe foundation E1b relies on.
+let __slotSeq = 0;
+/** Mint a process-unique slot id. Stable once assigned (persists across
+ * re-renders); a fresh id is minted only for a genuinely new column. */
+export function makeSlotId() {
+  return `col${++__slotSeq}`;
+}
+/** A slot for metric `key` — fresh id, unless one is supplied (how reconcileSlots
+ * / keysToSlots preserve identity across a rebuild). */
+export function makeSlot(key, id) {
+  return { id: id || makeSlotId(), key };
+}
+/** The slots' metric keys in order, DUPLICATES INCLUDED — the raw displayed
+ * column list (for dirty detection, preset matching, and buildMatchupQuery's own
+ * dedup). Tolerant of a plain key string too, so any state whose `columns` is
+ * still a bare key array (e.g. a hand-built state) passes through unchanged and
+ * byte-identical. */
+export function slotKeys(slots) {
+  return (slots || []).map((s) => (typeof s === "string" ? s : s.key));
+}
+/** The DISTINCT metric keys across the slots, in first-occurrence order — the
+ * deduped set load() hands to buildQuery so each stat's SQL is emitted once.
+ * Same string-tolerance as slotKeys. */
+export function distinctSlotKeys(slots) {
+  const seen = new Set();
+  const out = [];
+  for (const s of slots || []) {
+    const key = typeof s === "string" ? s : s.key;
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(key);
+    }
+  }
+  return out;
+}
+/** Build fresh slots (new ids) for an ordered key list — the initial / default /
+ * preset seed path where there is no prior identity to preserve. */
+export function keysToSlots(keys) {
+  return (keys || []).map((k) => makeSlot(k));
+}
+/** Reconcile a new ordered KEY list against the EXISTING slots, PRESERVING each
+ * surviving key's slot id (so its highlight / active-sort / position identity
+ * carries across an add / remove / reorder / preset change), minting a fresh id
+ * only for a genuinely new key. Matches by key, consuming one prior slot per
+ * occurrence (order-stable): with today's unique-key lists it is an exact
+ * id-preserving remap; with duplicates (E1b) it pairs prior same-key slots
+ * left-to-right. This is the ONE path every key-array→slots write goes through
+ * (picker setColumns, presets, default resync, auto-add), so slot identity can
+ * never silently churn. */
+export function reconcileSlots(newKeys, oldSlots) {
+  const pools = new Map(); // key -> queue of surviving slot ids
+  for (const s of oldSlots || []) {
+    const key = typeof s === "string" ? s : s.key;
+    if (!pools.has(key)) pools.set(key, []);
+    pools.get(key).push(typeof s === "string" ? undefined : s.id);
+  }
+  return (newKeys || []).map((k) => {
+    const q = pools.get(k);
+    const id = q && q.length ? q.shift() : undefined;
+    return makeSlot(k, id);
+  });
+}
+
 const DEFAULT_COLUMNS = {
   batting: ["matches", "innings", "runs", "average", "strike_rate", "high_score", "fours", "sixes"],
   bowling: ["matches", "innings", "wickets", "average", "economy", "strike_rate", "best"],
@@ -644,6 +725,17 @@ export function emptyAdvancedBlock() {
 export function createInitialState(maxMonth) {
   const dateTo = maxMonth ?? null;
   const dateFrom = null;
+  // E1a: every namespace's columns are Slot[] ({id, key}) from the start (matchup
+  // included, owner ruling), built with fresh ids from the key-array defaults. The
+  // default sort references the batting "runs" slot by id so the arrow attaches to
+  // that specific slot (with a by-key fallback in the render for safety).
+  const columns = {
+    batting: keysToSlots(DEFAULT_COLUMNS.batting),
+    bowling: keysToSlots(DEFAULT_COLUMNS.bowling),
+    matchup_batting: keysToSlots(DEFAULT_MATCHUP_COLUMNS.matchup_batting),
+    matchup_bowling: keysToSlots(DEFAULT_MATCHUP_COLUMNS.matchup_bowling),
+  };
+  const initialSortSlot = columns.batting.find((s) => s.key === "runs") || null;
   return {
     view: "table", // "table" | "graph" (SPEC §6 Graph Builder)
     discipline: "batting",
@@ -753,25 +845,28 @@ export function createInitialState(maxMonth) {
                    // gateWithPinExemption) so the two builders can never diverge; the pill is live
                    // (not greyed) in Vs mode too.
     search: "",
-    sort: { key: "runs", dir: "desc" },
+    // E1a: `sort` keeps {key, dir} (key = metric key — read by the SACRED
+    // buildMatchupQuery and the graph, so it MUST stay a metric key), and gains
+    // `slotId` so the active sort references a SPECIFIC slot (the per-slot
+    // foundation). The render attributes the ▲/▼ arrow by slotId, falling back to
+    // key when slotId is null — with today's unique-key columns the two agree, so
+    // it is byte-identical.
+    sort: { key: "runs", dir: "desc", slotId: initialSortSlot ? initialSortSlot.id : null },
     keepColumns: false, // "Keep Selected Columns" toggle (4d/A5): OFF (default) lets a
                    // discipline/format change re-sync the visible columns to that scope's
                    // default (main.js's reapplyDefaultColumnsIfUnmodified, unless already
                    // customized); ON skips that resync entirely, so whatever columns +
                    // order are currently showing simply carry into the next Search.
                    // Display-only — never read by any query builder.
-    columns: {
-      batting: [...DEFAULT_COLUMNS.batting],
-      bowling: [...DEFAULT_COLUMNS.bowling],
-      matchup_batting: [...DEFAULT_MATCHUP_COLUMNS.matchup_batting],
-      matchup_bowling: [...DEFAULT_MATCHUP_COLUMNS.matchup_bowling],
-    },
-    // Highlighted columns (columns-rejig W2, 2026-08-07): the set of metric keys
-    // the leaderboard tints with a soft accent wash — a purely COSMETIC emphasis
-    // toggled from the Columns section's 🖍️ control, per discipline exactly like
-    // `columns` above. DISPLAY-ONLY: never read by any query builder, never in
-    // serializeQueryState (so a highlight never lights Search), and a stale key
-    // for a hidden column simply matches no rendered cell (harmless, not pruned).
+    columns,
+    // Highlighted columns (columns-rejig W2, 2026-08-07; E1a): the SLOT IDS the
+    // leaderboard tints with a soft accent wash — a purely COSMETIC emphasis
+    // toggled from the Columns section's 🖍️ control, per namespace exactly like
+    // `columns` above. E1a re-pointed this from metric keys to SLOT IDS so a
+    // highlight attaches to one specific slot (per-copy in E1b). DISPLAY-ONLY:
+    // never read by any query builder, never in serializeQueryState (so a
+    // highlight never lights Search), and a stale id for a removed slot simply
+    // matches no rendered column (harmless, not pruned).
     highlightedColumns: {
       batting: [],
       bowling: [],
@@ -901,11 +996,15 @@ export const COLUMN_PRESET_DEFS = {
   ],
 };
 
-/** The preset key whose column set equals `columns` exactly (order-sensitive), or null ("custom"). */
+/** The preset key whose column set equals `columns` exactly (order-sensitive), or
+ * null ("custom"). E1a: `columns` may be a Slot[] (leaderboard) or a bare key
+ * array (the player pop-up's own column state) — normalise to keys first so both
+ * callers work; presets are defined as key arrays. */
 export function activePresetKey(discipline, formats, columns) {
+  const keys = (columns || []).map((c) => (typeof c === "string" ? c : c.key));
   for (const def of COLUMN_PRESET_DEFS[discipline]) {
     const preset = def.columns(formats);
-    if (preset && preset.length === columns.length && preset.every((k, i) => k === columns[i])) {
+    if (preset && preset.length === keys.length && preset.every((k, i) => k === keys[i])) {
       return def.key;
     }
   }
@@ -1019,10 +1118,11 @@ export function pruneIneligibleState(store) {
   // cross column is present (the extra keys just never match).
   const allowed = eligibleColumnKeys(s.discipline, s.formats);
 
-  const cols = s.columns[s.discipline];
+  const cols = s.columns[s.discipline]; // Slot[] (E1a)
   // D4: parametric composed columns (isr__/wh__) are value-dynamic — not enumerable
-  // into the finite `allowed` set — so keep them via a structural check.
-  const prunedCols = cols.filter((k) => allowed.has(k) || isParamComposedColumnKey(k, s.discipline));
+  // into the finite `allowed` set — so keep them via a structural check. E1a: filter
+  // SLOTS by their key (preserving each survivor's slot id → highlight/sort follow).
+  const prunedCols = cols.filter((sl) => allowed.has(sl.key) || isParamComposedColumnKey(sl.key, s.discipline));
   const colsChanged = prunedCols.length !== cols.length;
 
   // Matchup namespaces (D4 R3 follow-up, restricted picker): the same phase
@@ -1035,8 +1135,8 @@ export function pruneIneligibleState(store) {
   let matchupChanged = false;
   for (const ns of ["matchup_batting", "matchup_bowling"]) {
     const nsAllowed = new Set(eligibleMetrics(ns, s.formats).map((m) => m.key));
-    const nsCols = s.columns[ns] || [];
-    const nsPruned = nsCols.filter((k) => nsAllowed.has(k));
+    const nsCols = s.columns[ns] || []; // Slot[] (E1a)
+    const nsPruned = nsCols.filter((sl) => nsAllowed.has(sl.key));
     if (nsPruned.length !== nsCols.length) {
       newMatchupColumns[ns] = nsPruned;
       matchupChanged = true;

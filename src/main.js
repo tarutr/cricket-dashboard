@@ -5,7 +5,7 @@
 // and do the initial render.
 
 import { initDB, getManifest, prewarmBallEngine, setDeliveryWindow, setOpponentPlayer } from "./db.js";
-import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, pruneDeliveryWindowForFormats, effectiveNamespace } from "./state.js";
+import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, pruneDeliveryWindowForFormats, effectiveNamespace, slotKeys, reconcileSlots } from "./state.js";
 import { resolveDataAvail, getResolvedDataAvail } from "./dataAvailability.js";
 import { isConditionComplete } from "./advanced.js";
 import { mountFilters } from "./filters.js";
@@ -156,8 +156,9 @@ export function clearAll({ returnToTable = true } = {}) {
   // defaults view to "table"), so the user stays on Graphs.
   if (!returnToTable) fresh.view = store.get().view;
   store.set(fresh); // full replace — createInitialState returns every key
-  lastAppliedDefaults.batting = [...fresh.columns.batting];
-  lastAppliedDefaults.bowling = [...fresh.columns.bowling];
+  // E1a: fresh.columns.* are Slot[]; lastAppliedDefaults tracks KEY arrays.
+  lastAppliedDefaults.batting = slotKeys(fresh.columns.batting);
+  lastAppliedDefaults.bowling = slotKeys(fresh.columns.bowling);
   // 4d/A6: a Clear wipes pinnedPlayers too — drop any stale no-innings flags
   // so a player re-pinned post-Clear never shows "(no innings)" left over
   // from the previous (now-discarded) scope before a fresh load() corrects it.
@@ -200,9 +201,11 @@ const lastAppliedDefaults = { batting: null, bowling: null };
 
 function columnsAreDefault(discipline) {
   const state = store.get();
-  const applied = lastAppliedDefaults[discipline];
+  const applied = lastAppliedDefaults[discipline]; // a KEY array
   if (!applied) return true; // never customized yet
-  const current = state.columns[discipline];
+  // E1a: state.columns[discipline] is Slot[] — compare its KEY list (order-sensitive)
+  // to the last auto-applied default key array.
+  const current = slotKeys(state.columns[discipline]);
   return applied.length === current.length && applied.every((k, i) => current[i] === k);
 }
 
@@ -216,9 +219,11 @@ function reapplyDefaultColumnsIfUnmodified() {
   if (state.keepColumns) return;
   const discipline = state.discipline;
   if (!columnsAreDefault(discipline)) return; // user customized — leave alone
-  const next = defaultColumnsFor(discipline, state.formats);
+  const next = defaultColumnsFor(discipline, state.formats); // KEY array
   lastAppliedDefaults[discipline] = next;
-  store.set({ columns: { ...state.columns, [discipline]: next } });
+  // E1a: reconcile the default KEY array into Slot[] so keys shared with the current
+  // columns (e.g. the Test/MDM SR→BpD swap keeps runs/average/…) keep their slot id.
+  store.set({ columns: { ...state.columns, [discipline]: reconcileSlots(next, state.columns[discipline]) } });
 }
 
 /** Count badge on the toolbar's "Filters" button (F2 — repointed from the old
@@ -553,7 +558,9 @@ function togglePin(id, name) {
 function autoAddFilteredColumns() {
   const state = store.get();
   const ns = effectiveNamespace(state);
-  const cols = [...(state.columns[ns] || [])];
+  // E1a: work in KEY space (state.columns[ns] is Slot[]) — append missing filtered
+  // metric keys, then reconcile back into Slot[] below so existing columns keep ids.
+  const cols = slotKeys(state.columns[ns] || []);
   const added = [];
   // R6 #3: the FIRST complete, rankable filtered metric — whether it was just
   // added here OR was already a visible column. The table ranks by THIS on a
@@ -585,8 +592,10 @@ function autoAddFilteredColumns() {
   const dir = firstMetric && firstMetric.higherIsBetter === false ? "asc" : "desc";
   const patch = { sort: { key: firstFilteredKey, dir } };
   // Only touch columns when something was actually added — an already-visible
-  // filtered metric needs no column change, just the rank above.
-  if (added.length) patch.columns = { ...state.columns, [ns]: cols };
+  // filtered metric needs no column change, just the rank above. E1a: reconcile the
+  // appended KEY list into Slot[] (existing keys keep their slot id; the new one gets
+  // a fresh slot).
+  if (added.length) patch.columns = { ...state.columns, [ns]: reconcileSlots(cols, state.columns[ns]) };
   store.set(patch);
 }
 
@@ -668,8 +677,9 @@ function boot() {
       // createInitialState's legacy 36-month default.
       store = createStore(createInitialState(null));
       const initial = store.get();
-      lastAppliedDefaults.batting = [...initial.columns.batting];
-      lastAppliedDefaults.bowling = [...initial.columns.bowling];
+      // E1a: initial.columns.* are Slot[]; lastAppliedDefaults tracks KEY arrays.
+      lastAppliedDefaults.batting = slotKeys(initial.columns.batting);
+      lastAppliedDefaults.bowling = slotKeys(initial.columns.bowling);
       // Group 3 (owner 2026-08-06): prewarm the data-availability gate. Resolve the
       // CURRENT gender (male) and push it onto the store as soon as it lands
       // (mergeDataAvail), and separately warm the OTHER gender's cache so a later

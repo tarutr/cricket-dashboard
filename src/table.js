@@ -42,6 +42,11 @@ import {
   matchupVsActive,
   effectiveNamespace,
   escSql as esc,
+  // E1a column slots: keys ⇄ slots helpers (the store holds Slot[]; the SACRED
+  // builders + dirty key see keys; load() dedups to DISTINCT keys).
+  slotKeys,
+  distinctSlotKeys,
+  reconcileSlots,
 } from "./state.js";
 
 const VIEW_FOR_DISCIPLINE = { batting: "batting", bowling: "bowling" };
@@ -150,7 +155,9 @@ function serializeQueryState(state) {
     // `columns` STAYS in: the PENDING preset dropdown sets it and must keep
     // lighting Search — the INSTANT Columns picker / drag-reorder instead advance
     // the applied snapshot (onColumnsApplied) so THEY read as not-dirty.
-    columns: state.columns[ns],
+    columns: slotKeys(state.columns[ns]), // E1a: serialize the KEY list (identity ids
+    // are not a user-visible column choice) → dirty detection stays byte-identical
+    // to the key-array era; per-slot mode is captured (the key IS the variant).
     advanced: state.advanced,
   });
 }
@@ -304,7 +311,12 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   const ballsCol = MATCHUP_BALLS_COL[discipline];
   const groupCol = MATCHUP_GROUP_COL[discipline];
 
-  const ownCols = state.columns[ns] || [];
+  // E1a (owner-authorized single read-swap): read the KEYS from the column slots.
+  // Provably byte-identical — slotKeys yields the same metric keys in the same
+  // order, and this function already dedups keys (seenKeys/keyOrder) + preserves
+  // order, so the emitted matchup SQL is unchanged. NOTHING else in buildMatchupQuery
+  // is touched.
+  const ownCols = slotKeys(state.columns[ns] || []);
   const seenKeys = new Set();
   const keyOrder = [];
   for (const k of [...ownCols, ...(visibleColumns || []), state.sort.key]) {
@@ -1821,9 +1833,13 @@ export function mountTable(
   const columnsPicker = createColumnsPicker({
     getDiscipline: () => effectiveDiscipline(store.get()),
     getFormats: () => store.get().formats,
+    // E1a: the picker speaks KEYS (a string[] — same contract the player pop-up
+    // uses, so that surface is byte-identical). getColumns projects the store's
+    // Slot[] to its key list; setColumns' key array is reconciled back into slots
+    // by applyColumnsInstant (surviving keys keep their slot id).
     getColumns: () => {
       const s = store.get();
-      return s.columns[effectiveDiscipline(s)];
+      return slotKeys(s.columns[effectiveDiscipline(s)]);
     },
     setColumns: (cols) => applyColumnsInstant(effectiveDiscipline(store.get()), cols),
     // Columns-rejig W2 (2026-08-07): the leaderboard's inline picker also drives
@@ -1843,9 +1859,17 @@ export function mountTable(
       return { key: s.sort.key, dir: s.sort.dir, active: orderIsActiveSort };
     },
     setSort: (key) => sortByColumn(key),
+    // E1a: highlight is stored per-SLOT (slot ids). The picker works in key space,
+    // so getHighlights maps the highlighted slot ids → their keys, and setHighlights
+    // maps the picker's key set → the slot ids currently showing those keys
+    // (applyHighlightsInstant). With today's unique-key columns this is a lossless
+    // key⇄id bijection, so the highlight behaviour is byte-identical.
     getHighlights: () => {
       const s = store.get();
-      return (s.highlightedColumns && s.highlightedColumns[effectiveDiscipline(s)]) || [];
+      const ns = effectiveDiscipline(s);
+      const slots = (s.columns && s.columns[ns]) || [];
+      const hlIds = new Set((s.highlightedColumns && s.highlightedColumns[ns]) || []);
+      return slots.filter((sl) => hlIds.has(sl.id)).map((sl) => sl.key);
     },
     setHighlights: (keys) => applyHighlightsInstant(effectiveDiscipline(store.get()), keys),
     // W3: expose the OTHER discipline's columns as an interim cross-discipline
@@ -1956,8 +1980,9 @@ export function mountTable(
     // unchanged.
     const allowedKeys = eligibleColumnKeys(ns, formats);
     // D4: parametric composed columns (isr__/wh__) are value-dynamic — not enumerable
-    // into `allowedKeys` — so keep them via a structural check.
-    const pruned = cols.filter((k) => allowedKeys.has(k) || isParamComposedColumnKey(k, ns));
+    // into `allowedKeys` — so keep them via a structural check. E1a: `cols` is Slot[]
+    // — filter by each slot's key (survivors keep their id → highlight/sort follow).
+    const pruned = cols.filter((sl) => allowedKeys.has(sl.key) || isParamComposedColumnKey(sl.key, ns));
     if (pruned.length !== cols.length) {
       store.set({ columns: { ...state.columns, [ns]: pruned } });
     }
@@ -2117,7 +2142,9 @@ export function mountTable(
           syncToolbar(); // revert the select to the real current preset/custom
           return;
         }
-        store.set({ columns: { ...s.columns, [s.discipline]: cols } });
+        // E1a: a preset is a KEY array — reconcile into Slot[] so keys the preset
+        // shares with the current columns keep their slot id (highlight/sort follow).
+        store.set({ columns: { ...s.columns, [s.discipline]: reconcileSlots(cols, s.columns[s.discipline]) } });
         syncToolbar();
       });
     }
@@ -2325,12 +2352,20 @@ export function mountTable(
     if (btn) btn.addEventListener("click", retryFn);
   }
 
-  function headerCellHTML(metric, state, isHighlighted = false) {
+  function headerCellHTML(metric, state, isHighlighted = false, slotId = null) {
     // R5-B #0: the arrow + is-sorted styling show ONLY when the displayed order
     // is an active column sort (orderIsActiveSort) AND this is the sort column.
     // After an order-preserving toolbar-only commit, orderIsActiveSort is false,
     // so no column shows an arrow even though state.sort.key still names one.
-    const isSorted = orderIsActiveSort && state.sort.key === metric.key;
+    // E1a: attribute the arrow to the specific SLOT (slotId === sort.slotId) so a
+    // future duplicate copy carries the arrow on the right one; fall back to a
+    // by-key match when either id is absent (with unique keys the two agree, so
+    // this is byte-identical to today).
+    const isSorted =
+      orderIsActiveSort &&
+      (slotId != null && state.sort.slotId != null
+        ? state.sort.slotId === slotId
+        : state.sort.key === metric.key);
     const dir = isSorted ? state.sort.dir : null;
     const arrow = isSorted ? (dir === "asc" ? " ▲" : " ▼") : "";
     // `data-table__th--draggable` (task 2): every metric column can be
@@ -2430,19 +2465,22 @@ export function mountTable(
    * applied (no Search light). */
   function reorderColumns(ns, fromKey, overKey, side) {
     const base = lastLoadedState || store.get();
+    // E1a: reorder the SLOT[] (move the slot object, preserving its id → its
+    // highlight/sort stay attached). The header carries data-key, so drag targets
+    // by key; with today's unique-key columns findIndex-by-key is exact.
     const cols = (base.columns[ns] || []).slice();
-    const fromIdx = cols.indexOf(fromKey);
+    const fromIdx = cols.findIndex((s) => s.key === fromKey);
     if (fromIdx === -1) return;
-    cols.splice(fromIdx, 1);
+    const [moved] = cols.splice(fromIdx, 1);
     let toIdx;
     if (overKey == null) {
       toIdx = cols.length;
     } else {
-      toIdx = cols.indexOf(overKey);
+      toIdx = cols.findIndex((s) => s.key === overKey);
       if (toIdx === -1) toIdx = cols.length;
       else if (side === "after") toIdx += 1;
     }
-    cols.splice(toIdx, 0, fromKey);
+    cols.splice(toIdx, 0, moved);
     // Advance the APPLIED snapshot FIRST (before store.set fires the toolbar
     // sync) so the Search button never flashes dirty for a reorder.
     if (onColumnsApplied) onColumnsApplied(ns, cols);
@@ -2477,13 +2515,17 @@ export function mountTable(
     const base = lastLoadedState;
     const live = store.get();
     const baseNs = base ? effectiveDiscipline(base) : null;
+    // E1a: the picker hands a KEY array; reconcile it into Slot[] against the live
+    // slots so surviving keys keep their slot id (highlight/sort follow), and only
+    // a genuinely new key mints a fresh slot.
+    const newSlots = reconcileSlots(cols, live.columns[pickerNs]);
     if (!base || pickerNs !== baseNs) {
-      store.set({ columns: { ...live.columns, [pickerNs]: cols } });
+      store.set({ columns: { ...live.columns, [pickerNs]: newSlots } });
       syncToolbar();
       return;
     }
-    if (onColumnsApplied) onColumnsApplied(baseNs, cols);
-    store.set({ columns: { ...live.columns, [baseNs]: cols } });
+    if (onColumnsApplied) onColumnsApplied(baseNs, newSlots);
+    store.set({ columns: { ...live.columns, [baseNs]: newSlots } });
     // Prune to the frozen scope's eligible columns — a phase column only valid
     // under a still-pending format change can't apply to the frozen result set.
     // W3: eligibleColumnKeys includes cross-discipline keys (plain ∪ cross), so an
@@ -2491,7 +2533,7 @@ export function mountTable(
     const allowed = eligibleColumnKeys(baseNs, base.formats);
     // D4: keep value-dynamic parametric composed columns (isr__/wh__) via a structural
     // check — they can't be enumerated into the frozen scope's `allowed` set.
-    const frozenCols = cols.filter((k) => allowed.has(k) || isParamComposedColumnKey(k, baseNs));
+    const frozenCols = newSlots.filter((s) => allowed.has(s.key) || isParamComposedColumnKey(s.key, baseNs));
     const frozen = { ...base, columns: { ...base.columns, [baseNs]: frozenCols } };
     // R5-A #4: toggling a column is a toolbar-only change — preserve the current
     // row order (values swap in place; a dropped sort-column doesn't reshuffle).
@@ -2515,12 +2557,19 @@ export function mountTable(
   function sortByColumn(key) {
     const cur = store.get().sort;
     const frozen = lastLoadedState || store.get();
+    const nsF = effectiveDiscipline(frozen);
+    // E1a: the active sort references a SPECIFIC slot — resolve the slot currently
+    // showing `key` and stash its id alongside the (query-critical) metric key. The
+    // "name" pseudo-column has no slot → slotId null (its header matches by key, as
+    // before). With unique keys this id is exactly the one column showing `key`.
+    const slot = (frozen.columns[nsF] || []).find((s) => s.key === key) || null;
+    const slotId = slot ? slot.id : null;
     let sort;
     if (cur.key === key) {
-      sort = { key, dir: cur.dir === "asc" ? "desc" : "asc" };
+      sort = { key, dir: cur.dir === "asc" ? "desc" : "asc", slotId };
     } else {
-      const metric = resolveSortMetric(key, effectiveDiscipline(frozen));
-      sort = { key, dir: metric && metric.higherIsBetter === false ? "asc" : "desc" };
+      const metric = resolveSortMetric(key, nsF);
+      sort = { key, dir: metric && metric.higherIsBetter === false ? "asc" : "desc", slotId };
     }
     store.set({ sort }); // pending store (excluded from dirty → no Search light)
     // R5-B #0: a sort IS an active column sort — the arrow shows on this column
@@ -2548,7 +2597,22 @@ export function mountTable(
    * the picker built its rows for, matching the frozen table's columns. */
   function applyHighlightsInstant(ns, keys) {
     const live = store.get();
-    store.set({ highlightedColumns: { ...live.highlightedColumns, [ns]: keys } });
+    // E1a: highlight is stored per-SLOT. Map the picker's key set → the slot ids
+    // currently showing those keys (one slot consumed per key occurrence, so a
+    // duplicated key highlights distinct copies in E1b; today it's an exact
+    // key→id map). A key with no current slot is dropped (highlight is only
+    // enabled for shown columns). Never a query change.
+    const pools = new Map();
+    for (const s of live.columns[ns] || []) {
+      if (!pools.has(s.key)) pools.set(s.key, []);
+      pools.get(s.key).push(s.id);
+    }
+    const ids = [];
+    for (const k of keys) {
+      const q = pools.get(k);
+      if (q && q.length) ids.push(q.shift());
+    }
+    store.set({ highlightedColumns: { ...live.highlightedColumns, [ns]: ids } });
     if (lastLoadedState) {
       renderLoaded(lastRows, lastLoadedState, lastBowlingTypes);
     } else {
@@ -3030,18 +3094,22 @@ export function mountTable(
     scrollEl.classList.toggle("is-name-expanded", nameExpanded);
 
     const ns = effectiveDiscipline(state);
-    const colKeys = state.columns[ns];
-    // resolveColumnMetric resolves plain keys exactly like getMetric AND
-    // cross-discipline column keys (columns-rejig W3) to their virtual metric, so a
-    // Bowling column on a batting table renders/sorts with the right label + format.
-    const cols = colKeys.map((key) => resolveColumnMetric(key, ns)).filter(Boolean);
+    // E1a: render one column PER SLOT. Each entry keeps the slot's id (for per-slot
+    // highlight/sort attribution) alongside its resolved metric. Two slots sharing a
+    // key resolve to the same metric and read the SAME row value (row[key]) — the
+    // dedup foundation (buildQuery computed that stat once). resolveColumnMetric
+    // handles plain keys (like getMetric) AND cross-discipline keys (W3).
+    const slots = state.columns[ns] || [];
+    const cols = slots
+      .map((sl) => ({ slotId: sl.id, m: resolveColumnMetric(sl.key, ns) }))
+      .filter((c) => c.m);
 
-    // W2 highlight set: the display-only, per-namespace metric keys the user has
-    // 🖍️-toggled. Read from the LIVE store (not the frozen `state`) because a
-    // highlight is a pure cosmetic class, decoupled from the query snapshot —
-    // applyHighlightsInstant repaints via this same renderLoaded, so the fresh
-    // set is picked up. Keyed by the rendered columns' own `ns`, so it always
-    // matches the columns on screen. Never enters buildQuery — numbers untouched.
+    // W2/E1a highlight set: the display-only SLOT IDS the user has 🖍️-toggled.
+    // Read from the LIVE store (not the frozen `state`) because a highlight is a
+    // pure cosmetic class, decoupled from the query snapshot — applyHighlightsInstant
+    // repaints via this same renderLoaded, so the fresh set is picked up. Keyed by
+    // the rendered columns' own `ns`, so it always matches the columns on screen.
+    // Never enters buildQuery — numbers untouched.
     const highlightSet = new Set(
       (store.get().highlightedColumns && store.get().highlightedColumns[ns]) || []
     );
@@ -3080,7 +3148,7 @@ export function mountTable(
         ${pinTh}
         ${rankTh}
         ${playerTh}
-        ${cols.map((m) => headerCellHTML(m, state, highlightSet.has(m.key))).join("")}
+        ${cols.map((c) => headerCellHTML(c.m, state, highlightSet.has(c.slotId), c.slotId)).join("")}
       </tr>`;
 
     // R5-B #3: float pinned players to the top for DISPLAY only; `rows` (lastRows)
@@ -3105,7 +3173,7 @@ export function mountTable(
         // "Show More" reveal — no query, pure display.
         const rk = rankById.get(String(row.id));
         const rankTd = `<td class="data-table__td data-table__td--rank">${rk != null ? rk.toLocaleString() : "—"}</td>`;
-        const cells = cols.map((m) => dataCellHTML(m, row, highlightSet.has(m.key))).join("");
+        const cells = cols.map((c) => dataCellHTML(c.m, row, highlightSet.has(c.slotId))).join("");
         // Player names link to the player page (R2, decision 29). The full
         // name is now always the rendered text (task 4 replaced JS
         // pre-truncation with a dynamically-sized column — see
@@ -3245,7 +3313,12 @@ export function mountTable(
       // uses on a plain discipline switch.
       const preState = store.get();
       if (!resolveSortMetric(preState.sort.key, effectiveDiscipline(preState))) {
-        store.set({ sort: { key: preState.discipline === "batting" ? "runs" : "wickets", dir: "desc" } });
+        // E1a: attach the fallback sort to its slot (the slot showing runs/wickets
+        // in the effective namespace), so the arrow lands on the right column.
+        const fbNs = effectiveDiscipline(preState);
+        const fbKey = preState.discipline === "batting" ? "runs" : "wickets";
+        const fbSlot = (preState.columns[fbNs] || []).find((s) => s.key === fbKey) || null;
+        store.set({ sort: { key: fbKey, dir: "desc", slotId: fbSlot ? fbSlot.id : null } });
       }
 
       // Restricted picker (D4 R3 follow-up): the matchup namespaces get the same
@@ -3255,7 +3328,11 @@ export function mountTable(
       state = store.get();
     }
     const ns = effectiveDiscipline(state);
-    const cols = state.columns[ns];
+    // E1a Step 2: hand buildQuery the DISTINCT metric keys across the slots so each
+    // stat's SQL is emitted exactly once (two slots showing the same stat → one
+    // SELECT, no double-count). With today's unique-key columns this equals the old
+    // key array, so the emitted SQL is byte-identical.
+    const cols = distinctSlotKeys(state.columns[ns]);
     const { sql, matchesSql } = buildQuery(state, cols);
     const token = ++loadToken;
     // R5-A #4: capture the currently-displayed row order BEFORE this load replaces

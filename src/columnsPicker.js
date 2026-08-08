@@ -1161,12 +1161,19 @@ export function createColumnsPicker({
         const next = cols.filter((k) => k !== countKey && k !== altKey);
         next.splice(at, 0, wantKey);
         // Migrate an active highlight onto the shown form (Highlight keeps working on
-        // whichever form is shown). Display-only — never a query change.
+        // whichever form is shown). Display-only — never a query change. E1a: highlight
+        // is stored per-SLOT now, so CAPTURE the migrated key set BEFORE the column
+        // change (the old form's slot is dropped by setColumns), then apply columns,
+        // THEN re-apply the highlight so it maps onto the wanted form's freshly-created
+        // slot. (In the key-array era the order was the reverse; this reorder is
+        // leaderboard-only — wireModeToggles no-ops when controlsOn is false.)
+        let migratedHls = null;
         if (getHighlights && setHighlights) {
           const hls = getHighlights();
-          if (hls.includes(oldKey)) setHighlights(hls.map((k) => (k === oldKey ? wantKey : k)));
+          if (hls.includes(oldKey)) migratedHls = hls.map((k) => (k === oldKey ? wantKey : k));
         }
         setColumns(next);
+        if (migratedHls) setHighlights(migratedHls);
         syncCheckedState(rootEl);
       });
     });
