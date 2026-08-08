@@ -46,6 +46,9 @@ import {
   OTHER_DISCIPLINE, COLUMN_TOGGLE_PAIRS,
   // Columns content rework D1 (phase composer): the composed-key scheme + pool.
   makeComposedPhaseKey, composedPhasePool, composedPhaseTokensForFormats, COMPOSED_PHASE_LABEL,
+  // Columns content rework D2 (ball-range + innings-range composers).
+  makeComposedBallKey, composedBallPool, composedBallTokens, COMPOSED_BALL_LABEL,
+  makeComposedInningsKey, composedInningsPool, composedInningsTokensForFormats, COMPOSED_INNINGS_LABEL,
 } from "./metrics.js";
 import { eligibleMetrics, eligibleCrossMetrics } from "./state.js";
 
@@ -550,6 +553,15 @@ export function createColumnsPicker({
   // posture as the order arrays / HIDDEN_COLUMN_KEYS above.
   const DETAILED_TOTAL_KEYS = new Set(["boundary_balls", "boundary_runs"]);
 
+  // Columns content rework D2: the enumerated faced-ball-progression columns
+  // (batting Detailed) are REPLACED by the Ball Range composer in the leaderboard
+  // four-dropdown picker — hidden from the offered listing here so there is no
+  // display-identical duplicate (the composer offers the equivalent bl__ keys).
+  // Their metric DEFS stay in metrics.js (the pop-up popover, filters, graph and —
+  // repointed — the Progression preset still reference them); this hides them only
+  // from THIS picker, exactly as the enumerated phase metrics were replaced in D1.
+  const BALL_RANGE_ENUMERATED_KEYS = new Set(["sr_first10", "sr_11_20", "sr_21plus"]);
+
   /** Reorder `list` so any metric whose key appears in `order` comes first (in
    * `order`'s sequence); every other metric keeps its ORIGINAL relative order,
    * appended after. Metrics not named in `order` are untouched siblings (the
@@ -610,6 +622,61 @@ export function createColumnsPicker({
       <div class="cols-composer">${blocks.join("")}</div>`;
   }
 
+  /** The ball-range×metric composer (D2): one family sub-block per base metric in
+   * the discipline's composed ball-range pool (Strike Rate / Runs / Balls Faced —
+   * whatever the faced-ball buckets carry), each listing the buckets (First 10
+   * Balls / Balls 11–20 / 21+ Balls) as normal itemRows. Each row's data-key is a
+   * COMPOSED ball key (`bl__<bucket>__<base>`) resolved by getMetric to a virtual
+   * metric with a generated sqlExpression. "" for the pop-up namespaces, and ""
+   * for bowling (no fb* bucket columns → empty pool). Faced-ball buckets are
+   * FORMAT-AGNOSTIC, so — unlike Phases — this shows for every format. REPLACES the
+   * enumerated sr_first10/sr_11_20/sr_21plus rows in the leaderboard picker. */
+  function ballComposerHTML(ns, formats, visible) {
+    if (ns !== "batting" && ns !== "bowling") return "";
+    const pool = composedBallPool(ns);
+    if (!pool.length) return "";
+    const tokens = composedBallTokens();
+    const blocks = pool.map((base) => {
+      const famLabel = metricDisplayLabel(base, formats);
+      const rows = tokens
+        .map((tok) => itemRowHTML({ key: makeComposedBallKey(tok, base.key), label: COMPOSED_BALL_LABEL[tok] }, formats, visible))
+        .join("");
+      return `<div class="cols-composer__family">
+          <div class="cols-composer__family-label">${escHtml(famLabel)}</div>
+          <div class="columns-popover__list">${rows}</div>
+        </div>`;
+    });
+    return `<div class="columns-popover__section-label">Ball Range</div>
+      <div class="cols-composer">${blocks.join("")}</div>`;
+  }
+
+  /** The innings-range×metric composer (D2): one family sub-block per base metric in
+   * the discipline's composed innings pool, each listing the format-eligible innings
+   * (1st / 2nd, plus 3rd / 4th when Red Ball is in scope) as normal itemRows. Each
+   * row's data-key is a COMPOSED innings key (`in__<iToken>__<base>`) resolved by
+   * getMetric to a virtual metric whose sqlExpression is conditional aggregation
+   * over innings_number. "" for the pop-up namespaces / an empty pool. Offered for
+   * BOTH batting and bowling (both views carry innings_number). */
+  function inningsComposerHTML(ns, formats, visible) {
+    if (ns !== "batting" && ns !== "bowling") return "";
+    const tokens = composedInningsTokensForFormats(formats);
+    if (!tokens.length) return "";
+    const pool = composedInningsPool(ns);
+    if (!pool.length) return "";
+    const blocks = pool.map((base) => {
+      const famLabel = metricDisplayLabel(base, formats);
+      const rows = tokens
+        .map((tok) => itemRowHTML({ key: makeComposedInningsKey(tok, base.key), label: COMPOSED_INNINGS_LABEL[tok] }, formats, visible))
+        .join("");
+      return `<div class="cols-composer__family">
+          <div class="cols-composer__family-label">${escHtml(famLabel)}</div>
+          <div class="columns-popover__list">${rows}</div>
+        </div>`;
+    });
+    return `<div class="columns-popover__section-label">Innings Range</div>
+      <div class="cols-composer">${blocks.join("")}</div>`;
+  }
+
   /** Build the leaderboard's four-dropdown Columns UI (W4). Order is fixed —
    * Match · Batting · Bowling · Fielding (Match first, OQ2). The current
    * discipline's OWN columns (Basic/Detailed/Dismissals/Phase composer) fill its
@@ -648,6 +715,7 @@ export function createColumnsPicker({
         m.section !== "impact" &&
         !(isPlainNs && m.key === "matches") &&
         !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key)) &&
+        !(isPlainNs && BALL_RANGE_ENUMERATED_KEYS.has(m.key)) &&
         !hiddenAlts.has(m.key)
     );
     const basicOrder = bucket === "bowling" ? BOWLING_BASIC_ORDER : BATTING_BASIC_ORDER;
@@ -678,7 +746,9 @@ export function createColumnsPicker({
       sectionHTML("Basic Stats", ownBasic, formats, visible) +
       sectionHTML("Detailed Stats", ownDetailed, formats, visible) +
       dismissalSectionHTML(ns, formats, visible, dismissal) +
-      composerHTML(ns, formats, visible);
+      composerHTML(ns, formats, visible) +
+      ballComposerHTML(ns, formats, visible) +
+      inningsComposerHTML(ns, formats, visible);
     const crossSections =
       sectionHTML("Basic Stats", crossBasic, formats, visible) +
       sectionHTML("Detailed Stats", crossDetailed, formats, visible);

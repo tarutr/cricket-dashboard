@@ -36,6 +36,10 @@ import {
   OTHER_DISCIPLINE,
   makeCrossKey,
   eligibleComposedPhaseKeys,
+  eligibleComposedBallKeys,
+  eligibleComposedInningsKeys,
+  makeComposedPhaseKey,
+  makeComposedBallKey,
 } from "./metrics.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 
@@ -821,18 +825,27 @@ export const COLUMN_PRESET_DEFS = {
     {
       key: "phases",
       label: "Phases",
+      // Columns content rework D2: seed the D1 COMPOSED phase keys (byte-identical
+      // SQL to the retiring pp_/mid_/death_/odi_ enumerated defs — D1's equivalence
+      // gate), so the preset and the Phase composer agree (the composer shows these
+      // rows CHECKED, no display-identical duplicate).
       columns: (formats) => {
         if (formats.length === 1 && formats[0] === "T20")
-          return ["innings", "runs", "strike_rate", "pp_strike_rate", "mid_strike_rate", "death_strike_rate"];
+          return ["innings", "runs", "strike_rate", makeComposedPhaseKey("pp", "strike_rate"), makeComposedPhaseKey("mid", "strike_rate"), makeComposedPhaseKey("death", "strike_rate")];
         if (formats.length === 1 && formats[0] === "50 Over")
-          return ["innings", "runs", "strike_rate", "odi_pp_strike_rate", "odi_mid_strike_rate", "odi_death_strike_rate"];
+          return ["innings", "runs", "strike_rate", makeComposedPhaseKey("odi_pp", "strike_rate"), makeComposedPhaseKey("odi_mid", "strike_rate"), makeComposedPhaseKey("odi_death", "strike_rate")];
         return null;
       },
     },
     {
       key: "progression",
       label: "Progression",
-      columns: () => ["innings", "runs", "strike_rate", "sr_first10", "sr_11_20", "sr_21plus"],
+      // Columns content rework D2: seed the D2 COMPOSED ball-range keys (byte-
+      // identical SQL to the retiring sr_first10/sr_11_20/sr_21plus — the Ball Range
+      // equivalence gate), so the preset agrees with the Ball Range composer (rows
+      // show CHECKED, no display-identical duplicate). The sr_* defs stay in the
+      // catalogue (pop-up / filters / graph still use them).
+      columns: () => ["innings", "runs", "strike_rate", makeComposedBallKey("fb1_10", "strike_rate"), makeComposedBallKey("fb11_20", "strike_rate"), makeComposedBallKey("fb21p", "strike_rate")],
     },
   ],
   bowling: [
@@ -850,11 +863,13 @@ export const COLUMN_PRESET_DEFS = {
     {
       key: "phases",
       label: "Phases",
+      // Columns content rework D2: seed the D1 COMPOSED phase keys (byte-identical
+      // SQL to the retiring enumerated defs), matching the Phase composer.
       columns: (formats) => {
         if (formats.length === 1 && formats[0] === "T20")
-          return ["innings", "wickets", "pp_economy", "death_economy", "pp_wickets", "death_wickets"];
+          return ["innings", "wickets", makeComposedPhaseKey("pp", "economy"), makeComposedPhaseKey("death", "economy"), makeComposedPhaseKey("pp", "wickets"), makeComposedPhaseKey("death", "wickets")];
         if (formats.length === 1 && formats[0] === "50 Over")
-          return ["innings", "wickets", "odi_pp_economy", "odi_death_economy", "odi_pp_wickets", "odi_death_wickets"];
+          return ["innings", "wickets", makeComposedPhaseKey("odi_pp", "economy"), makeComposedPhaseKey("odi_death", "economy"), makeComposedPhaseKey("odi_pp", "wickets"), makeComposedPhaseKey("odi_death", "wickets")];
         return null;
       },
     },
@@ -933,6 +948,18 @@ export function eligibleColumnKeys(discipline, formats) {
   // returns [] off a single T20 / 50 Over selection). Byte-identical when no
   // composed column is present (the extra keys just never match).
   for (const key of eligibleComposedPhaseKeys(discipline, formats)) {
+    keys.add(key);
+  }
+  // Columns content rework D2: composed ball-range (bl__<bucket>__<base>, batting-
+  // only, format-agnostic) and innings-range (in__<iToken>__<base>, both
+  // disciplines; i3/i4 only when Red Ball is in scope) column keys are valid
+  // columns too — fold them in so they survive a re-render, and (for innings) drop
+  // the moment the format no longer permits their innings. Byte-identical when no
+  // such composed column is present (the extra keys just never match).
+  for (const key of eligibleComposedBallKeys(discipline, formats)) {
+    keys.add(key);
+  }
+  for (const key of eligibleComposedInningsKeys(discipline, formats)) {
     keys.add(key);
   }
   return keys;

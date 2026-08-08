@@ -2634,16 +2634,23 @@ export function getMetric(key, discipline) {
   if (discipline) {
     const hit = _byDisciplineKey.get(`${discipline}:${key}`);
     if (hit) return hit;
-    // Columns content rework D1 (2026-08-08): composed phase-metric keys
-    // (ph__<phase>__<base>) are DYNAMIC virtual metrics — never in the static
-    // catalogue — whose sqlExpression is rebuilt from phase-prefixed raw
-    // components. Resolve them HERE so the leaderboard's buildQuery inningsMetrics
-    // path (which calls getMetric) projects them through the NORMAL selectParts
-    // loop with NO query-builder change. Byte-identical for every catalogued key
-    // (the map hit returns first); resolveComposedPhaseMetric returns null for
-    // plain/cross keys and for the matchup disciplines, so those callers are
+    // Columns content rework D1/D2 (2026-08-08): composed dimension×metric keys
+    // are DYNAMIC virtual metrics — never in the static catalogue — whose
+    // sqlExpression is rebuilt on the fly. Three schemes share this ONE fallback:
+    //   • ph__<phase>__<base>  (D1) — phase-prefixed precomputed components.
+    //   • bl__<bucket>__<base> (D2) — faced-ball-bucket precomputed components.
+    //   • in__<iToken>__<base> (D2) — conditional aggregation over innings_number.
+    // Resolve them HERE so the leaderboard's buildQuery inningsMetrics path (which
+    // calls getMetric) projects them through the NORMAL selectParts loop with NO
+    // query-builder change. Byte-identical for every catalogued key (the map hit
+    // returns first); each resolver returns null for keys of another prefix, for
+    // plain/cross keys, and for the matchup disciplines, so those callers are
     // unchanged (same `?? null` result as before).
-    return resolveComposedPhaseMetric(key, discipline);
+    return (
+      resolveComposedPhaseMetric(key, discipline) ??
+      resolveComposedBallMetric(key, discipline) ??
+      resolveComposedInningsMetric(key, discipline)
+    );
   }
   return METRICS.find((m) => m.key === key) ?? null;
 }
@@ -2956,6 +2963,348 @@ export function eligibleComposedPhaseKeys(discipline, formats) {
   const keys = [];
   for (const base of composedPhasePool(discipline)) {
     for (const ph of phaseTokens) keys.push(makeComposedPhaseKey(ph, base.key));
+  }
+  return keys;
+}
+
+// ── Composed BALL-RANGE×metric columns (columns content rework D2, 2026-08-08) ─
+// The leaderboard's Ball Range composer generates a column for any pool metric
+// re-scoped to a FACED-BALL bucket of the innings (the batter's first 10 balls,
+// balls 11–20, then 21+) — REPLACING the enumerated `sr_first10` / `sr_11_20` /
+// `sr_21plus` columns in the leaderboard picker (their defs stay in the catalogue
+// for the pop-up / filters / graph / the Progression preset, which D2 repoints).
+// It mirrors the D1 phase scheme EXACTLY: a non-static key resolves to a VIRTUAL
+// metric whose sqlExpression is rebuilt from the bucket-prefixed raw components
+// the batting view carries (`<bucket>_runs`, `<bucket>_balls`). These are
+// FACED-BALL buckets, NOT over-phases, so they are FORMAT-AGNOSTIC and NOT
+// phase-gated (exactly like the enumerated sr_* they replace).
+//
+// EQUIVALENCE GATE (Rule 1): composed First-10-balls × (Batting) Strike Rate is
+// BYTE-IDENTICAL to the retiring `sr_first10` sqlExpression, and likewise
+// 11–20 ⇒ sr_11_20, 21+ ⇒ sr_21plus — the spec template reproduces those exact
+// forms when {B} is substituted. Runs / Balls Faced re-scoped to a bucket have no
+// enumerated equivalent (they are new), following the same SUM(<bucket>_…) shape.
+//
+// DATA (confirmed flag-off via DESCRIBE batting / DESCRIBE bowling on R2): each
+// batting bucket carries ONLY runs + balls (no per-bucket fours/dots/dismissals),
+// so the pool is {Strike Rate, Runs, Balls Faced}. The BOWLING view carries NO
+// fb* bucket columns at all, so composedBallPool("bowling") is empty and the
+// bowling Ball Range composer is never offered (data-driven — a bowling ball-range
+// would need a pipeline/parquet build, like byes/leg-byes; flagged for later).
+//
+// KEY = `bl__<bucketToken>__<baseKey>`  e.g. `bl__fb1_10__strike_rate`. The bucket
+// tokens are the exact view-column prefixes (`fb1_10`, `fb11_20`, `fb21p`), which
+// carry only single underscores, so splitting on the FIRST `__` after the `bl__`
+// prefix recovers {bucketToken, baseKey}. No catalogued key starts with `bl__`.
+const COMPOSED_BALL_PREFIX = "bl__";
+const COMPOSED_BALL_TOKENS = ["fb1_10", "fb11_20", "fb21p"];
+const _BALL_TOKEN_SET = new Set(COMPOSED_BALL_TOKENS);
+// Composer row label (the family sub-header carries the metric) + header short tag.
+export const COMPOSED_BALL_LABEL = {
+  fb1_10: "First 10 Balls", fb11_20: "Balls 11–20", fb21p: "21+ Balls",
+};
+const COMPOSED_BALL_SHORT = { fb1_10: "1-10", fb11_20: "11-20", fb21p: "21+" };
+// Bucket component SUFFIXES each view carries (batting only). A pool metric is
+// offered ONLY when ALL its `needs` are present, so a component vanishing from the
+// pipeline auto-drops the metric instead of generating SQL against a missing column.
+const COMPOSED_BALL_COMPONENTS = {
+  batting: new Set(["runs", "balls"]),
+  // bowling: (no fb* bucket columns in the view) — pool stays empty.
+};
+// Per-discipline COMPONENT SPEC: the base metric's formula re-expressed over
+// `<bucket>_<comp>` columns ({B} = bucket prefix). Only metrics whose components
+// live in the bucket set can be composed.
+const COMPOSED_BALL_SPECS = {
+  batting: {
+    strike_rate: { sql: "SUM({B}_runs) * 100.0 / NULLIF(SUM({B}_balls), 0)", needs: ["runs", "balls"] },
+    runs: { sql: "SUM({B}_runs)", needs: ["runs"] },
+    balls_faced: { sql: "SUM({B}_balls)", needs: ["balls"] },
+  },
+};
+// Composer display order of the metric pool.
+const COMPOSED_BALL_POOL_ORDER = {
+  batting: ["strike_rate", "runs", "balls_faced"],
+};
+
+/** Build the composed-ball column key for `baseKey` re-scoped to `bucketToken`. */
+export function makeComposedBallKey(bucketToken, baseKey) {
+  return `${COMPOSED_BALL_PREFIX}${bucketToken}__${baseKey}`;
+}
+
+/** Parse a composed-ball column key → { bucketToken, baseKey }, or null. Split on
+ * the FIRST `__` after the `bl__` prefix (bucket tokens carry no `__`). */
+export function parseComposedBallKey(key) {
+  if (typeof key !== "string" || !key.startsWith(COMPOSED_BALL_PREFIX)) return null;
+  const rest = key.slice(COMPOSED_BALL_PREFIX.length);
+  const sep = rest.indexOf("__");
+  if (sep <= 0) return null;
+  const bucketToken = rest.slice(0, sep);
+  const baseKey = rest.slice(sep + 2);
+  if (!_BALL_TOKEN_SET.has(bucketToken) || !baseKey) return null;
+  return { bucketToken, baseKey };
+}
+
+/** True iff every component the `baseKey` spec needs exists in `discipline`'s bucket set. */
+function composedBallComponentsPresent(discipline, spec) {
+  const have = COMPOSED_BALL_COMPONENTS[discipline];
+  return !!have && spec.needs.every((c) => have.has(c));
+}
+
+/** Build the VIRTUAL metric for a composed-ball column: the base metric's own
+ * format / higherIsBetter / zeroIsData / kind / source ("innings"), re-badged with
+ * the composed key + a bucket-prefixed label, and a GENERATED sqlExpression (base
+ * formula over `<bucket>_<component>` columns). isPhaseMetric stays the base's null
+ * (faced-ball buckets are format-agnostic). Returns null when the base/spec is
+ * unknown or a component is missing. */
+function buildComposedBallMetric(bucketToken, baseKey, discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return null;
+  if (!_BALL_TOKEN_SET.has(bucketToken)) return null;
+  const specMap = COMPOSED_BALL_SPECS[discipline];
+  const spec = specMap && specMap[baseKey];
+  if (!spec || !composedBallComponentsPresent(discipline, spec)) return null;
+  const base = getMetric(baseKey, discipline);
+  if (!base) return null;
+  return {
+    ...base,
+    key: makeComposedBallKey(bucketToken, baseKey),
+    baseKey,
+    ballToken: bucketToken,
+    isComposedBall: true,
+    sqlExpression: spec.sql.split("{B}").join(bucketToken),
+    label: `${COMPOSED_BALL_LABEL[bucketToken]} ${base.label}`,
+    shortLabel: `${COMPOSED_BALL_SHORT[bucketToken]} ${base.shortLabel}`,
+  };
+}
+
+/** Resolve a composed-ball COLUMN key to its virtual metric, or null when it is
+ * not a composed-ball key / the discipline can't compose it. Called by getMetric. */
+export function resolveComposedBallMetric(key, discipline) {
+  const parsed = parseComposedBallKey(key);
+  if (!parsed) return null;
+  return buildComposedBallMetric(parsed.bucketToken, parsed.baseKey, discipline);
+}
+
+/** The ordered base metrics the `discipline` Ball Range composer offers, filtered
+ * to those with a spec AND all components present (empty for bowling → not offered). */
+export function composedBallPool(discipline) {
+  const order = COMPOSED_BALL_POOL_ORDER[discipline];
+  const specMap = COMPOSED_BALL_SPECS[discipline];
+  if (!order || !specMap) return [];
+  const pool = [];
+  for (const baseKey of order) {
+    const spec = specMap[baseKey];
+    if (!spec || !composedBallComponentsPresent(discipline, spec)) continue;
+    const base = getMetric(baseKey, discipline);
+    if (base) pool.push(base);
+  }
+  return pool;
+}
+
+/** The ball-range bucket tokens (format-agnostic — faced-ball buckets exist for
+ * every format), for the composer to iterate. */
+export function composedBallTokens() {
+  return COMPOSED_BALL_TOKENS;
+}
+
+/** Every VALID composed-ball column key for the current discipline (bucket tokens
+ * are format-agnostic, so `formats` is unused — the signature mirrors the phase/
+ * innings helpers). Folded into eligibleColumnKeys so a composed ball column
+ * survives a re-render. */
+export function eligibleComposedBallKeys(discipline, _formats) {
+  const keys = [];
+  for (const base of composedBallPool(discipline)) {
+    for (const tok of COMPOSED_BALL_TOKENS) keys.push(makeComposedBallKey(tok, base.key));
+  }
+  return keys;
+}
+
+// ── Composed INNINGS-RANGE×metric columns (columns content rework D2) ──────────
+// The leaderboard's Innings Range composer generates a column for any pool metric
+// computed over ONLY a single innings number (1st / 2nd, plus 3rd / 4th for
+// red-ball) — via CONDITIONAL AGGREGATION, a DIFFERENT shape from the phase / ball
+// composers (those read precomputed bucket columns; this gates the BASE columns
+// with a CASE on `innings_number`). e.g. Innings-1 Runs = SUM(CASE WHEN
+// innings_number = 0 THEN runs ELSE 0 END). There is NO enumerated equivalent —
+// this dimension is new.
+//
+// CRITICAL (Rule 1): `innings_number` in the batting/bowling views is 0-BASED
+// (INNINGS_NUMBER_FILTER.zeroBased) — display "1st innings" is STORED 0. So the
+// stored predicate for display innings N is `innings_number = N-1`. (The task
+// brief's illustrative SQL used `= 1` for the 1st innings; that would be WRONG
+// here — verified against filters.js's Innings Number predicate + db_reference.)
+//
+// INNINGS-NUMBER FILTER INTERACTION: a composed Innings-k column's CASE and the
+// Innings Number FILTER's WHERE compose correctly — the WHERE narrows WHICH rows
+// are scanned, the CASE picks innings-k WITHIN them. If both name the same innings
+// the CASE is a no-op over the already-narrowed rows (identical value); if they
+// name different innings the CASE matches nothing → 0/— (correct: there are no
+// innings-k rows inside an innings-j-only scope). With NO composed innings column
+// present the query is byte-identical (no CASE, no innings_number reference added).
+//
+// KEY = `in__<iToken>__<baseKey>`  e.g. `in__i1__strike_rate`. Tokens i1..i4 are
+// the DISPLAY innings numbers; stored = tokenNumber-1. Tokens carry no `__`; no
+// catalogued key starts with `in__` (the plain "innings" key is "innings", never
+// "in__…"). Which tokens are eligible tracks the Innings Number filter exactly
+// (inningsNumberOptions): i1/i2 always, i3/i4 only when Red Ball is in scope.
+const COMPOSED_INNINGS_PREFIX = "in__";
+const COMPOSED_INNINGS_TOKENS = ["i1", "i2", "i3", "i4"];
+const _INNINGS_TOKEN_SET = new Set(COMPOSED_INNINGS_TOKENS);
+export const COMPOSED_INNINGS_LABEL = {
+  i1: "1st Innings", i2: "2nd Innings", i3: "3rd Innings", i4: "4th Innings",
+};
+const COMPOSED_INNINGS_SHORT = {
+  i1: "1st Inns", i2: "2nd Inns", i3: "3rd Inns", i4: "4th Inns",
+};
+/** Stored 0-based innings_number for a display token ("i1" → 0, "i4" → 3). */
+function inningsTokenToStored(token) {
+  return Number(token.slice(1)) - 1;
+}
+// The BASE view columns each conditional metric reads. A pool metric is offered
+// only when ALL its `needs` exist (confirmed flag-off via DESCRIBE for both views).
+const COMPOSED_INNINGS_COMPONENTS = {
+  batting: new Set(["runs", "balls_faced", "dots", "fours_hit", "sixes_hit", "dismissed"]),
+  bowling: new Set(["balls", "runs_conceded", "wickets", "dots", "fours_conceded", "sixes_conceded"]),
+};
+// Per-discipline COMPONENT SPEC: the base metric's formula with every SUM(col)
+// re-expressed as SUM(CASE WHEN innings_number = {S} THEN col ELSE 0 END) ({S} =
+// stored 0-based innings number). Denominators keep the same NULLIF(…, 0) guard,
+// so an innings the player never played yields 0 → NULL → "—" for rates (§8.1),
+// matching every base rate metric.
+const COMPOSED_INNINGS_SPECS = {
+  batting: {
+    strike_rate: { sql: "SUM(CASE WHEN innings_number = {S} THEN runs ELSE 0 END) * 100.0 / NULLIF(SUM(CASE WHEN innings_number = {S} THEN balls_faced ELSE 0 END), 0)", needs: ["runs", "balls_faced"] },
+    average: { sql: "SUM(CASE WHEN innings_number = {S} THEN runs ELSE 0 END) * 1.0 / NULLIF(SUM(CASE WHEN innings_number = {S} THEN dismissed ELSE 0 END), 0)", needs: ["runs", "dismissed"] },
+    runs: { sql: "SUM(CASE WHEN innings_number = {S} THEN runs ELSE 0 END)", needs: ["runs"] },
+    balls_faced: { sql: "SUM(CASE WHEN innings_number = {S} THEN balls_faced ELSE 0 END)", needs: ["balls_faced"] },
+    dot_balls: { sql: "SUM(CASE WHEN innings_number = {S} THEN dots ELSE 0 END)", needs: ["dots"] },
+    fours: { sql: "SUM(CASE WHEN innings_number = {S} THEN fours_hit ELSE 0 END)", needs: ["fours_hit"] },
+    sixes: { sql: "SUM(CASE WHEN innings_number = {S} THEN sixes_hit ELSE 0 END)", needs: ["sixes_hit"] },
+    dismissals: { sql: "SUM(CASE WHEN innings_number = {S} THEN dismissed ELSE 0 END)", needs: ["dismissed"] },
+    dot_pct: { sql: "SUM(CASE WHEN innings_number = {S} THEN dots ELSE 0 END) * 100.0 / NULLIF(SUM(CASE WHEN innings_number = {S} THEN balls_faced ELSE 0 END), 0)", needs: ["dots", "balls_faced"] },
+    boundary_pct: { sql: "(SUM(CASE WHEN innings_number = {S} THEN fours_hit ELSE 0 END) + SUM(CASE WHEN innings_number = {S} THEN sixes_hit ELSE 0 END)) * 100.0 / NULLIF(SUM(CASE WHEN innings_number = {S} THEN balls_faced ELSE 0 END), 0)", needs: ["fours_hit", "sixes_hit", "balls_faced"] },
+    balls_per_dismissal: { sql: "SUM(CASE WHEN innings_number = {S} THEN balls_faced ELSE 0 END) * 1.0 / NULLIF(SUM(CASE WHEN innings_number = {S} THEN dismissed ELSE 0 END), 0)", needs: ["balls_faced", "dismissed"] },
+    boundary_balls: { sql: "SUM(CASE WHEN innings_number = {S} THEN fours_hit ELSE 0 END) + SUM(CASE WHEN innings_number = {S} THEN sixes_hit ELSE 0 END)", needs: ["fours_hit", "sixes_hit"] },
+    boundary_runs: { sql: "4 * SUM(CASE WHEN innings_number = {S} THEN fours_hit ELSE 0 END) + 6 * SUM(CASE WHEN innings_number = {S} THEN sixes_hit ELSE 0 END)", needs: ["fours_hit", "sixes_hit"] },
+  },
+  bowling: {
+    economy: { sql: "SUM(CASE WHEN innings_number = {S} THEN runs_conceded ELSE 0 END) * 6.0 / NULLIF(SUM(CASE WHEN innings_number = {S} THEN balls ELSE 0 END), 0)", needs: ["runs_conceded", "balls"] },
+    wickets: { sql: "SUM(CASE WHEN innings_number = {S} THEN wickets ELSE 0 END)", needs: ["wickets"] },
+    runs_conceded: { sql: "SUM(CASE WHEN innings_number = {S} THEN runs_conceded ELSE 0 END)", needs: ["runs_conceded"] },
+    balls: { sql: "SUM(CASE WHEN innings_number = {S} THEN balls ELSE 0 END)", needs: ["balls"] },
+    dot_balls_conceded: { sql: "SUM(CASE WHEN innings_number = {S} THEN dots ELSE 0 END)", needs: ["dots"] },
+    average: { sql: "SUM(CASE WHEN innings_number = {S} THEN runs_conceded ELSE 0 END) * 1.0 / NULLIF(SUM(CASE WHEN innings_number = {S} THEN wickets ELSE 0 END), 0)", needs: ["runs_conceded", "wickets"] },
+    strike_rate: { sql: "SUM(CASE WHEN innings_number = {S} THEN balls ELSE 0 END) * 1.0 / NULLIF(SUM(CASE WHEN innings_number = {S} THEN wickets ELSE 0 END), 0)", needs: ["balls", "wickets"] },
+    dot_pct: { sql: "SUM(CASE WHEN innings_number = {S} THEN dots ELSE 0 END) * 100.0 / NULLIF(SUM(CASE WHEN innings_number = {S} THEN balls ELSE 0 END), 0)", needs: ["dots", "balls"] },
+    fours_conceded: { sql: "SUM(CASE WHEN innings_number = {S} THEN fours_conceded ELSE 0 END)", needs: ["fours_conceded"] },
+    sixes_conceded: { sql: "SUM(CASE WHEN innings_number = {S} THEN sixes_conceded ELSE 0 END)", needs: ["sixes_conceded"] },
+    boundary_pct_conceded: { sql: "(SUM(CASE WHEN innings_number = {S} THEN fours_conceded ELSE 0 END) + SUM(CASE WHEN innings_number = {S} THEN sixes_conceded ELSE 0 END)) * 100.0 / NULLIF(SUM(CASE WHEN innings_number = {S} THEN balls ELSE 0 END), 0)", needs: ["fours_conceded", "sixes_conceded", "balls"] },
+    boundary_runs_pct: { sql: "(4 * SUM(CASE WHEN innings_number = {S} THEN fours_conceded ELSE 0 END) + 6 * SUM(CASE WHEN innings_number = {S} THEN sixes_conceded ELSE 0 END)) * 100.0 / NULLIF(SUM(CASE WHEN innings_number = {S} THEN runs_conceded ELSE 0 END), 0)", needs: ["fours_conceded", "sixes_conceded", "runs_conceded"] },
+  },
+};
+const COMPOSED_INNINGS_POOL_ORDER = {
+  batting: [
+    "strike_rate", "average", "runs", "balls_faced", "dot_balls", "fours", "sixes",
+    "dismissals", "dot_pct", "boundary_pct", "balls_per_dismissal", "boundary_balls", "boundary_runs",
+  ],
+  bowling: [
+    "economy", "wickets", "runs_conceded", "balls", "dot_balls_conceded", "average",
+    "strike_rate", "dot_pct", "fours_conceded", "sixes_conceded", "boundary_pct_conceded", "boundary_runs_pct",
+  ],
+};
+
+/** Build the composed-innings column key for `baseKey` scoped to `inningsToken`. */
+export function makeComposedInningsKey(inningsToken, baseKey) {
+  return `${COMPOSED_INNINGS_PREFIX}${inningsToken}__${baseKey}`;
+}
+
+/** Parse a composed-innings column key → { inningsToken, baseKey }, or null. */
+export function parseComposedInningsKey(key) {
+  if (typeof key !== "string" || !key.startsWith(COMPOSED_INNINGS_PREFIX)) return null;
+  const rest = key.slice(COMPOSED_INNINGS_PREFIX.length);
+  const sep = rest.indexOf("__");
+  if (sep <= 0) return null;
+  const inningsToken = rest.slice(0, sep);
+  const baseKey = rest.slice(sep + 2);
+  if (!_INNINGS_TOKEN_SET.has(inningsToken) || !baseKey) return null;
+  return { inningsToken, baseKey };
+}
+
+/** True iff every component the `baseKey` spec needs exists in `discipline`'s view. */
+function composedInningsComponentsPresent(discipline, spec) {
+  const have = COMPOSED_INNINGS_COMPONENTS[discipline];
+  return !!have && spec.needs.every((c) => have.has(c));
+}
+
+/** Build the VIRTUAL metric for a composed-innings column: the base metric's own
+ * format / higherIsBetter / zeroIsData / kind / source ("innings"), re-badged with
+ * the composed key + an innings-prefixed label, and a GENERATED conditional-
+ * aggregation sqlExpression (stored 0-based innings_number substituted for {S}).
+ * isPhaseMetric stays the base's null — innings 1/2 exist for every format; token
+ * eligibility (i3/i4 red-ball only) is enforced by eligibleComposedInningsKeys, not
+ * phase gating. Returns null when the base/spec is unknown or a component missing. */
+function buildComposedInningsMetric(inningsToken, baseKey, discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return null;
+  if (!_INNINGS_TOKEN_SET.has(inningsToken)) return null;
+  const specMap = COMPOSED_INNINGS_SPECS[discipline];
+  const spec = specMap && specMap[baseKey];
+  if (!spec || !composedInningsComponentsPresent(discipline, spec)) return null;
+  const base = getMetric(baseKey, discipline);
+  if (!base) return null;
+  const stored = inningsTokenToStored(inningsToken);
+  return {
+    ...base,
+    key: makeComposedInningsKey(inningsToken, baseKey),
+    baseKey,
+    inningsToken,
+    isComposedInnings: true,
+    sqlExpression: spec.sql.split("{S}").join(String(stored)),
+    label: `${COMPOSED_INNINGS_LABEL[inningsToken]} ${base.label}`,
+    shortLabel: `${COMPOSED_INNINGS_SHORT[inningsToken]} ${base.shortLabel}`,
+  };
+}
+
+/** Resolve a composed-innings COLUMN key to its virtual metric, or null. Called by getMetric. */
+export function resolveComposedInningsMetric(key, discipline) {
+  const parsed = parseComposedInningsKey(key);
+  if (!parsed) return null;
+  return buildComposedInningsMetric(parsed.inningsToken, parsed.baseKey, discipline);
+}
+
+/** The innings tokens selectable under `formats`, mirroring the Innings Number
+ * filter's own option set (inningsNumberOptions): i1/i2 always, i3/i4 only when
+ * Red Ball is in the format selection (a Test/MDM can have four innings). */
+export function composedInningsTokensForFormats(formats) {
+  return (formats || []).includes("Red Ball")
+    ? COMPOSED_INNINGS_TOKENS
+    : COMPOSED_INNINGS_TOKENS.slice(0, 2);
+}
+
+/** The ordered base metrics the `discipline` Innings Range composer offers,
+ * filtered to those with a spec AND all components present. */
+export function composedInningsPool(discipline) {
+  const order = COMPOSED_INNINGS_POOL_ORDER[discipline];
+  const specMap = COMPOSED_INNINGS_SPECS[discipline];
+  if (!order || !specMap) return [];
+  const pool = [];
+  for (const baseKey of order) {
+    const spec = specMap[baseKey];
+    if (!spec || !composedInningsComponentsPresent(discipline, spec)) continue;
+    const base = getMetric(baseKey, discipline);
+    if (base) pool.push(base);
+  }
+  return pool;
+}
+
+/** Every VALID composed-innings column key for the current discipline + formats —
+ * the pool × the format-eligible innings tokens. Folded into eligibleColumnKeys so
+ * a composed innings column survives a re-render but is pruned the moment the
+ * format no longer permits its innings (i3/i4 drop when Red Ball leaves scope). */
+export function eligibleComposedInningsKeys(discipline, formats) {
+  const tokens = composedInningsTokensForFormats(formats);
+  if (!tokens.length) return [];
+  const keys = [];
+  for (const base of composedInningsPool(discipline)) {
+    for (const tok of tokens) keys.push(makeComposedInningsKey(tok, base.key));
   }
   return keys;
 }
