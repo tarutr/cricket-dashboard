@@ -2261,6 +2261,98 @@ a { color: var(--color-accent); }
 .cols-param__and,
 .cols-param__unit { color: var(--color-muted); font-size: 0.9rem; }
 .cols-param__add { flex: 0 0 auto; }
+
+/* Picker rework to FILTER-STYLE (E1c) — leaderboard inline picker only. The Columns
+   section now mirrors the Filters section: a CHOSEN-columns rows list (the "active
+   conditions" equivalent) above four click-to-add MENUS. The pop-up popover keeps its
+   flat checkbox list (unaffected — none of these classes appear there). */
+.cols-picker { display: flex; flex-direction: column; gap: var(--space-4); }
+
+/* Chosen-columns rows list. */
+.cols-chosen { display: flex; flex-direction: column; gap: var(--space-2); }
+.cols-chosen__empty { color: var(--color-muted); font-size: 0.9rem; padding: var(--space-1) 0; }
+/* One plain-column chosen row: label (grows) + its count/% · sort · highlight ·
+   duplicate · × controls (right). Same row language as the filter cond rows. */
+.cols-chosen-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--color-bg-raised);
+}
+.cols-chosen-row__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cols-chosen-row .columns-popover__item-controls { flex: 0 0 auto; }
+
+/* Parametric composer chosen row (Innings Score Range / Wicket Haul): a live
+   op-select + value input(s) + unit + ×, one column per row. */
+.cols-param-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--color-bg-raised);
+}
+.cols-param-row__noun { font-weight: 600; font-size: 0.9rem; flex: 0 0 auto; }
+.cols-param-row__remove { margin-left: auto; }
+
+/* Dimension/category composer chosen row (Phase/Ball/Innings/Runs-by-Source/
+   Wicket-Type): a titled card holding the composer's tick-box / count-% editor
+   inline (reuses .cols-composer / .columns-popover__list rows) + a × that removes
+   the row and all its columns. */
+.cols-composer-row {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--color-bg-raised);
+  padding: var(--space-2);
+}
+.cols-composer-row__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.cols-composer-row__title { font-weight: 600; font-size: 0.9rem; }
+.cols-composer-row__empty { color: var(--color-muted); font-size: 0.9rem; }
+
+/* Add menus. */
+.cols-add__label {
+  font-size: var(--text-xs);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  font-weight: 600;
+  margin-bottom: var(--space-2);
+}
+.cols-add-list { display: flex; flex-direction: column; gap: 1px; }
+/* One click-to-add column NAME item: a full-width, left-aligned menu button. */
+.cols-add-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--color-fg);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.cols-add-item:hover { background: var(--color-active-bg); color: var(--color-active-fg); }
+
 @media (max-width: 640px) {
   .cols-dd-bar { flex-direction: column; }
   .cols-dd-trigger { flex: 1 1 auto; }
