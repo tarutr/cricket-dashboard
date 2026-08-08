@@ -41,8 +41,45 @@
 //     re-render its own table). Called with the full new array on every change.
 
 import { escHtml } from "./html.js";
-import { DISMISSAL_KINDS, metricDisplayLabel, makeCrossKey, parseCrossKey, getMetric, OTHER_DISCIPLINE } from "./metrics.js";
+import { DISMISSAL_KINDS, metricDisplayLabel, makeCrossKey, parseCrossKey, getMetric, OTHER_DISCIPLINE, COLUMN_TOGGLE_PAIRS } from "./metrics.js";
 import { eligibleMetrics, eligibleCrossMetrics } from "./state.js";
+
+// ── Per-column count/% (+ count/per-match) toggle (columns content rework Wave C) ─
+// Each COUNT key in COLUMN_TOGGLE_PAIRS renders as a SINGLE picker row (leaderboard
+// four-dropdown only) whose value the user flips between the count metric and its
+// paired ALTERNATE (% or per-match) via a small segmented control — the display
+// counterpart of the batting Dismissals "Show as %" toggle, but per-column. The
+// alternate key is NEVER listed as its own row; it enters the visible column list
+// only by flipping the toggle (default = count). These helpers resolve a key ⇄ pair
+// within a namespace (dot_pct is a shared key with a different meaning per
+// discipline, so the pairing is namespace-scoped). The pop-up popover passes no W2
+// controls (controlsOn false) so it never renders these rows — it stays byte-identical.
+const _TOGGLE_PAIRS_BY_NS = {};
+const _TOGGLE_ALTS_BY_NS = {};
+for (const ns of Object.keys(COLUMN_TOGGLE_PAIRS)) {
+  const byCount = new Map();
+  const alts = new Set();
+  for (const p of COLUMN_TOGGLE_PAIRS[ns]) {
+    byCount.set(p.count, p);
+    alts.add(p.alt);
+  }
+  _TOGGLE_PAIRS_BY_NS[ns] = byCount;
+  _TOGGLE_ALTS_BY_NS[ns] = alts;
+}
+/** The toggle pair whose COUNT key is `key` in namespace `ns`, or null. */
+function togglePairByCount(key, ns) {
+  const byCount = _TOGGLE_PAIRS_BY_NS[ns];
+  return (byCount && byCount.get(key)) || null;
+}
+/** The set of ALTERNATE (%/per-match) keys hidden from the picker listing in `ns`. */
+function toggleAltKeys(ns) {
+  return _TOGGLE_ALTS_BY_NS[ns] || new Set();
+}
+/** Which key of a toggle pair is CURRENTLY shown for `visible` — the alternate when
+ * present, else the count key (the default). */
+function activeToggleKey(pair, visible) {
+  return visible.has(pair.alt) ? pair.alt : pair.count;
+}
 
 // ── Phase×metric composer (columns-rejig W4) ─────────────────────────────────
 // The composer REPLACES the flat enumerated phase columns in the leaderboard's
@@ -266,7 +303,7 @@ export function createColumnsPicker({
    * radio-like (only the active sort column shows ▲/▼, others show ↕); Highlight
    * is a multi-select toggle. syncColumnControls keeps these states honest after
    * every refresh without a re-render. */
-  function columnControlsHTML(key) {
+  function columnControlsHTML(key, toggleCountKey = null) {
     const isVisible = new Set(getColumns()).has(key);
     const sort = getSort();
     const isActiveSort = !!(sort && sort.active && sort.key === key);
@@ -283,10 +320,54 @@ export function createColumnsPicker({
       : hlOn
         ? "Remove highlight"
         : "Highlight this column";
+    // Wave C: on a count/% (or count/per-match) toggle row, the sort/highlight
+    // controls must operate on WHICHEVER form is currently shown (`key` is the
+    // ACTIVE key here). data-toggle-count lets syncColumnControls re-derive the
+    // active key + repoint data-sort-key/data-hl-key when the shown form changes
+    // (e.g. a preset swaps the variant) WITHOUT a full re-render.
+    const tc = toggleCountKey ? ` data-toggle-count="${toggleCountKey}"` : "";
     return `<span class="columns-popover__item-controls">
-      <button type="button" class="col-sort-btn${isActiveSort ? " is-active" : ""}" data-sort-key="${key}" aria-pressed="${isActiveSort ? "true" : "false"}" title="${sortTitle}" aria-label="${sortTitle}"${dis}>${sortArrow}</button>
-      <button type="button" class="col-hl-btn${hlOn ? " is-active" : ""}" data-hl-key="${key}" aria-pressed="${hlOn ? "true" : "false"}" title="${hlTitle}" aria-label="${hlTitle}"${dis}>${HIGHLIGHT_GLYPH}</button>
+      <button type="button" class="col-sort-btn${isActiveSort ? " is-active" : ""}" data-sort-key="${key}"${tc} aria-pressed="${isActiveSort ? "true" : "false"}" title="${sortTitle}" aria-label="${sortTitle}"${dis}>${sortArrow}</button>
+      <button type="button" class="col-hl-btn${hlOn ? " is-active" : ""}" data-hl-key="${key}"${tc} aria-pressed="${hlOn ? "true" : "false"}" title="${hlTitle}" aria-label="${hlTitle}"${dis}>${HIGHLIGHT_GLYPH}</button>
     </span>`;
+  }
+
+  /** Wave C: the count/% (or count/per-match) segmented control for a toggle pair.
+   * Two segments — count ("#") + alternate ("%" or "/M") — the active one carrying
+   * `is-active`. DISABLED while the column is hidden (neither variant shown), matching
+   * the sort/highlight "show it to act on it" convention. The click handler
+   * (wireModeToggles) swaps the shown key in the column list. */
+  function modeToggleHTML(pair) {
+    const visible = new Set(getColumns());
+    const shownAlt = visible.has(pair.alt);
+    const shown = visible.has(pair.count) || shownAlt;
+    const dis = shown ? "" : " disabled";
+    const countActive = shown && !shownAlt;
+    const altActive = shown && shownAlt;
+    const isPerMatch = pair.mode === "permatch";
+    const altGlyph = isPerMatch ? "/M" : "%";
+    const altTitle = isPerMatch ? "Show as per match" : "Show as percentage";
+    const groupLabel = isPerMatch ? "Show as count or per match" : "Show as count or percentage";
+    return `<span class="col-mode-toggle" role="group" aria-label="${groupLabel}">
+      <button type="button" class="col-mode-seg${countActive ? " is-active" : ""}" data-mode-count="${pair.count}" data-mode-alt="${pair.alt}" data-mode-target="count" aria-pressed="${countActive ? "true" : "false"}" title="Show as count"${dis}>#</button>
+      <button type="button" class="col-mode-seg${altActive ? " is-active" : ""}" data-mode-count="${pair.count}" data-mode-alt="${pair.alt}" data-mode-target="alt" aria-pressed="${altActive ? "true" : "false"}" title="${altTitle}"${dis}>${altGlyph}</button>
+    </span>`;
+  }
+
+  /** Wave C: one toggle-pair row (leaderboard only). A DUAL-KEY checkbox (checked iff
+   * EITHER variant is shown; ticking adds the count variant — default count; unticking
+   * removes both), the count metric's stable label, then the mode segmented control +
+   * the Sort-by/Highlight controls bound to whichever form is currently shown. Mirrors
+   * the batting Dismissals dual-key row, but per-column and with a per-row mode toggle
+   * instead of a section-level "Show as %". */
+  function toggleRowHTML(m, pair, formats, visible) {
+    const shown = visible.has(pair.count) || visible.has(pair.alt);
+    const active = activeToggleKey(pair, visible);
+    const label = `<label class="columns-popover__item">
+        <input type="checkbox" data-toggle-count="${pair.count}" data-toggle-alt="${pair.alt}" ${shown ? "checked" : ""} />
+        <span>${metricDisplayLabel(m, formats)}</span>
+      </label>`;
+    return `<div class="columns-popover__item-row">${label}${modeToggleHTML(pair)}${columnControlsHTML(active, pair.count)}</div>`;
   }
 
   // ── Shared leaf/section builders (used by BOTH the pop-up's flat picker and
@@ -301,6 +382,15 @@ export function createColumnsPicker({
    * ambiguous from the row alone; those columns stay sortable via the table
    * header. */
   function itemRowHTML(m, formats, visible) {
+    // Wave C: on the leaderboard (controlsOn), a count/% (or count/per-match) toggle
+    // PRIMARY renders as a single toggle row instead of a plain checkbox. Scoped to
+    // plain batting/bowling by COLUMN_TOGGLE_PAIRS (matchup namespaces have no entry).
+    // getDiscipline() == the ns this render was built for. Cross-discipline rows carry
+    // a prefixed key that never matches a pair, so they render as normal rows.
+    if (controlsOn) {
+      const pair = togglePairByCount(m.key, getDiscipline());
+      if (pair) return toggleRowHTML(m, pair, formats, visible);
+    }
     const label = `<label class="columns-popover__item">
         <input type="checkbox" data-key="${m.key}" ${visible.has(m.key) ? "checked" : ""} />
         <span>${metricDisplayLabel(m, formats)}</span>
@@ -545,11 +635,16 @@ export function createColumnsPicker({
     // pre-Wave-A layout untouched (their own "matches"/wickets_per_innings defs
     // are separate catalogue entries this wave never renamed, see metrics.js).
     const isPlainNs = ns === "batting" || ns === "bowling";
+    // Wave C: the ALTERNATE (%/per-match) key of every count/% (count/per-match)
+    // toggle pair is consolidated INTO its count row's toggle — never its own picker
+    // row. Hide those alt keys from every section's listing (they still reach the
+    // visible column list via the toggle). Plain ns only (matchup has no pairs).
+    const hiddenAlts = isPlainNs ? toggleAltKeys(ns) : new Set();
 
     const impact = all.filter(
-      (m) => m.section === "impact" && !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key))
+      (m) => m.section === "impact" && !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key)) && !hiddenAlts.has(m.key)
     );
-    const fielding = all.filter((m) => m.section === "fielding");
+    const fielding = all.filter((m) => m.section === "fielding" && !hiddenAlts.has(m.key));
     const dismissal = all.filter((m) => m.section === "dismissal");
     // Wave A: Player Matches consolidates into the Match dropdown (single
     // instance) instead of appearing in the discipline's own Basic section.
@@ -561,7 +656,8 @@ export function createColumnsPicker({
         m.section !== "fielding" &&
         m.section !== "impact" &&
         !(isPlainNs && m.key === "matches") &&
-        !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key))
+        !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key)) &&
+        !hiddenAlts.has(m.key)
     );
     const basicOrder = bucket === "bowling" ? BOWLING_BASIC_ORDER : BATTING_BASIC_ORDER;
     const detailedOrder = bucket === "bowling" ? BOWLING_DETAILED_ORDER : BATTING_DETAILED_ORDER;
@@ -661,6 +757,29 @@ export function createColumnsPicker({
       });
     });
 
+    // Wave C count/% (count/per-match) toggle rows: a DUAL-KEY checkbox. Ticking
+    // adds the COUNT variant (default count); unticking removes BOTH. Distinct
+    // data-toggle-* attributes so this never overlaps the batting-Dismissals
+    // data-count-key handler below. Sync immediately (idempotent with the host's
+    // async refresh) so the mode segs + sort/highlight controls follow the change.
+    rootEl.querySelectorAll('input[type="checkbox"][data-toggle-count]').forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const cols = getColumns().slice();
+        const countKey = cb.dataset.toggleCount;
+        const altKey = cb.dataset.toggleAlt;
+        if (cb.checked) {
+          if (!cols.includes(countKey) && !cols.includes(altKey)) cols.push(countKey);
+        } else {
+          [countKey, altKey].forEach((k) => {
+            const idx = cols.indexOf(k);
+            if (idx >= 0) cols.splice(idx, 1);
+          });
+        }
+        setColumns(cols); // A1: INSTANT, no Search light
+        syncCheckedState(rootEl);
+      });
+    });
+
     // Batting Dismissals rows: each checkbox stands for whichever variant (count
     // vs %) the toggle currently selects. Ticking adds THAT variant; unticking
     // removes BOTH (defensive against a legacy mixed-state save).
@@ -736,6 +855,46 @@ export function createColumnsPicker({
     });
   }
 
+  /** Wave C: wire the count/% (count/per-match) segmented mode controls (leaderboard
+   * only). Clicking a segment swaps the shown key of that pair to the segment's form
+   * (count or alternate), preserving the column's position, and MIGRATES any active
+   * highlight onto the shown form so Highlight keeps working on whichever form is
+   * shown. Disabled while the column is hidden (add it first). Sync immediately so
+   * the segs + sort/highlight reflect the change before the async requery lands. */
+  function wireModeToggles(rootEl) {
+    if (!controlsOn) return;
+    rootEl.querySelectorAll(".col-mode-seg[data-mode-count]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (btn.disabled) return;
+        const countKey = btn.dataset.modeCount;
+        const altKey = btn.dataset.modeAlt;
+        const wantKey = btn.dataset.modeTarget === "alt" ? altKey : countKey;
+        const cols = getColumns().slice();
+        const iCount = cols.indexOf(countKey);
+        const iAlt = cols.indexOf(altKey);
+        const present = [iCount, iAlt].filter((i) => i >= 0);
+        if (present.length === 0) return; // hidden — disabled anyway
+        const oldKey = iAlt >= 0 ? altKey : countKey;
+        if (wantKey === oldKey) return; // already showing that form
+        // Replace in place: drop both variants, insert the wanted one at the earliest
+        // index so the column keeps its position (order-sensitive for preset matching).
+        const at = Math.min(...present);
+        const next = cols.filter((k) => k !== countKey && k !== altKey);
+        next.splice(at, 0, wantKey);
+        // Migrate an active highlight onto the shown form (Highlight keeps working on
+        // whichever form is shown). Display-only — never a query change.
+        if (getHighlights && setHighlights) {
+          const hls = getHighlights();
+          if (hls.includes(oldKey)) setHighlights(hls.map((k) => (k === oldKey ? wantKey : k)));
+        }
+        setColumns(next);
+        syncCheckedState(rootEl);
+      });
+    });
+  }
+
   /** W2: re-sync the Sort-by + Highlight buttons' state (active / direction /
    * disabled) from the live host state, WITHOUT rebuilding — the counterpart to
    * syncCheckedState for the controls. Called from syncCheckedState so every
@@ -746,8 +905,20 @@ export function createColumnsPicker({
     const visible = new Set(getColumns());
     const sort = getSort();
     const hl = new Set(getHighlights());
+    const ns = getDiscipline();
+    // For a toggle row, the sort/highlight controls act on WHICHEVER form is shown:
+    // re-derive the active key from the current column list and repoint the button's
+    // data-key so a variant swap (e.g. a preset) keeps the controls honest without a
+    // full re-render. `data-toggle-count` marks such buttons; the count key is stable.
+    const activeKeyFor = (btn, fallback) => {
+      const countKey = btn.dataset.toggleCount;
+      if (!countKey) return fallback;
+      const pair = togglePairByCount(countKey, ns);
+      return pair ? activeToggleKey(pair, visible) : fallback;
+    };
     rootEl.querySelectorAll(".col-sort-btn[data-sort-key]").forEach((btn) => {
-      const key = btn.dataset.sortKey;
+      const key = activeKeyFor(btn, btn.dataset.sortKey);
+      btn.dataset.sortKey = key;
       const isVisible = visible.has(key);
       btn.disabled = !isVisible;
       const isActiveSort = !!(sort && sort.active && sort.key === key);
@@ -756,11 +927,23 @@ export function createColumnsPicker({
       btn.textContent = isActiveSort ? (sort.dir === "asc" ? "▲" : "▼") : "↕";
     });
     rootEl.querySelectorAll(".col-hl-btn[data-hl-key]").forEach((btn) => {
-      const key = btn.dataset.hlKey;
+      const key = activeKeyFor(btn, btn.dataset.hlKey);
+      btn.dataset.hlKey = key;
       btn.disabled = !visible.has(key);
       const on = hl.has(key);
       btn.classList.toggle("is-active", on);
       btn.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    // Wave C: keep the count/% (count/per-match) segmented controls in step too.
+    rootEl.querySelectorAll(".col-mode-seg[data-mode-count]").forEach((btn) => {
+      const countKey = btn.dataset.modeCount;
+      const altKey = btn.dataset.modeAlt;
+      const shownAlt = visible.has(altKey);
+      const shown = visible.has(countKey) || shownAlt;
+      btn.disabled = !shown;
+      const active = shown && (btn.dataset.modeTarget === "alt" ? shownAlt : !shownAlt);
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
     });
   }
 
@@ -819,6 +1002,9 @@ export function createColumnsPicker({
         cb.checked = visible.has(cb.dataset.key);
       } else if (cb.dataset.countKey) {
         cb.checked = visible.has(cb.dataset.countKey) || visible.has(cb.dataset.pctKey);
+      } else if (cb.dataset.toggleCount) {
+        // Wave C toggle rows: checked iff EITHER the count or alternate is shown.
+        cb.checked = visible.has(cb.dataset.toggleCount) || visible.has(cb.dataset.toggleAlt);
       }
     });
     // W2: keep the Sort-by / Highlight buttons in step too (no-op in the pop-up).
@@ -844,6 +1030,7 @@ export function createColumnsPicker({
     container.innerHTML = buildDropdownsHTML(ns, formats);
     wireCheckboxes(container);
     wireColumnControls(container); // W2 (no-op unless the sort/highlight contract was supplied)
+    wireModeToggles(container); // Wave C count/% (count/per-match) segmented controls
     wireDropdowns(container); // W4
   }
 

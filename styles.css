@@ -2059,6 +2059,49 @@ a { color: var(--color-accent); }
   color: var(--color-muted);
 }
 
+/* Count/% (count/per-match) toggle (columns content rework Wave C) — a compact
+   two-segment control on each toggle column's picker row (leaderboard only): "#"
+   for the count metric, "%" or "/M" for its paired alternate. The active segment
+   carries .is-active (accent). Disabled while the column is hidden, like the
+   sort/highlight controls beside it. Mirrors the app's .segmented control at a
+   smaller scale so it reads as one design language. */
+.col-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-sm, 4px);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.col-mode-seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.7em;
+  padding: var(--space-1);
+  font-size: 0.72em;
+  line-height: 1;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-muted);
+  opacity: 0.7;
+}
+.col-mode-seg + .col-mode-seg { border-left: 1px solid var(--color-line-strong); }
+.col-mode-seg:hover { opacity: 1; color: var(--color-fg); }
+.col-mode-seg.is-active {
+  opacity: 1;
+  background: var(--color-active-bg);
+  color: var(--color-active-fg);
+}
+.col-mode-seg:disabled {
+  opacity: 0.2;
+  cursor: default;
+  pointer-events: none;
+  background: none;
+  color: var(--color-muted);
+}
+
 /* Four-dropdown Columns layout (columns-rejig W4) — leaderboard inline picker
    only (the pop-up popover keeps its flat list). A bar of four trigger buttons
    (Match · Batting · Bowling · Fielding, each with a live count badge) sits above

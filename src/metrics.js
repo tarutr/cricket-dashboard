@@ -368,6 +368,24 @@ const BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
   },
+  // ── Columns content rework Wave C (2026-08-08): the % ALTERNATE of `ducks` ────
+  // Duck % = share of the batter's INNINGS that were ducks. The count↔% toggle
+  // (columnsPicker.js COLUMN_TOGGLE_PAIRS) swaps `ducks` ⇄ this key in the visible
+  // column list — it is never shown as its own picker row. NUMERATOR is byte-for-
+  // byte the `ducks` count CASE (out for 0 → runs = 0 AND dismissed = 1), so the
+  // count column and this % can never disagree; DENOMINATOR is innings (COUNT(*)),
+  // the same denominator not_out_pct uses. Fewer ducks is better (mirrors `ducks`).
+  {
+    key: "duck_pct",
+    label: "Duck %",
+    shortLabel: "Duck%",
+    discipline: "batting",
+    source: "innings",
+    sqlExpression: "SUM(CASE WHEN runs = 0 AND dismissed = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0)",
+    higherIsBetter: false, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
   // ── Columns content rework Wave B (2026-08-08): new PLAIN counting metrics ────
   // Additive counting totals that surface, as their OWN columns, the sub-totals
   // the existing rate/% metrics already compute internally — so each new column and
@@ -976,6 +994,25 @@ const BOWLING_METRICS = [
     additive: true,
     kind: "total",
   },
+  // ── Columns content rework Wave C (2026-08-08): the % ALTERNATE of `maidens` ──
+  // Maiden % = share of the OVERS the bowler bowled that were maiden overs =
+  // 100 × maidens / overs, where overs = legal balls / 6 (the same over count the
+  // `overs` column renders in O.B notation). Written 600 × maidens / balls, which
+  // is algebraically 100 × maidens / (balls / 6) with the divide-by-zero guard on
+  // balls (no balls bowled → no overs → NULL, never Infinity). NUMERATOR reuses the
+  // `maidens` count, so the count column and this % never disagree. More maidens is
+  // better (mirrors `maidens`). The count↔% toggle swaps `maidens` ⇄ this key.
+  {
+    key: "maiden_pct",
+    label: "Maiden %",
+    shortLabel: "Mdn%",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "SUM(maidens) * 600.0 / NULLIF(SUM(balls), 0)",
+    higherIsBetter: true, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
   // Extras conceded (filter-rejig Wave R1): wide-runs and no-ball-runs the bowler
   // conceded, from the view's wides_runs / noball_runs columns (each a SUM of the
   // per-delivery wides / noballs extra INCLUDING boundary wides and multi-run
@@ -1440,6 +1477,41 @@ for (const disc of ["batting", "bowling"]) {
   }
 }
 
+// ── Per-match fielding (columns content rework Wave C, 2026-08-08) ────────────
+// The PER-MATCH alternate of each fielding COUNT (owner: fielding toggles count ⇄
+// per-match, NOT count ⇄ %). Per-match = the fielding count ÷ the player's Player
+// Matches — a rate, so kind "rate" / format dec2 / zeroIsData false. The numerator
+// reuses the EXACT fielding_cte expression of its count sibling (so count and
+// per-match can never disagree); the denominator is a per-player match count from a
+// dedicated `pmatch_cte` over player_matches (MAX(pmatch_cte.match_count) — the same
+// COUNT(DISTINCT match_id) core scope the Player Matches column / pom_cte use, so a
+// fielder's per-match reconciles with their Matches column in the un-sliced
+// leaderboard). `perMatch: true` is the flag table.js/charts.js gate the pmatch_cte
+// build+join on (like source "result" gates result_cte); source stays
+// "fielding_events" so the fielding_cte join lights up too. Only the count/per-match
+// TOGGLE surfaces these (COLUMN_TOGGLE_PAIRS) — never their own picker row.
+const PER_MATCH_FIELDING_SPECS = FIELDING_METRIC_SPECS.filter((f) => f.section === "fielding");
+for (const disc of ["batting", "bowling"]) {
+  for (const f of PER_MATCH_FIELDING_SPECS) {
+    // f.sqlExpression is `MAX(fielding_cte.<…>)`; divide that COUNT by the player's
+    // match count, NULLIF-guarded (no matches → NULL, never Infinity).
+    const perMatchExpr = `(${f.sqlExpression}) * 1.0 / NULLIF(MAX(pmatch_cte.match_count), 0)`;
+    (disc === "batting" ? BATTING_METRICS : BOWLING_METRICS).push({
+      key: `${f.key}_per_match`,
+      label: `${f.label} per Match`,
+      shortLabel: `${f.shortLabel}/M`,
+      discipline: disc,
+      source: "fielding_events",
+      section: "fielding",
+      perMatch: true,
+      sqlExpression: perMatchExpr,
+      higherIsBetter: true, format: "dec2",
+      isPhaseMetric: null, zeroIsData: false,
+      kind: "rate",
+    });
+  }
+}
+
 // ── Result family (columns content rework Wave B, 2026-08-08) ────────────────
 // Per-player counts of MATCH OUTCOMES relative to the player's own team — Matches
 // Won / Lost / Tied / No-result and Toss Won. Like Player-of-the-Match, these are
@@ -1462,11 +1534,16 @@ for (const disc of ["batting", "bowling"]) {
 // and pushed into BOTH disciplines (a match fact is discipline-agnostic, exactly
 // like PoM). Counting totals: kind "total", additive, zeroIsData true.
 const RESULT_METRIC_SPECS = [
-  { key: "res_won", label: "Matches Won", shortLabel: "Won", col: "won", higherIsBetter: true },
-  { key: "res_lost", label: "Matches Lost", shortLabel: "Lost", col: "lost", higherIsBetter: false },
-  { key: "res_tied", label: "Matches Tied", shortLabel: "Tied", col: "tied", higherIsBetter: null },
-  { key: "res_no_result", label: "No Result", shortLabel: "NR", col: "no_result", higherIsBetter: null },
-  { key: "res_toss_won", label: "Toss Won", shortLabel: "Toss", col: "toss_won", higherIsBetter: null },
+  { key: "res_won", label: "Matches Won", shortLabel: "Won", col: "won", higherIsBetter: true,
+    pctLabel: "Win %", pctShort: "Win%", pctHigherIsBetter: true },
+  { key: "res_lost", label: "Matches Lost", shortLabel: "Lost", col: "lost", higherIsBetter: false,
+    pctLabel: "Loss %", pctShort: "Loss%", pctHigherIsBetter: false },
+  { key: "res_tied", label: "Matches Tied", shortLabel: "Tied", col: "tied", higherIsBetter: null,
+    pctLabel: "Tie %", pctShort: "Tie%", pctHigherIsBetter: null },
+  { key: "res_no_result", label: "No Result", shortLabel: "NR", col: "no_result", higherIsBetter: null,
+    pctLabel: "No Result %", pctShort: "NR%", pctHigherIsBetter: null },
+  { key: "res_toss_won", label: "Toss Won", shortLabel: "Toss", col: "toss_won", higherIsBetter: null,
+    pctLabel: "Toss Win %", pctShort: "Toss%", pctHigherIsBetter: null },
 ];
 for (const disc of ["batting", "bowling"]) {
   for (const r of RESULT_METRIC_SPECS) {
@@ -1483,8 +1560,62 @@ for (const disc of ["batting", "bowling"]) {
       additive: true,
       kind: "total",
     });
+    // ── Columns content rework Wave C: the % ALTERNATE of each Result count ────
+    // Result % = the outcome count ÷ the player's TOTAL matches × 100. Denominator
+    // is result_cte's `total` column (COUNT(DISTINCT match_id) — the same Player
+    // Matches count the counts partition, added by buildResultCteSql for this
+    // wave), NULLIF-guarded. NUMERATOR reuses the count's own result_cte column, so
+    // the count and its % never disagree. source "result" routes it through the
+    // SAME result_cte join. Only the count/% toggle surfaces these — never their
+    // own picker row.
+    (disc === "batting" ? BATTING_METRICS : BOWLING_METRICS).push({
+      key: `${r.key}_pct`,
+      label: r.pctLabel,
+      shortLabel: r.pctShort,
+      discipline: disc,
+      source: "result",
+      section: "impact",
+      sqlExpression: `MAX(result_cte.${r.col}) * 100.0 / NULLIF(MAX(result_cte.total), 0)`,
+      higherIsBetter: r.pctHigherIsBetter, format: "pct1",
+      isPhaseMetric: null, zeroIsData: false,
+      kind: "percent",
+    });
   }
 }
+
+// ── Per-column count/% (+ count/per-match) toggle pairings (Wave C) ────────────
+// The leaderboard's Columns picker (columnsPicker.js) renders each COUNT key below
+// as a single row whose value can be toggled between the count metric and its
+// paired ALTERNATE (% for most, per-match for fielding). Default = count. Keyed by
+// PLAIN discipline (batting/bowling): `dot_pct` is a shared key with a different
+// meaning per discipline, so the pair (dot_balls / dot_balls_conceded ⇄ dot_pct)
+// must be resolved within a namespace. `mode` is the alternate's form:
+//   "pct"      — count ⇄ % (share; e.g. Boundary Balls ⇄ Boundary %)
+//   "permatch" — count ⇄ per-match (fielding only; e.g. Catches ⇄ Catches per Match)
+// Result + fielding pairs are derived from their specs so this can never drift from
+// the metric catalogue. The matchup namespaces have NO entry (no toggle there — Vs
+// mode keeps its pre-Wave-C layout). Every `alt` key is a real metric added above.
+const _RESULT_PAIRS = RESULT_METRIC_SPECS.map((r) => ({ count: r.key, alt: `${r.key}_pct`, mode: "pct" }));
+const _FIELDING_PAIRS = PER_MATCH_FIELDING_SPECS.map((f) => ({
+  count: f.key, alt: `${f.key}_per_match`, mode: "permatch",
+}));
+export const COLUMN_TOGGLE_PAIRS = {
+  batting: [
+    { count: "boundary_balls", alt: "boundary_pct", mode: "pct" },
+    { count: "boundary_runs", alt: "boundary_runs_pct", mode: "pct" },
+    { count: "dot_balls", alt: "dot_pct", mode: "pct" },
+    { count: "not_outs", alt: "not_out_pct", mode: "pct" },
+    { count: "ducks", alt: "duck_pct", mode: "pct" },
+    ..._RESULT_PAIRS,
+    ..._FIELDING_PAIRS,
+  ],
+  bowling: [
+    { count: "maidens", alt: "maiden_pct", mode: "pct" },
+    { count: "dot_balls_conceded", alt: "dot_pct", mode: "pct" },
+    ..._RESULT_PAIRS,
+    ..._FIELDING_PAIRS,
+  ],
+};
 
 // ── Matchups (D4 R3) ─────────────────────────────────────────────────────────
 // Batter-vs-bowling-style and bowler-vs-batting-hand splits. Base tables are
