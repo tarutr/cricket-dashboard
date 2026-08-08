@@ -577,7 +577,16 @@ export function createColumnsPicker({
   // sqlExpression, no eligibleMetrics/state.js change, so filters/advanced
   // conditions and the pop-up's own popover (buildPickerHTML, untouched) keep
   // offering them exactly as before.
-  const HIDDEN_COLUMN_KEYS = new Set(["player_of_match", "wickets_per_innings"]);
+  //
+  // E2 tidy T1 (owner 2026-08-08): the standalone `boundary_runs` (batting
+  // "Boundary Runs") is also hidden from the OFFERING — the Runs-by-Source
+  // composer's "Boundaries" source covers it. Same hidden-not-deleted posture:
+  // the metric DEF stays in metrics.js (the composer's "Boundaries" row + its %
+  // still reference boundary_runs / boundary_runs_pct, and the pop-up popover
+  // keeps offering it). boundary_runs is a BATTING-only key (bowling carries only
+  // boundary_runs_pct), so this is inert on the bowling table. "Boundary Balls"
+  // is NOT hidden (it isn't dual-homed in a composer).
+  const HIDDEN_COLUMN_KEYS = new Set(["player_of_match", "wickets_per_innings", "boundary_runs"]);
 
   const BATTING_BASIC_ORDER = [
     "innings", "r_pos", "runs", "balls_faced", "dismissals", "high_score", "fours", "sixes",
@@ -1118,18 +1127,21 @@ export function createColumnsPicker({
   }
 
   /** A PENDING parametric composer row (owner ruling: parametric composers START
-   * EMPTY). Same op-select + value input(s) + unit + × layout as paramRowHTML, but
-   * the value input is BLANK (placeholder = the base default) and NO column exists
-   * yet — the column is minted only once a valid value is entered (wireParamRows). */
+   * FULLY EMPTY). Same op-select + value input(s) + unit + × layout as paramRowHTML,
+   * but E2 tidy T2 (owner 2026-08-08): the OPERATOR is unselected too (a leading blank
+   * "Choose…" option, value="", selected — no default ≥) AND the value input is BLANK
+   * (placeholder = the base default). NO column exists yet — it is minted only once
+   * BOTH an operator and a valid value are set (wireParamRows / tryCommit). */
   function pendingParamRowHTML(id, ns) {
     const desc = composedParamDescriptor(ns);
     if (!desc) return "";
+    // No `selected` on any real operator — the blank placeholder below carries it.
     const opts = OPERATORS.map(
-      (o) => `<option value="${o.key}"${o.key === "gte" ? " selected" : ""}>${escHtml(o.label)}</option>`
+      (o) => `<option value="${o.key}">${escHtml(o.label)}</option>`
     ).join("");
     return `<div class="cols-param-row cols-param-row--pending" data-param-pending="${id}" data-param-prefix="${desc.prefix}" data-param-min="${desc.min}">
       <span class="cols-param-row__noun">${escHtml(desc.noun)}</span>
-      <select class="select cols-param__op" data-role="param-op" aria-label="${escHtml(desc.noun)} operator">${opts}</select>
+      <select class="select cols-param__op" data-role="param-op" aria-label="${escHtml(desc.noun)} operator"><option value="" selected>Choose…</option>${opts}</select>
       <input type="number" class="input cols-param__val" data-role="param-v1" value="" placeholder="${escHtml(String(desc.default))}" min="${desc.min}" step="${desc.step}" aria-label="${escHtml(desc.noun)} value" />
       <span class="cols-param__and" data-role="param-and" hidden>and</span>
       <input type="number" class="input cols-param__val" data-role="param-v2" value="" placeholder="${escHtml(String(desc.default))}" min="${desc.min}" step="${desc.step}" aria-label="${escHtml(desc.noun)} upper value" hidden />
@@ -1475,8 +1487,10 @@ export function createColumnsPicker({
       const v2El = row.querySelector('[data-role="param-v2"]');
       const andEl = row.querySelector('[data-role="param-and"]');
       const tryCommit = () => {
-        const opToken = COMPOSED_PARAM_OP_TOKEN[opEl ? opEl.value : "gte"];
-        if (!opToken) return;
+        // T2: the pending row starts with NO operator (blank "" option). An unset
+        // operator maps to no token → no column yet, exactly like an unset value.
+        const opToken = COMPOSED_PARAM_OP_TOKEN[opEl ? opEl.value : ""];
+        if (!opToken) return; // operator unset → no column yet
         const raw1 = v1El ? v1El.value : "";
         if (raw1 === "" || raw1 == null) return; // value unset → no column yet
         const v1 = Math.max(min, Math.trunc(Number(raw1)));

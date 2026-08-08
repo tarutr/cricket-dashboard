@@ -1659,16 +1659,20 @@ export function formatValue(metric, value) {
  * (Batch B1 Wave 5, owner decision): every value — however thin its backing
  * sample — renders identically, plain and un-greyed. §8.1's hasMetricData
  * still governs "—" for genuine no-data; that's a different, still-live rule. */
-function dataCellHTML(metric, row, isHighlighted = false) {
+function dataCellHTML(metric, row, isHighlighted = false, slotId = null) {
   const value = row[metric.key];
   const text = formatValue(metric, value);
   // data-key (task 9): lets the live drag-reorder preview find "the cell in
   // THIS row belonging to column X" without any index arithmetic — see
   // wireColumnDrag's onMove.
+  // E2: data-slot-id mirrors the header's, so the drag preview moves the RIGHT
+  // copy's cell even when two columns share a key (E1b multi-instance). data-key
+  // stays for callers/tests that still key by it; slot id is the precise handle.
   // W2: `is-highlighted` gives the cell the soft accent wash when its column's
   // 🖍️ toggle is on — display-only (highlightedColumns), never a query change.
   const hlClass = isHighlighted ? " is-highlighted" : "";
-  return `<td class="data-table__td${hlClass}" data-key="${metric.key}">${text}</td>`;
+  const slotAttr = slotId != null ? ` data-slot-id="${escAttr(slotId)}"` : "";
+  return `<td class="data-table__td${hlClass}" data-key="${metric.key}"${slotAttr}>${text}</td>`;
 }
 
 // The Columns picker's dismissal-% / rare-dismissals grouping + rendering
@@ -1921,6 +1925,13 @@ export function mountTable(
   // inside wireColumnDrag's own closure) purely so onUp() can read where the
   // pointer last was over — see wireColumnDrag's doc comment.
   let dragState = null;
+  // E2: timestamp of the last drag-END (drop). onUp rebuilds the thead (renderLoaded),
+  // which re-binds fresh header click handlers, so the old capture-phase "swallow the
+  // trailing click" trick can't reliably reach whatever element the post-drop click
+  // lands on. Instead the header sort-arrow / highlight click handlers ignore any click
+  // that arrives within a short window of a drop — so a drag never ALSO sorts or
+  // highlights, deterministically. A normal click (no drag) leaves this untouched.
+  let lastHeaderDragEndTs = 0;
   // Mobile name-column expansion (task 7 / #11): on ≤640px the Player column is
   // clamped to a narrow fixed width (styles.css), truncating long names.
   // Double-clicking the Player header toggles this flag, which adds
@@ -2398,7 +2409,15 @@ export function mountTable(
         ? state.sort.slotId === slotId
         : state.sort.key === metric.key);
     const dir = isSorted ? state.sort.dir : null;
-    const arrow = isSorted ? (dir === "asc" ? " ▲" : " ▼") : "";
+    // E2 (owner 2026-08-08): the sort control is now a PERSISTENT small arrow on
+    // every metric header — "↕" idle (click it to sort by this column), "▲"/"▼"
+    // when this column IS the active sort. Clicking the ARROW sorts (toggles
+    // asc/desc); clicking ANYWHERE ELSE on the header toggles this column's
+    // highlight. This splits the former whole-header-click-sorts into the two
+    // gestures the owner approved (arrow = sort, rest = highlight); drag still
+    // reorders. Two-way bound with the popup row's Sort-by / Highlight controls
+    // (both entry points route through sortByColumn / applyHighlightIdsInstant).
+    const sortGlyph = isSorted ? (dir === "asc" ? "▲" : "▼") : "↕";
     // `data-table__th--draggable` (task 2): every metric column can be
     // reordered via drag — see wireColumnDrag. The sticky Player column
     // (rendered elsewhere in renderLoaded, never through this function) never
@@ -2410,8 +2429,14 @@ export function mountTable(
     // W2: `is-highlighted` paints this column's header with the soft accent wash
     // when its 🖍️ toggle is on (display-only — highlightedColumns, not a query).
     const hlClass = isHighlighted ? " is-highlighted" : "";
-    return `<th data-key="${metric.key}" class="data-table__th data-table__th--draggable ${isSorted ? "is-sorted" : ""}${hlClass}" scope="col"${titleAttr}>
-      <button type="button" class="data-table__sort-btn">${metric.shortLabel}${arrow}</button>
+    // E2: attribute the header (and, via dataCellHTML, its body cells) to a SPECIFIC
+    // copy so sort / highlight / drag act per-instance (E1b multi-instance) rather
+    // than on "the first column with this key". Metric columns always carry a slot;
+    // the by-key fallback only matters for pre-slot callers.
+    const slotAttr = slotId != null ? ` data-slot-id="${escAttr(slotId)}"` : "";
+    const sortLabel = escAttr(`Sort by ${metric.label || metric.shortLabel}`);
+    return `<th data-key="${metric.key}"${slotAttr} class="data-table__th data-table__th--draggable ${isSorted ? "is-sorted" : ""}${hlClass}" scope="col"${titleAttr}>
+      <span class="data-table__th-label">${metric.shortLabel}</span><button type="button" class="data-table__sort-arrow" title="${sortLabel}" aria-label="${sortLabel}">${sortGlyph}</button>
     </th>`;
   }
 
@@ -2480,10 +2505,15 @@ export function mountTable(
   // never wired (see renderLoaded's call site below — only
   // `.data-table__th--draggable` headers).
 
-  /** Reorder `ns`'s column-key array: pull `fromKey` out and reinsert it
-   * immediately before/after `overKey` (or at the end when `overKey` is
-   * null — dropped past the last draggable column). Pure array surgery over the
-   * column order; never changes which columns show or the query result.
+  /** Reorder `ns`'s column SLOT[] : pull the slot with id `fromId` out and reinsert
+   * it immediately before/after the slot with id `overId` (or at the end when
+   * `overId` is null — dropped past the last draggable column). Pure array surgery
+   * over the column order; never changes which columns show or the query result.
+   *
+   * E2: keyed by SLOT ID (not the metric key) so two copies of the same stat (E1b
+   * multi-instance) each move independently — moving one copy never disturbs the
+   * other. Each slot keeps its id, so its highlight / active-sort attribution stays
+   * attached through the move.
    *
    * R4 Wave 4a (A1): reorder is a purely-cosmetic view change of the SAME data,
    * applied immediately (the drag would look broken otherwise) and — like the
@@ -2494,20 +2524,17 @@ export function mountTable(
    * store (so a later Search persists the order), plus the APPLIED snapshot via
    * onColumnsApplied so the dirty comparison sees the new order as already
    * applied (no Search light). */
-  function reorderColumns(ns, fromKey, overKey, side) {
+  function reorderColumns(ns, fromId, overId, side) {
     const base = lastLoadedState || store.get();
-    // E1a: reorder the SLOT[] (move the slot object, preserving its id → its
-    // highlight/sort stay attached). The header carries data-key, so drag targets
-    // by key; with today's unique-key columns findIndex-by-key is exact.
     const cols = (base.columns[ns] || []).slice();
-    const fromIdx = cols.findIndex((s) => s.key === fromKey);
+    const fromIdx = cols.findIndex((s) => s.id === fromId);
     if (fromIdx === -1) return;
     const [moved] = cols.splice(fromIdx, 1);
     let toIdx;
-    if (overKey == null) {
+    if (overId == null) {
       toIdx = cols.length;
     } else {
-      toIdx = cols.findIndex((s) => s.key === overKey);
+      toIdx = cols.findIndex((s) => s.id === overId);
       if (toIdx === -1) toIdx = cols.length;
       else if (side === "after") toIdx += 1;
     }
@@ -2701,6 +2728,23 @@ export function mountTable(
     }
   }
 
+  /** E2: toggle the display-only highlight on ONE column copy from its TABLE HEADER
+   * (a click anywhere on the header except the ▲/▼ sort arrow). Reads/writes the same
+   * per-slot highlightedColumns[ns] set the popup's Highlight control uses, and commits
+   * via applyHighlightIdsInstant — so the header and popup Highlight controls stay
+   * two-way bound (that call repaints the table AND re-syncs the picker). `ns` is the
+   * RENDERED table's namespace (what renderLoaded painted), matching how the highlight
+   * set is read back there. Never a query change — highlight is display-only. */
+  function toggleHeaderHighlight(ns, slotId) {
+    if (!slotId) return;
+    const live = store.get();
+    const cur = ((live.highlightedColumns && live.highlightedColumns[ns]) || []).slice();
+    const i = cur.indexOf(slotId);
+    if (i >= 0) cur.splice(i, 1);
+    else cur.push(slotId);
+    applyHighlightIdsInstant(ns, cur);
+  }
+
   /** R4 Wave 4a ADDENDUM (owner ruling 2026-07-17): *picking* a player from the
    * results-toolbar search drops their row into the table INSTANTLY, unlike a
    * FILTER pill AND unlike a pin pill's ×/+ (both still PENDING — a pill's
@@ -2757,29 +2801,35 @@ export function mountTable(
    * reordering) that has no touch-specific ask in the brief. */
   function wireColumnDrag(th, ns) {
     const key = th.dataset.key;
+    // E2: the drag is keyed by SLOT ID so two copies of one stat (E1b multi-instance)
+    // move INDEPENDENTLY — the header and every body cell carry data-slot-id, and both
+    // the live preview and the commit target by it. `draggedSel` is the CSS selector
+    // for this copy's cells (slot id preferred; a by-key fallback only matters for a
+    // hypothetical slot-less column, which metric headers never are).
+    const slotId = th.dataset.slotId || null;
+    const draggedSel = slotId ? `[data-slot-id="${slotId}"]` : `[data-key="${key}"]`;
     let startX = null;
     let dragging = false;
     let moved = false;
-    // Live preview (task 9): the last (overKey, side) pair actually APPLIED to
+    // Live preview (task 9): the last (overId, side) pair actually APPLIED to
     // the DOM, so moveColumnDom only runs when the target genuinely changes,
     // not on every pointermove tick.
-    let appliedOverKey;
+    let appliedOverId;
     let appliedSide;
 
-    /** Actually move `th` — and every currently-rendered row's matching
-     * `<td data-key="key">` — to sit before/after the column identified by
-     * `overKey`, or to the very end when `overKey` is null (dragged past the
-     * last column). Real DOM moves (Element.before()/after() MOVE an
-     * already-attached node, they don't clone it) rather than a CSS trick;
-     * cheap enough to do on every target change because at most PAGE_SIZE
-     * rows are ever rendered (task 3's pagination keeps this bounded
-     * regardless of how many players the query returned). Purely a VISUAL
-     * preview — the committed column order (state.columns[ns]) only changes
-     * on drop, in onUp below, via reorderColumns; a full renderLoaded() after
-     * a real drop rebuilds the DOM from that committed order anyway, so
-     * there's nothing here that ever needs an explicit "revert". */
-    function moveColumnDom(overKey, side) {
-      const targetTh = overKey ? theadEl.querySelector(`.data-table__th--draggable[data-key="${overKey}"]`) : null;
+    /** Actually move `th` — and every currently-rendered row's matching data cell —
+     * to sit before/after the column whose SLOT is `overId`, or to the very end when
+     * `overId` is null (dragged past the last column). Real DOM moves
+     * (Element.before()/after() MOVE an already-attached node, they don't clone it)
+     * rather than a CSS trick; cheap enough to do on every target change because at
+     * most PAGE_SIZE rows are ever rendered (task 3's pagination keeps this bounded
+     * regardless of how many players the query returned). Purely a VISUAL preview —
+     * the committed column order (state.columns[ns]) only changes on drop, in onUp
+     * below, via reorderColumns; a full renderLoaded() after a real drop rebuilds the
+     * DOM from that committed order anyway, so there's nothing here that ever needs an
+     * explicit "revert". */
+    function moveColumnDom(overId, side) {
+      const targetTh = overId ? theadEl.querySelector(`.data-table__th--draggable[data-slot-id="${overId}"]`) : null;
       if (targetTh) {
         if (side === "after") targetTh.after(th);
         else targetTh.before(th);
@@ -2788,10 +2838,10 @@ export function mountTable(
         if (headerRow) headerRow.appendChild(th);
       }
       for (const tr of tbodyEl.querySelectorAll("tr")) {
-        const draggedTd = tr.querySelector(`td[data-key="${key}"]`);
-        if (!draggedTd) continue; // the sticky Player cell never carries data-key
-        if (overKey) {
-          const targetTd = tr.querySelector(`td[data-key="${overKey}"]`);
+        const draggedTd = tr.querySelector(`td${draggedSel}`);
+        if (!draggedTd) continue; // the sticky Player cell carries no slot id
+        if (overId) {
+          const targetTd = tr.querySelector(`td[data-slot-id="${overId}"]`);
           if (!targetTd) continue;
           if (side === "after") targetTd.after(draggedTd);
           else targetTd.before(draggedTd);
@@ -2812,7 +2862,7 @@ export function mountTable(
       clearDragIndicators();
       // Drop-index (task 4 / #10 fix): the OLD logic only recognised a target
       // when the pointer was strictly INSIDE some other header's rect, and
-      // fell back to overKey=null (→ moveColumnDom appends to the far right)
+      // fell back to overId=null (→ moveColumnDom appends to the far right)
       // for every position that wasn't — including, critically, when the
       // pointer sat over the dragged column itself after a live-preview move
       // (that column is excluded from `others`, so nothing was "under" the
@@ -2832,18 +2882,18 @@ export function mountTable(
           break;
         }
       }
-      let overKey = null;
+      let overId = null;
       let effectiveSide = null;
       let indicatorEl = null;
       let indicatorSide = "before";
       if (insertBeforeEl) {
-        overKey = insertBeforeEl.dataset.key;
+        overId = insertBeforeEl.dataset.slotId || null;
         effectiveSide = "before";
         indicatorEl = insertBeforeEl;
         indicatorSide = "before";
       } else if (others.length) {
         const lastOther = others[others.length - 1];
-        overKey = lastOther.dataset.key;
+        overId = lastOther.dataset.slotId || null;
         effectiveSide = "after";
         indicatorEl = lastOther;
         indicatorSide = "after";
@@ -2853,13 +2903,13 @@ export function mountTable(
           indicatorSide === "before" ? "data-table__th--drop-before" : "data-table__th--drop-after"
         );
       }
-      dragState = { key, ns, overKey, side: effectiveSide };
+      dragState = { id: slotId, ns, overId, side: effectiveSide };
       // Only touch the DOM when the drop target actually changed — every
       // other pointermove tick (moving within the same target's bounds) is a
       // no-op here, same as the old indicator-only version was.
-      if (overKey !== appliedOverKey || effectiveSide !== appliedSide) {
-        moveColumnDom(overKey, effectiveSide);
-        appliedOverKey = overKey;
+      if (overId !== appliedOverId || effectiveSide !== appliedSide) {
+        moveColumnDom(overId, effectiveSide);
+        appliedOverId = overId;
         appliedSide = effectiveSide;
       }
     }
@@ -2869,8 +2919,8 @@ export function mountTable(
       document.removeEventListener("pointerup", onUp);
       clearDragIndicators();
       th.classList.remove("data-table__th--dragging");
-      if (dragging && dragState && dragState.key === key) {
-        reorderColumns(ns, key, dragState.overKey, dragState.side);
+      if (dragging && dragState && dragState.id === slotId) {
+        reorderColumns(ns, slotId, dragState.overId, dragState.side);
         // Re-render the FROZEN body from lastLoadedState (whose columns
         // reorderColumns just updated) — never store.get(), which carries other
         // pending edits that must not reach the displayed table until Search.
@@ -2878,19 +2928,16 @@ export function mountTable(
       }
       dragState = null;
       startX = null;
-      appliedOverKey = undefined;
+      appliedOverId = undefined;
       appliedSide = undefined;
       if (moved) {
-        // Swallow the click the browser fires right after this pointerup so
-        // a real drag never ALSO re-sorts by this column — capturing means
-        // this runs before the plain (bubbling) click-to-sort listener bound
-        // on the same `th` below.
-        const suppressClick = (ev) => {
-          ev.stopPropagation();
-          ev.preventDefault();
-          th.removeEventListener("click", suppressClick, true);
-        };
-        th.addEventListener("click", suppressClick, true);
+        // E2: mark the drop time. renderLoaded above re-bound fresh header click
+        // handlers (arrow-sort + click-highlight); both ignore any click within
+        // 250ms of this, so the trailing click the browser fires right after a drag
+        // never ALSO sorts or highlights. (Replaces the former capture-phase
+        // "swallow the click" trick, which targeted the pre-rebuild `th` and so
+        // couldn't reliably reach the post-drop click's real target.)
+        lastHeaderDragEndTs = Date.now();
       }
       dragging = false;
       moved = false;
@@ -3253,7 +3300,7 @@ export function mountTable(
         // "Show More" reveal — no query, pure display.
         const rk = rankById.get(String(row.id));
         const rankTd = `<td class="data-table__td data-table__td--rank">${rk != null ? rk.toLocaleString() : "—"}</td>`;
-        const cells = cols.map((c) => dataCellHTML(c.m, row, highlightSet.has(c.slotId))).join("");
+        const cells = cols.map((c) => dataCellHTML(c.m, row, highlightSet.has(c.slotId), c.slotId)).join("");
         // Player names link to the player page (R2, decision 29). The full
         // name is now always the rendered text (task 4 replaced JS
         // pre-truncation with a dynamically-sized column — see
@@ -3291,15 +3338,37 @@ export function mountTable(
 
     syncToolbar();
 
-    // Sorting: clicking a column header re-sorts the loaded rows INSTANTLY via
-    // sortByColumn (hoisted to mountTable scope, W2 — the SAME path the Columns
-    // section's per-column Sort-by control uses, so the two are two-way bound).
-    // The sort-state class (is-sorted / arrow) reflects the FROZEN `state` and is
-    // recomputed on every renderLoaded, so it stays on the applied sort until the
-    // next re-sort. The sticky Player header is EXCLUDED here (task 6/7) — it
-    // needs its own single-click-sort vs double-click-expand handling.
+    // E2 (owner 2026-08-08): the metric header is split into two click gestures,
+    // both re-bound on every renderLoaded (like the drag handler below):
+    //   • the ▲/▼ SORT ARROW re-sorts by that column INSTANTLY via sortByColumn —
+    //     the SAME path the Columns section's per-copy Sort-by control uses (so the
+    //     two are two-way bound), now passed THIS copy's slot id so a duplicated
+    //     stat sorts by the exact copy clicked;
+    //   • a click ANYWHERE ELSE on the header toggles that copy's HIGHLIGHT
+    //     (toggleHeaderHighlight → the same per-slot highlightedColumns set + repaint
+    //     the popup's Highlight control reads/writes — two-way bound too).
+    // The sort-state class (is-sorted / arrow direction) reflects the FROZEN `state`
+    // and is recomputed on every renderLoaded, so it stays on the applied sort until
+    // the next re-sort. A drop (drag end) sets lastHeaderDragEndTs; a trailing click
+    // within that window is ignored so a drag never ALSO sorts/highlights. The sticky
+    // Player header is EXCLUDED here (task 6/7) — it keeps its own single-click-sort
+    // vs double-click-expand handling.
     theadEl.querySelectorAll(".data-table__th[data-key]:not(.data-table__th--sticky)").forEach((th) => {
-      th.addEventListener("click", () => sortByColumn(th.dataset.key));
+      const key = th.dataset.key;
+      const slotId = th.dataset.slotId || null;
+      const sortArrow = th.querySelector(".data-table__sort-arrow");
+      if (sortArrow) {
+        sortArrow.addEventListener("click", (e) => {
+          e.stopPropagation(); // the arrow sorts; don't also toggle the header's highlight
+          if (Date.now() - lastHeaderDragEndTs < 250) return; // ignore a drop's trailing click
+          sortByColumn(key, slotId);
+        });
+      }
+      th.addEventListener("click", (e) => {
+        if (e.target.closest(".data-table__sort-arrow")) return; // arrow handled above
+        if (Date.now() - lastHeaderDragEndTs < 250) return; // ignore a drop's trailing click
+        toggleHeaderHighlight(ns, slotId);
+      });
     });
 
     // Player header (tasks 6 + 7 / #13 + #11): single click sorts by name;

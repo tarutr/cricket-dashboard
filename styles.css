@@ -1860,6 +1860,30 @@ a { color: var(--color-accent); }
 
 .data-table__th.is-sorted .data-table__sort-btn:hover { color: var(--color-accent-strong); }
 
+/* E2 (owner 2026-08-08): a metric header splits into a LABEL and a persistent
+   ▲/▼/↕ SORT ARROW. Clicking the ARROW sorts (toggles asc/desc); clicking the
+   LABEL — or anywhere else on the header — toggles the column's highlight; the
+   header still drags to reorder. (The sticky Player column keeps the older
+   whole-header .data-table__sort-btn, so its look is untouched.) The idle arrow
+   is a muted "↕"; it becomes the accent ▲/▼ when this column IS the active sort
+   (via .is-sorted, alongside the header-wide accent above). */
+.data-table__th-label { cursor: pointer; }
+.data-table__sort-arrow {
+  font: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-muted);
+  opacity: 0.6;
+  padding: 0 var(--space-1);
+  min-height: 0;
+  line-height: 1;
+  vertical-align: baseline;
+}
+.data-table__sort-arrow:hover { opacity: 1; color: var(--color-fg); }
+.data-table__th.is-sorted .data-table__sort-arrow { opacity: 1; color: var(--color-accent); }
+.data-table__th.is-sorted .data-table__sort-arrow:hover { color: var(--color-accent-strong); }
+
 /* Highlighted columns (columns-rejig W2): a SOFT accent wash on the cells of a
    column whose 🖍️ toggle is on in the Columns section. Display-only (the
    `is-highlighted` class comes from table.js's highlightedColumns display state,
@@ -1974,24 +1998,9 @@ a { color: var(--color-accent); }
   .columns-popover__disclosure-arrow { transition: none; }
 }
 
-/* Per-column Sort-by + Highlight controls (columns-rejig W2) — leaderboard
-   Columns section only (the pop-up popover renders none). The row splits into
-   the checkbox label (left, growing) and the two controls (right). */
-.columns-popover__item-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-.columns-popover__item-row .columns-popover__item {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.columns-popover__item-row .columns-popover__item span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* Per-copy control cluster (columns-rejig W2 / E1b) — leaderboard Columns section
+   only (the pop-up popover renders none): the count/% · Sort-by · Highlight ·
+   Duplicate · Remove buttons for one chosen-column row, kept together at the right. */
 .columns-popover__item-controls {
   display: inline-flex;
   align-items: center;
@@ -2102,35 +2111,6 @@ a { color: var(--color-accent); }
   color: var(--color-muted);
 }
 
-/* Multi-instance "copies" layout (columns content rework E1b) — leaderboard inline
-   picker only. A column identity renders as an OFFER header (.cols-offer, the
-   append-checkbox + label) followed by one .cols-instance row PER copy shown, each
-   carrying that copy's count/% toggle + Sort-by / Highlight / Duplicate / Remove.
-   The instance rows are indented under the header so they read as "this column's
-   copies". The pop-up popover never renders these (it stays a flat checkbox list). */
-.cols-metric {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.cols-instances {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  /* Indent past the header checkbox so the copy controls line up under the label. */
-  margin-left: calc(1em + var(--space-2));
-}
-.cols-instance {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-/* The copy's controls sit at the LEFT of its (label-less) row and share the
-   .columns-popover__item-controls flex box with a left auto-margin removed. */
-.cols-instance .columns-popover__item-controls {
-  flex: 0 0 auto;
-}
-
 /* Duplicate control: the two-overlapping-cards copy glyph, styled like the Sort-by
    button (muted, brightening on hover) but STROKED (the front card must occlude the
    back one to read as "duplicate"). */
@@ -2206,21 +2186,6 @@ a { color: var(--color-accent); }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cols-dd-badge {
-  flex: 0 0 auto;
-  min-width: 1.5em;
-  text-align: center;
-  padding: 0 0.4em;
-  border-radius: 999px;
-  background: var(--color-line);
-  color: var(--color-muted);
-  font-size: var(--text-xs);
-  font-weight: 600;
-}
-.cols-dd-trigger.is-open .cols-dd-badge {
-  background: var(--color-accent);
-  color: var(--color-bg-raised);
-}
 .cols-dd-caret {
   flex: 0 0 auto;
   color: var(--color-muted);
@@ -2234,33 +2199,12 @@ a { color: var(--color-accent); }
   border-radius: var(--radius-md);
   background: var(--color-bg-raised);
 }
-/* Phase×metric composer: metric family sub-blocks, each a small header + its
-   Powerplay/Middle/Death phase rows. */
-.cols-composer {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-.cols-composer__family-label {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--color-fg);
-  margin-bottom: var(--space-2);
-}
-/* D4 parametric composer builder (Innings Score Range / Wicket Haul): an operator
-   <select> + value input(s) + unit + Add, laid out inline (wraps on a narrow popover),
-   above the list of columns already added. */
-.cols-param-builder {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  padding: var(--space-2) 0 var(--space-3);
-}
+/* Parametric composer row bits (Innings Score Range / Wicket Haul): the value
+   input(s) and the "and" / unit labels flanking the operator <select> in a
+   parametric chosen row (paramRowHTML / pendingParamRowHTML). */
 .cols-param__val { width: 4.5rem; }
 .cols-param__and,
 .cols-param__unit { color: var(--color-muted); font-size: 0.9rem; }
-.cols-param__add { flex: 0 0 auto; }
 
 /* Picker rework to FILTER-STYLE (E1c) — leaderboard inline picker only. The Columns
    section now mirrors the Filters section: a CHOSEN-columns rows list (the "active
@@ -2309,8 +2253,8 @@ a { color: var(--color-accent); }
 
 /* Dimension/category composer chosen row (Phase/Ball/Innings/Runs-by-Source/
    Wicket-Type): a titled card holding the composer's tick-box / count-% editor
-   inline (reuses .cols-composer / .columns-popover__list rows) + a × that removes
-   the row and all its columns. */
+   inline (reuses .columns-popover__list rows) + a × that removes the row and all
+   its columns. */
 .cols-composer-row {
   border: 1px solid var(--color-line);
   border-radius: var(--radius-sm, 4px);
@@ -2917,6 +2861,13 @@ a { color: var(--color-accent); }
     min-height: 40px;
     min-width: 40px;
     justify-content: flex-end;
+  }
+
+  /* E2: give the metric header's sort arrow a comfortable touch target too (the
+     rest of the header is a large tap area for the highlight toggle). */
+  .data-table__sort-arrow {
+    min-height: 40px;
+    min-width: 2.25rem;
   }
 
   .chip,
