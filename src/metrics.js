@@ -2642,6 +2642,8 @@ export function getMetric(key, discipline) {
     //   • in__<iToken>__<base> (D2) — conditional aggregation over innings_number.
     //   • rs__<source>__<axis> (D3) — run-source run-total / % of runs (batting).
     //   • wt__<type>__<axis>   (D3) — wicket-type count / % (both disciplines).
+    //   • isr__/wh__<op>__<v>  (D4) — parametric threshold count (op ∈ ge/le/eq/bt):
+    //     Innings Score Range (batting) / Wicket Haul (bowling).
     // Resolve them HERE so the leaderboard's buildQuery inningsMetrics path (which
     // calls getMetric) projects them through the NORMAL selectParts loop with NO
     // query-builder change. Byte-identical for every catalogued key (the map hit
@@ -2653,7 +2655,8 @@ export function getMetric(key, discipline) {
       resolveComposedBallMetric(key, discipline) ??
       resolveComposedInningsMetric(key, discipline) ??
       resolveComposedRunSourceMetric(key, discipline) ??
-      resolveComposedWicketTypeMetric(key, discipline)
+      resolveComposedWicketTypeMetric(key, discipline) ??
+      resolveComposedParamMetric(key, discipline)
     );
   }
   return METRICS.find((m) => m.key === key) ?? null;
@@ -3557,6 +3560,167 @@ export function eligibleComposedWicketTypeKeys(discipline) {
     keys.push(makeComposedWicketTypeKey(t, "pct"));
   }
   return keys;
+}
+
+// ── Composed PARAMETRIC threshold columns (columns content rework D4, 2026-08-08)
+// Innings Score Range (batting) + Wicket Haul (bowling): each generates a COLUMN =
+// the COUNT of the player's innings whose per-innings quantity — batting: innings
+// score (runs); bowling: wickets-in-an-innings — satisfies a user-chosen OPERATOR +
+// VALUE(S): ≥ N, ≤ N, = N, or between N and M. This GENERALISES the enumerated
+// `innings_score_ge` / `wicket_hauls_ge` (which are ≥ N only, with a fixed default N),
+// which are now HIDDEN from the leaderboard picker (columnsPicker's core filter) but
+// KEPT in the catalogue (the pop-up filter, paletteGroups, drawer's param HAVING path
+// still reference them).
+//
+// EQUIVALENCE GATE (Rule 1): the ≥ N case is BYTE-IDENTICAL to the enumerated metric's
+// sqlExpression at the same N — the builder DELEGATES the `ge` case to
+// paramSqlExpression(base, N), the very function the enumerated column/filter already
+// uses, so "Innings Score ≥ 100" reproduces innings_score_ge at N=100 char-for-char.
+// The le/eq operators reuse the SAME per-innings quantity column (`paramColumn`:
+// runs / wickets) in the SAME `SUM(CASE WHEN … THEN 1 ELSE 0 END)` shell; the between
+// form is `col BETWEEN lo AND hi` (lo/hi order-normalised), matching the pop-up
+// filter's own between-SQL (playerFiltersTab's conditionToInningsWhere) so a column
+// and its filter agree.
+//
+// KEY = `<prefix>__<opToken>__<value(s)>` — opToken ∈ {ge, le, eq, bt}; value is a
+// single non-negative integer, or `N_M` for between. prefix ∈ {isr (batting), wh
+// (bowling)}: identifier-safe, self-encodes the discipline, and no catalogued key
+// starts with `isr__` / `wh__` (verified) so `startsWith` is an unambiguous
+// discriminator. The `_` inside a between value never clashes with the `__` field
+// separator. Own-discipline only (never cross-discipline, like the D1–D3 composers).
+const COMPOSED_PARAM_SPECS = {
+  isr: { discipline: "batting", baseKey: "innings_score_ge", column: "runs", noun: "Innings Score", shortNoun: "Inns", sectionLabel: "Innings Score Range" },
+  wh: { discipline: "bowling", baseKey: "wicket_hauls_ge", column: "wickets", noun: "Wicket Hauls", shortNoun: "Hauls", sectionLabel: "Wicket Haul" },
+};
+// opToken ⇄ the pop-up's OPERATORS key (advanced.js: gte/lte/eq/between) so the
+// composer's operator <select> reuses the SAME operator vocabulary as the filter.
+export const COMPOSED_PARAM_OP_TOKEN = { gte: "ge", lte: "le", eq: "eq", between: "bt" };
+const _PARAM_OP_KEY = { ge: "gte", le: "lte", eq: "eq", bt: "between" };
+const _PARAM_OP_SQL = { le: "<=", eq: "=" }; // `ge` delegates to paramSqlExpression; `bt` is BETWEEN
+const _PARAM_OP_LABEL = { ge: "≥", le: "≤", eq: "=" };
+
+/** Build the composed parametric column key. `values` = [N] for ge/le/eq, [N, M]
+ * for bt (order-normalised so bt 50_30 and 30_50 make the same key). */
+export function makeComposedParamKey(prefix, opToken, values) {
+  if (opToken === "bt") {
+    const lo = Math.min(Math.trunc(Number(values[0])), Math.trunc(Number(values[1])));
+    const hi = Math.max(Math.trunc(Number(values[0])), Math.trunc(Number(values[1])));
+    return `${prefix}__bt__${lo}_${hi}`;
+  }
+  return `${prefix}__${opToken}__${Math.trunc(Number(values[0]))}`;
+}
+
+/** Parse a composed parametric column key → { prefix, opToken, values }, or null.
+ * Split on the FIRST `__` after the prefix (opToken carries no `__`); between values
+ * split on the single `_`. Validates the op token + integer value shape. */
+export function parseComposedParamKey(key) {
+  if (typeof key !== "string") return null;
+  for (const prefix of Object.keys(COMPOSED_PARAM_SPECS)) {
+    const pfx = `${prefix}__`;
+    if (!key.startsWith(pfx)) continue;
+    const rest = key.slice(pfx.length);
+    const sep = rest.indexOf("__");
+    if (sep <= 0) return null;
+    const opToken = rest.slice(0, sep);
+    const valuePart = rest.slice(sep + 2);
+    if (!(opToken in _PARAM_OP_KEY) || !valuePart) return null;
+    const nums = valuePart.split("_").map((s) => Number(s));
+    if (nums.some((n) => !Number.isInteger(n))) return null;
+    if (opToken === "bt" ? nums.length !== 2 : nums.length !== 1) return null;
+    return { prefix, opToken, values: nums };
+  }
+  return null;
+}
+
+/** Build the VIRTUAL metric for a composed parametric column, or null. The base
+ * parametric metric supplies format / higherIsBetter / zeroIsData / additive / kind /
+ * source ("innings"); the sqlExpression is generated operator-aware (ge delegates to
+ * paramSqlExpression for byte-identity). `discipline` must match the prefix's own
+ * discipline (isr→batting, wh→bowling) — so a wh__ key resolves to null on a batting
+ * table and vice versa (own-discipline only, never cross). paramTemplate/param are
+ * DROPPED: this is a concrete column, not itself re-parametrised. */
+function buildComposedParamMetric(prefix, opToken, values, discipline) {
+  const spec = COMPOSED_PARAM_SPECS[prefix];
+  if (!spec || spec.discipline !== discipline) return null;
+  if (!(opToken in _PARAM_OP_KEY)) return null;
+  const base = getMetric(spec.baseKey, discipline);
+  if (!base) return null;
+  const min = base.param && base.param.min != null ? base.param.min : 0;
+  const vs = values.map((v) => Math.max(min, Math.trunc(Number(v))));
+  let sql, opLabel;
+  if (opToken === "bt") {
+    if (vs.length !== 2) return null;
+    const lo = Math.min(vs[0], vs[1]);
+    const hi = Math.max(vs[0], vs[1]);
+    sql = `SUM(CASE WHEN ${spec.column} BETWEEN ${lo} AND ${hi} THEN 1 ELSE 0 END)`;
+    opLabel = `${lo}–${hi}`;
+  } else {
+    const n = vs[0];
+    // EQUIVALENCE: reproduce the enumerated metric's ≥ N sqlExpression exactly by
+    // reusing its own paramSqlExpression; le/eq mirror that shape with the same column.
+    sql = opToken === "ge"
+      ? paramSqlExpression(base, n)
+      : `SUM(CASE WHEN ${spec.column} ${_PARAM_OP_SQL[opToken]} ${n} THEN 1 ELSE 0 END)`;
+    opLabel = `${_PARAM_OP_LABEL[opToken]} ${n}`;
+  }
+  return {
+    key: makeComposedParamKey(prefix, opToken, vs),
+    baseKey: spec.baseKey,
+    isComposedParam: true,
+    discipline: base.discipline,
+    source: base.source, // "innings"
+    sqlExpression: sql,
+    label: `${spec.noun} ${opLabel}`,
+    shortLabel: `${spec.shortNoun} ${opLabel}`,
+    higherIsBetter: base.higherIsBetter,
+    format: base.format, // "int"
+    isPhaseMetric: base.isPhaseMetric, // null
+    zeroIsData: base.zeroIsData, // true
+    additive: base.additive, // true
+    kind: base.kind, // "total"
+  };
+}
+
+/** Resolve a composed parametric COLUMN key to its virtual metric, or null. Called
+ * by getMetric (so resolveColumnMetric picks it up too — a param key is not a cross
+ * key, so resolveColumnMetric falls through to getMetric). */
+export function resolveComposedParamMetric(key, discipline) {
+  const parsed = parseComposedParamKey(key);
+  if (!parsed) return null;
+  return buildComposedParamMetric(parsed.prefix, parsed.opToken, parsed.values, discipline);
+}
+
+/** True iff `key` is a VALID composed parametric column key for `discipline` (its
+ * prefix's own discipline). Used by the column-prune sites (state.pruneIneligibleState,
+ * table.pruneInvalidColumns / applyColumnsInstant) to keep a value-dynamic param
+ * column alive across a re-render — these keys can't be enumerated into
+ * eligibleColumnKeys' finite Set (infinite value space), so they're validated
+ * structurally instead. Format-independent (Innings Score / Wicket Haul don't gate
+ * on format). */
+export function isParamComposedColumnKey(key, discipline) {
+  const parsed = parseComposedParamKey(key);
+  return !!parsed && COMPOSED_PARAM_SPECS[parsed.prefix].discipline === discipline;
+}
+
+/** Builder descriptor for the leaderboard picker's parametric composer (D4): the
+ * section label + the numeric input's default / min / step / unit, derived from the
+ * base metric's `param` so there is ONE source of truth. Returns null outside plain
+ * batting/bowling. */
+export function composedParamDescriptor(discipline) {
+  const prefix = discipline === "batting" ? "isr" : discipline === "bowling" ? "wh" : null;
+  if (!prefix) return null;
+  const spec = COMPOSED_PARAM_SPECS[prefix];
+  const base = getMetric(spec.baseKey, discipline);
+  if (!base || !base.param) return null;
+  return {
+    prefix,
+    sectionLabel: spec.sectionLabel,
+    noun: spec.noun,
+    unit: base.param.label, // "runs" / "wickets"
+    default: base.param.default, // 50 / 4
+    min: base.param.min ?? 0,
+    step: base.param.step ?? 1,
+  };
 }
 
 /**

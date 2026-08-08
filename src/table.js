@@ -14,6 +14,7 @@ import {
   matchupBucketLabel,
   paramSqlExpression,
   resolveColumnMetric,
+  isParamComposedColumnKey,
   OTHER_DISCIPLINE,
 } from "./metrics.js";
 import { query } from "./db.js";
@@ -1954,7 +1955,9 @@ export function mountTable(
     // returns only the plain keys for matchup namespaces, so matchup pruning is
     // unchanged.
     const allowedKeys = eligibleColumnKeys(ns, formats);
-    const pruned = cols.filter((k) => allowedKeys.has(k));
+    // D4: parametric composed columns (isr__/wh__) are value-dynamic — not enumerable
+    // into `allowedKeys` — so keep them via a structural check.
+    const pruned = cols.filter((k) => allowedKeys.has(k) || isParamComposedColumnKey(k, ns));
     if (pruned.length !== cols.length) {
       store.set({ columns: { ...state.columns, [ns]: pruned } });
     }
@@ -2486,7 +2489,9 @@ export function mountTable(
     // W3: eligibleColumnKeys includes cross-discipline keys (plain ∪ cross), so an
     // added Bowling column survives this prune; byte-identical with none present.
     const allowed = eligibleColumnKeys(baseNs, base.formats);
-    const frozenCols = cols.filter((k) => allowed.has(k));
+    // D4: keep value-dynamic parametric composed columns (isr__/wh__) via a structural
+    // check — they can't be enumerated into the frozen scope's `allowed` set.
+    const frozenCols = cols.filter((k) => allowed.has(k) || isParamComposedColumnKey(k, baseNs));
     const frozen = { ...base, columns: { ...base.columns, [baseNs]: frozenCols } };
     // R5-A #4: toggling a column is a toolbar-only change — preserve the current
     // row order (values swap in place; a dropped sort-column doesn't reshuffle).

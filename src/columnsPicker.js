@@ -52,8 +52,13 @@ import {
   // Columns content rework D3 (runs-by-source + wicket-type composers).
   composedRunSourceRows, makeComposedRunSourceKey, parseComposedRunSourceKey,
   makeComposedWicketTypeKey, parseComposedWicketTypeKey,
+  // Columns content rework D4 (parametric Innings Score Range + Wicket Haul composers).
+  composedParamDescriptor, makeComposedParamKey, parseComposedParamKey, COMPOSED_PARAM_OP_TOKEN,
 } from "./metrics.js";
 import { eligibleMetrics, eligibleCrossMetrics } from "./state.js";
+// D4: the composer's operator <select> reuses the SAME operator vocabulary as the
+// pop-up / advanced filter (advanced.js is import-cycle-free — pure data model).
+import { OPERATORS } from "./advanced.js";
 
 // ── Per-column count/% (+ count/per-match) toggle (columns content rework Wave C) ─
 // Each COUNT key in COLUMN_TOGGLE_PAIRS renders as a SINGLE picker row (leaderboard
@@ -627,6 +632,14 @@ export function createColumnsPicker({
     "wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket",
   ]);
 
+  // Columns content rework D4: the enumerated ≥-N-only threshold columns are REPLACED
+  // by the parametric Innings Score Range (batting) / Wicket Haul (bowling) composers —
+  // hidden from the OWN-discipline listing here so there is no duplicate. Their metric
+  // DEFS stay in metrics.js (the pop-up filter, paletteGroups, and the drawer's param
+  // HAVING path still reference them). Batting-only / bowling-only keys are inert on the
+  // other discipline's table, so one combined set is safe on either plain namespace.
+  const D4_ENUMERATED_HIDDEN_KEYS = new Set(["innings_score_ge", "wicket_hauls_ge"]);
+
   /** Reorder `list` so any metric whose key appears in `order` comes first (in
    * `order`'s sequence); every other metric keeps its ORIGINAL relative order,
    * appended after. Metrics not named in `order` are untouched siblings (the
@@ -807,6 +820,57 @@ export function createColumnsPicker({
     return "";
   }
 
+  /** D4: one row for an already-added parametric column (Innings Score Range /
+   * Wicket Haul). A CHECKED checkbox whose only action is REMOVE (unchecking drops the
+   * column); the concrete label ("Innings Score ≥ 100") comes from the resolved virtual
+   * metric, and the W2 Sort-by/Highlight controls follow (leaderboard). Marked
+   * data-param-remove-key so the generic data-key checkbox handler never touches it —
+   * wireParamComposers owns add/remove + the inline re-render. */
+  function paramColumnRowHTML(m, formats) {
+    const label = `<label class="columns-popover__item">
+        <input type="checkbox" data-param-remove-key="${m.key}" checked />
+        <span>${metricDisplayLabel(m, formats)}</span>
+      </label>`;
+    return controlsOn
+      ? `<div class="columns-popover__item-row">${label}${columnControlsHTML(m.key)}</div>`
+      : label;
+  }
+
+  /** The parametric composer (D4): Innings Score Range (batting) / Wicket Haul
+   * (bowling). A BUILDER — an operator <select> (reusing advanced.js OPERATORS so the
+   * column agrees with the pop-up filter) + a value input, a second value input +
+   * "and" for the "between" operator, a unit tag, and an Add button — followed by the
+   * list of param columns already added (each a paramColumnRowHTML). Each added
+   * column's data-key is a composed param key (`isr__…` / `wh__…`) resolved by
+   * getMetric to a virtual metric with a generated sqlExpression whose ≥ N case is
+   * byte-identical to the retiring innings_score_ge / wicket_hauls_ge. "" outside plain
+   * batting/bowling. REPLACES the enumerated ≥-N-only picker rows. */
+  function paramComposerHTML(ns, formats) {
+    const desc = composedParamDescriptor(ns);
+    if (!desc) return "";
+    const opts = OPERATORS.map((o) => `<option value="${o.key}">${escHtml(o.label)}</option>`).join("");
+    const builder = `<div class="cols-param-builder" data-param-prefix="${desc.prefix}" data-param-min="${desc.min}">
+        <select class="select cols-param__op" data-role="param-op" aria-label="${escHtml(desc.noun)} operator">${opts}</select>
+        <input type="number" class="input cols-param__val" data-role="param-v1" value="${desc.default}" min="${desc.min}" step="${desc.step}" aria-label="${escHtml(desc.noun)} value" />
+        <span class="cols-param__and" data-role="param-and" hidden>and</span>
+        <input type="number" class="input cols-param__val" data-role="param-v2" value="${desc.default}" min="${desc.min}" step="${desc.step}" aria-label="${escHtml(desc.noun)} upper value" hidden />
+        <span class="cols-param__unit">${escHtml(desc.unit)}</span>
+        <button type="button" class="btn cols-param__add" data-role="param-add">Add</button>
+      </div>`;
+    const added = getColumns().filter((k) => {
+      const p = parseComposedParamKey(k);
+      return p && p.prefix === desc.prefix;
+    });
+    const rows = added
+      .map((k) => getMetric(k, ns))
+      .filter(Boolean)
+      .map((m) => paramColumnRowHTML(m, formats))
+      .join("");
+    const addedHTML = rows ? `<div class="columns-popover__list">${rows}</div>` : "";
+    return `<div class="columns-popover__section-label">${escHtml(desc.sectionLabel)}</div>
+      ${builder}${addedHTML}`;
+  }
+
   /** Build the leaderboard's four-dropdown Columns UI (W4). Order is fixed —
    * Match · Batting · Bowling · Fielding (Match first, OQ2). The current
    * discipline's OWN columns (Basic/Detailed/Dismissals/Phase composer) fill its
@@ -847,6 +911,7 @@ export function createColumnsPicker({
         !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key)) &&
         !(isPlainNs && BALL_RANGE_ENUMERATED_KEYS.has(m.key)) &&
         !(isPlainNs && D3_ENUMERATED_HIDDEN_KEYS.has(m.key)) &&
+        !(isPlainNs && D4_ENUMERATED_HIDDEN_KEYS.has(m.key)) &&
         !hiddenAlts.has(m.key)
     );
     const basicOrder = bucket === "bowling" ? BOWLING_BASIC_ORDER : BATTING_BASIC_ORDER;
@@ -878,14 +943,22 @@ export function createColumnsPicker({
     // composers, placed AFTER the Phase/Ball/Innings composers (v5 audit order). The
     // MATCHUP namespaces (Vs mode) keep their plain "Dismissals" section exactly where
     // it was — the D3 composers return "" for matchup, so Vs mode stays byte-identical.
+    // D4 parametric composer (Innings Score Range / Wicket Haul), placed per the v5
+    // audit order: batting → after Innings Range, before Runs by Source; bowling →
+    // after Wicket Type (last). paramComposerHTML self-selects isr (batting) / wh
+    // (bowling) from ns and returns "" otherwise.
+    const paramHTML = paramComposerHTML(ns, formats);
     const ownSections = isPlainNs
       ? sectionHTML("Basic Stats", ownBasic, formats, visible) +
         sectionHTML("Detailed Stats", ownDetailed, formats, visible) +
         composerHTML(ns, formats, visible) +
         ballComposerHTML(ns, formats, visible) +
         inningsComposerHTML(ns, formats, visible) +
-        runSourceComposerHTML(ns, formats, visible) +
-        wicketTypeComposerHTML(ns, formats, visible)
+        (ns === "batting"
+          ? paramHTML +
+            runSourceComposerHTML(ns, formats, visible) +
+            wicketTypeComposerHTML(ns, formats, visible)
+          : wicketTypeComposerHTML(ns, formats, visible) + paramHTML)
       : sectionHTML("Basic Stats", ownBasic, formats, visible) +
         sectionHTML("Detailed Stats", ownDetailed, formats, visible) +
         dismissalSectionHTML(ns, formats, visible, dismissal) +
@@ -1099,6 +1172,63 @@ export function createColumnsPicker({
     });
   }
 
+  /** D4: wire the parametric composers (Innings Score Range / Wicket Haul —
+   * leaderboard inline only; the pop-up popover has no such builder). The BUILDER's
+   * operator <select> toggles the second "between" value input; Add reads operator +
+   * value(s), builds the composed param key (byte-identical ≥ N to the retiring
+   * enumerated column), appends it, and re-renders inline so the new row appears. A
+   * param column's data-param-remove-key checkbox removes it (unchecking) + re-renders.
+   * A full inline re-render is needed on add/remove because the param-column LIST is
+   * value-dynamic — syncCheckedState alone can't create/destroy those rows. */
+  function wireParamComposers(rootEl) {
+    rootEl.querySelectorAll(".cols-param-builder[data-param-prefix]").forEach((builder) => {
+      const opEl = builder.querySelector('[data-role="param-op"]');
+      const v1El = builder.querySelector('[data-role="param-v1"]');
+      const v2El = builder.querySelector('[data-role="param-v2"]');
+      const andEl = builder.querySelector('[data-role="param-and"]');
+      const addBtn = builder.querySelector('[data-role="param-add"]');
+      const prefix = builder.dataset.paramPrefix;
+      const min = Number(builder.dataset.paramMin) || 0;
+      const syncBetween = () => {
+        const between = opEl && opEl.value === "between";
+        if (v2El) v2El.hidden = !between;
+        if (andEl) andEl.hidden = !between;
+      };
+      if (opEl) opEl.addEventListener("change", syncBetween);
+      if (addBtn)
+        addBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          const opToken = COMPOSED_PARAM_OP_TOKEN[opEl ? opEl.value : "gte"];
+          if (!opToken) return;
+          const v1 = Math.max(min, Math.trunc(Number(v1El && v1El.value)));
+          if (!Number.isFinite(v1)) return;
+          let values;
+          if (opToken === "bt") {
+            const v2 = Math.max(min, Math.trunc(Number(v2El && v2El.value)));
+            if (!Number.isFinite(v2)) return;
+            values = [v1, v2];
+          } else {
+            values = [v1];
+          }
+          const key = makeComposedParamKey(prefix, opToken, values);
+          const cols = getColumns().slice();
+          if (!cols.includes(key)) cols.push(key);
+          setColumns(cols); // INSTANT, no Search light (like every other column change)
+          rerenderInline(); // value-dynamic row list → rebuild so the new row shows
+        });
+    });
+    rootEl.querySelectorAll('input[type="checkbox"][data-param-remove-key]').forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const key = cb.dataset.paramRemoveKey;
+        const cols = getColumns().slice();
+        const idx = cols.indexOf(key);
+        if (idx >= 0) cols.splice(idx, 1);
+        setColumns(cols); // INSTANT
+        rerenderInline(); // drop the removed row
+      });
+    });
+  }
+
   /** W2: re-sync the Sort-by + Highlight buttons' state (active / direction /
    * disabled) from the live host state, WITHOUT rebuilding — the counterpart to
    * syncCheckedState for the controls. Called from syncCheckedState so every
@@ -1235,7 +1365,15 @@ export function createColumnsPicker({
     wireCheckboxes(container);
     wireColumnControls(container); // W2 (no-op unless the sort/highlight contract was supplied)
     wireModeToggles(container); // Wave C count/% (count/per-match) segmented controls
+    wireParamComposers(container); // D4 Innings Score Range / Wicket Haul builders
     wireDropdowns(container); // W4
+  }
+
+  /** D4: re-render the inline picker in place (preserving the open dropdown). Called
+   * after adding/removing a value-dynamic parametric column so its row list rebuilds.
+   * No-op in popover mode (the pop-up has no param composer). */
+  function rerenderInline() {
+    if (inlineState) renderInline(inlineState.el, getDiscipline(), getFormats());
   }
 
   /**

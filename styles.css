@@ -2184,6 +2184,20 @@ a { color: var(--color-accent); }
   color: var(--color-fg);
   margin-bottom: var(--space-2);
 }
+/* D4 parametric composer builder (Innings Score Range / Wicket Haul): an operator
+   <select> + value input(s) + unit + Add, laid out inline (wraps on a narrow popover),
+   above the list of columns already added. */
+.cols-param-builder {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) 0 var(--space-3);
+}
+.cols-param__val { width: 4.5rem; }
+.cols-param__and,
+.cols-param__unit { color: var(--color-muted); font-size: 0.9rem; }
+.cols-param__add { flex: 0 0 auto; }
 @media (max-width: 640px) {
   .cols-dd-bar { flex-direction: column; }
   .cols-dd-trigger { flex: 1 1 auto; }

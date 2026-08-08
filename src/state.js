@@ -40,6 +40,7 @@ import {
   eligibleComposedInningsKeys,
   eligibleComposedRunSourceKeys,
   eligibleComposedWicketTypeKeys,
+  isParamComposedColumnKey,
   makeComposedPhaseKey,
   makeComposedBallKey,
   makeComposedWicketTypeKey,
@@ -1019,7 +1020,9 @@ export function pruneIneligibleState(store) {
   const allowed = eligibleColumnKeys(s.discipline, s.formats);
 
   const cols = s.columns[s.discipline];
-  const prunedCols = cols.filter((k) => allowed.has(k));
+  // D4: parametric composed columns (isr__/wh__) are value-dynamic — not enumerable
+  // into the finite `allowed` set — so keep them via a structural check.
+  const prunedCols = cols.filter((k) => allowed.has(k) || isParamComposedColumnKey(k, s.discipline));
   const colsChanged = prunedCols.length !== cols.length;
 
   // Matchup namespaces (D4 R3 follow-up, restricted picker): the same phase
