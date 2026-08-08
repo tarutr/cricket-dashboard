@@ -2634,12 +2634,14 @@ export function getMetric(key, discipline) {
   if (discipline) {
     const hit = _byDisciplineKey.get(`${discipline}:${key}`);
     if (hit) return hit;
-    // Columns content rework D1/D2 (2026-08-08): composed dimension×metric keys
+    // Columns content rework D1/D2/D3 (2026-08-08): composed dimension×metric keys
     // are DYNAMIC virtual metrics — never in the static catalogue — whose
-    // sqlExpression is rebuilt on the fly. Three schemes share this ONE fallback:
+    // sqlExpression is rebuilt on the fly. Five schemes share this ONE fallback:
     //   • ph__<phase>__<base>  (D1) — phase-prefixed precomputed components.
     //   • bl__<bucket>__<base> (D2) — faced-ball-bucket precomputed components.
     //   • in__<iToken>__<base> (D2) — conditional aggregation over innings_number.
+    //   • rs__<source>__<axis> (D3) — run-source run-total / % of runs (batting).
+    //   • wt__<type>__<axis>   (D3) — wicket-type count / % (both disciplines).
     // Resolve them HERE so the leaderboard's buildQuery inningsMetrics path (which
     // calls getMetric) projects them through the NORMAL selectParts loop with NO
     // query-builder change. Byte-identical for every catalogued key (the map hit
@@ -2649,7 +2651,9 @@ export function getMetric(key, discipline) {
     return (
       resolveComposedPhaseMetric(key, discipline) ??
       resolveComposedBallMetric(key, discipline) ??
-      resolveComposedInningsMetric(key, discipline)
+      resolveComposedInningsMetric(key, discipline) ??
+      resolveComposedRunSourceMetric(key, discipline) ??
+      resolveComposedWicketTypeMetric(key, discipline)
     );
   }
   return METRICS.find((m) => m.key === key) ?? null;
@@ -3305,6 +3309,252 @@ export function eligibleComposedInningsKeys(discipline, formats) {
   const keys = [];
   for (const base of composedInningsPool(discipline)) {
     for (const tok of tokens) keys.push(makeComposedInningsKey(tok, base.key));
+  }
+  return keys;
+}
+
+// ── Composed RUN-SOURCE × count/% columns (columns content rework D3, 2026-08-08)
+// The leaderboard's "Runs by Source" composer generates, per run source (1s / 2s /
+// 3s / 4s-run / 4s-boundary / 5s / 6s-run / 6s-boundary), a column that is EITHER
+// the run total from that source (count axis) OR that total as a share of the
+// batter's runs (% axis) — the axis chosen by the SAME per-column count/% toggle
+// Wave C built. REPLACES the enumerated runs_1s_pct … runs_6s_boundary_pct % columns
+// in the leaderboard OWN-discipline picker (their defs stay in the catalogue for the
+// pop-up / filters / graph / per-innings slicing). "All Boundaries" is the
+// composer's ninth row but REUSES the catalogued boundary_runs / boundary_runs_pct
+// pair (its count already exists from Wave B), so no composed key is minted for it
+// (see columnsPicker's runSourceComposerHTML) — that also keeps it a single source
+// of truth with the Detailed-section Boundary Runs column.
+//
+// EQUIVALENCE GATE (Rule 1): each source's % sqlExpression is BYTE-IDENTICAL to the
+// retiring enumerated runs_<source>_pct — the % template `(<num>) * 100.0 /
+// NULLIF(SUM(runs), 0)` reproduces the enumerated form exactly (e.g. 6s-boundary ⇒
+// `(6 * SUM(sixes_hit)) * 100.0 / NULLIF(SUM(runs), 0)` == runs_6s_boundary_pct).
+// The count side is the same run-total numerator without the /runs share — a new
+// counting total. Batting-only (run composition is a batting concept).
+//
+// KEY = `rs__<sourceToken>__<axis>`  axis ∈ {runs (count), pct}. Source tokens carry
+// only single underscores (4s_run, 6s_bdry); no catalogued key starts with `rs__`;
+// axis carries no underscore — so splitting on the FIRST `__` after the prefix
+// recovers {token, axis}.
+const COMPOSED_RUNSOURCE_PREFIX = "rs__";
+const COMPOSED_RUNSOURCE_AXES = new Set(["runs", "pct"]);
+// token, composer ROW label, run-total numerator, and the count/% column
+// labels+shorts (the % ones REPRODUCE the enumerated runs_<source>_pct display).
+const COMPOSED_RUNSOURCE_DIMS = [
+  { token: "1s",      rowLabel: "1s",            num: "1 * SUM(ones)",      countLabel: "Runs in 1s",            countShort: "1s Runs",      pctLabel: "% Runs in 1s",            pctShort: "1s Run%" },
+  { token: "2s",      rowLabel: "2s",            num: "2 * SUM(twos)",      countLabel: "Runs in 2s",            countShort: "2s Runs",      pctLabel: "% Runs in 2s",            pctShort: "2s Run%" },
+  { token: "3s",      rowLabel: "3s",            num: "3 * SUM(threes)",    countLabel: "Runs in 3s",            countShort: "3s Runs",      pctLabel: "% Runs in 3s",            pctShort: "3s Run%" },
+  { token: "4s_run",  rowLabel: "4s (run)",      num: "4 * SUM(nb_fours)",  countLabel: "Runs in 4s (run)",      countShort: "4s-run Runs",  pctLabel: "% Runs in 4s (run)",      pctShort: "4s-run%" },
+  { token: "4s_bdry", rowLabel: "4s (boundary)", num: "4 * SUM(fours_hit)", countLabel: "Runs in 4s (boundary)", countShort: "4s-bdry Runs", pctLabel: "% Runs in 4s (boundary)", pctShort: "4s-bdry%" },
+  { token: "5s",      rowLabel: "5s",            num: "5 * SUM(fives)",     countLabel: "Runs in 5s",            countShort: "5s Runs",      pctLabel: "% Runs in 5s",            pctShort: "5s Run%" },
+  { token: "6s_run",  rowLabel: "6s (run)",      num: "6 * SUM(nb_sixes)",  countLabel: "Runs in 6s (run)",      countShort: "6s-run Runs",  pctLabel: "% Runs in 6s (run)",      pctShort: "6s-run%" },
+  { token: "6s_bdry", rowLabel: "6s (boundary)", num: "6 * SUM(sixes_hit)", countLabel: "Runs in 6s (boundary)", countShort: "6s-bdry Runs", pctLabel: "% Runs in 6s (boundary)", pctShort: "6s-bdry%" },
+];
+const _RUNSOURCE_BY_TOKEN = new Map(COMPOSED_RUNSOURCE_DIMS.map((d) => [d.token, d]));
+const _RUNSOURCE_TOKEN_SET = new Set(COMPOSED_RUNSOURCE_DIMS.map((d) => d.token));
+
+/** Build the composed run-source column key for `sourceToken` on `axis`. */
+export function makeComposedRunSourceKey(sourceToken, axis) {
+  return `${COMPOSED_RUNSOURCE_PREFIX}${sourceToken}__${axis}`;
+}
+/** Parse a composed run-source column key → { token, axis }, or null. Split on the
+ * FIRST `__` after the `rs__` prefix (source tokens carry no `__`; axis is a bare word). */
+export function parseComposedRunSourceKey(key) {
+  if (typeof key !== "string" || !key.startsWith(COMPOSED_RUNSOURCE_PREFIX)) return null;
+  const rest = key.slice(COMPOSED_RUNSOURCE_PREFIX.length);
+  const sep = rest.indexOf("__");
+  if (sep <= 0) return null;
+  const token = rest.slice(0, sep);
+  const axis = rest.slice(sep + 2);
+  if (!_RUNSOURCE_TOKEN_SET.has(token) || !COMPOSED_RUNSOURCE_AXES.has(axis)) return null;
+  return { token, axis };
+}
+/** Build the VIRTUAL metric for a composed run-source column (batting only). Count
+ * axis = the run-total numerator (kind "total"); pct axis = that numerator over
+ * SUM(runs) — byte-identical to the enumerated runs_<source>_pct. source stays
+ * "innings" so buildQuery's inningsMetrics loop projects it like any real metric. */
+function buildComposedRunSourceMetric(token, axis, discipline) {
+  if (discipline !== "batting") return null;
+  const dim = _RUNSOURCE_BY_TOKEN.get(token);
+  if (!dim || !COMPOSED_RUNSOURCE_AXES.has(axis)) return null;
+  const key = makeComposedRunSourceKey(token, axis);
+  if (axis === "runs") {
+    return {
+      key, baseToken: token, isComposedRunSource: true,
+      label: dim.countLabel, shortLabel: dim.countShort,
+      discipline: "batting", source: "innings",
+      sqlExpression: dim.num,
+      higherIsBetter: null, format: "int",
+      isPhaseMetric: null, zeroIsData: true, additive: true, kind: "total",
+    };
+  }
+  return {
+    key, baseToken: token, isComposedRunSource: true,
+    label: dim.pctLabel, shortLabel: dim.pctShort,
+    discipline: "batting", source: "innings",
+    sqlExpression: `(${dim.num}) * 100.0 / NULLIF(SUM(runs), 0)`,
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false, kind: "percent",
+  };
+}
+/** Resolve a composed run-source COLUMN key to its virtual metric, or null. Called
+ * by getMetric (so resolveColumnMetric picks it up too). */
+export function resolveComposedRunSourceMetric(key, discipline) {
+  const parsed = parseComposedRunSourceKey(key);
+  if (!parsed) return null;
+  return buildComposedRunSourceMetric(parsed.token, parsed.axis, discipline);
+}
+/** Ordered composer rows for the batting Runs by Source composer: the 8 composed
+ * sources + a final "Boundaries" row that REUSES the catalogued boundary_runs /
+ * boundary_runs_pct pair (no composed key). Each row = { rowLabel, countKey, pctKey }
+ * → a Wave-C count/% toggle row in columnsPicker. */
+export function composedRunSourceRows() {
+  const rows = COMPOSED_RUNSOURCE_DIMS.map((d) => ({
+    rowLabel: d.rowLabel,
+    countKey: makeComposedRunSourceKey(d.token, "runs"),
+    pctKey: makeComposedRunSourceKey(d.token, "pct"),
+  }));
+  rows.push({ rowLabel: "Boundaries", countKey: "boundary_runs", pctKey: "boundary_runs_pct" });
+  return rows;
+}
+/** Every composed run-source column key (batting only) — folded into
+ * eligibleColumnKeys so they survive a re-render. Boundaries' keys are catalogued
+ * (boundary_runs / boundary_runs_pct), so they are NOT listed here. */
+export function eligibleComposedRunSourceKeys(discipline) {
+  if (discipline !== "batting") return [];
+  const keys = [];
+  for (const d of COMPOSED_RUNSOURCE_DIMS) {
+    keys.push(makeComposedRunSourceKey(d.token, "runs"));
+    keys.push(makeComposedRunSourceKey(d.token, "pct"));
+  }
+  return keys;
+}
+
+// ── Composed WICKET-TYPE × count/% columns (columns content rework D3) ─────────
+// The "Wicket Type" composer generates, per dismissal type, a column that is EITHER
+// the count of that type OR its share (%), via the Wave-C count/% toggle. Batting:
+// the dismissal-KIND breakdown (12 kinds; % = share of the batter's dismissals) —
+// REPLACES the enumerated batting Dismissals section (out_*/out_*_pct). Bowling: the
+// bowler-credited wicket kinds (6; % = share of the bowler's wickets, a NEW %) —
+// REPLACES the enumerated wkt_* columns. All enumerated defs stay in the catalogue
+// (pop-up / filters / graph / advanced-conditions / presets still reference them).
+//
+// EQUIVALENCE GATE (Rule 1): batting count == out_<kind> and % == out_<kind>_pct
+// byte-for-byte (same CASE tally over dismissal_kind, same /SUM(dismissed) share);
+// bowling count == wkt_<kind> byte-for-byte (SUM(wickets_<col>)). The bowling %
+// (SUM(wickets_<col>) * 100.0 / NULLIF(SUM(wickets), 0)) is NEW — a share of the
+// bowler-credited wickets, which the six kinds partition exactly.
+//
+// KEY = `wt__<typeToken>__<axis>`  axis ∈ {count, pct}. Type tokens carry only single
+// underscores (run_out, caught_and_bowled); no catalogued key starts with `wt__`;
+// axis carries no underscore — split on the FIRST `__` after the prefix.
+const COMPOSED_WICKETTYPE_PREFIX = "wt__";
+const COMPOSED_WICKETTYPE_AXES = new Set(["count", "pct"]);
+// Batting: token → { kind (dismissal_kind value), label, short } from DISMISSAL_KINDS
+// (defined above) so the composed count/% labels stay identical to the retiring
+// out_*/out_*_pct. Token = kind with spaces → underscores.
+const _WT_BATTING = new Map(
+  DISMISSAL_KINDS.map((d) => [d.kind.replace(/ /g, "_"), { kind: d.kind, label: d.label, short: d.short }])
+);
+// Bowling: the six bowler-credited kinds → { col (the wickets_<col> view column the
+// wkt_* defs read), label, short } — reproducing the wkt_* display for the count side.
+const _WT_BOWLING = new Map([
+  ["bowled",            { col: "bowled",            label: "Bowled",          short: "Bowled" }],
+  ["lbw",               { col: "lbw",               label: "LBW",             short: "LBW" }],
+  ["caught",            { col: "caught",            label: "Caught",          short: "Caught" }],
+  ["caught_and_bowled", { col: "caught_and_bowled", label: "Caught & Bowled", short: "c&b" }],
+  ["stumped",           { col: "stumped",           label: "Stumped",         short: "Stumped" }],
+  ["hit_wicket",        { col: "hit_wicket",        label: "Hit Wicket",      short: "Hit Wkt" }],
+]);
+
+/** Build the composed wicket-type column key for `typeToken` on `axis`. */
+export function makeComposedWicketTypeKey(typeToken, axis) {
+  return `${COMPOSED_WICKETTYPE_PREFIX}${typeToken}__${axis}`;
+}
+/** Parse a composed wicket-type column key → { token, axis }, or null. */
+export function parseComposedWicketTypeKey(key) {
+  if (typeof key !== "string" || !key.startsWith(COMPOSED_WICKETTYPE_PREFIX)) return null;
+  const rest = key.slice(COMPOSED_WICKETTYPE_PREFIX.length);
+  const sep = rest.indexOf("__");
+  if (sep <= 0) return null;
+  const token = rest.slice(0, sep);
+  const axis = rest.slice(sep + 2);
+  if (!COMPOSED_WICKETTYPE_AXES.has(axis)) return null;
+  return { token, axis };
+}
+/** Build the VIRTUAL metric for a composed wicket-type column. Batting reproduces
+ * out_<kind>/out_<kind>_pct exactly; bowling reproduces wkt_<kind> (count) + a share
+ * of SUM(wickets) (%). source "innings" → projected by buildQuery like any metric. */
+function buildComposedWicketTypeMetric(token, axis, discipline) {
+  if (!COMPOSED_WICKETTYPE_AXES.has(axis)) return null;
+  const key = makeComposedWicketTypeKey(token, axis);
+  if (discipline === "batting") {
+    const spec = _WT_BATTING.get(token);
+    if (!spec) return null;
+    const countSql = `SUM(CASE WHEN dismissal_kind = '${spec.kind}' THEN 1 ELSE 0 END)`;
+    if (axis === "count") {
+      return {
+        key, baseToken: token, isComposedWicketType: true,
+        label: spec.label, shortLabel: spec.short,
+        discipline: "batting", source: "innings",
+        sqlExpression: countSql,
+        higherIsBetter: null, format: "int",
+        isPhaseMetric: null, zeroIsData: true, additive: true, kind: "total",
+      };
+    }
+    return {
+      key, baseToken: token, isComposedWicketType: true,
+      label: `${spec.label} %`, shortLabel: `${spec.short} %`,
+      discipline: "batting", source: "innings",
+      sqlExpression: `${countSql} * 100.0 / NULLIF(SUM(dismissed), 0)`,
+      higherIsBetter: null, format: "pct1",
+      isPhaseMetric: null, zeroIsData: false, kind: "percent",
+    };
+  }
+  if (discipline === "bowling") {
+    const spec = _WT_BOWLING.get(token);
+    if (!spec) return null;
+    const countSql = `SUM(wickets_${spec.col})`;
+    if (axis === "count") {
+      return {
+        key, baseToken: token, isComposedWicketType: true,
+        label: spec.label, shortLabel: spec.short,
+        discipline: "bowling", source: "innings",
+        sqlExpression: countSql,
+        higherIsBetter: true, format: "int",
+        isPhaseMetric: null, zeroIsData: true, additive: true, kind: "total",
+      };
+    }
+    return {
+      key, baseToken: token, isComposedWicketType: true,
+      label: `${spec.label} %`, shortLabel: `${spec.short} %`,
+      discipline: "bowling", source: "innings",
+      sqlExpression: `${countSql} * 100.0 / NULLIF(SUM(wickets), 0)`,
+      higherIsBetter: null, format: "pct1",
+      isPhaseMetric: null, zeroIsData: false, kind: "percent",
+    };
+  }
+  return null;
+}
+/** Resolve a composed wicket-type COLUMN key to its virtual metric, or null. Called
+ * by getMetric. */
+export function resolveComposedWicketTypeMetric(key, discipline) {
+  const parsed = parseComposedWicketTypeKey(key);
+  if (!parsed) return null;
+  return buildComposedWicketTypeMetric(parsed.token, parsed.axis, discipline);
+}
+/** Every composed wicket-type column key for a discipline — folded into
+ * eligibleColumnKeys so they survive a re-render. */
+export function eligibleComposedWicketTypeKeys(discipline) {
+  const tokens =
+    discipline === "batting" ? [..._WT_BATTING.keys()]
+    : discipline === "bowling" ? [..._WT_BOWLING.keys()]
+    : [];
+  const keys = [];
+  for (const t of tokens) {
+    keys.push(makeComposedWicketTypeKey(t, "count"));
+    keys.push(makeComposedWicketTypeKey(t, "pct"));
   }
   return keys;
 }

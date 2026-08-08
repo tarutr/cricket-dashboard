@@ -38,8 +38,11 @@ import {
   eligibleComposedPhaseKeys,
   eligibleComposedBallKeys,
   eligibleComposedInningsKeys,
+  eligibleComposedRunSourceKeys,
+  eligibleComposedWicketTypeKeys,
   makeComposedPhaseKey,
   makeComposedBallKey,
+  makeComposedWicketTypeKey,
 } from "./metrics.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 
@@ -816,10 +819,20 @@ export const COLUMN_PRESET_DEFS = {
     {
       key: "dismissals",
       label: "Dismissals",
+      // Columns content rework D3: seed the COMPOSED wicket-type % keys (byte-identical
+      // SQL to the retiring out_<kind>_pct — the Wicket Type equivalence gate), so the
+      // preset agrees with the Wicket Type composer (rows show CHECKED at %, no
+      // display-identical duplicate). The out_*_pct defs stay in the catalogue (pop-up /
+      // filters / graph / advanced conditions still use them).
       columns: () => [
         "innings", "runs", "average",
-        "out_caught_pct", "out_bowled_pct", "out_lbw_pct", "out_run_out_pct",
-        "out_stumped_pct", "out_caught_and_bowled_pct", "out_hit_wicket_pct",
+        makeComposedWicketTypeKey("caught", "pct"),
+        makeComposedWicketTypeKey("bowled", "pct"),
+        makeComposedWicketTypeKey("lbw", "pct"),
+        makeComposedWicketTypeKey("run_out", "pct"),
+        makeComposedWicketTypeKey("stumped", "pct"),
+        makeComposedWicketTypeKey("caught_and_bowled", "pct"),
+        makeComposedWicketTypeKey("hit_wicket", "pct"),
       ],
     },
     {
@@ -858,7 +871,18 @@ export const COLUMN_PRESET_DEFS = {
     {
       key: "wicket_types",
       label: "Wicket types",
-      columns: () => ["innings", "wickets", "wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket"],
+      // Columns content rework D3: seed the COMPOSED wicket-type COUNT keys (byte-
+      // identical SQL to the retiring wkt_<kind> — the equivalence gate), so the preset
+      // agrees with the Wicket Type composer (rows CHECKED at count, no duplicate). The
+      // wkt_* defs stay in the catalogue (ball engine / filters / pop-up still use them).
+      columns: () => ["innings", "wickets",
+        makeComposedWicketTypeKey("bowled", "count"),
+        makeComposedWicketTypeKey("lbw", "count"),
+        makeComposedWicketTypeKey("caught", "count"),
+        makeComposedWicketTypeKey("caught_and_bowled", "count"),
+        makeComposedWicketTypeKey("stumped", "count"),
+        makeComposedWicketTypeKey("hit_wicket", "count"),
+      ],
     },
     {
       key: "phases",
@@ -960,6 +984,18 @@ export function eligibleColumnKeys(discipline, formats) {
     keys.add(key);
   }
   for (const key of eligibleComposedInningsKeys(discipline, formats)) {
+    keys.add(key);
+  }
+  // Columns content rework D3: composed run-source (rs__<src>__<axis>, batting) and
+  // wicket-type (wt__<type>__<axis>, both disciplines) column keys are valid columns —
+  // fold them in so a composed Runs-by-Source / Wicket-Type column survives a
+  // re-render. Both are format-agnostic. Byte-identical when none is present (the
+  // extra keys just never match). Boundaries' composer row reuses the catalogued
+  // boundary_runs / boundary_runs_pct keys, already covered by eligibleMetrics above.
+  for (const key of eligibleComposedRunSourceKeys(discipline)) {
+    keys.add(key);
+  }
+  for (const key of eligibleComposedWicketTypeKeys(discipline)) {
     keys.add(key);
   }
   return keys;

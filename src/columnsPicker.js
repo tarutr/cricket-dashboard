@@ -49,6 +49,9 @@ import {
   // Columns content rework D2 (ball-range + innings-range composers).
   makeComposedBallKey, composedBallPool, composedBallTokens, COMPOSED_BALL_LABEL,
   makeComposedInningsKey, composedInningsPool, composedInningsTokensForFormats, COMPOSED_INNINGS_LABEL,
+  // Columns content rework D3 (runs-by-source + wicket-type composers).
+  composedRunSourceRows, makeComposedRunSourceKey, parseComposedRunSourceKey,
+  makeComposedWicketTypeKey, parseComposedWicketTypeKey,
 } from "./metrics.js";
 import { eligibleMetrics, eligibleCrossMetrics } from "./state.js";
 
@@ -74,10 +77,26 @@ for (const ns of Object.keys(COLUMN_TOGGLE_PAIRS)) {
   _TOGGLE_PAIRS_BY_NS[ns] = byCount;
   _TOGGLE_ALTS_BY_NS[ns] = alts;
 }
-/** The toggle pair whose COUNT key is `key` in namespace `ns`, or null. */
+/** The toggle pair whose COUNT key is `key` in namespace `ns`, or null. Static Wave-C
+ * pairs (COLUMN_TOGGLE_PAIRS) first; then the D3 COMPOSED count/% pairs, which are
+ * dynamic (never in COLUMN_TOGGLE_PAIRS) — the count key of a run-source
+ * (rs__<src>__runs) / wicket-type (wt__<type>__count) composer row pairs with its %
+ * alternate, resolved from the key structure so the per-row count/% control +
+ * sort/highlight sync behave identically to the static pairs. ns-agnostic for the
+ * composed case (the key self-encodes its source/type + axis). */
 function togglePairByCount(key, ns) {
   const byCount = _TOGGLE_PAIRS_BY_NS[ns];
-  return (byCount && byCount.get(key)) || null;
+  const stat = (byCount && byCount.get(key)) || null;
+  if (stat) return stat;
+  const rs = parseComposedRunSourceKey(key);
+  if (rs && rs.axis === "runs") {
+    return { count: key, alt: makeComposedRunSourceKey(rs.token, "pct"), mode: "pct" };
+  }
+  const wt = parseComposedWicketTypeKey(key);
+  if (wt && wt.axis === "count") {
+    return { count: key, alt: makeComposedWicketTypeKey(wt.token, "pct"), mode: "pct" };
+  }
+  return null;
 }
 /** The set of ALTERNATE (%/per-match) keys hidden from the picker listing in `ns`. */
 function toggleAltKeys(ns) {
@@ -152,6 +171,30 @@ const DISMISSAL_ROW_LABEL = {
   out_timed_out: "Timed out",
   out_hit_the_ball_twice: "Hit the ball twice",
 };
+
+// ── Wicket Type composer row layout (columns content rework D3) ──────────────
+// The D3 "Wicket Type" composer (leaderboard only) replaces the batting Dismissals
+// section (out_*/out_*_pct) and the bowling wkt_* columns with per-row count/%
+// toggle rows over composed keys (wt__<token>__<axis>). Row LAYOUT (which types are
+// common vs rare, their row labels, order) is a picker-layout judgment call and
+// lives HERE — same posture as RARE_DISMISSAL_KINDS / DISMISSAL_ROW_LABEL above; the
+// composed-key scheme + metric identity + sqlExpression live in metrics.js.
+//
+// BATTING reuses DISMISSAL_KINDS + RARE_DISMISSAL_KINDS + DISMISSAL_ROW_LABEL, so the
+// common/rare split + ordering + row labels are IDENTICAL to the pop-up's Dismissals
+// section (which must stay byte-identical) — the two surfaces never disagree about
+// which kinds are common. (NB: the D3 brief lists Hit-wicket among the common batting
+// types; it is kept in the Rare disclosure here to match that established split — a
+// one-line change to RARE_DISMISSAL_KINDS would promote it in BOTH surfaces.)
+// BOWLING has its own six bowler-credited kinds (no rares), ordered per the audit.
+const BOWLING_WICKET_TYPE_ROWS = [
+  { token: "bowled", rowLabel: "Bowled" },
+  { token: "lbw", rowLabel: "LBW" },
+  { token: "caught", rowLabel: "Caught" },
+  { token: "caught_and_bowled", rowLabel: "Caught & Bowled" },
+  { token: "stumped", rowLabel: "Stumped" },
+  { token: "hit_wicket", rowLabel: "Hit wicket" },
+];
 
 /** One dismissal-kind row: a single checkbox standing for EITHER the count or
  * the % column (metrics.js's `${key}` / `${key}_pct`), whichever the
@@ -562,6 +605,28 @@ export function createColumnsPicker({
   // from THIS picker, exactly as the enumerated phase metrics were replaced in D1.
   const BALL_RANGE_ENUMERATED_KEYS = new Set(["sr_first10", "sr_11_20", "sr_21plus"]);
 
+  // Columns content rework D3: the enumerated run-source % columns (batting) and the
+  // enumerated wicket-type columns (bowling wkt_*) are REPLACED by the Runs by Source
+  // / Wicket Type composers in the leaderboard four-dropdown picker — hidden from the
+  // OWN-discipline listing here so there is no display-identical duplicate. (The
+  // batting Dismissals breakdown out_* is already section "dismissal", excluded from
+  // `core`; it drops from the leaderboard simply by not rendering dismissalSectionHTML
+  // below.) The metric DEFS stay in metrics.js (pop-up popover, filters, graph,
+  // advanced conditions, presets still reference them). Cross-discipline columns are
+  // NOT hidden — the other discipline's fingerprint stays available as an all-rounder
+  // cross column (preserve existing functionality), and it has no own-discipline
+  // duplicate on that table. Batting-only keys are inert on a bowling table and vice
+  // versa (they aren't in that discipline's eligibleMetrics), so one combined set is
+  // safe to apply on either plain namespace.
+  const D3_ENUMERATED_HIDDEN_KEYS = new Set([
+    // batting run-source % (boundary_runs_pct is the boundary_runs toggle alt — hidden
+    // via hiddenAlts, and reused as the composer's "Boundaries" row — so NOT listed):
+    "runs_1s_pct", "runs_2s_pct", "runs_3s_pct", "runs_4s_run_pct", "runs_4s_boundary_pct",
+    "runs_5s_pct", "runs_6s_run_pct", "runs_6s_boundary_pct",
+    // bowling wicket types:
+    "wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket",
+  ]);
+
   /** Reorder `list` so any metric whose key appears in `order` comes first (in
    * `order`'s sequence); every other metric keeps its ORIGINAL relative order,
    * appended after. Metrics not named in `order` are untouched siblings (the
@@ -677,6 +742,71 @@ export function createColumnsPicker({
       <div class="cols-composer">${blocks.join("")}</div>`;
   }
 
+  /** The runs-by-source × count/% composer (D3, batting only): a flat list of run
+   * sources (1s / 2s / 3s / 4s-run / 4s-boundary / 5s / 6s-run / 6s-boundary /
+   * Boundaries), each a Wave-C count/% TOGGLE row so the user picks the run total OR
+   * its % of the batter's runs per source. The 8 fine sources use composed keys
+   * (rs__<src>__runs / __pct); "Boundaries" reuses the catalogued boundary_runs /
+   * boundary_runs_pct pair (composedRunSourceRows). "" for every non-batting ns.
+   * REPLACES the enumerated runs_<source>_pct columns in the leaderboard picker. */
+  function runSourceComposerHTML(ns, formats, visible) {
+    if (ns !== "batting") return "";
+    const rows = composedRunSourceRows()
+      .map((r) =>
+        toggleRowHTML(
+          { label: r.rowLabel },
+          { count: r.countKey, alt: r.pctKey, mode: "pct" },
+          formats,
+          visible
+        )
+      )
+      .join("");
+    return `<div class="columns-popover__section-label">Runs by Source</div>
+      <div class="columns-popover__list">${rows}</div>`;
+  }
+
+  /** The wicket-type × count/% composer (D3, both disciplines): a list of dismissal
+   * types, each a Wave-C count/% TOGGLE row (count of that type OR its share).
+   * Batting = the 12 dismissal kinds (common rows + a Rare disclosure, split/ordered
+   * exactly like the pop-up's Dismissals section); bowling = the 6 bowler-credited
+   * kinds. Each row's pair is composed keys (wt__<token>__count / __pct) resolved by
+   * getMetric. REPLACES the batting Dismissals section + the bowling wkt_* columns in
+   * the leaderboard picker. "" for the matchup namespaces. */
+  function wicketTypeComposerHTML(ns, formats, visible) {
+    const rowFor = (token, rowLabel) =>
+      toggleRowHTML(
+        { label: rowLabel },
+        {
+          count: makeComposedWicketTypeKey(token, "count"),
+          alt: makeComposedWicketTypeKey(token, "pct"),
+          mode: "pct",
+        },
+        formats,
+        visible
+      );
+    if (ns === "batting") {
+      const common = DISMISSAL_KINDS.filter((d) => !RARE_DISMISSAL_KINDS.has(d.kind));
+      const rare = DISMISSAL_KINDS.filter((d) => RARE_DISMISSAL_KINDS.has(d.kind));
+      const rowForKind = (d) =>
+        rowFor(d.kind.replace(/ /g, "_"), DISMISSAL_ROW_LABEL[d.key] ?? d.label);
+      const rareHTML = rare.length
+        ? `<details class="columns-popover__disclosure">
+            <summary><span class="columns-popover__disclosure-arrow">▸</span> Rare dismissals</summary>
+            <div class="columns-popover__list">${rare.map(rowForKind).join("")}</div>
+          </details>`
+        : "";
+      return `<div class="columns-popover__section-label">Wicket Type</div>
+        <div class="columns-popover__list">${common.map(rowForKind).join("")}</div>
+        ${rareHTML}`;
+    }
+    if (ns === "bowling") {
+      const rows = BOWLING_WICKET_TYPE_ROWS.map((r) => rowFor(r.token, r.rowLabel)).join("");
+      return `<div class="columns-popover__section-label">Wicket Type</div>
+        <div class="columns-popover__list">${rows}</div>`;
+    }
+    return "";
+  }
+
   /** Build the leaderboard's four-dropdown Columns UI (W4). Order is fixed —
    * Match · Batting · Bowling · Fielding (Match first, OQ2). The current
    * discipline's OWN columns (Basic/Detailed/Dismissals/Phase composer) fill its
@@ -716,6 +846,7 @@ export function createColumnsPicker({
         !(isPlainNs && m.key === "matches") &&
         !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key)) &&
         !(isPlainNs && BALL_RANGE_ENUMERATED_KEYS.has(m.key)) &&
+        !(isPlainNs && D3_ENUMERATED_HIDDEN_KEYS.has(m.key)) &&
         !hiddenAlts.has(m.key)
     );
     const basicOrder = bucket === "bowling" ? BOWLING_BASIC_ORDER : BATTING_BASIC_ORDER;
@@ -742,13 +873,25 @@ export function createColumnsPicker({
       crossDetailed = crossDetailedSrc.map((base) => ({ ...base, key: makeCrossKey(other, base.key) }));
     }
 
-    const ownSections =
-      sectionHTML("Basic Stats", ownBasic, formats, visible) +
-      sectionHTML("Detailed Stats", ownDetailed, formats, visible) +
-      dismissalSectionHTML(ns, formats, visible, dismissal) +
-      composerHTML(ns, formats, visible) +
-      ballComposerHTML(ns, formats, visible) +
-      inningsComposerHTML(ns, formats, visible);
+    // Columns content rework D3: on the PLAIN namespaces the batting Dismissals
+    // section + bowling wkt_* are replaced by the Runs by Source / Wicket Type
+    // composers, placed AFTER the Phase/Ball/Innings composers (v5 audit order). The
+    // MATCHUP namespaces (Vs mode) keep their plain "Dismissals" section exactly where
+    // it was — the D3 composers return "" for matchup, so Vs mode stays byte-identical.
+    const ownSections = isPlainNs
+      ? sectionHTML("Basic Stats", ownBasic, formats, visible) +
+        sectionHTML("Detailed Stats", ownDetailed, formats, visible) +
+        composerHTML(ns, formats, visible) +
+        ballComposerHTML(ns, formats, visible) +
+        inningsComposerHTML(ns, formats, visible) +
+        runSourceComposerHTML(ns, formats, visible) +
+        wicketTypeComposerHTML(ns, formats, visible)
+      : sectionHTML("Basic Stats", ownBasic, formats, visible) +
+        sectionHTML("Detailed Stats", ownDetailed, formats, visible) +
+        dismissalSectionHTML(ns, formats, visible, dismissal) +
+        composerHTML(ns, formats, visible) +
+        ballComposerHTML(ns, formats, visible) +
+        inningsComposerHTML(ns, formats, visible);
     const crossSections =
       sectionHTML("Basic Stats", crossBasic, formats, visible) +
       sectionHTML("Detailed Stats", crossDetailed, formats, visible);
