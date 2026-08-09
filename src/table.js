@@ -12,7 +12,7 @@ import {
   getMetric,
   hasMetricData,
   matchupBucketLabel,
-  paramSqlExpression,
+  paramExistenceHaving,
   resolveColumnMetric,
   isParamComposedColumnKey,
   OTHER_DISCIPLINE,
@@ -684,18 +684,24 @@ function conditionToHaving(cond, discipline, exprFn) {
   // column `peak.<key>` (materialized in buildMatchupQuery). Plain peaks
   // (source "innings") evaluate their real sqlExpression directly, unchanged.
   //
-  // Parametrised threshold metrics (R2b Phase 2: Innings Score ≥ N / Wicket Hauls
-  // ≥ N) carry a `paramTemplate`; the plain (non-matchup) path compiles the
-  // aggregate at the user's per-condition threshold via paramSqlExpression(metric,
-  // cond.n). ADDITIVE: paramSqlExpression returns the metric's DEFAULT sqlExpression
-  // whenever cond.n is absent/invalid, so a condition without an N is byte-identical
-  // to before. (These metrics live in the plain batting/bowling namespaces only, so
-  // the matchup exprFn branch never sees them.)
-  const expr = exprFn
-    ? exprFn(cond, metric)
-    : metric.paramTemplate
-      ? paramSqlExpression(metric, cond.n)
-      : metric.sqlExpression;
+  // Parametrised threshold metrics (Innings Score / Wicket Hauls) — R2 (2026-08-09):
+  // the operator now applies to the PER-INNINGS quantity (runs / wickets), and the
+  // filter is an EXISTENCE gate — the player has >= 1 innings whose quantity
+  // satisfies operator + value(s) (>= / <= / = / between). paramExistenceHaving
+  // compiles `((<count-column SQL for (op, values)>) >= 1)`, reusing the SAME
+  // composed-column builder a matching "# innings …" count column uses, so a
+  // parametric filter and its auto-added column can never disagree. The operator +
+  // value(s) live on the SAME fields every numeric condition uses (cond.operator /
+  // cond.v1, + cond.v2 for between); the old separate score-threshold box (cond.n)
+  // and count operator/value are retired. These metrics exist only in the plain
+  // batting/bowling namespaces (getMetric above returns null in matchup mode), so
+  // this branch is plain-path only — resolveComposedParamMetric returns null for any
+  // other discipline, degrading to a dropped row rather than a wrong number.
+  if (metric.paramTemplate && metric.param) {
+    const vals = cond.operator === "between" ? [cond.v1, cond.v2] : [cond.v1];
+    return paramExistenceHaving(metric, cond.operator, vals, discipline);
+  }
+  const expr = exprFn ? exprFn(cond, metric) : metric.sqlExpression;
   if (!expr) return null;
   // §8.1: rate/ratio metrics (zeroIsData:false) treat 0 as "no data" too, so a
   // condition on them must also exclude value = 0 even though the numeric
