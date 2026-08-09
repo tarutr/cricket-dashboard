@@ -240,6 +240,16 @@ export function isPopupFilterMetric(metricKey, discipline) {
   return isBooleanMetric(metricKey, discipline);
 }
 
+/** True when a metric KEY is a PARAMETRIC threshold metric (Innings Score /
+ * Wicket Hauls) — carries a paramTemplate + param descriptor in metrics.js. R2
+ * (2026-08-09): the editor uses this to start such a condition with NO operator
+ * selected (owner "no prefills"); the slice engine still treats it as a normal
+ * numeric on the per-innings runs/wickets (SLICE_COLUMN_EXPR), unchanged. */
+export function isParamMetric(metricKey, discipline) {
+  const m = getMetric(metricKey, discipline);
+  return Boolean(m && m.paramTemplate && m.param);
+}
+
 /** True when a condition is complete AND sliceable in this discipline. Boolean →
  * yn set + a predicate exists; numeric → its expr is mapped + v1 finite (+ v2 for
  * "between"). Local to the tab: the slice model differs from advanced.js's
@@ -256,6 +266,12 @@ function isSliceConditionComplete(cond, discipline) {
   }
   const map = SLICE_COLUMN_EXPR[discipline];
   if (!map || !map[cond.metricKey]) return false;
+  // R2 (2026-08-09): a numeric condition needs its operator explicitly chosen —
+  // parametric rows (Innings Score / Wicket Hauls) now start unset (no default),
+  // so an unset/unknown operator is INCOMPLETE. No-op for every existing numeric
+  // condition (they carry a valid gte/lte/eq/between); mirrors conditionToInningsWhere,
+  // which already returns null for such an operator.
+  if (cond.operator !== "between" && !SLICE_OP_SQL[cond.operator]) return false;
   if (!Number.isFinite(Number(cond.v1))) return false;
   if (cond.operator === "between" && !Number.isFinite(Number(cond.v2))) return false;
   return true;
@@ -933,6 +949,7 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
       formats: currentFormats(),
       isBooleanMetric,
       isPopupFilterMetric,
+      isParamMetric,
       conditionBaseName,
       // T-2c: the shared scope-singletons controller + this row's existing scope
       // singletons / ball predicates (edit pre-fill).

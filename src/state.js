@@ -573,6 +573,12 @@ function conditionIsBowlingFigures(c) {
 
 function conditionIsComplete(c) {
   if (!c.metricKey) return false;
+  // R2 (2026-08-09): a parametric threshold condition (Innings Score / Wicket
+  // Hauls) starts with NO operator (owner "no prefills") — an unset operator ⇒
+  // incomplete, so an inert row never leaks into the honest scope subtitle.
+  // Hand-duplicated twin of advanced.isConditionComplete — kept in sync.
+  const pm = getMetric(c.metricKey);
+  if (pm && pm.paramTemplate && pm.param && !c.operator) return false;
   if (c.v1 === "" || c.v1 === null || c.v1 === undefined || Number.isNaN(parseFloat(c.v1))) return false;
   if (c.operator === "between" || conditionIsBowlingFigures(c)) {
     if (c.v2 === "" || c.v2 === null || c.v2 === undefined || Number.isNaN(parseFloat(c.v2))) return false;
@@ -586,7 +592,11 @@ function conditionScopeLabel(c, state) {
   const metric = inNs || getMetric(c.metricKey);
   // metricDisplayLabel keeps the "(Innings)" suffix logic in sync with pills.js
   // (this function is the hand-duplicated twin noted above) — Wave A1 item 4.
-  const label = metric ? metricDisplayLabel(metric, state.formats) : c.metricKey;
+  let label = metric ? metricDisplayLabel(metric, state.formats) : c.metricKey;
+  // R2 (2026-08-09): strip the parametric "≥ N" token ("Innings Score ≥ N" →
+  // "Innings Score") so the subtitle reads "Innings Score ≥ 50", not a doubled
+  // "≥ N ≥ 50". Sync twin of pills.conditionPillLabel.
+  if (metric && metric.paramTemplate && metric.param) label = label.replace(/\s*[≥≤=]\s*N\b.*$/, "").trim();
   // Best Bowling (Wave A2 item 2): "Best Bowling ≥2W for ≤9R" — matches pills.js.
   if (conditionIsBowlingFigures(c)) return `${label} ≥${c.v1}W for ≤${c.v2}R`;
   if (c.operator === "between") return `${label} ${c.v1}–${c.v2}`;

@@ -69,6 +69,10 @@ function cleanConditions(conditions) {
         // T-2e: a batting-position LIST slice is usable once ≥1 position is ticked.
         if (isListCond(c)) return (c.positions || []).some((p) => Number.isInteger(Number(p)));
         if (isBooleanCond(c)) return true;
+        // R2: a numeric condition needs its operator chosen — parametric rows start
+        // unset (no default), so drop a committed row that never picked one. No-op
+        // for every other numeric (they carry a valid gte/lte/eq/between).
+        if (!c.operator) return false;
         if (!Number.isFinite(Number(c.v1)) || c.v1 === "") return false;
         if (c.operator === "between" && (!Number.isFinite(Number(c.v2)) || c.v2 === "")) return false;
         return true;
@@ -104,6 +108,11 @@ export function openFilterRowEditor(hostDoc, deps) {
     formats,
     isBooleanMetric,
     isPopupFilterMetric,
+    // R2 (2026-08-09): true for a PARAMETRIC threshold metric (Innings Score /
+    // Wicket Hauls). Such a condition starts with NO operator selected (owner "no
+    // prefills") and its operator <select> carries a blank "Choose…" option. Safe
+    // default for any caller that doesn't supply it → behaves as before.
+    isParamMetric = () => false,
     conditionBaseName,
     onCommit,
     onClose,
@@ -337,7 +346,9 @@ export function openFilterRowEditor(hostDoc, deps) {
       ? { metricKey: key, positions: [] }
       : isBooleanMetric(key, discipline)
         ? { metricKey: key, yn: true }
-        : { metricKey: key, operator: "gte", v1: "", v2: "" };
+        // R2: parametric metrics start with NO operator (blank until chosen); every
+        // other numeric metric keeps the "gte" default, unchanged.
+        : { metricKey: key, operator: isParamMetric(key, discipline) ? "" : "gte", v1: "", v2: "" };
     group().conds.push(cond);
     renderConditions();
     refreshPaletteForLock(); // an empty row just became a slice row → hide matchup-Vs
@@ -371,7 +382,12 @@ export function openFilterRowEditor(hostDoc, deps) {
           <button type="button" class="icon-btn pfe-cond__remove" data-role="remove-cond" title="Remove condition" aria-label="Remove condition">&times;</button>
         </div>`;
     }
-    const opts = OPERATORS.map(
+    // R2: parametric rows (Innings Score / Wicket Hauls) prepend a blank "Choose…"
+    // option (selected while the operator is unset) so nothing is pre-selected.
+    const paramBlank = isParamMetric(cond.metricKey, discipline)
+      ? `<option value=""${cond.operator ? "" : " selected"}>Choose…</option>`
+      : "";
+    const opts = paramBlank + OPERATORS.map(
       (o) => `<option value="${escAttr(o.key)}" ${cond.operator === o.key ? "selected" : ""}>${escHtml(o.label)}</option>`
     ).join("");
     const v2 =

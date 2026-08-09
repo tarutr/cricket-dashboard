@@ -14,7 +14,7 @@ import { mountPills } from "./pills.js";
 import { mountTable } from "./table.js";
 import { mountOmnisearch } from "./omnisearch.js";
 import { mountPlayerPopup } from "./playerPopup.js";
-import { getMetric } from "./metrics.js";
+import { getMetric, COMPOSED_PARAM_OP_TOKEN, composedParamDescriptor, makeComposedParamKey } from "./metrics.js";
 import { mountGraph } from "./graph/graph.js";
 import { showToast } from "./toast.js";
 
@@ -554,6 +554,19 @@ function togglePin(id, name) {
  * it does not suppress showing a freshly-filtered column. Display/state only:
  * buildQuery just SELECTs one more existing metric expression — no aggregation
  * change, and with no conditions this is a no-op (anchor byte-identical).
+ *
+ * R2 (2026-08-09) — PARAMETRIC AUTO-COLUMN LINK (Innings Score / Wicket Hauls,
+ * leaderboard only): a completed parametric FILTER surfaces its MATCHING count
+ * COLUMN, not the base parametric metric key. The column key is built from the
+ * filter's own (operator, value(s)) via makeComposedParamKey — the SAME key the
+ * existence-gate compiles from — so the column ("# innings, score [op] N") ≡ the
+ * filter by construction. Because a column is added only when absent, the owner's
+ * rules fall out for free: ONE-SHOT (a re-Search with the same complete filter finds
+ * the column already present → no duplicate), ACCUMULATE ((op,N) is baked into the
+ * key, so ">50" and "<40" are distinct columns that both persist), and REMOVING the
+ * filter LEAVES the column (nothing here ever removes a column). Guard: an unset
+ * operator → no opToken → skipped (mirrors paramExistenceHaving's null), though
+ * isConditionComplete already drops such a row upstream.
  */
 function autoAddFilteredColumns() {
   const state = store.get();
@@ -580,10 +593,21 @@ function autoAddFilteredColumns() {
       // Skip non-column placeholders (R. Pos. / composition never render as a
       // rankable data column) and metrics that don't exist in this namespace.
       if (!m || m.kind === "position" || m.kind === "composition") continue;
-      if (firstFilteredKey === null) firstFilteredKey = c.metricKey;
-      if (cols.includes(c.metricKey) || added.includes(c.metricKey)) continue;
-      cols.push(c.metricKey);
-      added.push(c.metricKey);
+      // R2: a parametric filter maps to its composed count-column key (isr__/wh__),
+      // NOT the base parametric metric key (which is a filter-only aggregate). Built
+      // from the SAME (op, value(s)) the existence-gate uses → column ≡ filter.
+      let colKey = c.metricKey;
+      if (m.paramTemplate && m.param) {
+        const opToken = COMPOSED_PARAM_OP_TOKEN[c.operator];
+        const desc = composedParamDescriptor(ns);
+        if (!opToken || !desc) continue; // unset operator / non-plain ns → no column
+        const values = c.operator === "between" ? [c.v1, c.v2] : [c.v1];
+        colKey = makeComposedParamKey(desc.prefix, opToken, values);
+      }
+      if (firstFilteredKey === null) firstFilteredKey = colKey;
+      if (cols.includes(colKey) || added.includes(colKey)) continue;
+      cols.push(colKey);
+      added.push(colKey);
     }
   }
   // No complete, rankable condition → no-op (store untouched, anchors byte-identical).

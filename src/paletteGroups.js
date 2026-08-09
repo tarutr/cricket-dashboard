@@ -370,9 +370,10 @@ export function createPaletteGroupsBuilder(deps) {
         leafMetric("high_score", "High Score"),
         leafMetric("fifties", "50s"),
         leafMetric("hundreds", "100s"),
-        // Pop-up: full-operator numeric on the innings' runs (≥/≤/=/between via the
-        // editor), so it reads "Innings Score" — not the leaderboard's "≥ N" count.
-        leafMetric("innings_score_ge", surface === "popup" ? "Innings Score" : "Innings Score ≥ N"),
+        // R2 (2026-08-09): the leaderboard filter is a full-operator existence gate
+        // on the innings' runs (≥/≤/=/between chosen in the editor), so the add-menu
+        // leaf reads "Innings Score" on BOTH surfaces — the hardcoded "≥ N" is gone.
+        leafMetric("innings_score_ge", "Innings Score"),
       ]);
       pushGroup("Batting · Detailed Stats", [
         leafMetric("average", "Batting Average"),
@@ -414,8 +415,9 @@ export function createPaletteGroupsBuilder(deps) {
         // 4-WI / 5-WI removed (R2b): the fixed exactly-4 / 5-plus haul leaves are
         // superseded by the parametrised Wicket Hauls ≥ N ▸ below. The metric defs
         // (four_wicket_hauls / five_wicket_hauls) stay in metrics.js as columns.
-        // Pop-up: full-operator numeric on the innings' wickets (see Innings Score).
-        leafMetric("wicket_hauls_ge", surface === "popup" ? "Wicket Hauls" : "Wicket Hauls ≥ N"),
+        // R2 (2026-08-09): full-operator existence gate on the innings' wickets, so
+        // the add-menu leaf reads "Wicket Hauls" on BOTH surfaces (see Innings Score).
+        leafMetric("wicket_hauls_ge", "Wicket Hauls"),
       ]);
       pushGroup("Bowling · Detailed Stats", [
         leafMetric("average", "Bowling Average"),

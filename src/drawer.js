@@ -985,13 +985,16 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // comparison is implicit: at least W wickets conceding at most R runs in a
     // single innings). Every other metric keeps the operator + value layout.
     const isFigures = isBowlingFiguresCondition(cond);
-    // Parametrised threshold metrics (R2b Phase 2: Innings Score ≥ N, Wicket Hauls
-    // ≥ N). These carry a `paramTemplate` + `param` descriptor (metrics.js): the
-    // user first sets the threshold N (an INSIDE-the-metric bar, e.g. "≥ 50 runs"),
-    // then the normal operator + value applies to the resulting COUNT of innings.
-    // The N lives on cond.n (inside state.advanced, so it serializes + re-lights
-    // Search like every other condition field). ADDITIVE: an unset cond.n falls
-    // back to the metric's default sqlExpression in table.js — byte-identical.
+    // Parametric threshold metrics (Innings Score / Wicket Hauls). These carry a
+    // `paramTemplate` + `param` descriptor (metrics.js). R2 (2026-08-09): they are
+    // now a NORMAL numeric-condition editor whose operator + value apply to the
+    // PER-INNINGS score (runs / wickets) — the filter is an existence gate ("has ≥1
+    // innings meeting score [op] N", compiled by metrics.paramExistenceHaving from
+    // cond.operator + cond.v1 [+ cond.v2 for between]). The old score-threshold box
+    // (cond.n) and the count-operator/value are GONE. The only render differences
+    // from a plain numeric row: the label drops the "≥ N" token, and the operator
+    // select carries a blank "Choose…" option so nothing is pre-selected (owner:
+    // no prefills — the row commits only once an operator AND a value are set).
     const rowMetric = getMetric(cond.metricKey, ns);
     const paramMeta = rowMetric && rowMetric.paramTemplate && rowMetric.param ? rowMetric.param : null;
     let valueFields;
@@ -1008,28 +1011,24 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     } else {
       valueFields = `<input type="number" class="input cond-row__value-input" data-role="v1" value="${escAttr(cond.v1)}" placeholder="value" />`;
     }
+    // Param rows prepend a blank "Choose…" option (selected while the operator is
+    // unset) so no operator is pre-selected — the row is inert until one is chosen.
     const operatorSelect = isFigures
       ? ""
       : `<select class="select" data-role="operator">
+              ${paramMeta ? `<option value=""${cond.operator ? "" : " selected"}>Choose…</option>` : ""}
               ${OPERATORS.map((o) => `<option value="${o.key}" ${cond.operator === o.key ? "selected" : ""}>${o.label}</option>`).join("")}
             </select>`;
-    // Param metrics: drop the "≥ N" placeholder from the label (it becomes the live
-    // N box) and render "<base> ≥ [N] <unit>" before the operator. Default-show
-    // param.default while cond.n is unset — consistent, since table.js's
-    // paramSqlExpression falls back to that same default when cond.n is absent.
+    // Param metrics: drop the "≥ N" token from the label ("Innings Score ≥ N" →
+    // "Innings Score") — the operator is chosen now, so the fixed "≥ N" caption is
+    // gone. Everything after is the plain operator + value layout.
     const rawLabel = metricLabel(cond.metricKey, ns, formats);
     const typeLabel = paramMeta ? rawLabel.replace(/\s*≥\s*N\s*$/, "") : rawLabel;
-    const paramField = paramMeta
-      ? `<span class="cond-row__and">≥</span>
-           <input type="number" min="${paramMeta.min ?? 0}" step="${paramMeta.step ?? 1}" class="input cond-row__value-input cond-row__n-input" data-role="n" value="${escAttr(cond.n ?? paramMeta.default)}" aria-label="${escAttr(paramMeta.label || "threshold")} threshold" title="Threshold (${escAttr(paramMeta.label || "")})" />
-           ${paramMeta.label ? `<span class="cond-row__and">${escHtml(paramMeta.label)}</span>` : ""}`
-      : "";
     return `
       <div class="cond-row cond-row--metric ${hasError ? "cond-row--error" : ""}" data-gi="${gi}" data-ci="${ci}">
         <div class="cond-row__line">
           <div class="cond-row__main">
             <span class="cond-row__type">${escHtml(typeLabel)}</span>
-            ${paramField}
             ${operatorSelect}
             ${valueFields}
           </div>
@@ -1153,12 +1152,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
         });
       }
 
-      // v1 / v2 (values) AND n (the R2b param threshold): all edit cond[role].
-      // A param metric's N (data-role="n") re-uses this handler verbatim —
-      // cond.n = input.value, persisted in state.advanced (serialized), and the
-      // error-clear below keys off conditionHasError (which validates v1, not n),
-      // so an N edit never spuriously clears/blocks the row.
-      rowEl.querySelectorAll('[data-role="v1"],[data-role="v2"],[data-role="n"]').forEach((input) => {
+      // v1 / v2 (values): edit cond[role]. (R2 removed the param "≥ N" box, so the
+      // former data-role="n" handler is gone — parametric rows now use v1/v2 like
+      // any numeric condition, with the operator applied to the per-innings score.)
+      rowEl.querySelectorAll('[data-role="v1"],[data-role="v2"]').forEach((input) => {
         input.addEventListener("input", () => {
           cond[input.dataset.role] = input.value;
           store.set({ advanced: { ...store.get().advanced } });

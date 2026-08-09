@@ -47,7 +47,15 @@ export const OPERATORS = [
 ];
 
 export function newCondition(metricKey = "") {
-  return { metricKey, operator: "gte", v1: "", v2: "" };
+  // R2 (2026-08-09): the PARAMETRIC threshold metrics (Innings Score / Wicket
+  // Hauls) start with NO operator selected — owner "no prefills anywhere": the
+  // filter/column materialises only once BOTH an operator and a value are set.
+  // Every OTHER metric keeps the default "gte", so non-parametric conditions are
+  // byte-identical. getMetric(key) with no discipline matches the base metric
+  // (both parametric keys are single-discipline), same idiom as isBowlingFigures.
+  const m = metricKey ? getMetric(metricKey) : null;
+  const operator = m && m.paramTemplate && m.param ? "" : "gte";
+  return { metricKey, operator, v1: "", v2: "" };
 }
 export function newGroup() {
   return { op: "AND", conds: [] };
@@ -68,6 +76,14 @@ export function ensureGroup(store) {
  * and v2 (R) — same two-value requirement the "between" operator already has. */
 export function isConditionComplete(cond) {
   if (!cond.metricKey) return false;
+  // R2 (2026-08-09): a parametric threshold condition (Innings Score / Wicket
+  // Hauls) needs its operator EXPLICITLY chosen — it starts unset (no default),
+  // so an unset operator is INCOMPLETE: it neither applies (activeGroups drops
+  // it) nor seeds a column (autoAddFilteredColumns skips it), mirroring
+  // metrics.paramExistenceHaving returning null. No-op for every other metric
+  // (they always carry a "gte"/"lte"/… operator).
+  const pm = getMetric(cond.metricKey);
+  if (pm && pm.paramTemplate && pm.param && !cond.operator) return false;
   if (cond.v1 === "" || cond.v1 === null || cond.v1 === undefined || Number.isNaN(parseFloat(cond.v1))) return false;
   if (cond.operator === "between" || isBowlingFiguresCondition(cond)) {
     if (cond.v2 === "" || cond.v2 === null || cond.v2 === undefined || Number.isNaN(parseFloat(cond.v2))) return false;

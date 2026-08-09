@@ -37,7 +37,13 @@ function metricLabelFor(metricKey, state) {
 }
 
 function conditionPillLabel(cond, state) {
-  const label = metricLabelFor(cond.metricKey, state);
+  let label = metricLabelFor(cond.metricKey, state);
+  // R2 (2026-08-09): parametric threshold metrics carry a "≥ N" token in their
+  // catalogue label ("Innings Score ≥ N") — strip it so the pill reads "Innings
+  // Score ≥ 50" (the user's chosen operator + value), not a doubled "≥ N ≥ 50".
+  // Same strip the drawer + pop-up apply; sync twin of state.conditionScopeLabel.
+  const pm = getMetric(cond.metricKey);
+  if (pm && pm.paramTemplate && pm.param) label = label.replace(/\s*[≥≤=]\s*N\b.*$/, "").trim();
   // Best Bowling (Wave A2 item 2): two-box "≥ W wickets for ≤ R runs" — render
   // as "Best Bowling ≥2W for ≤9R" (W = v1, R = v2).
   if (isBowlingFiguresCondition(cond)) return `${label} ≥${cond.v1}W for ≤${cond.v2}R`;
