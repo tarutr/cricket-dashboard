@@ -882,6 +882,14 @@ a { color: var(--color-accent); }
 .profile-role > .search-select { width: auto; }
 .cond-row__value > .search-select .search-select__toggle,
 .profile-role > .search-select .search-select__toggle { min-width: 7rem; }
+/* R3 harmonisation: the "Vs" editor (drawer.js) mounts mountSearchSelect DIRECTLY
+   onto its .cond-row__value host (matching the toolbar's own compact look) rather
+   than into a nested wrapper div like the profile pickers above — so this compound
+   selector (no descendant combinator: search-select is on THE SAME element as
+   cond-row__value, not a child of it) is needed alongside the nested-child rule
+   above. Same "size to content, don't stretch the row" intent. */
+.cond-row__value.search-select { width: auto; }
+.cond-row__value.search-select .search-select__toggle { min-width: 7rem; }
 
 /* ── Nested pickers: Event → Season and Result → Result Condition ────────────
    Both rows have the SAME shape (polish item 6), so they share the layout rules
@@ -1959,11 +1967,18 @@ a { color: var(--color-accent); }
   gap: var(--space-2);
 }
 
+/* R3 harmonisation (density): this popover (columnsPicker.js's mount()/open() —
+   used ONLY by the player pop-up's "Columns" button; the leaderboard's own
+   Columns section uses the separate mountInline()/.cols-* picker below, which
+   this rule does not touch) was still at the base .select/.input-era 0.9rem —
+   bring it down to match the leaderboard's Search Conditions bar (--text-sm2 =
+   0.8rem, see .filter-bar .select/.input, ~398-403, and .pfe .select/.input
+   above for the pop-up's Filter Row editor's matching change). */
 .columns-popover__item {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 0.9rem;
+  font-size: var(--text-sm2);
   cursor: pointer;
 }
 
@@ -1975,7 +1990,7 @@ a { color: var(--color-accent); }
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 0.9rem;
+  font-size: var(--text-sm2);
   color: var(--color-muted);
   cursor: pointer;
   margin: var(--space-1) 0 var(--space-3);
@@ -1987,7 +2002,7 @@ a { color: var(--color-accent); }
 
 .columns-popover__disclosure summary {
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--text-sm2);
   color: var(--color-muted);
   list-style: none;
 }
@@ -2655,31 +2670,16 @@ a { color: var(--color-accent); }
   .filter-group--teamtype { grid-area: teamtype; }
   .filter-group--dates { grid-area: dates; }
 
-  /* Gender/Discipline: stretch the pill control to fill its half-column and
-     split it 50/50 between the two options — big tactile buttons instead of
-     the control hugging its own text width (desktop's
-     `.filter-group .segmented { align-self: flex-start }` stays as-is for
-     the single-row layout at 900px+). flex:1 alone isn't enough — flex
-     items default to min-width:auto, which refuses to shrink below the
-     button's own text+padding min-content, so at a narrow half-column
-     "Batting"/"Bowling" would overflow past the segmented control's own
-     border (visibly clipped mid-word by its `overflow: hidden`, i.e.
-     showing "Bowlin") instead of being contained. min-width:0 + ellipsis is
-     the safety net for whenever a column gets tighter than the label
-     (phones; see the ≤640px tightening below) or a future longer label. */
-  .filter-group--gender .segmented,
-  .filter-group--discipline .segmented {
-    align-self: stretch;
+  /* Gender/Discipline (R3 harmonisation: now plain <select>s, was a segmented
+     pill toggle — see filters.js) — same "fill the half-column" treatment as
+     the Format/Team type dropdowns just below, so all four controls read as
+     one consistent row. A native <select> truncates its own text on its own,
+     so (unlike the old two-button segmented control) no explicit ellipsis
+     rule is needed here. */
+  .filter-group--gender .select,
+  .filter-group--discipline .select {
     width: 100%;
-  }
-  .filter-group--gender .segmented__btn,
-  .filter-group--discipline .segmented__btn {
-    flex: 1;
     min-width: 0;
-    text-align: center;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   /* Format/Team type: fill the half-column instead of the desktop min-width
@@ -2719,11 +2719,10 @@ a { color: var(--color-accent); }
 
   .filter-bar .filter-group { gap: var(--space-1); }
 
-  .filter-group--gender .segmented__btn,
-  .filter-group--discipline .segmented__btn {
-    padding: var(--space-2) var(--space-1);
-    font-size: var(--text-md);
-  }
+  /* R3 harmonisation: the old segmented pill got a phone-only padding/font
+     bump here because its two-button layout could squeeze uncomfortably
+     tight at this width; a plain <select> (see filters.js) doesn't have that
+     problem — the browser's own native control sizing is enough. */
 }
 
 /* Tablet, wide end (900-1149px): the desktop single-row flex-wrap already
@@ -2774,22 +2773,12 @@ a { color: var(--color-accent); }
     white-space: nowrap;
   }
 
-  /* Same safety net as the ≤899px block above, kept here too since
-     "International + Domestic" can still just barely outrun a ~216px
-     column at the low end of this range. */
-  .filter-group--gender .segmented,
-  .filter-group--discipline .segmented {
-    align-self: stretch;
+  /* Same "fill the column" treatment as the ≤899px block above (R3
+     harmonisation: Gender/Discipline are plain <select>s now). */
+  .filter-group--gender .select,
+  .filter-group--discipline .select {
     width: 100%;
-  }
-  .filter-group--gender .segmented__btn,
-  .filter-group--discipline .segmented__btn {
-    flex: 1;
     min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    text-align: center;
   }
 }
 
@@ -5014,6 +5003,16 @@ a { color: var(--color-accent); }
   flex-direction: column;
   max-height: 100%;
 }
+/* R3 harmonisation (density): the pop-up's "Add/Edit Filter Row" controls
+   (condition operator/value selects + inputs, the matchup-Vs search-select
+   toggle) were still at the base .select/.input size (0.9rem) — bring them
+   down to match the leaderboard's own Search Conditions bar (.filter-bar
+   .select/.input, styles.css ~398-403, --text-sm2 = 0.8rem). font-size only;
+   min-height (tap target) stays untouched, same precedent as that bar. */
+.pfe .select,
+.pfe .input {
+  font-size: var(--text-sm2);
+}
 .pfe__head {
   display: flex;
   align-items: center;
@@ -5055,6 +5054,13 @@ a { color: var(--color-accent); }
 .pfe-cond__and { color: var(--color-muted); font-size: 0.9rem; }
 .pfe-cond__val { width: 5.5rem; }
 .pfe-cond__ctrl { flex: 0 0 auto; }
+/* R3 harmonisation: the matchup-Vs row's control is now a mounted search-select
+   PANEL (searchSelect.js), not a plain <select> — its toggle button is width:100%
+   of its own host div (searchSelect.js's own .search-select rule), so THIS row's
+   .pfe-cond__ctrl needs to actually claim space in the flex row instead of
+   sizing to zero/auto content, unlike every other row's compact op/yn <select>.
+   Same growable pattern as .pfe-scope-row__editor below. */
+.pfe-cond--matchupvs .pfe-cond__ctrl { flex: 1 1 auto; min-width: 0; }
 .pfe-cond__remove { margin-left: auto; }
 
 /* T-2e: Batting position — a per-innings LIST slice (tick order positions 1..11). */

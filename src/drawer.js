@@ -396,16 +396,37 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     },
   });
 
-  // ── "Vs" matchup editor (R3.2) ──────────────────────────────────────────────
+  // ── "Vs" matchup editor (R3.2; R3 harmonisation: raw <select> → shared panel) ──
   // Mirrors the results-toolbar's bonded Vs control — both edit state.matchupVs,
   // kept in sync purely through the shared store (a change here calls onChange →
-  // main.js re-syncs the toolbar; a toolbar change re-syncs this via sync()).
-  // buildMatchupQuery is untouched. Options depend on discipline (batting →
-  // pace/spin group + fine bowling types; bowling → batting hand) and match the
-  // toolbar's set — the fine bowling types come from the SAME matchup_batting
-  // distinct-values query, so any value set on either side displays on the other.
-  editorHosts.vs.innerHTML = `<select class="select" data-role="cond-vs" aria-label="Matchup opponent"></select>`;
-  const vsEl = editorHosts.vs.querySelector('[data-role="cond-vs"]');
+  // main.js re-syncs the toolbar; a toolbar change re-syncs this via renderVsEditor(),
+  // called from syncSingletonRows() on every store change). buildMatchupQuery is
+  // untouched. Options depend on discipline (batting → pace/spin group + fine
+  // bowling types; bowling → batting hand) and match the toolbar's set — the fine
+  // bowling types come from the SAME matchup_batting distinct-values query, so any
+  // value set on either side displays on the other. The TOOLBAR's own Vs control
+  // (src/table.js) stays a native <select> (owner ruling — keep the toolbar tight);
+  // only this drawer copy (and the player pop-up's) move to the shared searchable-
+  // panel component, the same migration the five profile pickers already did.
+  const vsSel = mountSearchSelect(editorHosts.vs, {
+    searchable: false,
+    portal: true,
+    ariaLabel: "Matchup opponent",
+    placeholder: "Everyone",
+    allowEmptyLabel: "Everyone",
+    onChange: (val) => {
+      // Same value encoding as the old <select> ("dim:value", or null/"" for
+      // Everyone) — writes the IDENTICAL state.matchupVs shape so the toolbar
+      // select and buildMatchupQuery see no difference.
+      if (!val) {
+        store.set({ matchupVs: null });
+      } else {
+        const i = val.indexOf(":");
+        store.set({ matchupVs: { dim: val.slice(0, i), value: val.slice(i + 1) } });
+      }
+      onChange();
+    },
+  });
   let vsBowlingTypes = null; // fetched once; null until loaded (Vs disabled/coarse-only until then)
   async function loadVsBowlingTypes() {
     if (vsBowlingTypes) return vsBowlingTypes;
@@ -438,16 +459,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   function ensureVsBowlingTypesLoaded() {
     if (!vsBowlingTypes) loadVsBowlingTypes().then((types) => { if (types && types.length) renderNumeric(store.get(), true); });
   }
-  vsEl.addEventListener("change", () => {
-    const raw = vsEl.value;
-    if (!raw) {
-      store.set({ matchupVs: null });
-    } else {
-      const i = raw.indexOf(":");
-      store.set({ matchupVs: { dim: raw.slice(0, i), value: raw.slice(i + 1) } });
-    }
-    onChange();
-  });
   function renderVsEditor() {
     const s = store.get();
     // Fetch the fine bowling types on demand for the batting view; re-render
@@ -456,20 +467,26 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     if (s.discipline === "batting" && !vsBowlingTypes) {
       loadVsBowlingTypes().then(() => renderVsEditor());
     }
-    const current = matchupVsActive(s) ? `${s.matchupVs.dim}:${s.matchupVs.value}` : "";
-    const opt = (value, label) =>
-      `<option value="${escAttr(value)}" ${value === current ? "selected" : ""}>${escHtml(label)}</option>`;
+    const current = matchupVsActive(s) ? `${s.matchupVs.dim}:${s.matchupVs.value}` : null;
+    // Same option SET and ORDER as the old <select> — "Everyone" (via
+    // allowEmptyLabel, above) leads, then Pace/Spin, then the fine bowling
+    // types for batting; just the two hand buckets for bowling. Group labels
+    // reproduce the old <optgroup>s as the panel's own group headers.
+    let opts;
     if (s.discipline === "batting") {
-      const typeOpts = (vsBowlingTypes || []).map((t) => opt(`type:${t}`, matchupBucketLabel(t))).join("");
-      vsEl.innerHTML = `${opt("", "Everyone")}
-        <optgroup label="Pace / spin">${opt("group:Pace", "Pace")}${opt("group:Spin", "Spin")}</optgroup>
-        <optgroup label="Bowling type">${typeOpts}</optgroup>`;
+      opts = [
+        { value: "group:Pace", label: "Pace", group: "Pace / spin" },
+        { value: "group:Spin", label: "Spin", group: "Pace / spin" },
+        ...(vsBowlingTypes || []).map((t) => ({ value: `type:${t}`, label: matchupBucketLabel(t), group: "Bowling type" })),
+      ];
     } else {
-      vsEl.innerHTML = `${opt("", "Everyone")}${opt("hand:Right-hand bat", "Right-handers")}${opt(
-        "hand:Left-hand bat",
-        "Left-handers"
-      )}`;
+      opts = [
+        { value: "hand:Right-hand bat", label: "Right-handers" },
+        { value: "hand:Left-hand bat", label: "Left-handers" },
+      ];
     }
+    vsSel.setOptions(opts);
+    vsSel.setValue(current);
   }
 
   // Push the current option lists + values into the mounted panels (setOptions

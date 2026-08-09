@@ -34,7 +34,6 @@ import {
 } from "./state.js";
 import { INNINGS_NUMBER_FILTER } from "./metrics.js";
 import { eventAliases, stageAliases } from "./canonicalNames.js";
-import { segmentedToggleHTML, wireSegmentedToggle } from "./segmentedToggle.js";
 
 // ── Day-level date helpers (Batch 1B, task 1B-2) ─────────────────────────────
 // Native <input type="date"> yields "YYYY-MM-DD" (which buildScopeClauses
@@ -897,24 +896,18 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
   container.innerHTML = `
     <div class="filter-group filter-group--gender">
       <span class="filter-label">Gender</span>
-      ${segmentedToggleHTML(
-        [
-          { value: "male", label: "Men" },
-          { value: "female", label: "Women" },
-        ],
-        { dataRole: "gender", ariaLabel: "Gender" }
-      )}
+      <select class="select" data-role="gender" aria-label="Gender">
+        <option value="male">Men</option>
+        <option value="female">Women</option>
+      </select>
     </div>
 
     <div class="filter-group filter-group--discipline">
       <span class="filter-label">Discipline</span>
-      ${segmentedToggleHTML(
-        [
-          { value: "batting", label: "Batting" },
-          { value: "bowling", label: "Bowling" },
-        ],
-        { dataRole: "discipline", ariaLabel: "Discipline" }
-      )}
+      <select class="select" data-role="discipline" aria-label="Discipline">
+        <option value="batting">Batting</option>
+        <option value="bowling">Bowling</option>
+      </select>
     </div>
 
     <div class="filter-group filter-group--format">
@@ -974,17 +967,15 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
     </div>
   `;
 
-  // Wave F2 (control-harmonisation, control-audit.md "Exclusive 2-way
-  // toggle"): Gender and Discipline are segmented toggles (src/segmentedToggle.js),
-  // not native <select>s — the audit's own two remaining outliers, now on the
-  // same pattern as every other exclusive on/off choice in the app (Stats/
-  // Graphs view, player-page Batting/Bowling, Bars/Dots, ...). Same store keys
-  // (gender/discipline), same values ("male"/"female", "batting"/"bowling"),
-  // same downstream onChange/onDisciplineChanged/onFormatsChanged calls as the
-  // <select>s they replace — this is a markup + wiring swap only, nothing
-  // about WHAT gets written to state changed. (Round 3 had earlier swapped the
-  // other way, select for what was then a bespoke hero toggle; this wave's
-  // segmented toggle is the shared, audited standard, not that old one-off.)
+  // R3 harmonisation sweep (owner ruling): Gender and Discipline are PLAIN
+  // native <select>s again — the Wave F2 segmented toggles were reverted here
+  // because a 2-way exclusive choice is what a native <select> is for; the
+  // owner ruled the searchable panel (mountSearchSelect) is overkill for a
+  // binary choice too. Same store keys (gender/discipline), same values
+  // ("male"/"female", "batting"/"bowling"), same downstream onChange/
+  // onDisciplineChanged/onFormatsChanged calls as the segmented toggles they
+  // replace — this is a markup + wiring swap only, nothing about WHAT gets
+  // written to state changed.
   const els = {
     gender: container.querySelector('[data-role="gender"]'),
     discipline: container.querySelector('[data-role="discipline"]'),
@@ -1105,8 +1096,8 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
 
   function render() {
     const state = store.get();
-    genderToggle.sync(state.gender);
-    disciplineToggle.sync(state.discipline);
+    els.gender.value = state.gender;
+    els.discipline.value = state.discipline;
     syncFormatDropdown();
     syncTeamTypeDropdown();
     syncDateInputs();
@@ -1170,12 +1161,14 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
   }
 
   // ---- wire remaining events ----
-  // Gender + Discipline (Wave F2): segmented toggles, wired via
-  // wireSegmentedToggle — same store keys/values, same clearing logic, as the
-  // <select>s they replaced. A click on the already-active button is a no-op
-  // (matching a native <select>'s "change" not firing when the same option is
-  // re-picked) — guarded explicitly since a button click fires every time.
-  const genderToggle = wireSegmentedToggle(els.gender, (value) => {
+  // Gender + Discipline (R3 harmonisation): plain native <select>s again — same
+  // store keys/values, same clearing logic, as the segmented toggles they
+  // replaced. A native <select>'s "change" event doesn't fire when the same
+  // option is re-picked, so the explicit value-unchanged guard below is
+  // belt-and-braces (kept from the segmented-toggle version) rather than load-
+  // bearing.
+  els.gender.addEventListener("change", () => {
+    const value = els.gender.value;
     if (value === store.get().gender) return;
     // Switching gender clears the gender-specific selections: teams differ by
     // gender; profile + matchupVs depend on profile/matchup data that (today)
@@ -1207,10 +1200,11 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
   // Discipline: same store key as before. onDisciplineChanged (main.js)
   // re-applies the default column set + falls back the sort key when it no
   // longer resolves in the new discipline.
-  const disciplineToggle = wireSegmentedToggle(els.discipline, (value) => {
+  els.discipline.addEventListener("change", () => {
+    const value = els.discipline.value;
     if (value === store.get().discipline) return;
     store.set({ discipline: value });
-    disciplineToggle.sync(value);
+    els.discipline.value = value;
     if (onDisciplineChanged) onDisciplineChanged();
     onChange();
   });

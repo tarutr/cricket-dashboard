@@ -28,6 +28,7 @@ import { query } from "./db.js";
 import { orderBowlingTypes } from "./table.js";
 import { matchupBucketLabel } from "./metrics.js";
 import { escHtml, escAttr } from "./html.js";
+import { mountSearchSelect } from "./searchSelect.js";
 
 // T-2e: the batting-position LIST slice + the matchup-Vs pick. Batting position ticks
 // order positions 1..11 (compiled to `batting_position IN (…)` by the tab's slice
@@ -44,6 +45,36 @@ const TEAM_TYPES = [
 ];
 
 const GI = 0; // single AND group per row in this wave (multiple conditions, AND)
+
+// ── R3 harmonisation: matchup-Vs picker → shared search-select PANEL ─────────
+// mountSearchSelect registers a document-level click listener that is only ever
+// removed by its own destroy() — fine for the drawer's profile pickers (mounted
+// once for the app's life) but NOT fine here: this editor's overlay/modal is
+// created and torn down on every open (playerFilterScope.js documents this exact
+// leak risk for its own scope-singleton controllers and solves it the same way).
+// So the widget is mounted ONCE, at module scope, and its host <div> is
+// re-parented into whichever modal is currently open; `matchupVsOnPick` is
+// rebound to the CURRENT open editor's setMatchupVs on every render, and cleared
+// on teardown. The widget itself is never destroyed — its one document listener
+// registers exactly once for the module's lifetime, matching the drawer.
+let matchupVsHost = null;
+let matchupVsSel = null;
+let matchupVsOnPick = null;
+function ensureMatchupVsMounted() {
+  if (matchupVsSel) return;
+  matchupVsHost = document.createElement("div");
+  matchupVsSel = mountSearchSelect(matchupVsHost, {
+    searchable: false,
+    portal: true, // the modal's .pfe__body scrolls (overflow-y:auto) — escape the clip
+    ariaLabel: "Matchup opponent",
+    placeholder: "Choose…",
+    onChange: (val) => {
+      if (!val || !matchupVsOnPick) return;
+      const i = val.indexOf(":");
+      if (i > 0) matchupVsOnPick(val.slice(0, i), val.slice(i + 1));
+    },
+  });
+}
 
 /** Fresh, editable clone of a condition block (draft is mutated freely and only
  * committed on save, so the caller's row is never touched mid-edit). */
@@ -403,27 +434,37 @@ export function openFilterRowEditor(hostDoc, deps) {
       </div>`;
   }
 
-  // ── T-2e: the matchup-Vs draft row (a <select> to change the bucket + × remove) ─
-  function matchupVsSelectOptionsHTML() {
-    const cur = draft.matchupVs ? `${draft.matchupVs.dim}:${draft.matchupVs.value}` : "";
-    const opt = (v, label) => `<option value="${escAttr(v)}" ${v === cur ? "selected" : ""}>${escHtml(label)}</option>`;
+  // ── T-2e: the matchup-Vs draft row (R3 harmonisation: shared search-select PANEL
+  // to change the bucket + × remove) ────────────────────────────────────────────
+  // Same option SET and ORDER as the old <select>: Pace/Spin then the fine bowling
+  // types for batting (grouped exactly as the drawer's panel now is — see
+  // drawer.js's renderVsEditor); just the two hand buckets for bowling. No
+  // "Everyone" entry — that's what the × remove button is for on this surface
+  // (unchanged from the old <select>, which never offered one either).
+  function matchupVsOptions() {
     if (discipline === "batting") {
       const types = getVsBowlingTypes() || [];
-      let out = opt("group:Pace", "Pace") + opt("group:Spin", "Spin");
-      // Keep a fine "type:…" pick selectable even before the async list resolves.
+      const opts = [
+        { value: "group:Pace", label: "Pace", group: "Pace / spin" },
+        { value: "group:Spin", label: "Spin", group: "Pace / spin" },
+      ];
+      // Keep a fine "type:…" pick present even before the async list resolves.
       if (draft.matchupVs && draft.matchupVs.dim === "type" && !types.includes(draft.matchupVs.value)) {
-        out += opt(`type:${draft.matchupVs.value}`, matchupBucketLabel(draft.matchupVs.value));
+        opts.push({ value: `type:${draft.matchupVs.value}`, label: matchupBucketLabel(draft.matchupVs.value), group: "Bowling type" });
       }
-      out += types.map((t) => opt(`type:${t}`, matchupBucketLabel(t))).join("");
-      return out;
+      opts.push(...types.map((t) => ({ value: `type:${t}`, label: matchupBucketLabel(t), group: "Bowling type" })));
+      return opts;
     }
-    return opt("hand:Right-hand bat", "Right-handers") + opt("hand:Left-hand bat", "Left-handers");
+    return [
+      { value: "hand:Right-hand bat", label: "Right-handers" },
+      { value: "hand:Left-hand bat", label: "Left-handers" },
+    ];
   }
   function matchupVsRowHTML() {
     return `<div class="pfe-cond pfe-cond--matchupvs" data-role="matchupvs-row">
         <span class="pfe-cond__name">Matchup (Vs)</span>
         <span class="pfe-cond__op">is</span>
-        <select class="select pfe-cond__ctrl" data-role="matchupvs-select" aria-label="Matchup opponent">${matchupVsSelectOptionsHTML()}</select>
+        <div class="pfe-cond__ctrl" data-role="matchupvs-mount"></div>
         <button type="button" class="icon-btn pfe-cond__remove" data-role="remove-matchupvs" title="Remove matchup filter" aria-label="Remove matchup filter">&times;</button>
       </div>`;
   }
@@ -435,19 +476,23 @@ export function openFilterRowEditor(hostDoc, deps) {
       condsEl.innerHTML = `<p class="pfe__empty">No conditions yet — a row with only a scope compares the player's whole record under it.</p>`;
       return;
     }
-    // Load the batting fine-type variants so the matchup-Vs <select> can offer them
+    // Load the batting fine-type variants so the matchup-Vs panel can offer them
     // (the palette family also triggers this, but an edited matchup row skips it).
     if (hasMatchup && discipline === "batting") ensureVsBowlingTypesLoaded();
     condsEl.innerHTML = (hasMatchup ? matchupVsRowHTML() : "") + conds.map((c, ci) => condRowHTML(c, ci)).join("");
 
-    // matchup-Vs row: change the bucket / remove the whole matchup mode.
-    const mvSel = condsEl.querySelector('[data-role="matchupvs-select"]');
-    if (mvSel)
-      mvSel.addEventListener("change", () => {
-        const raw = mvSel.value;
-        const i = raw.indexOf(":");
-        if (i > 0) setMatchupVs(raw.slice(0, i), raw.slice(i + 1));
-      });
+    // matchup-Vs row: the shared search-select panel (module-scope singleton — see
+    // its declaration above) is re-parented into this render's placeholder <div>
+    // and repointed at THIS editor instance's setMatchupVs; remove-button is
+    // rewired like every other row control.
+    if (hasMatchup) {
+      ensureMatchupVsMounted();
+      matchupVsOnPick = setMatchupVs;
+      const mountEl = condsEl.querySelector('[data-role="matchupvs-mount"]');
+      if (mountEl) mountEl.appendChild(matchupVsHost);
+      matchupVsSel.setOptions(matchupVsOptions());
+      matchupVsSel.setValue(draft.matchupVs ? `${draft.matchupVs.dim}:${draft.matchupVs.value}` : null);
+    }
     const mvRm = condsEl.querySelector('[data-role="remove-matchupvs"]');
     if (mvRm) mvRm.addEventListener("click", removeMatchupVs);
 
@@ -553,6 +598,12 @@ export function openFilterRowEditor(hostDoc, deps) {
     // than faking a click; a closed dropdown's close() is already a no-op, so this
     // is a no-op the rest of the time.
     if (scopeController) scopeController.closeOpenPanels();
+    // Same reasoning for the module-scope matchup-Vs picker (see its declaration
+    // above): close any open panel so it doesn't float on <body> after this modal
+    // is gone, and unbind this instance's setMatchupVs so a stray pick can never
+    // reach a torn-down editor. The widget itself stays mounted for reuse next open.
+    if (matchupVsSel) matchupVsSel.close();
+    matchupVsOnPick = null;
     // Detach the shared scope-singleton host BEFORE removing the modal, so its
     // persistent editors (+ their one-time document listeners) survive the close.
     if (scopeController) scopeController.detach();
