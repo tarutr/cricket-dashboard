@@ -1801,6 +1801,13 @@ export function mountTable(
   // NOT flip it either (pins float on top AFTER ordering — the non-pinned rows
   // stay in whatever order applies), which is why the pin requery preserves it.
   let orderIsActiveSort = true;
+  // R1 (2026-08-09): a PICKER-ONLY flag — true while the popup has a STAGED sort
+  // (stageSort) not yet applied to the table. It flows into getSort().active so the
+  // picker lights the staged column's arrow, but the TABLE reads `orderIsActiveSort`
+  // directly (renderLoaded / headerCellHTML), so a staged sort never draws an arrow
+  // on the frozen table. Reset the moment the sort is actually applied (load) or a
+  // table-header sort takes over (sortByColumn).
+  let stagedSortPending = false;
   // Snapshot (serializeQueryState) of the state that produced lastRows, or
   // null before any successful load. Only used as a "has a result ever been
   // loaded" sentinel now (hasResults()) — enterView() used to also compare
@@ -1828,36 +1835,37 @@ export function mountTable(
   let lastBowlingTypes = [];
   // The shared Columns picker (extracted to src/columnsPicker.js, Tab-2 wave
   // T-F2). The leaderboard's contract: it lists metrics for the EFFECTIVE
-  // namespace (matchup vocab while a Vs selection is active) and applies a
-  // column change INSTANTLY via applyColumnsInstant — a frozen-scope requery
-  // that never lights Search. The popover lives on document.body so a reload
-  // never destroys it; load()/enterView() call columnsPicker.refresh(...) after
-  // every re-render to re-anchor + re-sync it. Same behaviour as the former
-  // in-closure openColumnsPopover; only the UI moved behind this contract.
+  // namespace (matchup vocab while a Vs selection is active) and — R1 (2026-08-09) —
+  // STAGES a column change into the pending store via stageColumns/stageColumnSlots,
+  // applying it on the next Search (it no longer requeries the table instantly). The
+  // popover lives on document.body so a reload never destroys it; load()/enterView()
+  // call columnsPicker.refresh(...) after every re-render to re-anchor + re-sync it.
   const columnsPicker = createColumnsPicker({
     getDiscipline: () => effectiveDiscipline(store.get()),
     getFormats: () => store.get().formats,
     // E1a: the picker speaks KEYS (a string[] — same contract the player pop-up
     // uses, so that surface is byte-identical). getColumns projects the store's
     // Slot[] to its key list; setColumns' key array is reconciled back into slots
-    // by applyColumnsInstant (surviving keys keep their slot id).
+    // by stageColumns (surviving keys keep their slot id).
     getColumns: () => {
       const s = store.get();
       return slotKeys(s.columns[effectiveDiscipline(s)]);
     },
-    setColumns: (cols) => applyColumnsInstant(effectiveDiscipline(store.get()), cols),
+    setColumns: (cols) => stageColumns(effectiveDiscipline(store.get()), cols),
     // Columns-rejig W2 (2026-08-07): the leaderboard's inline picker also drives
     // the per-column Sort-by + Highlight controls. Presence of this quartet is
     // what makes the picker RENDER those controls — the player pop-up's popover
     // (playerFiltersTab.js) passes none, so it stays byte-identical (no controls).
-    //   • getSort → the SAME sort state the header clicks read/write
-    //     (store.sort + orderIsActiveSort), so the popup control and the table
-    //     header are ONE two-way-bound sort, never a fork.
-    //   • setSort → routes through sortByColumn, the exact code path a header
-    //     click uses (toggle dir on the active key, default dir otherwise).
-    //   • getHighlights/setHighlights → the display-only highlightedColumns set
-    //     for the effective namespace; setHighlights repaints the table with the
-    //     tint class and never touches the query.
+    //   • getSort → the pending (live-store) sort state; the picker's arrow reflects
+    //     the STAGED choice. The table header reads the FROZEN applied sort, so before
+    //     Search the picker can show a staged sort the table hasn't applied yet.
+    //   • setSort → R1 (2026-08-09, reverses 47g for the popup): routes through
+    //     stageSort — the popup Sort button STAGES a sort into the pending store and
+    //     applies it on Search, it no longer re-sorts the table instantly. The
+    //     table-header ▲/▼ still re-sorts instantly (sortByColumn), a separate path.
+    //   • getHighlights/setHighlights → the display-only highlightedColumns set for
+    //     the effective namespace; R1: setHighlights STAGES (stageHighlights) — the
+    //     picker reflects it, the table applies it on Search. Never touches the query.
     // E1b: getSort also reports the active-sort SLOT id, so the picker's per-copy
     // Sort-by control lights the arrow on the exact copy that is ordering the rows
     // (not every copy of that stat). setSort gains an optional slotId — a per-copy
@@ -1865,13 +1873,16 @@ export function mountTable(
     // key only, and sortByColumn resolves the first slot as before.
     getSort: () => {
       const s = store.get();
-      return { key: s.sort.key, dir: s.sort.dir, active: orderIsActiveSort, slotId: s.sort.slotId };
+      // R1: `active` for the PICKER also lights on a staged-but-unsearched sort
+      // (stagedSortPending); the table itself reads the raw orderIsActiveSort, so a
+      // staged sort shows in the popup without drawing an arrow on the frozen table.
+      return { key: s.sort.key, dir: s.sort.dir, active: orderIsActiveSort || stagedSortPending, slotId: s.sort.slotId };
     },
-    setSort: (key, slotId) => sortByColumn(key, slotId),
+    setSort: (key, slotId) => stageSort(key, slotId),
     // E1a: highlight is stored per-SLOT (slot ids). The picker works in key space,
     // so getHighlights maps the highlighted slot ids → their keys, and setHighlights
     // maps the picker's key set → the slot ids currently showing those keys
-    // (applyHighlightsInstant). With today's unique-key columns this is a lossless
+    // (stageHighlights). With today's unique-key columns this is a lossless
     // key⇄id bijection, so the highlight behaviour is byte-identical.
     getHighlights: () => {
       const s = store.get();
@@ -1880,7 +1891,7 @@ export function mountTable(
       const hlIds = new Set((s.highlightedColumns && s.highlightedColumns[ns]) || []);
       return slots.filter((sl) => hlIds.has(sl.id)).map((sl) => sl.key);
     },
-    setHighlights: (keys) => applyHighlightsInstant(effectiveDiscipline(store.get()), keys),
+    setHighlights: (keys) => stageHighlights(effectiveDiscipline(store.get()), keys),
     // ── E1b multi-instance contract (leaderboard only) ─────────────────────────
     // The presence of getSlots + applySlots is what turns the picker's inline
     // leaderboard rendering into the per-copy "instance" layout (a stat shown twice
@@ -1892,21 +1903,24 @@ export function mountTable(
     //   • getSlots  → the ordered Slot[] ({id,key}) for the effective namespace — the
     //     picker reads each slot's id (per-copy sort/highlight) + key (its count/%
     //     variant) straight from the store.
-    //   • applySlots → apply a freshly-built Slot[] INSTANTLY (frozen-scope requery,
-    //     no Search light), the slot-native twin of setColumns/applyColumnsInstant.
+    //   • applySlots → R1 (2026-08-09): STAGE a freshly-built Slot[] into the pending
+    //     store (add / remove / duplicate / pick / composer / parametric / count-%);
+    //     the table applies it on Search, the slot-native twin of setColumns/stageColumns.
     //   • getHighlightIds / setHighlightIds → the per-copy highlight set as SLOT IDS
     //     (highlightedColumns already stores ids), so a highlight lands on one copy.
+    //     R1: setHighlightIds STAGES (stageHighlightIds); the table-header highlight
+    //     click stays instant (toggleHeaderHighlight → applyHighlightIdsInstant).
     getSlots: () => {
       const s = store.get();
       return (s.columns && s.columns[effectiveDiscipline(s)]) || [];
     },
-    applySlots: (slots) => applyColumnSlotsInstant(effectiveDiscipline(store.get()), slots),
+    applySlots: (slots) => stageColumnSlots(effectiveDiscipline(store.get()), slots),
     getHighlightIds: () => {
       const s = store.get();
       const ns = effectiveDiscipline(s);
       return ((s.highlightedColumns && s.highlightedColumns[ns]) || []).slice();
     },
-    setHighlightIds: (ids) => applyHighlightIdsInstant(effectiveDiscipline(store.get()), ids),
+    setHighlightIds: (ids) => stageHighlightIds(effectiveDiscipline(store.get()), ids),
     // W3: expose the OTHER discipline's columns as an interim cross-discipline
     // group (the all-rounder view) — leaderboard only; the pop-up leaves it off.
     crossDiscipline: true,
@@ -2415,8 +2429,9 @@ export function mountTable(
     // asc/desc); clicking ANYWHERE ELSE on the header toggles this column's
     // highlight. This splits the former whole-header-click-sorts into the two
     // gestures the owner approved (arrow = sort, rest = highlight); drag still
-    // reorders. Two-way bound with the popup row's Sort-by / Highlight controls
-    // (both entry points route through sortByColumn / applyHighlightIdsInstant).
+    // reorders. R1 (2026-08-09): these TABLE-HEADER gestures stay INSTANT
+    // (sortByColumn / applyHighlightIdsInstant); the popup row's Sort-by / Highlight
+    // controls now STAGE (stageSort / stageHighlightIds) and apply on Search.
     const sortGlyph = isSorted ? (dir === "asc" ? "▲" : "▼") : "↕";
     // `data-table__th--draggable` (task 2): every metric column can be
     // reordered via drag — see wireColumnDrag. The sticky Player column
@@ -2515,18 +2530,25 @@ export function mountTable(
    * other. Each slot keeps its id, so its highlight / active-sort attribution stays
    * attached through the move.
    *
-   * R4 Wave 4a (A1): reorder is a purely-cosmetic view change of the SAME data,
-   * applied immediately (the drag would look broken otherwise) and — like the
-   * Columns picker — it must NOT light Search. It updates the FROZEN snapshot's
-   * columns ONLY (a shallow clone of lastLoadedState with just its `columns`
-   * replaced) — never `lastLoadedState = store.get()`, which would fold every
-   * OTHER pending edit into the frozen table and misdraw it — plus the pending
+   * R4 Wave 4a (A1): a TABLE-HEADER drag is a purely-cosmetic view change of the
+   * SAME data, applied immediately (the drag would look broken otherwise) and — a
+   * direct manipulation of the shown table — it must NOT light Search. It updates
+   * the FROZEN snapshot's columns ONLY (a shallow clone of lastLoadedState with just
+   * its `columns` replaced) — never `lastLoadedState = store.get()`, which would fold
+   * every OTHER pending edit into the frozen table and misdraw it — plus the pending
    * store (so a later Search persists the order), plus the APPLIED snapshot via
-   * onColumnsApplied so the dirty comparison sees the new order as already
-   * applied (no Search light). */
+   * onColumnsApplied so the dirty comparison sees the new order as already applied
+   * (no Search light).
+   *
+   * R1 (2026-08-09): with the Columns PANEL now staging (add/remove/etc. wait for
+   * Search), the pending store can hold STAGED columns that aren't on the frozen
+   * table. The splice therefore runs over the PENDING (full) list so staged columns
+   * ride along and are never dropped, while the APPLIED snapshot is set to only the
+   * DISPLAYED slots in their new relative order — so a header drag never leaks a
+   * staged (unsearched) column onto the frozen table, and never loses one either. */
   function reorderColumns(ns, fromId, overId, side) {
-    const base = lastLoadedState || store.get();
-    const cols = (base.columns[ns] || []).slice();
+    const live = store.get();
+    const cols = (live.columns[ns] || []).slice(); // pending (full) list, incl. staged
     const fromIdx = cols.findIndex((s) => s.id === fromId);
     if (fromIdx === -1) return;
     const [moved] = cols.splice(fromIdx, 1);
@@ -2539,94 +2561,70 @@ export function mountTable(
       else if (side === "after") toIdx += 1;
     }
     cols.splice(toIdx, 0, moved);
+    // The DISPLAYED (applied) columns in their new relative order — the frozen table
+    // and the applied snapshot must carry ONLY these, never a staged extra. When
+    // nothing is staged this equals `cols` (byte-identical to the pre-R1 behaviour).
+    const shownIds = new Set(((lastLoadedState && lastLoadedState.columns[ns]) || []).map((s) => s.id));
+    const shownCols = lastLoadedState ? cols.filter((s) => shownIds.has(s.id)) : cols;
     // Advance the APPLIED snapshot FIRST (before store.set fires the toolbar
     // sync) so the Search button never flashes dirty for a reorder.
-    if (onColumnsApplied) onColumnsApplied(ns, cols);
-    const live = store.get();
+    if (onColumnsApplied) onColumnsApplied(ns, shownCols);
+    // Pending store keeps the FULL reordered list (staged columns preserved).
     store.set({ columns: { ...live.columns, [ns]: cols } });
-    // Frozen snapshot: reorder ONLY its columns for this ns, leaving every
-    // other applied field untouched, so the displayed body reorders in place
-    // and enterView() keeps showing the reordered columns after a tab switch.
-    lastLoadedState = { ...lastLoadedState, columns: { ...lastLoadedState.columns, [ns]: cols } };
+    // Frozen snapshot: reorder ONLY its DISPLAYED columns for this ns, leaving every
+    // other applied field untouched, so the displayed body reorders in place and
+    // enterView() keeps showing the reordered columns after a tab switch.
+    if (lastLoadedState) {
+      lastLoadedState = { ...lastLoadedState, columns: { ...lastLoadedState.columns, [ns]: shownCols } };
+    }
     lastQueryStateKey = serializeQueryState(store.get());
   }
 
-  /** R4 Wave 4a (A1): apply a Columns-picker change INSTANTLY. Checking/
-   * unchecking a column changes the DISPLAYED (frozen) table now, not at Search,
-   * and must NOT light the Search button — the applied snapshot's columns
-   * advance in lockstep (onColumnsApplied) so the dirty comparison reads them as
-   * unchanged. This is the deliberate split from the PENDING preset dropdown,
-   * which also sets state.columns but does NOT call onColumnsApplied.
+  /** R1 (2026-08-09, reverses decision 47g for the Columns panel): STAGE a Columns-
+   * picker key-list change into the pending store. Checking / unchecking / picking a
+   * column no longer changes the DISPLAYED table — it edits the PENDING column set
+   * (exactly like a filter edit) and applies on the next Search. `columns` IS part of
+   * serializeQueryState, so this lights the toolbar Search button; the popup's own
+   * Search commits it too (runSearch → snapshotAppliedState → load reads store.columns).
    *
-   * Adding a column needs data the frozen result set doesn't carry (buildQuery
-   * only SELECTs the visible columns), so this requeries — but against the
-   * FROZEN applied SCOPE (lastLoadedState), never the live/pending store, so an
-   * un-searched pending scope edit can't leak in (rows stay frozen).
-   *
-   * `pickerNs` is the namespace the popover was built for (the live effective
-   * discipline). It matches the frozen table's namespace in the common case (no
-   * pending discipline/Vs change); when it doesn't, an instant apply to a table
-   * showing a different namespace would be incoherent, so we fall back to a
-   * PENDING edit (store + syncToolbar → Search lights, applied on the next
-   * load). */
-  function applyColumnsInstant(pickerNs, cols) {
+   * `pickerNs` is the effective discipline the picker was built for (the live pending
+   * namespace); the staged set is written to store.columns[pickerNs]. */
+  function stageColumns(pickerNs, cols) {
     const live = store.get();
     // E1a: the picker hands a KEY array; reconcile it into Slot[] against the live
     // slots so surviving keys keep their slot id (highlight/sort follow), and only
     // a genuinely new key mints a fresh slot.
     const newSlots = reconcileSlots(cols, live.columns[pickerNs]);
-    applyColumnSlotsCore(pickerNs, newSlots);
+    stageColumnSlotsCore(pickerNs, newSlots);
   }
 
-  /** E1b: apply a freshly-built Slot[] INSTANTLY — the slot-native entry point the
-   * multi-instance picker calls (add / remove / duplicate a copy, or swap one
-   * copy's count/% variant). The picker already carries slot identity (each slot's
-   * id preserved, a genuinely new copy minted via makeSlot), so this skips the
-   * key→slot reconcile applyColumnsInstant does and hands the slots straight to the
+  /** E1b + R1: STAGE a freshly-built Slot[] — the slot-native entry point the multi-
+   * instance picker calls (add / remove / duplicate a copy, swap a copy's count/%
+   * variant, composer / parametric edits). The picker already carries slot identity,
+   * so this skips the key→slot reconcile stageColumns does and hands the slots to the
    * shared core. Numbers-safe by construction: two slots of the same stat dedup in
    * load()/buildMatchupQuery, so the SQL + values are unchanged. */
-  function applyColumnSlotsInstant(pickerNs, slots) {
-    applyColumnSlotsCore(pickerNs, slots);
+  function stageColumnSlots(pickerNs, slots) {
+    stageColumnSlotsCore(pickerNs, slots);
   }
 
-  /** Shared instant-column-apply core (E1a/E1b): commit `newSlots` for `pickerNs`
-   * against the FROZEN applied scope so an un-searched pending edit can't leak in,
-   * advance the applied snapshot (onColumnsApplied) so Search stays unlit, and
-   * requery in place preserving row order. Split out so the KEY path
-   * (applyColumnsInstant → reconcile) and the SLOT path (applyColumnSlotsInstant)
-   * share one implementation. */
-  function applyColumnSlotsCore(pickerNs, newSlots) {
-    const base = lastLoadedState;
+  /** R1: shared column-STAGING core (E1a/E1b). Writes `newSlots` to the PENDING store
+   * for `pickerNs` and re-syncs the toolbar/picker — it does NOT touch the frozen
+   * table or requery. The table's shown columns change only on the next Search
+   * (runSearch → load reads store.columns → buildQuery), so the leaderboard stays put
+   * until the user searches. Split out so the KEY path (stageColumns → reconcile) and
+   * the SLOT path (stageColumnSlots) share one implementation. */
+  function stageColumnSlotsCore(pickerNs, newSlots) {
     const live = store.get();
-    const baseNs = base ? effectiveDiscipline(base) : null;
-    if (!base || pickerNs !== baseNs) {
-      store.set({ columns: { ...live.columns, [pickerNs]: newSlots } });
-      syncToolbar();
-      return;
-    }
-    if (onColumnsApplied) onColumnsApplied(baseNs, newSlots);
-    store.set({ columns: { ...live.columns, [baseNs]: newSlots } });
-    // Prune to the frozen scope's eligible columns — a phase column only valid
-    // under a still-pending format change can't apply to the frozen result set.
-    // W3: eligibleColumnKeys includes cross-discipline keys (plain ∪ cross), so an
-    // added Bowling column survives this prune; byte-identical with none present.
-    const allowed = eligibleColumnKeys(baseNs, base.formats);
-    // D4: keep value-dynamic parametric composed columns (isr__/wh__) via a structural
-    // check — they can't be enumerated into the frozen scope's `allowed` set.
-    const frozenCols = newSlots.filter((s) => allowed.has(s.key) || isParamComposedColumnKey(s.key, baseNs));
-    const frozen = { ...base, columns: { ...base.columns, [baseNs]: frozenCols } };
-    // R5-A #4: toggling a column is a toolbar-only change — preserve the current
-    // row order (values swap in place; a dropped sort-column doesn't reshuffle).
-    load(frozen, { resort: false });
+    store.set({ columns: { ...live.columns, [pickerNs]: newSlots } });
+    syncToolbar();
   }
 
-  /** Columns-rejig W2: re-sort the loaded rows by `key` INSTANTLY — the ONE sort
-   * path shared by the table's column-header clicks and the Columns section's
-   * per-column Sort-by control (so the two are two-way bound: either entry point
-   * updates store.sort + orderIsActiveSort, then both the header arrow and the
-   * picker's active-sort indicator recompute from that single state). Hoisted to
-   * mountTable scope (it used to be nested in renderLoaded as `applySortKey`) so
-   * the columnsPicker contract, created above, can call it via setSort.
+  /** Columns-rejig W2 / R1: re-sort the loaded rows by `key` INSTANTLY — the TABLE-
+   * HEADER ▲/▼ sort path (a direct manipulation of the shown table). R1 (2026-08-09)
+   * split the former two-way binding: the Columns PANEL's per-copy Sort-by control now
+   * STAGES (stageSort) and waits for Search, while this header path stays instant.
+   * Hoisted to mountTable scope (it used to be nested in renderLoaded as `applySortKey`).
    *
    * Sorting is "how the loaded rows are displayed," not "which rows" — a pure
    * client-side re-sort (no requery; every sortable column's values are already
@@ -2666,6 +2664,9 @@ export function mountTable(
     // R5-B #0: a sort IS an active column sort — the arrow shows on this column
     // and the rows re-order by it (in the table AND the picker).
     orderIsActiveSort = true;
+    // R1: a header sort is now the applied order — clear any picker-only staged-sort
+    // flag so the picker's arrow tracks this real sort, not a superseded staged one.
+    stagedSortPending = false;
     if (lastLoadedState) {
       lastLoadedState = { ...lastLoadedState, sort };
       lastQueryStateKey = serializeQueryState(lastLoadedState);
@@ -2677,16 +2678,53 @@ export function mountTable(
     }
   }
 
+  /** R1 (2026-08-09, reverses decision 47g for the Columns panel): STAGE a sort from
+   * the Columns panel's per-copy Sort-by control. Unlike the table-header ▲/▼
+   * (sortByColumn, instant), this only writes the PENDING store.sort and lights a
+   * PICKER-ONLY indicator (stagedSortPending → getSort().active) — it does NOT re-sort
+   * or re-render the frozen table. The staged sort applies on the next Search: the
+   * popup's Search (runSearch, resort:true) runs applySort over store.sort. The
+   * flip/default-direction rule mirrors sortByColumn, but reads the PENDING namespace
+   * and PENDING sort so repeated popup clicks toggle the staged choice. */
+  function stageSort(key, slotId) {
+    const live = store.get();
+    const cur = live.sort;
+    const nsL = effectiveDiscipline(live);
+    // Same slot-resolution rule as sortByColumn: a per-copy click passes the slot id;
+    // otherwise resolve the first slot showing `key` in the pending namespace.
+    let sid = slotId != null ? slotId : null;
+    if (sid == null) {
+      const slot = (live.columns[nsL] || []).find((s) => s.key === key) || null;
+      sid = slot ? slot.id : null;
+    }
+    const sameAsActive =
+      sid != null && cur.slotId != null ? cur.slotId === sid : cur.key === key;
+    let sort;
+    if (sameAsActive) {
+      sort = { key, dir: cur.dir === "asc" ? "desc" : "asc", slotId: sid };
+    } else {
+      const metric = resolveSortMetric(key, nsL);
+      sort = { key, dir: metric && metric.higherIsBetter === false ? "asc" : "desc", slotId: sid };
+    }
+    store.set({ sort }); // PENDING only — no lastLoadedState change, no re-sort, no re-render
+    stagedSortPending = true; // picker lights the staged arrow; the frozen table does not
+    syncToolbar();
+  }
+
   /** Columns-rejig W2: toggle the soft-accent highlight on a set of columns,
    * INSTANTLY and DISPLAY-ONLY. Highlight is a CSS class on the column's cells
    * (see headerCellHTML / dataCellHTML) — it never enters a query, never changes
    * which rows or numbers show, and never lights Search (highlightedColumns is
-   * absent from serializeQueryState). So this only rewrites the store's display
-   * field and repaints the already-cached lastRows in place (no requery, no
-   * re-sort, no pagination reset — renderLoaded reads highlightedColumns from the
-   * live store, so the fresh set is picked up). `ns` is the effective namespace
-   * the picker built its rows for, matching the frozen table's columns. */
-  function applyHighlightsInstant(ns, keys) {
+   * absent from serializeQueryState).
+   *
+   * R1 (2026-08-09, reverses decision 47g for the Columns panel): STAGE — the
+   * Columns panel's Highlight controls now write only the PENDING store's display
+   * field (highlightedColumns) and re-sync the picker; they do NOT repaint the frozen
+   * table. renderLoaded reads the highlight set from the FROZEN state (see there), so
+   * a staged highlight can't tint the table until the next Search applies it (load →
+   * lastLoadedState = the committed store). `ns` is the effective (pending) namespace
+   * the picker built its rows for. */
+  function stageHighlights(ns, keys) {
     const live = store.get();
     // E1a: highlight is stored per-SLOT. Map the picker's key set → the slot ids
     // currently showing those keys (one slot consumed per key occurrence, so a
@@ -2704,24 +2742,36 @@ export function mountTable(
       if (q && q.length) ids.push(q.shift());
     }
     store.set({ highlightedColumns: { ...live.highlightedColumns, [ns]: ids } });
-    if (lastLoadedState) {
-      renderLoaded(lastRows, lastLoadedState, lastBowlingTypes);
-    } else {
-      // No table yet — still re-sync the picker's 🖍️ buttons to the new set.
-      syncToolbar();
-    }
+    syncToolbar(); // staged: the picker reflects it; the table waits for Search
   }
 
-  /** E1b: apply a per-copy highlight set given as SLOT IDS directly (the slot-native
-   * twin of applyHighlightsInstant). The multi-instance picker toggles highlight on
-   * one specific copy, so it hands the ids straight in — no key→id remap. Same
-   * DISPLAY-ONLY contract: rewrites highlightedColumns[ns] + repaints the cached
-   * rows in place; never a query change, never lights Search. A stale id for a
-   * removed copy simply matches no rendered column (harmless). */
-  function applyHighlightIdsInstant(ns, ids) {
+  /** R1: STAGE a per-copy highlight set given as SLOT IDS directly (the slot-native
+   * twin of stageHighlights) — the multi-instance Columns panel's Highlight toggle.
+   * Writes only the PENDING store + re-syncs the picker; never repaints the frozen
+   * table (renderLoaded reads highlight from the frozen state), never a query change,
+   * never lights Search. Applies on the next Search. */
+  function stageHighlightIds(ns, ids) {
     const live = store.get();
     store.set({ highlightedColumns: { ...live.highlightedColumns, [ns]: (ids || []).slice() } });
+    syncToolbar();
+  }
+
+  /** E2: apply a per-copy highlight set as SLOT IDS to the DISPLAYED table INSTANTLY —
+   * the TABLE-HEADER highlight path (toggleHeaderHighlight). R1: because renderLoaded
+   * now reads the highlight set from the FROZEN state, this mirrors the change onto
+   * lastLoadedState (the applied/on-screen set) AND the pending store (so the picker
+   * two-way binding still tracks a header highlight), then repaints in place. A staged
+   * POPUP highlight (stageHighlightIds) deliberately does NOT touch lastLoadedState, so
+   * it can never leak onto the frozen table via this path. Never a query change. */
+  function applyHighlightIdsInstant(ns, ids) {
+    const next = (ids || []).slice();
+    const live = store.get();
+    store.set({ highlightedColumns: { ...live.highlightedColumns, [ns]: next } });
     if (lastLoadedState) {
+      lastLoadedState = {
+        ...lastLoadedState,
+        highlightedColumns: { ...lastLoadedState.highlightedColumns, [ns]: next },
+      };
       renderLoaded(lastRows, lastLoadedState, lastBowlingTypes);
     } else {
       syncToolbar();
@@ -2729,16 +2779,15 @@ export function mountTable(
   }
 
   /** E2: toggle the display-only highlight on ONE column copy from its TABLE HEADER
-   * (a click anywhere on the header except the ▲/▼ sort arrow). Reads/writes the same
-   * per-slot highlightedColumns[ns] set the popup's Highlight control uses, and commits
-   * via applyHighlightIdsInstant — so the header and popup Highlight controls stay
-   * two-way bound (that call repaints the table AND re-syncs the picker). `ns` is the
-   * RENDERED table's namespace (what renderLoaded painted), matching how the highlight
-   * set is read back there. Never a query change — highlight is display-only. */
+   * (a click anywhere on the header except the ▲/▼ sort arrow). Commits via
+   * applyHighlightIdsInstant (instant, on the shown table). R1: the toggle is computed
+   * against the APPLIED highlight set (lastLoadedState), NOT the pending store — so a
+   * header highlight never accidentally commits a still-staged POPUP highlight that is
+   * waiting for Search. `ns` is the RENDERED table's namespace. Never a query change. */
   function toggleHeaderHighlight(ns, slotId) {
     if (!slotId) return;
-    const live = store.get();
-    const cur = ((live.highlightedColumns && live.highlightedColumns[ns]) || []).slice();
+    const applied = lastLoadedState || store.get();
+    const cur = ((applied.highlightedColumns && applied.highlightedColumns[ns]) || []).slice();
     const i = cur.indexOf(slotId);
     if (i >= 0) cur.splice(i, 1);
     else cur.push(slotId);
@@ -2751,8 +2800,7 @@ export function mountTable(
    * soft-delete/undo only commits on Search). main.js calls this AFTER it has
    * already (a) added the player to state.pinnedPlayers on the live store and
    * (b) advanced its OWN applied snapshot's pinnedPlayers to match, so the
-   * Search button's dirty comparison sees no change. This mirrors
-   * applyColumnsInstant: it requeries
+   * Search button's dirty comparison sees no change. It requeries
    * against the FROZEN applied SCOPE (lastLoadedState) with pinnedPlayers
    * swapped in — never the live/pending store's OTHER fields (dates/Vs/
    * filters/etc.), which must stay frozen until Search.
@@ -3232,13 +3280,14 @@ export function mountTable(
       .filter((c) => c.m);
 
     // W2/E1a highlight set: the display-only SLOT IDS the user has 🖍️-toggled.
-    // Read from the LIVE store (not the frozen `state`) because a highlight is a
-    // pure cosmetic class, decoupled from the query snapshot — applyHighlightsInstant
-    // repaints via this same renderLoaded, so the fresh set is picked up. Keyed by
-    // the rendered columns' own `ns`, so it always matches the columns on screen.
-    // Never enters buildQuery — numbers untouched.
+    // R1 (2026-08-09): read from the FROZEN `state` (the applied snapshot), NOT the
+    // live store. The Columns panel's Highlight controls now STAGE into the pending
+    // store (stageHighlights / stageHighlightIds) and must not tint the table until
+    // Search; the table-header path (applyHighlightIdsInstant) mirrors its change onto
+    // this frozen `state`, so a header highlight still shows instantly. Keyed by the
+    // rendered columns' own `ns`. Never enters buildQuery — numbers untouched.
     const highlightSet = new Set(
-      (store.get().highlightedColumns && store.get().highlightedColumns[ns]) || []
+      (state.highlightedColumns && state.highlightedColumns[ns]) || []
     );
 
     // Coverage-breakdown wave: the old fixed "Coverage" column is gone —
@@ -3523,6 +3572,10 @@ export function mountTable(
       // A pin requery passes preserveSortFlag so pinning never flips the arrow
       // (the pin only floats a row on top; the non-pinned order is unchanged).
       if (!preserveSortFlag) orderIsActiveSort = doSort;
+      // R1: this load settles the displayed order, so any picker-only staged-sort
+      // indicator is now applied (or superseded) — clear it so the picker tracks the
+      // real applied sort, not a leftover staged flag.
+      stagedSortPending = false;
 
       // R5-B #3: `lastRows` is the BASE ordered array (NOT pin-floated) — the
       // pin float is applied at RENDER time (renderLoaded → floatPinsToTop), so

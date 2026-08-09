@@ -16,15 +16,15 @@
 // behaviour-preserving: the leaderboard produces the EXACT same popover it did
 // before (numbers sacred — no query/column-to-SQL path lives here). Adding a
 // column, ticking a dismissal kind, flipping "Show as %" all call `setColumns`
-// with the SAME column-key array the inline handlers used to hand to
-// applyColumnsInstant.
+// with the SAME column-key array the inline handlers used to hand to the host's
+// column-apply path.
 //
 // What deliberately STAYS with the host (not part of this component):
-//   • applyColumnsInstant — the leaderboard's OWN `setColumns` (a frozen-scope
-//     instant requery); it is the contract impl, passed in here.
-//   • the preset <select> — a toolbar control with different (PENDING, lights
-//     Search) semantics from this popover (instant, no Search light); it shares
-//     columns via the SAME get/set contract, not via this component.
+//   • stageColumns/stageColumnSlots — the leaderboard's OWN `setColumns`/`applySlots`
+//     (R1, 2026-08-09: STAGE into the pending store, applied on Search); the contract
+//     impl, passed in here.
+//   • the preset <select> — a toolbar control that also lights Search and applies on
+//     Search; it shares columns via the SAME get/set contract, not via this component.
 //   • column drag-to-reorder — table-body machinery (moves <th>/<td>, re-renders
 //     the table); per-table, not per-picker. Also uses the same contract.
 //
@@ -37,8 +37,9 @@
 //   getColumns()    -> string[]   the CURRENT visible column-key list for the
 //     effective namespace (the caller reads state.columns[ns]).
 //   setColumns(cols) -> void      apply a new column-key list. The caller decides
-//     what "apply" means (leaderboard: instant frozen-scope requery; pop-up:
-//     re-render its own table). Called with the full new array on every change.
+//     what "apply" means (leaderboard R1: STAGE into the pending store, applied on
+//     Search; pop-up: re-render its own table). Called with the full new array on
+//     every change.
 
 import { escHtml } from "./html.js";
 import {

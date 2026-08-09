@@ -3692,7 +3692,7 @@ export function resolveComposedParamMetric(key, discipline) {
 
 /** True iff `key` is a VALID composed parametric column key for `discipline` (its
  * prefix's own discipline). Used by the column-prune sites (state.pruneIneligibleState,
- * table.pruneInvalidColumns / applyColumnsInstant) to keep a value-dynamic param
+ * table.pruneInvalidColumns) to keep a value-dynamic param
  * column alive across a re-render — these keys can't be enumerated into
  * eligibleColumnKeys' finite Set (infinite value space), so they're validated
  * structurally instead. Format-independent (Innings Score / Wicket Haul don't gate

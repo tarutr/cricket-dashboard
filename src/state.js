@@ -1057,7 +1057,7 @@ export function eligibleCrossMetrics(discipline, formats) {
  * The full set of VALID leaderboard COLUMN keys for a namespace right now — the
  * plain eligible metric keys PLUS the cross-discipline column keys. The three
  * column-prune sites (pruneIneligibleState here, plus table.js's
- * pruneInvalidColumns / applyColumnsInstant) filter against this so a cross column
+ * pruneInvalidColumns) filter against this so a cross column
  * survives a re-render / format tweak instead of being silently dropped as
  * "invalid". Advanced-CONDITION pruning keeps its own (plain) allow-set — cross
  * conditions are not creatable. */
