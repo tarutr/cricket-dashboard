@@ -813,8 +813,23 @@ a { color: var(--color-accent); }
    stretched to the popup width. align-items:flex-start stops the column from
    stretching the line; __main / __value hug their editors (flex:0 1 auto) so a
    picked filter reads as a compact inline group with generous whitespace to its
-   right, rather than a full-width bar. */
-.cond-row { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+   right, rather than a full-width bar.
+   R0 Step 1 (D3): the row now carries a FAINT HAIRLINE card — 1px --color-line,
+   gentle radius, NO fill — the same look the Columns picker's chosen rows use, so
+   both surfaces share one row language. align-self:flex-start keeps the content-
+   sizing intent above: the card hugs its content instead of becoming a full-width
+   bar (the border wraps the __line and any __error line beneath it). */
+.cond-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  align-self: flex-start;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm, 4px);
+  background: none;
+}
 
 .cond-row__line { display: flex; align-items: flex-start; gap: var(--space-2); max-width: 100%; }
 
@@ -2221,10 +2236,10 @@ a { color: var(--color-accent); }
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-2);
   border: 1px solid var(--color-line);
   border-radius: var(--radius-sm, 4px);
-  background: var(--color-bg-raised);
+  background: none;
 }
 .cols-chosen-row__label {
   flex: 1 1 auto;
@@ -2243,10 +2258,10 @@ a { color: var(--color-accent); }
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-2);
   border: 1px solid var(--color-line);
   border-radius: var(--radius-sm, 4px);
-  background: var(--color-bg-raised);
+  background: none;
 }
 .cols-param-row__noun { font-weight: 600; font-size: 0.9rem; flex: 0 0 auto; }
 .cols-param-row__remove { margin-left: auto; }
@@ -2258,7 +2273,7 @@ a { color: var(--color-accent); }
 .cols-composer-row {
   border: 1px solid var(--color-line);
   border-radius: var(--radius-sm, 4px);
-  background: var(--color-bg-raised);
+  background: none;
   padding: var(--space-2);
 }
 .cols-composer-row__head {
