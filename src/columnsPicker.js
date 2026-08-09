@@ -63,6 +63,10 @@ import { eligibleMetrics, eligibleCrossMetrics, makeSlot } from "./state.js";
 // D4: the composer's operator <select> reuses the SAME operator vocabulary as the
 // pop-up / advanced filter (advanced.js is import-cycle-free — pure data model).
 import { OPERATORS } from "./advanced.js";
+// R0 Step 2: the four discipline dropdowns reuse the SAME floating searchable menu
+// as the filters' "+ Add condition" (portal + search + one-open-at-a-time), instead
+// of the old inline panels that reflowed the modal. No query path lives here.
+import { createAddPalette, paletteSkeletonHTML } from "./addPalette.js";
 
 // ── Per-column count/% (+ count/per-match) toggle (columns content rework Wave C) ─
 // Each COUNT key in COLUMN_TOGGLE_PAIRS renders as a SINGLE picker row (leaderboard
@@ -873,38 +877,6 @@ export function createColumnsPicker({
   }
 
 
-  /** W4: wire the four dropdown triggers (inline / leaderboard only — the pop-up
-   * popover has no such bar). Clicking a trigger opens its panel and closes the
-   * others (one open at a time); clicking the open one closes it. The open id is
-   * remembered on inlineState so a re-render (namespace/format change) reopens it. */
-  function wireDropdowns(rootEl) {
-    rootEl.querySelectorAll(".cols-dd-trigger[data-dd]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        if (btn.disabled) return;
-        const id = btn.dataset.dd;
-        const cur = (inlineState && inlineState.openDropdown) || null;
-        const next = cur === id ? null : id;
-        if (inlineState) inlineState.openDropdown = next;
-        applyOpenDropdown(rootEl, next);
-      });
-    });
-  }
-
-  /** Show `openId`'s panel + mark its trigger active; hide/close the rest. Pure
-   * DOM toggle — no re-render, so the wired checkboxes/controls survive. */
-  function applyOpenDropdown(rootEl, openId) {
-    rootEl.querySelectorAll(".cols-dd-trigger[data-dd]").forEach((btn) => {
-      const on = btn.dataset.dd === openId && !btn.disabled;
-      btn.classList.toggle("is-open", on);
-      btn.setAttribute("aria-expanded", on ? "true" : "false");
-    });
-    rootEl.querySelectorAll(".cols-dd-panel[data-dd-panel]").forEach((p) => {
-      p.hidden = p.dataset.ddPanel !== openId;
-    });
-  }
-
-
   /** Re-sync every checkbox's checked state from getColumns() WITHOUT rebuilding
    * — the host may have silently pruned a column out from under us. Two checkbox
    * shapes share this: plain data-key ones and the batting Dismissals dual-key
@@ -1284,24 +1256,27 @@ export function createColumnsPicker({
     return `<div class="cols-chosen" data-role="cols-chosen">${empty}${body}</div>`;
   }
 
-  // ── Add menus ───────────────────────────────────────────────────────────────
+  // ── Add menus (R0 Step 2: four floating searchable palettes, one per discipline) ─
+  // The four discipline dropdowns (Match/Batting/Bowling/Fielding) reuse the SAME
+  // floating searchable menu as the filters' "+ Add condition" (createAddPalette /
+  // paletteSkeletonHTML), instead of the retired inline panels that reflowed the modal.
+  // buildAddMenuHTML now emits only the four trigger skeletons (a bar); the panels are
+  // portaled to <body> on open. columnsPaletteModel computes what each discipline offers
+  // (byte-identical partitioning to the retired inline menu) and buildColumnsGroups turns
+  // one discipline's model into the palette's group/leaf tree, each leaf's run() calling
+  // the SAME slot-store add logic the old data-add-* click handlers used.
 
-  /** One click-to-add menu item for a plain column. */
-  function menuItemHTML(m, formats) {
-    return `<button type="button" class="cols-add-item" data-add-plain-key="${m.key}">${escHtml(metricDisplayLabel(m, formats))}</button>`;
-  }
-  /** A labelled menu section of plain-column items, or "" when empty. */
-  function menuSectionHTML(label, metrics, formats) {
-    return metrics.length
-      ? `<div class="columns-popover__section-label">${label}</div><div class="cols-add-list">${metrics.map((m) => menuItemHTML(m, formats)).join("")}</div>`
-      : "";
-  }
+  /** The four discipline dropdowns, in bar order; the palette skeleton's data-gi is the
+   * INDEX here, which buildColumnsGroups maps back to a discipline. */
+  const DISCIPLINE_ORDER = ["match", "batting", "bowling", "fielding"];
 
-  /** Build the four click-to-add MENUS (Match · Batting · Bowling · Fielding),
-   * partitioning the discipline's columns across the dropdowns and rendering clickable
-   * NAMES (+ composer entries). Clicking a name appends a slot; a composer entry adds
-   * its row. */
-  function buildAddMenuHTML(ns, formats) {
+  /** What each discipline dropdown OFFERS: { <discipline>: [{ name, items }] } where
+   * item = { type:"plain", key, label } | { type:"composer", kind, label } |
+   * { type:"param", prefix, label }. This is the EXACT partitioning the retired inline
+   * menu did (same eligibleMetrics / hidden-key / ordering / cross-discipline / composer
+   * rules) — it depends only on (ns, formats), NEVER on which columns are chosen, so an
+   * open palette never needs rebuilding when a column is added. */
+  function columnsPaletteModel(ns, formats) {
     const bucket = disciplineBucket(ns);
     const all = eligibleMetrics(ns, formats);
     const isDetailed = (m) => m.kind === "rate" || m.kind === "percent" || DETAILED_TOTAL_KEYS.has(m.key);
@@ -1347,57 +1322,108 @@ export function createColumnsPicker({
       crossDetailed = crossDetailedSrc.map((base) => ({ ...base, key: makeCrossKey(other, base.key) }));
     }
 
-    // Composers menu section (own discipline, plain ns only): only kinds applicable
-    // to this discipline/format, plus the parametric composer.
-    let composerSection = "";
+    const plainItems = (list) => list.map((m) => ({ type: "plain", key: m.key, label: metricDisplayLabel(m, formats) }));
+    const section = (name, items) => (items.length ? [{ name, items }] : []);
+
+    // Composers section (own discipline, plain ns only): only kinds applicable to this
+    // discipline/format, plus the parametric composer.
+    const composerItems = [];
     if (isPlainNs) {
-      const items = [];
       for (const kind of DIM_COMPOSER_KINDS) {
-        if (composerAvailable(kind, ns, formats)) {
-          items.push(`<button type="button" class="cols-add-item" data-add-composer-kind="${kind}">${escHtml(COMPOSER_KIND_LABEL[kind])}</button>`);
-        }
+        if (composerAvailable(kind, ns, formats)) composerItems.push({ type: "composer", kind, label: COMPOSER_KIND_LABEL[kind] });
       }
       const desc = composedParamDescriptor(ns);
-      if (desc) {
-        items.push(`<button type="button" class="cols-add-item" data-add-param-prefix="${desc.prefix}">${escHtml(desc.sectionLabel)}</button>`);
-      }
-      composerSection = items.length
-        ? `<div class="columns-popover__section-label">Composers</div><div class="cols-add-list">${items.join("")}</div>`
-        : "";
+      if (desc) composerItems.push({ type: "param", prefix: desc.prefix, label: desc.sectionLabel });
     }
 
-    const ownSections =
-      menuSectionHTML("Basic Stats", ownBasic, formats) +
-      menuSectionHTML("Detailed Stats", ownDetailed, formats) +
-      (isPlainNs ? "" : menuSectionHTML("Dismissals", dismissal, formats)) +
-      composerSection;
-    const crossSections =
-      menuSectionHTML("Basic Stats", crossBasic, formats) + menuSectionHTML("Detailed Stats", crossDetailed, formats);
-    const matchHTML =
-      menuSectionHTML("Basic Stats", matchesMetric ? [matchesMetric] : [], formats) +
-      menuSectionHTML("Impact", impact, formats);
-
-    const dropdowns = [
-      { id: "match", label: "Match", html: matchHTML },
-      { id: "batting", label: "Batting", html: bucket === "batting" ? ownSections : crossSections },
-      { id: "bowling", label: "Bowling", html: bucket === "bowling" ? ownSections : crossSections },
-      { id: "fielding", label: "Fielding", html: menuSectionHTML("Fielding Stats", fielding, formats) },
+    const ownSections = [
+      ...section("Basic Stats", plainItems(ownBasic)),
+      ...section("Detailed Stats", plainItems(ownDetailed)),
+      ...(isPlainNs ? [] : section("Dismissals", plainItems(dismissal))),
+      ...(composerItems.length ? [{ name: "Composers", items: composerItems }] : []),
     ];
-    const open = (inlineState && inlineState.openDropdown) || null;
-    const bar = dropdowns
-      .map((d) => {
-        const empty = !d.html;
-        const isOpen = open === d.id && !empty;
-        return `<button type="button" class="cols-dd-trigger${isOpen ? " is-open" : ""}" data-dd="${d.id}" aria-expanded="${isOpen ? "true" : "false"}" aria-controls="cols-dd-panel-${d.id}"${empty ? " disabled" : ""}><span class="cols-dd-name">${d.label}</span><span class="cols-dd-caret" aria-hidden="true">▾</span></button>`;
-      })
-      .join("");
-    const panels = dropdowns
-      .map((d) => {
-        const isOpen = open === d.id && !!d.html;
-        return `<div class="cols-dd-panel" id="cols-dd-panel-${d.id}" data-dd-panel="${d.id}" role="region" aria-label="${d.label} columns"${isOpen ? "" : " hidden"}>${d.html || ""}</div>`;
-      })
-      .join("");
-    return `<div class="cols-dropdowns cols-add"><div class="cols-add__label">Add columns</div><div class="cols-dd-bar">${bar}</div><div class="cols-dd-panels">${panels}</div></div>`;
+    const crossSections = [
+      ...section("Basic Stats", plainItems(crossBasic)),
+      ...section("Detailed Stats", plainItems(crossDetailed)),
+    ];
+    return {
+      match: [...section("Basic Stats", plainItems(matchesMetric ? [matchesMetric] : [])), ...section("Impact", plainItems(impact))],
+      batting: bucket === "batting" ? ownSections : crossSections,
+      bowling: bucket === "bowling" ? ownSections : crossSections,
+      fielding: section("Fielding Stats", plainItems(fielding)),
+    };
+  }
+
+  /** Build the four discipline dropdown TRIGGERS (a bar). Each is a paletteSkeleton whose
+   * floating panel createAddPalette fills + wires (search + list). A discipline with no
+   * offered columns renders its trigger disabled. NONE open by default (clean empty state,
+   * like the filters section). */
+  function buildAddMenuHTML(ns, formats) {
+    const model = columnsPaletteModel(ns, formats);
+    const skeletons = DISCIPLINE_ORDER.map((disc, gi) => {
+      const label = disc.charAt(0).toUpperCase() + disc.slice(1);
+      const disabled = (model[disc] || []).length === 0;
+      return paletteSkeletonHTML(gi, {
+        ctlClass: "addctl cols-dd-ctl",
+        toggleClass: "cols-dd-trigger",
+        toggleAttrs: disabled ? " disabled" : "",
+        toggleAriaLabel: `Add a ${label} column`,
+        toggleInner: `<span class="cols-dd-name">${escHtml(label)}</span><span class="cols-dd-caret" aria-hidden="true">▾</span>`,
+        searchPlaceholder: "Search columns&hellip;",
+        searchAriaLabel: "Search columns",
+        emptyText: "No matching column.",
+      });
+    }).join("");
+    return `<div class="cols-dropdowns cols-add"><div class="cols-add__label">Add columns</div><div class="cols-dd-bar">${skeletons}</div></div>`;
+  }
+
+  /** The palette group/leaf tree for ONE discipline dropdown (gi = its index in
+   * DISCIPLINE_ORDER). Each leaf's run() does the SAME store mutation the retired inline
+   * data-add-* handlers did (add a plain slot / materialise a composer row / materialise a
+   * pending parametric row), then rerenders. */
+  function buildColumnsGroups(gi) {
+    const ns = getDiscipline();
+    const formats = getFormats();
+    const model = columnsPaletteModel(ns, formats);
+    const sections = model[DISCIPLINE_ORDER[gi]] || [];
+    return sections.map((sec) => ({
+      name: sec.name,
+      items: sec.items.map((it) => ({
+        kind: "leaf",
+        label: it.label,
+        run:
+          it.type === "plain"
+            ? () => addPlainColumn(it.key)
+            : it.type === "composer"
+            ? () => addComposerRow(it.kind)
+            : () => addParamRow(),
+      })),
+    }));
+  }
+
+  // ── Add actions (the palette leaves' run() closures) — byte-identical store mutations
+  //    to the retired inline data-add-* handlers. ──────────────────────────────────────
+  /** Append a plain column slot (a fresh copy; duplicates allowed — owner's re-pick). */
+  function addPlainColumn(key) {
+    applySlots([...(getSlots() || []), makeSlot(key)]);
+    rerenderInline();
+  }
+  /** Materialise a dimension/category composer row (owner ruling: ONE metric/axis per
+   * row) — a manual empty row with the first metric/axis not already shown for this kind;
+   * no-op if that (kind, sel) already has a row. */
+  function addComposerRow(kind) {
+    if (!inlineState) return;
+    const sel = defaultComposerSel(kind, getDiscipline(), getFormats());
+    if (sel == null) return;
+    if (!inlineState.composers.some((c) => c.kind === kind && c.sel === sel)) inlineState.composers.push({ kind, sel });
+    rerenderInline();
+  }
+  /** Materialise a BLANK pending parametric row (owner ruling: parametric composers start
+   * empty; the column is minted only once a valid operator + value is entered). */
+  function addParamRow() {
+    if (!inlineState) return;
+    inlineState.pendingParams.push({ id: nextPendingId() });
+    rerenderInline();
   }
 
   /** The whole leaderboard Columns section: chosen rows + add menus. */
@@ -1405,43 +1431,10 @@ export function createColumnsPicker({
     return `<div class="cols-picker">${buildChosenHTML(ns, formats)}${buildAddMenuHTML(ns, formats)}</div>`;
   }
 
-  // ── Add-menu + composer + param wiring (filter-style inline) ─────────────────
-  function wireAddMenus(rootEl) {
-    rootEl.querySelectorAll(".cols-add-item[data-add-plain-key]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        applySlots([...(getSlots() || []), makeSlot(btn.dataset.addPlainKey)]);
-        rerenderInline();
-      });
-    });
-    rootEl.querySelectorAll(".cols-add-item[data-add-composer-kind]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        const kind = btn.dataset.addComposerKind;
-        if (!inlineState) return;
-        // Owner ruling: ONE metric/axis per row. Add a manual empty row with the
-        // first metric/axis not already shown for this kind (so "add again" lands on
-        // a new metric). No-op if that (kind, sel) already has a row.
-        const sel = defaultComposerSel(kind, getDiscipline(), getFormats());
-        if (sel == null) return;
-        if (!inlineState.composers.some((c) => c.kind === kind && c.sel === sel)) {
-          inlineState.composers.push({ kind, sel });
-        }
-        rerenderInline();
-      });
-    });
-    rootEl.querySelectorAll(".cols-add-item[data-add-param-prefix]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        // Owner ruling: parametric composers START EMPTY — add a blank pending row,
-        // NOT a seeded column. The column is minted once the user enters a valid value.
-        if (!inlineState) return;
-        inlineState.pendingParams.push({ id: nextPendingId() });
-        rerenderInline();
-      });
-    });
-  }
-
+  // ── Composer + param editor wiring (in the CHOSEN-rows region) ───────────────
+  // (The ADD actions for plain columns / composers / params now live in the four
+  // floating discipline palettes — see buildColumnsGroups + addPlainColumn /
+  // addComposerRow / addParamRow above.)
   function wireComposerEditors(rootEl) {
     // Dimension/category tick-box: add / remove the composed slot for its value.
     rootEl.querySelectorAll(".cols-comp-check[data-composed-key]").forEach((cb) => {
@@ -1601,29 +1594,64 @@ export function createColumnsPicker({
     syncInstanceControls(rootEl);
   }
 
-  /** Render the leaderboard's inline picker (filter-style: chosen rows + add menus)
-   * straight into its host (build + wire). Inline-only: the pop-up popover renders
-   * via open() → buildPickerHTML, untouched. The inline host is always the multi-
-   * instance (slot-native) leaderboard picker — the pre-rework four-dropdown checkbox
-   * layout has been retired. */
-  function renderInline(container, ns, formats) {
-    container.innerHTML = buildInlineHTML(ns, formats);
-    // Plain chosen-row controls (count/% · sort · highlight · duplicate · ×) reuse
-    // the E1b per-slot wiring (data-*-slot markup). Param-row × also uses
-    // data-remove-slot, so it wires here too.
+  /** Wire the CHOSEN-rows region controls (per-slot count/% · sort · highlight ·
+   * duplicate · × via the E1b data-*-slot markup; composer tick/metric/×; param
+   * op/value/×). Shared by the full render and the chosen-only re-render. */
+  function wireChosen(container) {
     wireMultiInstance(container);
-    wireAddMenus(container);
     wireComposerEditors(container);
     wireParamRows(container);
-    wireDropdowns(container);
+  }
+
+  /** Build + mount the four floating discipline palettes into `container` (one shared
+   * createAddPalette instance → one-open-at-a-time + keepOpenOnPick). Stored on
+   * inlineState so a subsequent FULL render can close an open palette before wiping. */
+  function mountColumnPalettes(container) {
+    const api = createAddPalette({ buildGroups: buildColumnsGroups, keepOpenOnPick: true });
+    container.querySelectorAll('[data-role="add-palette"]').forEach((el) => api.mountAddPalette(el));
+    if (inlineState) inlineState.paletteApi = api;
+  }
+
+  /** FULL render of the leaderboard's inline picker (chosen rows + the four discipline
+   * palette triggers) into its host, then wire everything + mount the palettes. Called
+   * on mount and on a discipline/format change (which swaps the whole metric vocabulary).
+   * Inline-only: the pop-up popover renders via open() → buildPickerHTML, untouched. */
+  function renderInline(container, ns, formats) {
+    // Close any open floating column palette before wiping (a portaled-open panel would
+    // orphan on <body>) — mirrors drawer.js's palette.closeCurrent() before a rebuild.
+    if (inlineState && inlineState.paletteApi) inlineState.paletteApi.closeCurrent();
+    container.innerHTML = buildInlineHTML(ns, formats);
+    wireChosen(container);
+    mountColumnPalettes(container);
     if (inlineState) inlineState.sig = inlineSignature(ns, formats);
   }
 
-  /** D4: re-render the inline picker in place (preserving the open dropdown). Called
-   * after adding/removing a value-dynamic parametric column so its row list rebuilds.
-   * No-op in popover mode (the pop-up has no param composer). */
+  /** Re-render ONLY the chosen-rows region (add / remove / duplicate / mode-swap /
+   * composer / param edits), leaving the four discipline palettes MOUNTED — so a menu
+   * that is open (owner ruling D2: stays open while adding several columns) survives the
+   * pick, search text and all. The add menu is a pure function of (ns, formats), never of
+   * the chosen columns, so it never needs rebuilding here; a discipline/format change goes
+   * through the FULL renderInline path (refresh) instead. Falls back to a full render if
+   * the chosen host is somehow missing. */
   function rerenderInline() {
-    if (inlineState) renderInline(inlineState.el, getDiscipline(), getFormats());
+    if (!inlineState) return;
+    const container = inlineState.el;
+    const ns = getDiscipline();
+    const formats = getFormats();
+    const chosenHost = container.querySelector('[data-role="cols-chosen"]');
+    if (!chosenHost) {
+      renderInline(container, ns, formats);
+      return;
+    }
+    const tmp = document.createElement("div");
+    tmp.innerHTML = buildChosenHTML(ns, formats);
+    const fresh = tmp.firstElementChild;
+    chosenHost.replaceWith(fresh);
+    wireChosen(container);
+    inlineState.sig = inlineSignature(ns, formats);
+    // keepOpenOnPick: adding a column grows the chosen list ABOVE the dropdown bar, which
+    // shifts the (still-open) discipline trigger — re-anchor the open menu to it.
+    if (inlineState.paletteApi) inlineState.paletteApi.repositionCurrent();
   }
 
   /**
@@ -1631,8 +1659,8 @@ export function createColumnsPicker({
    * leaderboard popup's "Columns" section) and remember it so refresh() keeps it
    * honest. Idempotent — re-mounting simply re-renders. Distinct from mount(),
    * which wires a trigger button to OPEN a floating popover; a given picker
-   * instance uses one mode or the other, never both. W4: the current discipline's
-   * OWN dropdown (Batting on a batting table) opens by default.
+   * instance uses one mode or the other, never both. R0 Step 2: none of the four
+   * discipline dropdowns opens by default (clean empty state, like the filters section).
    */
   function mountInline(container) {
     if (!container) return;
@@ -1644,8 +1672,9 @@ export function createColumnsPicker({
     // slots, so this only tracks the pending-empty set. `pendingParams` = added-but-
     // unset parametric rows ({ id }; owner ruling: parametric composers start empty).
     // Both reset on a discipline switch (refresh). `sig` caches the last render's
-    // structural signature for the sync fast-path.
-    inlineState = { el: container, ns, formats: formats.slice(), openDropdown: disciplineBucket(ns), composers: [], pendingParams: [], sig: null };
+    // structural signature for the sync fast-path. `paletteApi` holds the mounted
+    // discipline-palette component so a full re-render can close an open menu first.
+    inlineState = { el: container, ns, formats: formats.slice(), composers: [], pendingParams: [], sig: null, paletteApi: null };
     renderInline(container, ns, formats);
   }
 
@@ -1666,13 +1695,11 @@ export function createColumnsPicker({
       const ns = getDiscipline();
       const formats = getFormats();
       if (ns !== inlineState.ns || !sameFormats(formats, inlineState.formats)) {
-        // A discipline switch flips which dropdown holds the OWN columns — default
-        // the newly-relevant own dropdown open (a format-only change keeps whatever
-        // was open) — and DROPS any pending-empty composer/param rows (their metric
-        // vocabulary belongs to the old discipline; a composer with real columns
-        // re-derives from the new ns's slots).
+        // A discipline switch swaps the whole metric vocabulary and DROPS any pending-
+        // empty composer/param rows (their vocabulary belongs to the old discipline; a
+        // composer with real columns re-derives from the new ns's slots). No dropdown
+        // opens by default (R0 Step 2); the full renderInline closes any open menu first.
         if (ns !== inlineState.ns) {
-          inlineState.openDropdown = disciplineBucket(ns);
           inlineState.composers = [];
           inlineState.pendingParams = [];
         }

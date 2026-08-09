@@ -28,17 +28,33 @@ import { escHtml, escAttr } from "./html.js";
  * group card, addressed by `gi`). Kept here so the component owns both its
  * markup and its wiring; drawer.js's groupCardHTML embeds this verbatim, so the
  * rendered DOM is byte-identical to the pre-extraction inline skeleton. */
-export function paletteSkeletonHTML(gi) {
-  return `<div class="addctl" data-role="add-palette" data-gi="${gi}">
-            <button type="button" class="select cond-builder__add-toggle" data-role="palette-toggle" aria-haspopup="dialog" aria-expanded="false" aria-label="Add a filter condition">
-              <span class="cond-builder__add-plus" aria-hidden="true">+</span>
+export function paletteSkeletonHTML(gi, opts = {}) {
+  // R0 Step 2 — ADDITIVE parametrisation. The leaderboard Columns picker mounts this
+  // SAME skeleton four times as discipline dropdowns (Match / Batting / Bowling /
+  // Fielding), so the toggle's class / label / inner markup / disabled state and the
+  // search placeholder + empty text are overridable. EVERY default reproduces the
+  // original "+ Add condition" trigger, so the filters-drawer and player-pop-up callers
+  // (which call paletteSkeletonHTML(gi) with no opts) render exactly as before.
+  const ctlClass = opts.ctlClass || "addctl";
+  const toggleClass = opts.toggleClass || "select cond-builder__add-toggle";
+  const toggleAttrs = opts.toggleAttrs || "";
+  const toggleAriaLabel = opts.toggleAriaLabel || "Add a filter condition";
+  const toggleInner =
+    opts.toggleInner ||
+    `<span class="cond-builder__add-plus" aria-hidden="true">+</span>
               <span class="cond-builder__add-text">Add condition</span>
-              <span class="cond-builder__add-caret" aria-hidden="true"></span>
+              <span class="cond-builder__add-caret" aria-hidden="true"></span>`;
+  const searchPlaceholder = opts.searchPlaceholder || "Search filters&hellip;";
+  const searchAriaLabel = opts.searchAriaLabel || "Search filters";
+  const emptyText = opts.emptyText || "No matching filter.";
+  return `<div class="${ctlClass}" data-role="add-palette" data-gi="${gi}">
+            <button type="button" class="${toggleClass}" data-role="palette-toggle" aria-haspopup="dialog" aria-expanded="false" aria-label="${escAttr(toggleAriaLabel)}"${toggleAttrs}>
+              ${toggleInner}
             </button>
             <div class="palette" data-role="palette-panel" hidden>
-              <input type="text" class="input palette__search" data-role="palette-search" placeholder="Search filters&hellip;" autocomplete="off" aria-label="Search filters" />
+              <input type="text" class="input palette__search" data-role="palette-search" placeholder="${searchPlaceholder}" autocomplete="off" aria-label="${escAttr(searchAriaLabel)}" />
               <div class="palette__list" data-role="palette-list"></div>
-              <div class="palette__empty" data-role="palette-empty" hidden>No matching filter.</div>
+              <div class="palette__empty" data-role="palette-empty" hidden>${escHtml(emptyText)}</div>
             </div>
           </div>`;
 }
@@ -51,17 +67,29 @@ export function paletteSkeletonHTML(gi) {
  *     rebuild, exactly as drawer.js's wireNumeric did.
  *   • closeCurrent() — close whichever palette is open (call before wiping the
  *     cards on a rebuild; a portaled-open panel would otherwise orphan on <body>).
+ *   • repositionCurrent() — re-anchor the open panel to its trigger after the caller
+ *     reflows the layout beneath a kept-open panel (see keepOpenOnPick). No-op if closed.
  *
  * `buildGroups(gi)` returns the group tree for the current state (see the shape
  * note at the top of the file). Each component instance owns its OWN
  * "only-one-open-at-a-time" close tracker, so two surfaces mounting their own
  * component never interfere — identical to the per-mountFilterDrawer closure the
  * tracker lived in before the extraction.
+ *
+ * `keepOpenOnPick` (R0 Step 2, owner ruling D2): default false = close the palette
+ * after a pick (the filters drawer + player pop-up rely on this). The leaderboard
+ * Columns picker passes true so its discipline menu STAYS OPEN after adding a column
+ * (add several in a row); it closes only on an outside click / Escape / re-toggle.
  */
-export function createAddPalette({ buildGroups }) {
+export function createAddPalette({ buildGroups, keepOpenOnPick = false }) {
   // Only one palette is open at a time (per this component); a rebuild closes it
   // before wiping the DOM (a portaled-open panel would orphan on <body>).
   let currentPaletteClose = null;
+  // The open panel's reposition fn (R0 Step 2). With keepOpenOnPick the panel outlives
+  // the pick, so a caller that reflows the layout under it (the Columns picker grows its
+  // chosen-rows list ABOVE the trigger) can re-anchor the still-open panel to the trigger
+  // via repositionCurrent(). null when nothing is open.
+  let currentPaletteReposition = null;
 
   /** Leak-free portal for the palette panel: doc listeners are added on open and
    * REMOVED on close, so re-creating the palette on every numeric rebuild never
@@ -91,6 +119,13 @@ export function createAddPalette({ buildGroups }) {
     const onDocClick = (e) => {
       if (!opened) return;
       if (panelEl.contains(e.target) || toggleEl === e.target || toggleEl.contains(e.target)) return;
+      // R0 Step 2, owner ruling D2: the dismiss click ONLY closes the palette — it is
+      // CONSUMED (capture-phase preventDefault + stopPropagation) so it does not also
+      // fall through to whatever is underneath (e.g. clicking the Columns-section
+      // minimise toggle while a menu is open just closes the menu; a second click
+      // would collapse the section). Owner OK'd the consistent filter-side effect.
+      e.preventDefault();
+      e.stopPropagation();
       close();
     };
     const onKeydown = (e) => {
@@ -109,6 +144,7 @@ export function createAddPalette({ buildGroups }) {
       document.addEventListener("click", onDocClick, true);
       document.addEventListener("keydown", onKeydown, true);
       currentPaletteClose = close;
+      currentPaletteReposition = position;
       if (onOpen) onOpen();
     }
     function close() {
@@ -124,6 +160,7 @@ export function createAddPalette({ buildGroups }) {
       else home.parent.appendChild(panelEl);
       toggleEl.setAttribute("aria-expanded", "false");
       if (currentPaletteClose === close) currentPaletteClose = null;
+      if (currentPaletteReposition === position) currentPaletteReposition = null;
     }
     toggleEl.addEventListener("click", () => { if (opened) close(); else open(); });
     return { open, close };
@@ -141,7 +178,9 @@ export function createAddPalette({ buildGroups }) {
     const portal = portalPanel(toggleEl, panelEl, {
       onOpen: () => { searchEl.value = ""; resetFilter(); searchEl.focus(); },
     });
-    const doPick = (run) => { portal.close(); run(); };
+    // D2: when keepOpenOnPick is set (Columns picker), a pick runs WITHOUT closing so
+    // several columns can be added in a row; otherwise close-then-run (filters / pop-up).
+    const doPick = keepOpenOnPick ? (run) => { run(); } : (run) => { portal.close(); run(); };
 
     // ── list DOM ────────────────────────────────────────────────────────────────
     const labelHTML = (label) =>
@@ -269,5 +308,12 @@ export function createAddPalette({ buildGroups }) {
     if (currentPaletteClose) currentPaletteClose();
   }
 
-  return { mountAddPalette, closeCurrent };
+  /** Re-anchor the currently-open panel to its trigger (R0 Step 2). No-op when nothing
+   * is open. Callers that reflow the layout under a kept-open panel (the Columns picker)
+   * call this after the reflow so the panel follows its trigger. */
+  function repositionCurrent() {
+    if (currentPaletteReposition) currentPaletteReposition();
+  }
+
+  return { mountAddPalette, closeCurrent, repositionCurrent };
 }

@@ -2172,6 +2172,11 @@ a { color: var(--color-accent); }
   gap: var(--space-2);
   margin-bottom: var(--space-3);
 }
+/* R0 Step 2: each discipline trigger is wrapped in an .addctl (the positioning context
+   for its floating palette), so the WRAPPER is the bar's flex child and carries the
+   sizing while the trigger fills it. */
+.cols-dd-ctl { flex: 1 1 8rem; min-width: 0; }
+.cols-dd-ctl > .cols-dd-trigger { width: 100%; }
 .cols-dd-trigger {
   display: inline-flex;
   align-items: center;
@@ -2188,7 +2193,9 @@ a { color: var(--color-accent); }
   cursor: pointer;
 }
 .cols-dd-trigger:hover:not(:disabled) { border-color: var(--color-accent); }
-.cols-dd-trigger.is-open {
+/* R0 Step 2: the floating palette marks its open trigger via aria-expanded (portalPanel),
+   not a class — so the open look keys off that. */
+.cols-dd-trigger[aria-expanded="true"] {
   border-color: var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 8%, var(--color-bg-raised));
 }
@@ -2207,7 +2214,7 @@ a { color: var(--color-accent); }
   font-size: 0.75em;
   transition: transform 0.15s ease;
 }
-.cols-dd-trigger.is-open .cols-dd-caret { transform: rotate(180deg); }
+.cols-dd-trigger[aria-expanded="true"] .cols-dd-caret { transform: rotate(180deg); }
 .cols-dd-panel {
   padding: var(--space-3);
   border: 1px solid var(--color-line);
@@ -2317,7 +2324,7 @@ a { color: var(--color-accent); }
 
 @media (max-width: 640px) {
   .cols-dd-bar { flex-direction: column; }
-  .cols-dd-trigger { flex: 1 1 auto; }
+  .cols-dd-ctl { flex: 1 1 auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   .cols-dd-caret { transition: none; }
