@@ -40,7 +40,9 @@ import {
   eligibleComposedInningsKeys,
   eligibleComposedRunSourceKeys,
   eligibleComposedWicketTypeKeys,
+  eligibleComposedFieldingKeys,
   isParamComposedColumnKey,
+  isComposedFieldingColumnKey,
   makeComposedPhaseKey,
   makeComposedBallKey,
   makeComposedWicketTypeKey,
@@ -1104,6 +1106,17 @@ export function eligibleColumnKeys(discipline, formats) {
   for (const key of eligibleComposedWicketTypeKeys(discipline)) {
     keys.add(key);
   }
+  // Fielding composers (FC-1): the FIXED-token fc__ column keys (phase / innings /
+  // hand / bowler-style × the 5 tallies × count+per-match) are valid columns too —
+  // fold them in so a composed fielding column survives a re-render. The USER-
+  // DEFINED over/pos RANGE keys are value-dynamic (infinite) and are kept alive
+  // structurally via isComposedFieldingColumnKey at the prune sites instead (like
+  // the isr__/wh__ parametric columns). Fielding is discipline-agnostic, so these
+  // exist on both plain batting and bowling. Byte-identical when no fc__ column is
+  // present (the extra keys just never match).
+  for (const key of eligibleComposedFieldingKeys(discipline)) {
+    keys.add(key);
+  }
   return keys;
 }
 
@@ -1128,7 +1141,14 @@ export function pruneIneligibleState(store) {
   // D4: parametric composed columns (isr__/wh__) are value-dynamic — not enumerable
   // into the finite `allowed` set — so keep them via a structural check. E1a: filter
   // SLOTS by their key (preserving each survivor's slot id → highlight/sort follow).
-  const prunedCols = cols.filter((sl) => allowed.has(sl.key) || isParamComposedColumnKey(sl.key, s.discipline));
+  // FC-1: value-dynamic fielding composers (fc__…__over/pos__<range>) are an
+  // infinite value space too — keep them alive with the same structural check.
+  const prunedCols = cols.filter(
+    (sl) =>
+      allowed.has(sl.key) ||
+      isParamComposedColumnKey(sl.key, s.discipline) ||
+      isComposedFieldingColumnKey(sl.key, s.discipline)
+  );
   const colsChanged = prunedCols.length !== cols.length;
 
   // Matchup namespaces (D4 R3 follow-up, restricted picker): the same phase

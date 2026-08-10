@@ -2644,6 +2644,8 @@ export function getMetric(key, discipline) {
     //   • wt__<type>__<axis>   (D3) — wicket-type count / % (both disciplines).
     //   • isr__/wh__<op>__<v>  (D4) — parametric threshold count (op ∈ ge/le/eq/bt):
     //     Innings Score Range (batting) / Wicket Haul (bowling).
+    //   • fc__<tally>__<dim>__<v> (FC-1) — fielding composer: a tally×dimension×
+    //     value COUNT (or _per_match) projected out of the injected fielding_cte.
     // Resolve them HERE so the leaderboard's buildQuery inningsMetrics path (which
     // calls getMetric) projects them through the NORMAL selectParts loop with NO
     // query-builder change. Byte-identical for every catalogued key (the map hit
@@ -2656,7 +2658,8 @@ export function getMetric(key, discipline) {
       resolveComposedInningsMetric(key, discipline) ??
       resolveComposedRunSourceMetric(key, discipline) ??
       resolveComposedWicketTypeMetric(key, discipline) ??
-      resolveComposedParamMetric(key, discipline)
+      resolveComposedParamMetric(key, discipline) ??
+      resolveComposedFieldingMetric(key, discipline)
     );
   }
   return METRICS.find((m) => m.key === key) ?? null;
@@ -3768,6 +3771,261 @@ export function paramExistenceHaving(baseMetric, operator, values, discipline) {
   const countMetric = resolveComposedParamMetric(makeComposedParamKey(prefix, opToken, nums), discipline);
   if (!countMetric) return null;
   return `((${countMetric.sqlExpression}) >= 1)`;
+}
+
+// ── Composed FIELDING columns (fielding composers, FC-1, 2026-08-10) ──────────
+// A fielding composer = a BASE TALLY × a DIMENSION × a value/range → its own
+// COLUMN, resolved by getMetric like the other composed families (ph__/wt__/…).
+//
+// UNLIKE the batting/bowling composers (which recombine PRE-MATERIALISED innings
+// components — pp_runs, wickets_caught, …), fielding_events carries NO
+// per-dimension pre-aggregates, so each composed column is a FRESH event-grain
+// aggregation over the `fielding` view: SUM(CASE WHEN <dim> AND <tally> THEN 1
+// ELSE 0 END). That aggregation is injected INSIDE the per-fielder `fielding_cte`
+// (table.js buildFieldingCteSql, gated on requested fc__ keys — byte-identical
+// when none are requested); the metric's sqlExpression then only PROJECTS the
+// injected CTE column with MAX() — EXACTLY the shape the five base tallies use
+// (MAX(fielding_cte.catches)). Two consequences: (1) a composed column inherits
+// the CTE's full scope — core + team(fielding_team) + opposition + event/venue +
+// profile + the fielding SLICE (so it composes with opposition/venue/season and
+// the pop-up's per-row slicing for FREE); (2) every non-fc__ query keeps a
+// byte-identical CTE and byte-identical existing-tally values.
+//
+// KEY = `fc__<tally>__<dim>__<value>`  (+ `_per_match` for the per-match variant,
+// mirroring the enumerated per-match fielding keys `catches_per_match`, …).
+//   tally ∈ {catches, cab, stumpings, runouts, dismissals}  (the plan's 5)
+//   dim   ∈ {phase, over, inns, pos, hand}   — 5 of the plan's 6 ACTIVE. The 6th,
+//           `bstyle` (Bowler Style pace/spin/detailed), is RESERVED but INACTIVE:
+//           fielding_events carries the RAW Cricsheet bowling style, not the
+//           normalised bowling_group/bowling_type the owner's vocabulary means —
+//           a data-source ruling is needed first (STOP-RULE; see the FC-1 report).
+//   value depends on the dim (see below). NO token contains `__`, and the
+//   `_per_match` suffix uses SINGLE underscores, so `key.split("__")` after the
+//   prefix recovers exactly [tally, dim, value] and the per-match suffix rides on
+//   the value token (stripped first). Identifier-safe (letters/digits/underscore)
+//   so the key DOUBLES as the CTE column alias with no quoting; no catalogued key
+//   starts with `fc__` (verified), so startsWith is an unambiguous discriminator.
+// Own-discipline-agnostic: fielding is a whole-player fact pushed into BOTH plain
+// disciplines (like the base tallies), so the resolver returns a metric for
+// discipline "batting" OR "bowling" and null for the matchup namespaces.
+const FC_PREFIX = "fc__";
+const _FC_PER_MATCH = "_per_match";
+
+// BASE TALLY → { pred (event-grain WHERE fragment over fielding.kind), label,
+// short }. These are the plan's 5 composer bases, byte-identical in meaning to
+// FIELDING_METRIC_SPECS: catches folds c&b in; dismissals = catches ∪ stumpings ∪
+// run-outs = the four disjoint credited kinds (so it equals catches + stumpings +
+// run_outs, the base dismissals_effected definition).
+const _FC_TALLIES = new Map([
+  ["catches",    { pred: "kind IN ('caught', 'caught and bowled')", label: "Catches", short: "Ct" }],
+  ["cab",        { pred: "kind = 'caught and bowled'", label: "Caught & bowled", short: "C&B" }],
+  ["stumpings",  { pred: "kind = 'stumped'", label: "Stumpings", short: "St" }],
+  ["runouts",    { pred: "kind = 'run out'", label: "Run-outs", short: "RO" }],
+  ["dismissals", { pred: "kind IN ('caught', 'caught and bowled', 'stumped', 'run out')", label: "Fielding Dismissals", short: "F. Wkts" }],
+]);
+
+// PHASE dim — the fielding.phase column is a SINGLE, FORMAT-AWARE string
+// (export_parquet.py: T20/Hundred → T20 ranges, ODI → ODI ranges, red-ball →
+// NULL) holding exactly 'pp'/'mid'/'death'. So a phase composer needs just three
+// tokens and matches the leaderboard's own fielding phase SLICE (`phase IN (…)`)
+// by construction. (Red-ball rows have phase NULL → the CASE never matches → 0,
+// which is honest: red-ball has no phase concept in this data.)
+const _FC_PHASE = new Map([
+  ["pp",    { pred: "phase = 'pp'",    label: "Powerplay",    short: "PP" }],
+  ["mid",   { pred: "phase = 'mid'",   label: "Middle Overs", short: "Mid" }],
+  ["death", { pred: "phase = 'death'", label: "Death Overs",  short: "Death" }],
+]);
+
+// HAND dim — the dismissed batter's batting hand (fielding.out_hand, BATTING_HAND
+// _VOCAB = 'Right-hand bat' / 'Left-hand bat').
+const _FC_HAND = new Map([
+  ["l", { pred: "out_hand = 'Left-hand bat'",  label: "vs LHB", short: "vLHB" }],
+  ["r", { pred: "out_hand = 'Right-hand bat'", label: "vs RHB", short: "vRHB" }],
+]);
+
+// BOWLER-STYLE dim — RESERVED, NOT YET IMPLEMENTED (FC-1 STOP-RULE flag). The
+// plan's 6th dimension is "Bowler Style (pace/spin/detailed)". That vocabulary
+// (Pace/Spin groups; Off-spin/Leg-spin/Medium/Fast fine types) is the profile's
+// NORMALISED `bowling_group` / `bowling_type` — the same the matchup "Vs Spin"
+// uses. BUT fielding_events.bowler_style carries the RAW Cricsheet style instead
+// ('Right-arm offbreak', 'Legbreak googly', 'Left-arm slow', 'Right-arm bowler',
+// …), verified against the live view; the normalised columns are NOT on the
+// fielding parquet, and player_profiles is not registered as a query-time table.
+// So "pace/spin/detailed" cannot be reproduced on the fielding view without a
+// DATA change (add bowling_type/bowling_group to the fielding export — out of
+// FC-1 scope) or a player_profiles join, AND some raw styles ('*-arm slow',
+// 'Right-arm bowler') don't classify into pace/spin without a cricket ruling.
+// This is an owner decision → the `bstyle` token is reserved but inactive; the
+// resolver returns null for it (so no fc__…__bstyle__… key resolves yet). The
+// other 5 dimensions are fully implemented + verified. See the FC-1 report.
+const _FC_DIM_SET = new Set(["phase", "over", "inns", "pos", "hand"]);
+
+/** 1st/2nd/3rd/4th… for innings labels. */
+function _fcOrdinal(n) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+}
+
+/** Parse a numeric single / range value token ("7" or "1_6") → {lo, hi, isRange}
+ * or null. Order-normalised (lo ≤ hi). Used by the over + pos dims. */
+function _fcParseRange(value) {
+  const nums = value.split("_").map((x) => Number(x));
+  if (nums.some((x) => !Number.isInteger(x))) return null;
+  if (nums.length === 1) return { lo: nums[0], hi: nums[0], isRange: false };
+  if (nums.length === 2) return { lo: Math.min(nums[0], nums[1]), hi: Math.max(nums[0], nums[1]), isRange: true };
+  return null;
+}
+
+/** Resolve a (dim, valueToken) → { pred (event-grain WHERE fragment), label,
+ * short } or null when the value is invalid for the dim. Escaping is unnecessary:
+ * every literal is a hardcoded vocabulary string or a validated integer. */
+function _fcDimResolve(dim, value) {
+  if (dim === "phase") return _FC_PHASE.get(value) || null;
+  if (dim === "hand") return _FC_HAND.get(value) || null;
+  if (dim === "over") {
+    // USER-DEFINED 1-based over(s) → 0-based over_number (over 1 = over_number 0).
+    const r = _fcParseRange(value);
+    if (!r || r.lo < 1) return null;
+    const lo0 = r.lo - 1;
+    const hi0 = r.hi - 1;
+    if (!r.isRange) return { pred: `over_number = ${lo0}`, label: `Over ${r.lo}`, short: `Ov ${r.lo}` };
+    return { pred: `over_number BETWEEN ${lo0} AND ${hi0}`, label: `Overs ${r.lo}–${r.hi}`, short: `Ov ${r.lo}-${r.hi}` };
+  }
+  if (dim === "pos") {
+    // USER-DEFINED dismissed-batter batting position(s), 1-based (1–11), NO offset.
+    const r = _fcParseRange(value);
+    if (!r || r.lo < 1) return null;
+    if (!r.isRange) return { pred: `out_batting_position = ${r.lo}`, label: `Pos ${r.lo}`, short: `Pos ${r.lo}` };
+    return { pred: `out_batting_position BETWEEN ${r.lo} AND ${r.hi}`, label: `Pos ${r.lo}–${r.hi}`, short: `Pos ${r.lo}-${r.hi}` };
+  }
+  if (dim === "inns") {
+    // USER 1-based innings → 0-based innings_number (1st innings = innings_number 0).
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 1) return null;
+    return { pred: `innings_number = ${n - 1}`, label: `${_fcOrdinal(n)} inns`, short: `${_fcOrdinal(n)} inns` };
+  }
+  return null;
+}
+
+/** Build a composed fielding column key. */
+export function makeComposedFieldingKey(tally, dim, value, perMatch) {
+  return `${FC_PREFIX}${tally}__${dim}__${value}${perMatch ? _FC_PER_MATCH : ""}`;
+}
+
+/** Parse a composed fielding column key → { tally, dim, value, perMatch } or
+ * null. Splits on `__` (exactly 3 parts after the prefix); the `_per_match`
+ * suffix (single underscores) rides on the value token and is stripped first. */
+export function parseComposedFieldingKey(key) {
+  if (typeof key !== "string" || !key.startsWith(FC_PREFIX)) return null;
+  const parts = key.slice(FC_PREFIX.length).split("__");
+  if (parts.length !== 3) return null;
+  const [tally, dim] = parts;
+  let value = parts[2];
+  if (!_FC_TALLIES.has(tally) || !_FC_DIM_SET.has(dim) || !value) return null;
+  let perMatch = false;
+  if (value.endsWith(_FC_PER_MATCH)) {
+    perMatch = true;
+    value = value.slice(0, -_FC_PER_MATCH.length);
+    if (!value) return null;
+  }
+  return { tally, dim, value, perMatch };
+}
+
+/** Build the VIRTUAL metric for a composed fielding column, or null. `discipline`
+ * must be plain batting/bowling (fielding is not in the matchup namespaces). The
+ * metric carries fieldingCteAlias + fieldingCteCaseSql so table.js's
+ * buildFieldingCteSql can inject `<caseSql> AS <alias>` into fielding_cte; the
+ * per-match variant shares the COUNT sibling's CTE column (its numerator) and
+ * divides by the pmatch_cte match count — the exact shape the enumerated
+ * per-match fielding metrics use. */
+function buildComposedFieldingMetric(parsed, discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return null;
+  const tally = _FC_TALLIES.get(parsed.tally);
+  if (!tally) return null;
+  const dim = _fcDimResolve(parsed.dim, parsed.value);
+  if (!dim) return null;
+  // CTE column alias = the COUNT key (the per-match variant reuses it as its
+  // numerator, so count and per-match can never disagree).
+  const alias = makeComposedFieldingKey(parsed.tally, parsed.dim, parsed.value, false);
+  const caseSql = `SUM(CASE WHEN (${dim.pred}) AND (${tally.pred}) THEN 1 ELSE 0 END)`;
+  const countProjection = `MAX(fielding_cte.${alias})`;
+  const label = `${tally.label} (${dim.label})`;
+  const shortLabel = `${tally.short} ${dim.short}`;
+  const common = {
+    isComposedFielding: true,
+    discipline,
+    source: "fielding_events",
+    section: "fielding",
+    fieldingCteAlias: alias,
+    fieldingCteCaseSql: caseSql,
+    isPhaseMetric: null,
+    additive: true,
+  };
+  if (!parsed.perMatch) {
+    return {
+      ...common,
+      key: alias,
+      sqlExpression: countProjection,
+      label, shortLabel,
+      higherIsBetter: true, format: "int",
+      zeroIsData: true, kind: "total",
+    };
+  }
+  return {
+    ...common,
+    key: `${alias}${_FC_PER_MATCH}`,
+    perMatch: true,
+    sqlExpression: `(${countProjection}) * 1.0 / NULLIF(MAX(pmatch_cte.match_count), 0)`,
+    label: `${label} per Match`, shortLabel: `${shortLabel}/M`,
+    higherIsBetter: true, format: "dec2",
+    zeroIsData: false, kind: "rate",
+  };
+}
+
+/** Resolve a composed fielding COLUMN key to its virtual metric, or null. Chained
+ * into getMetric as the 7th composed resolver. */
+export function resolveComposedFieldingMetric(key, discipline) {
+  const parsed = parseComposedFieldingKey(key);
+  if (!parsed) return null;
+  return buildComposedFieldingMetric(parsed, discipline);
+}
+
+/** True iff `key` is a VALID composed fielding column key for `discipline`. Used
+ * by the column-prune sites (state.pruneIneligibleState, table.pruneInvalidColumns)
+ * to keep a value-dynamic fc__ column (over/pos ranges are an infinite value
+ * space, not enumerable into eligibleColumnKeys' finite Set) alive across a
+ * re-render — the structural analogue of isParamComposedColumnKey. */
+export function isComposedFieldingColumnKey(key, discipline) {
+  return !!resolveComposedFieldingMetric(key, discipline);
+}
+
+/** Every composed fielding column key with a FIXED (enumerable) token — phase,
+ * innings 1–4, hand, bowler-style (detailed + pace/spin), × the 5 tallies × {count,
+ * per-match}. Folded into eligibleColumnKeys so these survive a re-render, exactly
+ * like the other composed families. The USER-DEFINED over/pos RANGE keys are an
+ * infinite value space and are kept alive structurally via isComposedFieldingColumnKey
+ * instead (mirroring the isr__/wh__ parametric columns). Own plain disciplines
+ * only. */
+export function eligibleComposedFieldingKeys(discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return [];
+  const perDim = {
+    phase: [..._FC_PHASE.keys()],
+    inns: ["1", "2", "3", "4"],
+    hand: [..._FC_HAND.keys()],
+    // `bstyle` is RESERVED but inactive (see _FC_DIM_SET) — pending an owner
+    // ruling on the fielding view's raw-style vs normalised pace/spin source.
+  };
+  const keys = [];
+  for (const tally of _FC_TALLIES.keys()) {
+    for (const [dim, values] of Object.entries(perDim)) {
+      for (const v of values) {
+        keys.push(makeComposedFieldingKey(tally, dim, v, false));
+        keys.push(makeComposedFieldingKey(tally, dim, v, true));
+      }
+    }
+  }
+  return keys;
 }
 
 /**

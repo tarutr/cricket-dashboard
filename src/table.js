@@ -15,6 +15,7 @@ import {
   paramExistenceHaving,
   resolveColumnMetric,
   isParamComposedColumnKey,
+  isComposedFieldingColumnKey,
   OTHER_DISCIPLINE,
 } from "./metrics.js";
 import { query } from "./db.js";
@@ -924,7 +925,7 @@ export function buildFieldingExtraSliceClauses(state) {
  * table and the graph. buildQuery's emitted SQL is byte-identical to before the
  * extraction (verified by a node harness diff across every scenario).
  */
-export function buildFieldingCteSql(state) {
+export function buildFieldingCteSql(state, composedFieldingCols = []) {
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
   const fieldingSliceClauses = buildFieldingSliceClauses(state);
   const fldClauses = buildScopeClausesTagged(state, {
@@ -942,17 +943,37 @@ export function buildFieldingCteSql(state) {
   // to every fielder including pins — pins only bypass the "who/which match"
   // scope above.
   const fldTail = ["substitute IS NOT TRUE", ...fieldingSliceClauses];
-  return [
-    "fielding_cte AS (",
-    "  SELECT fielder_id AS fld_player_id,",
-    "         SUM(CASE WHEN kind IN ('caught','caught and bowled') THEN 1 ELSE 0 END) AS catches,",
+  // Base per-fielder tally columns (SACRED — byte-identical output). The four
+  // lines carry NO trailing comma; the array is comma-joined below so appending
+  // composed columns needs no edit to these lines.
+  const selectCols = [
+    "         SUM(CASE WHEN kind IN ('caught','caught and bowled') THEN 1 ELSE 0 END) AS catches",
     // Distinct caught-&-bowled count (Wave R2d): the c&b subset of `catches` above
     // (which deliberately still folds c&b in — unchanged). Lets "Fielding Wicket
     // Type ▸ Caught & bowled" filter on c&b alone. Purely additive: existing
     // catches/stumpings/run_outs outputs are byte-identical.
-    "         SUM(CASE WHEN kind = 'caught and bowled' THEN 1 ELSE 0 END) AS caught_and_bowled,",
-    "         SUM(CASE WHEN kind = 'stumped' THEN 1 ELSE 0 END) AS stumpings,",
+    "         SUM(CASE WHEN kind = 'caught and bowled' THEN 1 ELSE 0 END) AS caught_and_bowled",
+    "         SUM(CASE WHEN kind = 'stumped' THEN 1 ELSE 0 END) AS stumpings",
     "         SUM(CASE WHEN kind = 'run out' THEN 1 ELSE 0 END) AS run_outs",
+  ];
+  // Fielding composers (FC-1): inject one SUM(CASE …) column per REQUESTED fc__
+  // column, so the composed column's `MAX(fielding_cte.<alias>)` projection has a
+  // real CTE column. Each metric carries fieldingCteAlias + fieldingCteCaseSql
+  // (metrics.js buildComposedFieldingMetric); the count and per-match variants of
+  // one composer share an alias, so we dedup. ADDITIVE + sacred-safe: with no fc__
+  // column requested this loop adds nothing, so `selectCols` — and the whole
+  // emitted CTE string — is BYTE-IDENTICAL to before this wave (the four base
+  // lines join to the exact former text). The composed CASE inherits the CTE's
+  // scope/slice WHERE automatically (it lives in the same aggregation).
+  const seenAlias = new Set();
+  for (const m of composedFieldingCols || []) {
+    if (!m || !m.fieldingCteAlias || !m.fieldingCteCaseSql || seenAlias.has(m.fieldingCteAlias)) continue;
+    seenAlias.add(m.fieldingCteAlias);
+    selectCols.push(`         ${m.fieldingCteCaseSql} AS ${m.fieldingCteAlias}`);
+  }
+  return [
+    "fielding_cte AS (",
+    "  SELECT fielder_id AS fld_player_id,\n" + selectCols.join(",\n"),
     "  FROM fielding",
     `  WHERE ${[fldScopeSql, ...fldTail].join(" AND ")}`,
     "  GROUP BY fielder_id",
@@ -1390,7 +1411,14 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // buildFieldingCteSql() helper (extracted so graph/charts.js attaches the
   // identical join) — same output as the former inline construction.
   let fieldingCteSql = null;
-  if (wantsFielding) fieldingCteSql = buildFieldingCteSql(state);
+  if (wantsFielding) {
+    // Fielding composers (FC-1): the requested fc__ columns (source
+    // "fielding_events", so already in fieldingEventCols) need their SUM(CASE …)
+    // aggregation injected into fielding_cte. Pass them down; with none requested
+    // this is [] and buildFieldingCteSql emits a byte-identical CTE.
+    const composedFieldingCols = fieldingEventCols.filter((m) => m && m.isComposedFielding);
+    fieldingCteSql = buildFieldingCteSql(state, composedFieldingCols);
+  }
 
   // Impact subquery (player_of_match): a whole-match award, so it stays on
   // player_matches (which has no opposition/position column). Same scope options
@@ -2044,7 +2072,14 @@ export function mountTable(
     // D4: parametric composed columns (isr__/wh__) are value-dynamic — not enumerable
     // into `allowedKeys` — so keep them via a structural check. E1a: `cols` is Slot[]
     // — filter by each slot's key (survivors keep their id → highlight/sort follow).
-    const pruned = cols.filter((sl) => allowedKeys.has(sl.key) || isParamComposedColumnKey(sl.key, ns));
+    // FC-1: value-dynamic fielding composers (fc__…__over/pos__<range>) are an
+    // infinite value space too — keep them via the same structural check.
+    const pruned = cols.filter(
+      (sl) =>
+        allowedKeys.has(sl.key) ||
+        isParamComposedColumnKey(sl.key, ns) ||
+        isComposedFieldingColumnKey(sl.key, ns)
+    );
     if (pruned.length !== cols.length) {
       store.set({ columns: { ...state.columns, [ns]: pruned } });
     }
