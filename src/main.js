@@ -567,8 +567,16 @@ function togglePin(id, name) {
  * filter LEAVES the column (nothing here ever removes a column). Guard: an unset
  * operator → no opToken → skipped (mirrors paramExistenceHaving's null), though
  * isConditionComplete already drops such a row upstream.
+ *
+ * R2 follow-up (2026-08-10) — TOOLBAR PARAMETRIC LINK ONLY: `opts.paramOnly` restricts
+ * this pass to parametric conditions alone (skips every other condition entirely, so
+ * neither its column nor its sort is touched). Called with `paramOnly: true` from a
+ * TOOLBAR Search — the general R5-B #6 rule ("a toolbar Search never edits
+ * filters/columns" for non-parametric conditions) is unchanged; only the Innings-Score
+ * / Wicket-Hauls auto-column now also seeds there. A popup Search keeps calling this
+ * with no options (paramOnly defaults false) — byte-identical to R2.
  */
-function autoAddFilteredColumns() {
+function autoAddFilteredColumns({ paramOnly = false } = {}) {
   const state = store.get();
   const ns = effectiveNamespace(state);
   // E1a: work in KEY space (state.columns[ns] is Slot[]) — append missing filtered
@@ -596,8 +604,14 @@ function autoAddFilteredColumns() {
       // R2: a parametric filter maps to its composed count-column key (isr__/wh__),
       // NOT the base parametric metric key (which is a filter-only aggregate). Built
       // from the SAME (op, value(s)) the existence-gate uses → column ≡ filter.
+      const isParam = !!(m.paramTemplate && m.param);
+      // R2 toolbar follow-up: paramOnly (a TOOLBAR Search) skips every non-parametric
+      // condition outright — it neither seeds a column nor becomes firstFilteredKey/
+      // the sort target, keeping the general R5-B #6 "toolbar never edits columns"
+      // rule intact for everything except the parametric count-column link.
+      if (paramOnly && !isParam) continue;
       let colKey = c.metricKey;
-      if (m.paramTemplate && m.param) {
+      if (isParam) {
         const opToken = COMPOSED_PARAM_OP_TOKEN[c.operator];
         const desc = composedParamDescriptor(ns);
         if (!opToken || !desc) continue; // unset operator / non-plain ns → no column
@@ -883,10 +897,17 @@ function boot() {
         // so the cleared pins are part of the committed baseline.
         // R5-B #6: also auto-add a column for any filtered metric not yet visible
         // and rank by it (popup Search only — a toolbar Search never edits filters).
+        // R2 follow-up (2026-08-10, owner): the PARAMETRIC auto-column (Innings Score /
+        // Wicket Hauls) is an exception — it now seeds on a TOOLBAR Search too, via the
+        // SAME adder scoped to `paramOnly` (skips every other condition, so a Best-
+        // Bowling / etc. filter still adds nothing from the toolbar — R5-B #6 unchanged
+        // for everything else).
         if (!fromToolbar) {
           if ((store.get().pinnedPlayers || []).length) store.set({ pinnedPlayers: [] });
           noInningsPinIds = new Set();
           autoAddFilteredColumns();
+        } else {
+          autoAddFilteredColumns({ paramOnly: true });
         }
         // R3.2: Search is the moment ALL pending edits (popup filters AND the
         // toolbar controls — dates, Vs, preset, columns, sort, player search /
