@@ -359,14 +359,19 @@ export function createPaletteGroupsBuilder(deps) {
         metricFamily("Dismissal Type", parts.dismissal.map(dismissalVariant)),
         leafMetric("ducks", "Ducks"),
         leafMetric("not_outs", "Not Outs"),
-        // Matchup-namespace restore (Wave R2c): "Dismissals" is offered as a FILTER
-        // only in matchup-batting mode (ns = matchup_batting). It USED to be
-        // matchup-only implicitly (plain batting had no "dismissals" metric, so
-        // leafMetric returned null). Columns content rework Wave B ADDED a plain
-        // batting `dismissals` COLUMN of the same key; the explicit `matchup` gate
-        // KEEPS this filter matchup-only, so the filter palette stays byte-identical
-        // (the plain Dismissals FILTER is a separate later filter-parity task).
-        matchup ? leafMetric("dismissals", "Dismissals") : null,
+        // R4-B (owner ruling 6, 2026-08-09): "Dismissals" is now offered as a plain
+        // BATTING filter on the leaderboard too — closing the filter/column asymmetry
+        // (Columns Wave B added the plain batting `dismissals` COLUMN of this same
+        // key). `getMetric("dismissals","batting")` resolves that plain metric
+        // (sqlExpression SUM(dismissed) — the `average` denominator) and
+        // conditionToHaving compiles `SUM(dismissed) <op> N`; in matchup batting it
+        // still resolves matchup_batting's own `dismissals`. buildQuery is UNCHANGED
+        // — this only reuses existing sqlExpression via the existing HAVING path
+        // (numbers sacred). `surface !== "popup" || matchup` keeps the POP-UP surface
+        // byte-identical: plain dismissals is NOT sliceable there (not in the pop-up
+        // slice set), and on a matchup pop-up row leafMetric self-nulls — so the
+        // pop-up is untouched (its plain-Dismissals offering is a separate R5 task).
+        (surface !== "popup" || matchup) ? leafMetric("dismissals", "Dismissals") : null,
         leafMetric("high_score", "High Score"),
         leafMetric("fifties", "50s"),
         leafMetric("hundreds", "100s"),
@@ -401,15 +406,21 @@ export function createPaletteGroupsBuilder(deps) {
         leafMetric("maidens", "Maidens"),
         leafMetric("runs_conceded", "Runs Conceded"),
         leafMetric("wickets", "Wickets"),
-        // Matchup-namespace restore (Wave R2c): "Fours Conceded" / "Sixes Conceded"
-        // are offered as FILTERS only in matchup-bowling mode (ns = matchup_bowling).
-        // They USED to be matchup-only implicitly (plain bowling had no such metric,
-        // so leafMetric returned null). Columns content rework Wave B ADDED plain
-        // bowling `fours_conceded` / `sixes_conceded` COLUMNS of the same keys; the
-        // explicit `matchup` gate KEEPS these filters matchup-only, so the filter
-        // palette stays byte-identical (the plain filters are a later parity task).
-        matchup ? leafMetric("fours_conceded", "Fours Conceded") : null,
-        matchup ? leafMetric("sixes_conceded", "Sixes Conceded") : null,
+        // R4-B (owner ruling 6, 2026-08-09): "4s Conceded" / "6s Conceded" are now
+        // offered as plain BOWLING filters on the leaderboard too — closing the
+        // filter/column asymmetry (Columns Wave B added the plain bowling
+        // `fours_conceded` / `sixes_conceded` COLUMNS of these same keys). In plain
+        // bowling `getMetric` resolves those plain metrics (sqlExpression
+        // SUM(fours_conceded) / SUM(sixes_conceded)) and conditionToHaving compiles
+        // `SUM(fours_conceded) <op> N` etc.; buildQuery is UNCHANGED (numbers sacred).
+        // The label is mode-dependent: plain uses the metric's own "4s/6s Conceded";
+        // matchup keeps its existing "Fours/Sixes Conceded" label (a naming-sync is a
+        // DEFERRED later task, ruling 6). `surface !== "popup" || matchup` keeps the
+        // POP-UP surface byte-identical — these are engine-sliceable there but the
+        // pop-up palette still WITHHOLDS them (a separate R5 task), so the plain arm
+        // is leaderboard-only and a matchup pop-up row self-nulls in leafMetric.
+        (surface !== "popup" || matchup) ? leafMetric("fours_conceded", matchup ? "Fours Conceded" : "4s Conceded") : null,
+        (surface !== "popup" || matchup) ? leafMetric("sixes_conceded", matchup ? "Sixes Conceded" : "6s Conceded") : null,
         metricFamily("Wicket Types", parts.dismissal.map((m) => [m.key, metricDisplayLabel(m, s.formats)])),
         leafMetric("best", "Best Bowling"),
         // 4-WI / 5-WI removed (R2b): the fixed exactly-4 / 5-plus haul leaves are
