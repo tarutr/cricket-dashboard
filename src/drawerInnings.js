@@ -52,7 +52,6 @@
 import { wirePortalDropdown } from "./filters.js";
 import {
   matchupVsActive,
-  FIELDING_PHASE_OPTIONS,
   FIELDING_POSITIONS,
   RESULT_OPTIONS,
   RESULT_ALL,
@@ -334,19 +333,23 @@ export function mountRegularPositions(container, store, onChange, { embedded = f
 }
 
 // ── Fielding SLICE pickers (fielding rebuild) ───────────────────────────────
-// Two multi-select checkbox dropdowns that narrow WHICH wicket-events the
+// A multi-select checkbox dropdown that narrows WHICH wicket-events the
 // Catches/Stumpings/Run-outs/Dismissals-Effected metrics count, by the event's
-// OWN dims — dismissed-batter position (state.fielding.positions), phase
-// (.phases). Same self-contained `{ sync }` shape and portal
-// dropdown as mountBattingPosition above, so they slot into the condition
-// builder's singleton rows the same way. PLAIN mode only: the fielding metrics
-// live in the plain buildQuery (its fielding_cte join) — matchup Vs mode has no
-// fielding, so these self-hide there (mirrors mountBattingPosition's matchup gate,
-// inverted).
+// OWN dims — dismissed-batter position (state.fielding.positions). Same
+// self-contained `{ sync }` shape and portal dropdown as mountBattingPosition
+// above, so it slots into the condition builder's singleton rows the same way.
+// PLAIN mode only: the fielding metrics live in the plain buildQuery (its
+// fielding_cte join) — matchup Vs mode has no fielding, so this self-hides
+// there (mirrors mountBattingPosition's matchup gate, inverted).
+// (R6 cleanup: the sibling "Fielding phase" picker — state.fielding.phases at
+// this top level — was removed here as dead code: it was never offered by the
+// "+ Add condition" palette in paletteGroups.js, so its row could never appear.
+// buildFieldingSliceClauses' phase handling in table.js stays — it is still
+// exercised by the player pop-up's own, separate per-row fielding editor.)
 
 /** Generic checkbox multi-select over one list on state.fielding. `field` is
- * "positions" | "phases"; `options` is [{value,label}] (value is the
- * literal written to state — number for positions, string for phase);
+ * currently always "positions"; `options` is [{value,label}] (value is the
+ * literal written to state — a number for positions);
  * `summaryFn(selectedValues)` renders the toggle label. `embedded` suppresses the
  * outer filter-label (the condition row already names it). Returns `{ sync }`. */
 function mountFieldingSlicePicker(container, store, onChange, { field, options, anyLabel, summaryFn, embedded = false, label }) {
@@ -446,22 +449,6 @@ export function mountFieldingPosition(container, store, onChange, opts = {}) {
       return sorted.length <= 3 ? sorted.join(", ") : `${sorted.length} selected`;
     },
     label: "Dismissed batter's position",
-    ...opts,
-  });
-}
-
-/** Fielding: phase slice (state.fielding.phases). */
-export function mountFieldingPhase(container, store, onChange, opts = {}) {
-  return mountFieldingSlicePicker(container, store, onChange, {
-    field: "phases",
-    options: FIELDING_PHASE_OPTIONS,
-    anyLabel: "Any phase",
-    summaryFn: (vals) => {
-      if (!vals || vals.length === 0) return "Any phase";
-      if (vals.length === 1) return FIELDING_PHASE_OPTIONS.find((o) => o.value === vals[0])?.label || vals[0];
-      return `${vals.length} selected`;
-    },
-    label: "Fielding phase",
     ...opts,
   });
 }

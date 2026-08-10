@@ -33,7 +33,6 @@ import {
   eventFilterActive,
   venueFilterActive,
   fieldingPositionActive,
-  fieldingPhaseActive,
   resultFilterActive,
   tossResultFilterActive,
   tossDecisionFilterActive,
@@ -66,7 +65,6 @@ import {
   mountEvent,
   mountVenue,
   mountFieldingPosition,
-  mountFieldingPhase,
   mountResult,
   mountTossResult,
   mountTossDecision,
@@ -109,9 +107,10 @@ function orderBy(present, order) {
 // land) and stay absent otherwise. R5 Wave 1a (item 7)
 // restructured the "+ Add condition" dropdown: the old standalone "Team" subset
 // is dissolved into "Player" (Played for → "Team", Against opposition →
-// "Opposition"); Bowling style is no longer a standalone dropdown entry (it is
-// reachable via Role → Bowler, which exposes the fine bowling styles and writes
-// the SAME profile.bowlingType); and R. Pos. relocates into the Basic-metrics
+// "Opposition"); Bowling style IS a standalone dropdown entry (R6 cleanup:
+// removed the redundant nested bowling-style sub-picker that used to also live
+// inside Role → Bowler — Role stays purely role, profile.bowlingType is set only
+// here); and R. Pos. relocates into the Basic-metrics
 // group after "Innings". The PALETTE order/grouping is driven by the explicit
 // 7-group taxonomy in buildPaletteGroups below (not by this array's order or the
 // `group` field, which is now documentation only). This array's order drives the
@@ -189,7 +188,6 @@ const SINGLETON_TYPES = [
   // both genders. They sit in the "Fielding" dropdown optgroup, alongside the
   // fielding metric conditions.
   { key: "fld_pos", label: "Dismissed batter's position", group: "Fielding" },
-  { key: "fld_phase", label: "Fielding phase", group: "Fielding" },
   // Match-context singletons (Wave 6): categorical WHERE filters keyed off the
   // MATCH's context. Both genders; work in batting, bowling AND matchup views
   // (no matchup gate), so — unlike the fielding slices — isPresent has no Vs
@@ -319,20 +317,17 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   // onChange, so buildQuery is untouched — only the widget changed.
   const toOptions = (values) => (values || []).map((v) => ({ value: v, label: v }));
 
-  // Role editor: broad role + (conditional) detailed sub-role + (when the broad
-  // role is "Bowler") the FINE bowling styles (ROUND 3, task 2). The fine-style
-  // picker writes the SAME state.profile.bowlingType as the standalone "Bowling
-  // style" condition — they are two editors of one value (see report note on the
-  // redundancy). renderProfileEditors keeps both in sync from profile.bowlingType.
+  // Role editor: broad role + (conditional) detailed sub-role. Role stays purely
+  // role (R6 cleanup) — the fine bowling-style sub-picker that used to appear here
+  // when the broad role was "Bowler" is gone; profile.bowlingType is now set ONLY
+  // via the standalone "Bowling style" condition (bowlingSel below).
   editorHosts.role.innerHTML = `
     <div class="profile-role">
       <div data-role="prof-roleGroup"></div>
       <div data-role="prof-roleSub" hidden></div>
-      <div data-role="prof-roleBowling" hidden></div>
     </div>`;
   const roleGroupHost = editorHosts.role.querySelector('[data-role="prof-roleGroup"]');
   const roleSubHost = editorHosts.role.querySelector('[data-role="prof-roleSub"]');
-  const roleBowlingHost = editorHosts.role.querySelector('[data-role="prof-roleBowling"]');
   editorHosts.hand.innerHTML = `<div data-role="prof-hand"></div>`;
   const handHost = editorHosts.hand.querySelector('[data-role="prof-hand"]');
   editorHosts.bowling.innerHTML = `<div data-role="prof-bowling"></div>`;
@@ -358,18 +353,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     allowEmptyLabel: "Any",
     onChange: (val) => {
       setProfile({ roleSub: val || null });
-      onChange();
-    },
-  });
-  const roleBowlingSel = mountSearchSelect(roleBowlingHost, {
-    searchable: false,
-    portal: true,
-    ariaLabel: "Bowling style",
-    placeholder: "Any bowling style",
-    allowEmptyLabel: "Any bowling style",
-    onChange: (val) => {
-      setProfile({ bowlingType: val || null });
-      renderProfileEditors();
       onChange();
     },
   });
@@ -508,16 +491,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     } else {
       roleSubHost.hidden = true;
     }
-    // Fine bowling styles: shown only when the broad role is "Bowler". Hiding it
-    // (role changed away from Bowler) never CLEARS bowlingType — the standalone
-    // "Bowling style" condition may own that value; the pill keeps it honest.
-    if (p.roleGroup === "Bowler" && profileOptions.bowlingTypes.length > 0) {
-      roleBowlingSel.setOptions(toOptions(profileOptions.bowlingTypes));
-      roleBowlingSel.setValue(p.bowlingType);
-      roleBowlingHost.hidden = false;
-    } else {
-      roleBowlingHost.hidden = true;
-    }
     handSel.setOptions(toOptions(profileOptions.battingHands));
     handSel.setValue(p.battingHand);
     bowlingSel.setOptions(toOptions(profileOptions.bowlingTypes));
@@ -581,7 +554,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const eventController = mountEvent(editorHosts.event, store, onChange, { onOptionsLoaded: onCascadeOptionsLoaded });
   const venueController = mountVenue(editorHosts.venue, store, onChange, { onOptionsLoaded: onCascadeOptionsLoaded });
   const fieldingPositionController = mountFieldingPosition(editorHosts.fld_pos, store, onChange, { embedded: true });
-  const fieldingPhaseController = mountFieldingPhase(editorHosts.fld_phase, store, onChange, { embedded: true });
   // Match-context editors (Wave 6): each writes only its own state key.
   const resultController = mountResult(editorHosts.mc_result, store, onChange, { embedded: true });
   const tossResultController = mountTossResult(editorHosts.mc_toss_result, store, onChange, { embedded: true });
@@ -703,7 +675,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "venue": return (s.venue || []).length > 0;
       // Fielding SLICE conditions: present when their list has a value.
       case "fld_pos": return Boolean(s.fielding && (s.fielding.positions || []).length > 0);
-      case "fld_phase": return Boolean(s.fielding && (s.fielding.phases || []).length > 0);
       // Match-context singletons (Wave 6): present when their value is set. Result
       // (FIX A) and Stage (polish item 3) are present once their condition is added
       // — each seeded to ["all"] (the "All" default) — so length > 0 covers both All
@@ -717,7 +688,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     }
   }
 
-  const FIELDING_SLICE_KEYS = new Set(["fld_pos", "fld_phase"]);
+  const FIELDING_SLICE_KEYS = new Set(["fld_pos"]);
 
   // Profile/matchup-backed singleton rows are offered only where their DATA exists
   // in the current scope (data-driven — owner "remove the hardcode everywhere",
@@ -788,7 +759,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "event": store.set({ event: [], eventSeasons: {} }); break; // Wave 6 pt2: drop season narrowing too
       case "venue": store.set({ venue: [] }); break;
       case "fld_pos": store.set({ fielding: { ...(store.get().fielding || {}), positions: [] } }); break;
-      case "fld_phase": store.set({ fielding: { ...(store.get().fielding || {}), phases: [] } }); break;
       // Removing Result also removes its nested Result Condition (FIX B).
       case "mc_result": store.set({ result: [], resultCondition: [] }); break;
       case "mc_toss_result": store.set({ tossResult: [] }); break;
@@ -945,7 +915,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     eventController.sync();
     venueController.sync();
     fieldingPositionController.sync();
-    fieldingPhaseController.sync();
     resultController.sync();
     tossResultController.sync();
     tossDecisionController.sync();
@@ -1294,7 +1263,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // Fielding SLICE conditions — plain mode only (inert under a matchup Vs).
     if (!matchupVsActive(s)) {
       if (fieldingPositionActive(s)) n++;
-      if (fieldingPhaseActive(s)) n++;
     }
     n += activeConditionCount(s.advanced);
     return n;

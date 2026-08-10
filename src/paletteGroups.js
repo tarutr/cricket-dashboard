@@ -526,9 +526,11 @@ export function createPaletteGroupsBuilder(deps) {
     // Stumpings / Run-outs from parts.fielding, and Player of the Match from
     // parts.impact) are NOT offered here — the spec makes Catches/Stumpings/Run-outs
     // reachable as "Fielding Wicket Type ▸ (Caught/Run-out/Stumped) + count operator",
-    // and PotM now lives in Player Profile as PotM Count. (See report: the count-
-    // operator on Fielding Wicket Type is not yet wired, so "catches ≥ N" is not
-    // presently expressible — flagged for the owner.)
+    // and PotM now lives in Player Profile as PotM Count. The count operator on
+    // Fielding Wicket Type IS wired (R6 stale-comment fix): each variant below is a
+    // normal leafMetric leaf, routing through pickMetric to the standard numeric
+    // condition editor exactly like any other metric — so "Caught ≥ 10" is
+    // expressible today.
     if (!matchup) {
       // Fielding Wicket Type ▸ (Wave R2c): a COUNT sub-filter (owner ruling) — each
       // kind maps to its fielding-count metric and adds a NUMERIC condition
