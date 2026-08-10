@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, fieldingPhaseActive, FIELDING_PHASE_OPTIONS, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
@@ -376,16 +376,6 @@ export function mountPills(
           label: `Dismissed pos: ${sorted.join(", ")}`,
           remove: () => setFld({ positions: [] }),
           restore: () => setFld({ positions: captured }),
-        });
-      }
-      if (fieldingPhaseActive(s)) {
-        const captured = [...fld.phases];
-        const labels = fld.phases.map((p) => FIELDING_PHASE_OPTIONS.find((o) => o.value === p)?.label || p);
-        pills.push({
-          key: "fld_phase",
-          label: `Fielding phase: ${labels.join(", ")}`,
-          remove: () => setFld({ phases: [] }),
-          restore: () => setFld({ phases: captured }),
         });
       }
     }

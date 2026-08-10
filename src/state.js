@@ -351,10 +351,6 @@ export function venueFilterActive(state) {
 export function fieldingPositionActive(state) {
   return Boolean(state.fielding && Array.isArray(state.fielding.positions) && state.fielding.positions.length > 0);
 }
-/** True if the fielding phase slice is narrowing the events. */
-export function fieldingPhaseActive(state) {
-  return Boolean(state.fielding && Array.isArray(state.fielding.phases) && state.fielding.phases.length > 0);
-}
 
 /** The three fielding phase buckets — the vocabulary the fielding phase SLICE
  * condition picks from. The `value`s are the EXACT literals stored in
