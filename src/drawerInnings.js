@@ -445,7 +445,7 @@ export function mountFieldingPosition(container, store, onChange, opts = {}) {
       const sorted = [...vals].sort((a, b) => a - b);
       return sorted.length <= 3 ? sorted.join(", ") : `${sorted.length} selected`;
     },
-    label: "Dismissed position",
+    label: "Dismissed batter's position",
     ...opts,
   });
 }

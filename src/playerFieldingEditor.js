@@ -90,7 +90,7 @@ const RESULT_OUTCOME_OPTIONS = RESULT_OPTIONS.filter((o) => o.value !== RESULT_A
 // means the checklist VALUE is the 0-based stored innings_number (display via label).
 const DIMS = [
   { key: "kind",         field: "kinds",         group: "Dismissal", label: "Wicket type",       control: "checklist", options: () => WICKET_TYPE_OPTIONS },
-  { key: "position",     field: "positions",     group: "Dismissal", label: "Batting position",  control: "checklist", numeric: true,
+  { key: "position",     field: "positions",     group: "Dismissal", label: "Dismissed batter's position",  control: "checklist", numeric: true,
     options: () => FIELDING_POSITIONS.map((n) => ({ value: n, label: `Position ${n}` })) },
   { key: "hand",         field: "hands",         group: "Dismissal", label: "Batting hand",      control: "checklist", source: "fielding", column: "out_hand" },
   { key: "role",         field: "roles",         group: "Dismissal", label: "Batter role",       control: "checklist", source: "fielding", column: "out_role" },

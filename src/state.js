@@ -1390,7 +1390,8 @@ export function createStore(initial) {
     if (s.view === "table" && matchupVsActive(s)) {
       const mv = s.matchupVs;
       if (mv.dim === "hand") {
-        parts.push(mv.value === "Left-hand bat" ? "vs left-handers" : "vs right-handers");
+        // R4-C naming (locked): no "-handers" wording, even mid-sentence.
+        parts.push(mv.value === "Left-hand bat" ? "vs left-hand batters" : "vs right-hand batters");
       } else if (mv.dim === "type") {
         parts.push(`vs ${matchupBucketLabel(mv.value)}`);
       } else {

@@ -492,9 +492,12 @@ export function createPaletteGroupsBuilder(deps) {
       } else {
         // vs batting hand — offered iff mapped batting hands exist in scope.
         if (isFilterAvailable("vsBattingHand", s)) {
+          // R4-C naming (locked): the leaf LABEL reads "Right-hand batter" /
+          // "Left-hand batter" — the preselect's stored bucket VALUE ("Right-hand
+          // bat" / "Left-hand bat") is data, untouched.
           vsItems.push(matchupVsFamily("vs batting hand", [
-            ["Right-hand bat", preselectMatchupVs("hand", "Right-hand bat")],
-            ["Left-hand bat", preselectMatchupVs("hand", "Left-hand bat")],
+            ["Right-hand batter", preselectMatchupVs("hand", "Right-hand bat")],
+            ["Left-hand batter", preselectMatchupVs("hand", "Left-hand bat")],
           ]));
         }
       }

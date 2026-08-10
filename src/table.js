@@ -2506,8 +2506,8 @@ export function mountTable(
     }
     return `
       ${opt("", "Everyone")}
-      ${opt("hand:Right-hand bat", "Right-handers")}
-      ${opt("hand:Left-hand bat", "Left-handers")}
+      ${opt("hand:Right-hand bat", "Right-hand batter")}
+      ${opt("hand:Left-hand bat", "Left-hand batter")}
     `;
   }
 

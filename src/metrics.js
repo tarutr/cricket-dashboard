@@ -3786,6 +3786,23 @@ export function hasMetricData(metric, value) {
 }
 
 /**
+ * R4-C: input precision for a numeric FILTER condition's value box, derived from
+ * the metric's own `format` — display/input only, never touches sqlExpression or
+ * the HAVING value itself. Counts (format "int" — runs, wickets, matches,
+ * dismissals, PotM, innings…) stay integer (step 1); rates/averages/percentages
+ * (format "dec1"/"dec2"/"pct1" — Strike Rate, Average, Economy, NBSR, any %…)
+ * accept up to 2dp (step 0.01). "overs" is a raw SUM(balls) integer ball count
+ * dressed up in O.B display notation (see the format doc above) — its filter
+ * value is the same integer the query compares against, so it stays integer too.
+ * ONE shared predicate — every numeric-condition surface (drawer, pop-up filter
+ * editor) calls this instead of re-deriving the type.
+ */
+export function metricInputStep(metric) {
+  const decimal = metric && (metric.format === "dec1" || metric.format === "dec2" || metric.format === "pct1");
+  return decimal ? "0.01" : "1";
+}
+
+/**
  * Display label for a matchup bucket value (bowling_type / bowling_group /
  * batting_hand from matchup_batting / matchup_bowling). Callers must exclude
  * '(unmapped)' rows themselves (decision 21) — this function should never see

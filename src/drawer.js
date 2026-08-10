@@ -46,7 +46,7 @@ import {
 } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { ballEngineEnabled } from "./config.js";
-import { getMetric, matchupBucketLabel, metricDisplayLabel } from "./metrics.js";
+import { getMetric, matchupBucketLabel, metricDisplayLabel, metricInputStep } from "./metrics.js";
 import {
   OPERATORS,
   activeConditionCount,
@@ -188,7 +188,7 @@ const SINGLETON_TYPES = [
   // isPresent gates them on !matchupVsActive. Not menOnly — fielding works for
   // both genders. They sit in the "Fielding" dropdown optgroup, alongside the
   // fielding metric conditions.
-  { key: "fld_pos", label: "Dismissed position", group: "Fielding" },
+  { key: "fld_pos", label: "Dismissed batter's position", group: "Fielding" },
   { key: "fld_phase", label: "Fielding phase", group: "Fielding" },
   // Match-context singletons (Wave 6): categorical WHERE filters keyed off the
   // MATCH's context. Both genders; work in batting, bowling AND matchup views
@@ -481,8 +481,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       ];
     } else {
       opts = [
-        { value: "hand:Right-hand bat", label: "Right-handers" },
-        { value: "hand:Left-hand bat", label: "Left-handers" },
+        // R4-C naming (locked): "Right-hand batter" / "Left-hand batter" — never
+        // "Right-handers"/"Left-handers". These describe the opponent BATTER's hand
+        // (this branch is the bowling-discipline Vs editor).
+        { value: "hand:Right-hand bat", label: "Right-hand batter" },
+        { value: "hand:Left-hand bat", label: "Left-hand batter" },
       ];
     }
     vsSel.setOptions(opts);
@@ -1022,11 +1025,16 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
            <input type="number" min="0" step="1" class="input cond-row__value-input" data-role="v2" value="${escAttr(cond.v2)}" placeholder="R" aria-label="runs" />
            <span class="cond-row__and">runs</span>`;
     } else if (cond.operator === "between") {
-      valueFields = `<input type="number" class="input cond-row__value-input" data-role="v1" value="${escAttr(cond.v1)}" placeholder="min" />
+      // R4-C: step derived from the metric's own format (metricInputStep) — counts
+      // stay integer, rates/averages/% get up to 2dp. Input precision only; the
+      // HAVING value itself is untouched.
+      const step = metricInputStep(rowMetric);
+      valueFields = `<input type="number" step="${step}" class="input cond-row__value-input" data-role="v1" value="${escAttr(cond.v1)}" placeholder="min" />
            <span class="cond-row__and">and</span>
-           <input type="number" class="input cond-row__value-input" data-role="v2" value="${escAttr(cond.v2)}" placeholder="max" />`;
+           <input type="number" step="${step}" class="input cond-row__value-input" data-role="v2" value="${escAttr(cond.v2)}" placeholder="max" />`;
     } else {
-      valueFields = `<input type="number" class="input cond-row__value-input" data-role="v1" value="${escAttr(cond.v1)}" placeholder="value" />`;
+      const step = metricInputStep(rowMetric);
+      valueFields = `<input type="number" step="${step}" class="input cond-row__value-input" data-role="v1" value="${escAttr(cond.v1)}" placeholder="value" />`;
     }
     // Param rows prepend a blank "Choose…" option (selected while the operator is
     // unset) so no operator is pre-selected — the row is inert until one is chosen.

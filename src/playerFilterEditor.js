@@ -26,7 +26,7 @@ import { OPERATORS } from "./advanced.js";
 import { createInitialState, emptyAdvancedBlock, FORMAT_BUCKETS } from "./state.js";
 import { query } from "./db.js";
 import { orderBowlingTypes } from "./table.js";
-import { matchupBucketLabel } from "./metrics.js";
+import { matchupBucketLabel, getMetric, metricInputStep } from "./metrics.js";
 import { escHtml, escAttr } from "./html.js";
 import { mountSearchSelect } from "./searchSelect.js";
 
@@ -421,14 +421,18 @@ export function openFilterRowEditor(hostDoc, deps) {
     const opts = paramBlank + OPERATORS.map(
       (o) => `<option value="${escAttr(o.key)}" ${cond.operator === o.key ? "selected" : ""}>${escHtml(o.label)}</option>`
     ).join("");
+    // R4-C: step derived from the metric's own format (metricInputStep) — counts
+    // stay integer, rates/averages/% get up to 2dp. Input precision only; the
+    // filter value itself is untouched.
+    const step = metricInputStep(getMetric(cond.metricKey, discipline));
     const v2 =
       cond.operator === "between"
-        ? `<span class="pfe-cond__and">and</span><input type="number" step="any" class="input pfe-cond__val" data-role="v2" value="${escAttr(cond.v2 ?? "")}" aria-label="${escAttr(base)} upper value" />`
+        ? `<span class="pfe-cond__and">and</span><input type="number" step="${step}" class="input pfe-cond__val" data-role="v2" value="${escAttr(cond.v2 ?? "")}" aria-label="${escAttr(base)} upper value" />`
         : "";
     return `<div class="pfe-cond" data-ci="${ci}">
         <span class="pfe-cond__name">${escHtml(base)}</span>
         <select class="select pfe-cond__ctrl" data-role="op" aria-label="${escAttr(base)} operator">${opts}</select>
-        <input type="number" step="any" class="input pfe-cond__val" data-role="v1" value="${escAttr(cond.v1 ?? "")}" aria-label="${escAttr(base)} value" />
+        <input type="number" step="${step}" class="input pfe-cond__val" data-role="v1" value="${escAttr(cond.v1 ?? "")}" aria-label="${escAttr(base)} value" />
         ${v2}
         <button type="button" class="icon-btn pfe-cond__remove" data-role="remove-cond" title="Remove condition" aria-label="Remove condition">&times;</button>
       </div>`;
@@ -456,8 +460,10 @@ export function openFilterRowEditor(hostDoc, deps) {
       return opts;
     }
     return [
-      { value: "hand:Right-hand bat", label: "Right-handers" },
-      { value: "hand:Left-hand bat", label: "Left-handers" },
+      // R4-C naming (locked): "Right-hand batter" / "Left-hand batter" — never
+      // "Right-handers"/"Left-handers".
+      { value: "hand:Right-hand bat", label: "Right-hand batter" },
+      { value: "hand:Left-hand bat", label: "Left-hand batter" },
     ];
   }
   function matchupVsRowHTML() {
