@@ -64,9 +64,12 @@ import {
   formatValue,
   buildFieldingCteSql,
   buildFieldingSliceClauses,
+  // FC-2: the per-player match-count CTE (per-match fielding denominator) — reused
+  // UNCHANGED so a pop-up per-match value == the leaderboard's (same definition).
+  buildPmatchCteSql,
 } from "./table.js";
 import { buildScopeClausesTagged, whereWithPinExemption } from "./filters.js";
-import { getMetric, resolveColumnMetric, metricDisplayLabel, matchupBucketLabel, DISMISSAL_KINDS } from "./metrics.js";
+import { getMetric, resolveColumnMetric, metricDisplayLabel, matchupBucketLabel, DISMISSAL_KINDS, parseComposedFieldingKey, makeComposedFieldingKey } from "./metrics.js";
 import {
   createInitialState,
   emptyAdvancedBlock,
@@ -404,22 +407,15 @@ export const FIELDING_TALLY_KEYS = [
   "matches",
 ];
 
-// ── Fielding COLUMNS (T-3b) — a FIXED tally set, in the owner's display order ──
-// Fielding is not a picker discipline: its columns are the six tallies, always the
-// same, so there is no columns picker / preset in fielding mode. metrics.js registers
-// these ONLY under the "batting"/"bowling" disciplines (there is no "fielding"
-// discipline), so the metric objects are pulled from the "batting" catalogue (they
-// are identical under either) — key/label/shortLabel/format all resolve, and the
-// keys match the columns fetchFieldingRow returns (catches / stumpings / run_outs /
+// ── Fielding COLUMNS — the SEED for the FC-2 Slot[] picker ────────────────────
+// Pre-FC-2 the fielding mode was a FIXED table of these six columns. FC-2 gives it a
+// filter-style Slot[] picker (base tallies + fc__ composers); this list is now only
+// the DEFAULT SEED, so the picker opens byte-identical to the old fixed table. The
+// keys resolve under the "batting" catalogue (there is no "fielding" metrics
+// discipline; fielding metrics are identical under batting/bowling) and match the
+// columns buildFieldingRowQuery projects (catches / stumpings / run_outs /
 // caught_and_bowled / dismissals_effected / matches).
 const FIELDING_COLUMN_KEYS = ["catches", "stumpings", "run_outs", "caught_and_bowled", "dismissals_effected", "matches"];
-let _fieldingColumnMetrics = null;
-function fieldingColumnMetrics() {
-  if (!_fieldingColumnMetrics) {
-    _fieldingColumnMetrics = FIELDING_COLUMN_KEYS.map((k) => getMetric(k, "batting")).filter(Boolean);
-  }
-  return _fieldingColumnMetrics;
-}
 
 // ── Fielding row LABELS (T-3b) — honest tokens for a fielding row's dims (§8.4) ──
 // The batting/bowling label path (rowAllLabels) describes per-innings conditions +
@@ -514,11 +510,56 @@ export function buildFieldingRowState(row, pageState) {
   };
 }
 
+// FC-2: the SELECT expression (over fielding_cte / fld_matches_cte) for each BASE
+// fielding COUNT column. dismissals_effected is derived; matches comes from the
+// matches CTE. Per-match variants divide these by pmatch_cte.match_count.
+const FIELDING_BASE_COUNT_EXPR = {
+  catches: "fielding_cte.catches",
+  caught_and_bowled: "fielding_cte.caught_and_bowled",
+  stumpings: "fielding_cte.stumpings",
+  run_outs: "fielding_cte.run_outs",
+  dismissals_effected: "(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs)",
+  matches: "fld_matches_cte.matches",
+};
+const FIELDING_BASE_KEYS = new Set(Object.keys(FIELDING_BASE_COUNT_EXPR));
+const FC_PER_MATCH_SUFFIX = "_per_match";
+
+/** FC-2: the SELECT expression + per-match flag for a requested EXTRA fielding column
+ * (one NOT in the always-projected base 6), or null when unsupported. Covers the base
+ * tallies' per-match variants and the fc__ composers (count + per-match). The per-match
+ * denominator is pmatch_cte.match_count — the SAME source (buildPmatchCteSql) the
+ * leaderboard's per-match fielding metrics use, so a pop-up per-match value equals the
+ * leaderboard's by construction. */
+function fieldingRowSelectExpr(key) {
+  if (key.endsWith(FC_PER_MATCH_SUFFIX)) {
+    const base = key.slice(0, -FC_PER_MATCH_SUFFIX.length);
+    if (FIELDING_BASE_COUNT_EXPR[base]) {
+      return { perMatch: true, sql: `(${FIELDING_BASE_COUNT_EXPR[base]}) * 1.0 / NULLIF(pmatch_cte.match_count, 0)` };
+    }
+  }
+  const fc = parseComposedFieldingKey(key);
+  if (fc) {
+    const countAlias = makeComposedFieldingKey(fc.tally, fc.dim, fc.value, false); // the injected fielding_cte column
+    if (fc.perMatch) return { perMatch: true, sql: `(fielding_cte.${countAlias}) * 1.0 / NULLIF(pmatch_cte.match_count, 0)` };
+    return { perMatch: false, sql: `fielding_cte.${countAlias}` };
+  }
+  return null;
+}
+
 /**
  * Build ONE fielding row's whole-scope SQL (player-agnostic — fetchFieldingRow outer-
- * wraps `WHERE id = '<player>'`, the established idiom). Returns SQL selecting, per
- * fielder: id, catches, caught_and_bowled, stumpings, run_outs, dismissals_effected
- * (= catches + stumpings + run_outs), matches (COUNT(DISTINCT match_id)).
+ * wraps `WHERE id = '<player>'`, the established idiom). ALWAYS selects, per fielder:
+ * id + the six base columns (catches, caught_and_bowled, stumpings, run_outs,
+ * dismissals_effected = catches+stumpings+run_outs, matches = COUNT(DISTINCT match_id))
+ * — byte-identical to the pre-FC-2 fixed table.
+ *
+ * FC-2: `cols` (the pop-up's requested fielding column keys) ADDS projections beyond the
+ * base 6 — fc__ composer counts (injected into fielding_cte via the UNCHANGED
+ * buildFieldingCteSql 2nd arg) and per-match variants (base OR fc__, dividing by
+ * pmatch_cte.match_count from the UNCHANGED buildPmatchCteSql). With no cols (or only
+ * base-6 cols) the emitted SQL is the former base query → the base-tally NUMBERS are
+ * unchanged (the extra fielding_cte SUM(CASE) columns + the LEFT-JOINed pmatch_cte are
+ * additive and never alter catches/stumpings/…). NO sacred builder is modified.
  *
  * Tallies come from the SACRED buildFieldingCteSql UNCHANGED. The parallel
  * fld_matches_cte's WHERE is rebuilt from the SAME exported primitives
@@ -531,8 +572,18 @@ export function buildFieldingRowState(row, pageState) {
  * or the "matches" count could diverge from the four tallies. (The four tallies
  * always track it automatically, since they come straight from the sacred CTE.)
  */
-export function buildFieldingRowQuery(state) {
-  const cte = buildFieldingCteSql(state); // SACRED — unchanged tallies + scope + slice
+export function buildFieldingRowQuery(state, cols) {
+  const requested = Array.isArray(cols) ? cols : [];
+  // Resolve requested fc__ composers so buildFieldingCteSql injects their SUM(CASE)
+  // alias columns (count + per-match share one alias → deduped inside the CTE builder).
+  const composedFieldingCols = [];
+  for (const key of requested) {
+    if (parseComposedFieldingKey(key)) {
+      const m = getMetric(key, "batting");
+      if (m && m.fieldingCteAlias && m.fieldingCteCaseSql) composedFieldingCols.push(m);
+    }
+  }
+  const cte = buildFieldingCteSql(state, composedFieldingCols); // SACRED — 2nd arg is the FC-1 gate
 
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
   const fldClauses = buildScopeClausesTagged(state, {
@@ -556,19 +607,36 @@ export function buildFieldingRowQuery(state) {
     ")",
   ].join("\n");
 
-  return [
-    `WITH ${cte},`,
-    matchesCte,
-    "SELECT fielding_cte.fld_player_id AS id,",
-    "       fielding_cte.catches AS catches,",
-    "       fielding_cte.caught_and_bowled AS caught_and_bowled,",
-    "       fielding_cte.stumpings AS stumpings,",
-    "       fielding_cte.run_outs AS run_outs,",
-    "       (fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs) AS dismissals_effected,",
-    "       fld_matches_cte.matches AS matches",
-    "FROM fielding_cte",
-    "LEFT JOIN fld_matches_cte ON fld_matches_cte.fld_player_id = fielding_cte.fld_player_id",
-  ].join("\n");
+  // Extra projections (requested keys beyond the base 6): fc__ counts + per-match.
+  const selectCols = [
+    "fielding_cte.fld_player_id AS id",
+    "fielding_cte.catches AS catches",
+    "fielding_cte.caught_and_bowled AS caught_and_bowled",
+    "fielding_cte.stumpings AS stumpings",
+    "fielding_cte.run_outs AS run_outs",
+    "(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs) AS dismissals_effected",
+    "fld_matches_cte.matches AS matches",
+  ];
+  let wantsPmatch = false;
+  const seen = new Set(FIELDING_BASE_KEYS);
+  for (const key of requested) {
+    if (seen.has(key)) continue; // base 6 already projected + de-dup
+    seen.add(key);
+    const expr = fieldingRowSelectExpr(key);
+    if (!expr) continue;
+    if (expr.perMatch) wantsPmatch = true;
+    selectCols.push(`${expr.sql} AS ${key}`); // key is identifier-safe (fc__… / …_per_match)
+  }
+
+  const cteDefs = [cte, matchesCte];
+  let fromSql =
+    "FROM fielding_cte\nLEFT JOIN fld_matches_cte ON fld_matches_cte.fld_player_id = fielding_cte.fld_player_id";
+  if (wantsPmatch) {
+    cteDefs.push(buildPmatchCteSql(state)); // UNCHANGED — the leaderboard's per-match denominator
+    fromSql += "\nLEFT JOIN pmatch_cte ON pmatch_cte.pm_player_id = fielding_cte.fld_player_id";
+  }
+
+  return ["WITH " + cteDefs.join(",\n"), "SELECT " + selectCols.join(",\n       "), fromSql].join("\n");
 }
 
 /**
@@ -577,11 +645,12 @@ export function buildFieldingRowQuery(state) {
  * Returns the single aggregate row object, or null when the player has no fielding
  * events under the row's scope/slice. Fielding is NOT a ball-engine source, so it
  * carries NO delivery-window / opponent-player predicates (those are batting/bowling
- * ball filters); db.query is called plainly.
+ * ball filters); db.query is called plainly. FC-2: `cols` are the requested fielding
+ * column keys (base tallies + fc__ composers) → drive the extra projections.
  */
-export async function fetchFieldingRow(row, playerId, pageState) {
+export async function fetchFieldingRow(row, playerId, pageState, cols) {
   const state = buildFieldingRowState(row, pageState);
-  const sql = buildFieldingRowQuery(state);
+  const sql = buildFieldingRowQuery(state, cols);
   const wrapped = `SELECT * FROM (\n${sql}\n) t\nWHERE id = '${esc(playerId)}'`;
   const res = await query(wrapped);
   return res.rows[0] || null;
@@ -785,10 +854,10 @@ function buildRowState(row, pageState, discipline) {
 async function fetchRow(row, playerId, pageState, discipline, cols) {
   // T-3a: a fielding row routes to the fielding source (fielding_events), not
   // buildQuery. It has no per-innings slice / ball predicate / matches-secondary
-  // merge — buildFieldingRowQuery folds matches in via its own CTE. `cols` is
-  // unused by the fielding path (its output columns are fixed — T-3b picks which
-  // to show).
-  if (discipline === "fielding") return fetchFieldingRow(row, playerId, pageState);
+  // merge — buildFieldingRowQuery folds matches in via its own CTE. FC-2: `cols` (the
+  // requested fielding column keys) now DRIVE its extra projections (fc__ composers +
+  // per-match), so they are threaded through.
+  if (discipline === "fielding") return fetchFieldingRow(row, playerId, pageState, cols);
   const rowState = buildRowState(row, pageState, discipline);
   const inningsWhere = conditionsToInningsWhere(row.conditions, discipline);
   // T-2d: a ball predicate (opponent-player / delivery window) restricts the view
@@ -889,16 +958,21 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
    * discipline default. Fielding has a FIXED tally set (no picker) — handled on the
    * fielding paths, never here. */
   function columnSlotsFor(disc) {
-    if (!tabColumnSlots[disc]) tabColumnSlots[disc] = keysToSlots(defaultColumnsFor(disc, currentFormats()));
+    if (!tabColumnSlots[disc]) {
+      // FC-2: fielding seeds from its fixed tally set (the 5 base tallies + Player
+      // Matches — the pre-FC-2 fixed table) so its NEW Slot[] picker opens
+      // byte-identical; batting/bowling seed from their discipline default.
+      const seed = disc === "fielding" ? FIELDING_COLUMN_KEYS : defaultColumnsFor(disc, currentFormats());
+      tabColumnSlots[disc] = keysToSlots(seed);
+    }
     return tabColumnSlots[disc];
   }
 
-  /** The DISTINCT column keys handed to the query (buildQuery) for a discipline —
-   * slots deduped so each stat's SQL is emitted once (numbers sacred: a no-filter row
-   * stays byte-identical to that player's leaderboard row). Fielding returns its fixed
-   * tally keys. */
+  /** The DISTINCT column keys handed to the query for a discipline — slots deduped so
+   * each stat's SQL is emitted once (numbers sacred: a no-filter row stays byte-identical
+   * to that player's leaderboard row). Fielding (FC-2) is now Slot[]-based too — its
+   * distinct keys drive fetchFieldingRow's projection (base tallies + fc__ composers). */
   function columnKeysFor(disc) {
-    if (disc === "fielding") return FIELDING_COLUMN_KEYS;
     return distinctSlotKeys(columnSlotsFor(disc));
   }
 
@@ -912,12 +986,13 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
    * tally metric list (no slots / highlight). Composed + cross keys resolve via
    * resolveColumnMetric, exactly as the picker's chosen rows do. */
   function columnEntries() {
-    if (curDiscipline === "fielding") {
-      return fieldingColumnMetrics().map((metric) => ({ slot: null, metric, highlighted: false }));
-    }
-    const hl = new Set(highlightIdsFor(curDiscipline));
-    return columnSlotsFor(curDiscipline)
-      .map((slot) => ({ slot, metric: resolveColumnMetric(slot.key, curDiscipline), highlighted: hl.has(slot.id) }))
+    const disc = curDiscipline;
+    // FC-2: fielding resolves its metrics under "batting" — the fielding tallies + the
+    // fc__ composers are registered there (there is no "fielding" metrics discipline).
+    const metricNs = disc === "fielding" ? "batting" : disc;
+    const hl = new Set(highlightIdsFor(disc));
+    return columnSlotsFor(disc)
+      .map((slot) => ({ slot, metric: resolveColumnMetric(slot.key, metricNs), highlighted: hl.has(slot.id) }))
       .filter((e) => e.metric);
   }
 
@@ -931,7 +1006,12 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
   // no Fielding column-family — owner ruling); crossDiscipline stays false. The SACRED
   // query never sees a slot (columnKeysFor dedups first), so the numbers are untouched.
   const columnsPicker = createColumnsPicker({
-    getDiscipline: () => curDiscipline,
+    // FC-2: the picker's metrics namespace. In FIELDING mode it maps to "batting" (a
+    // real metrics ns — fielding tallies + the fc__ composers are registered there),
+    // so every metrics-layer call inside the picker resolves unchanged; getFieldingMode
+    // below carries the fielding-only UI intent the ns can't express.
+    getDiscipline: () => (curDiscipline === "fielding" ? "batting" : curDiscipline),
+    getFieldingMode: () => curDiscipline === "fielding",
     getFormats: () => currentFormats(),
     // Key contract (the shared POPOVER path consults these; inert in inline mode, but
     // kept honest as a lossless slot⇄key projection so the contract is complete).
@@ -1097,20 +1177,21 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
   }
 
   function renderShell() {
-    // Fielding has a FIXED column set → no preset / columns picker in fielding mode.
+    // FC-2: fielding now has a columns picker too (Slot[]-based). It gets the SAME
+    // Columns button + inline host as batting/bowling; only the PRESET <select> stays
+    // hidden (fielding has no COLUMN_PRESET_DEFS).
     const isFielding = curDiscipline === "fielding";
-    const columnsControlsHTML = isFielding
+    const presetSelectHTML = isFielding
       ? ""
-      : `<div class="filters-tab__toolbar-right">
-            <select class="select filters-tab__preset" data-role="preset-select" aria-label="Column preset">${presetOptionsHTML()}</select>
+      : `<select class="select filters-tab__preset" data-role="preset-select" aria-label="Column preset">${presetOptionsHTML()}</select>`;
+    const columnsControlsHTML = `<div class="filters-tab__toolbar-right">
+            ${presetSelectHTML}
             <button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>
           </div>`;
     // R5: the shared inline picker (filter-style chosen-rows + Add-columns dropdowns)
     // lives in a PERSISTENT host revealed by the Columns button (was a floating
     // popover). Starts collapsed so the tab reads the same until the user opens it.
-    const columnsPanelHTML = isFielding
-      ? ""
-      : `<div class="filters-tab__columns-panel" data-role="columns-panel" hidden>
+    const columnsPanelHTML = `<div class="filters-tab__columns-panel" data-role="columns-panel" hidden>
             <div class="filters-tab__columns-host" data-role="columns-host"></div>
           </div>`;
     container.innerHTML = `
@@ -1386,10 +1467,9 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     refreshColumnsPicker();
   }
 
-  /** Keep the inline picker in step after a render — but NOT in fielding mode, where
-   * no inline host is mounted (fielding has a fixed tally set, no picker). */
+  /** Keep the inline picker in step after a render. FC-2: fielding now mounts the same
+   * inline picker (a Slot[]-based fielding picker), so it refreshes like batting/bowling. */
   function refreshColumnsPicker() {
-    if (curDiscipline === "fielding") return;
     columnsPicker.refresh();
   }
 

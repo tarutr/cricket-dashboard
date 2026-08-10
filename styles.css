@@ -2358,6 +2358,49 @@ a { color: var(--color-accent); }
 .cols-compose-cancel { background: none; color: var(--color-fg); }
 .cols-compose-cancel:hover { background: var(--color-bg); }
 
+/* FC-2: the fielding Over Range / Dismissed Position "define a range" editor body. */
+.cols-fc-range__fields {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.cols-fc-range__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.8rem;
+  color: var(--color-muted);
+}
+.cols-fc-range__in { width: 4.5rem; }
+.cols-fc-range__add { flex: 0 0 auto; font-size: 0.85rem; }
+.cols-fc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+.cols-fc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-1) 2px var(--space-2);
+  border: 1px solid var(--color-line-strong);
+  border-radius: 999px;
+  background: var(--color-bg);
+  font-size: 0.8rem;
+}
+.cols-fc-chip__x {
+  border: none;
+  background: none;
+  color: var(--color-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0 2px;
+}
+.cols-fc-chip__x:hover { color: var(--color-fg); }
+
 /* Add menus. */
 .cols-add__label {
   font-size: var(--text-xs);

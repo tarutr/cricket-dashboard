@@ -59,7 +59,12 @@ import {
   makeComposedWicketTypeKey, parseComposedWicketTypeKey,
   // Columns content rework D4 (parametric Innings Score Range + Wicket Haul composers).
   composedParamDescriptor, makeComposedParamKey, parseComposedParamKey, COMPOSED_PARAM_OP_TOKEN,
+  // FC-2: the fielding-composer key scheme (tally × dimension × value → fc__ column).
+  makeComposedFieldingKey, parseComposedFieldingKey,
 } from "./metrics.js";
+// FC-2: the Bowler Style composer is gated on the presence of fielding.bowling_group
+// (added by the FC-1b pipeline re-run) — a data-driven schema probe, cached per session.
+import { getFieldingColumnPresent, ensureFieldingColumnProbed } from "./dataAvailability.js";
 import { eligibleMetrics, eligibleCrossMetrics, makeSlot } from "./state.js";
 // D4: the composer's operator <select> reuses the SAME operator vocabulary as the
 // pop-up / advanced filter (advanced.js is import-cycle-free — pure data model).
@@ -109,6 +114,15 @@ function togglePairByCount(key, ns) {
   const wt = parseComposedWicketTypeKey(key);
   if (wt && wt.axis === "count") {
     return { count: key, alt: makeComposedWicketTypeKey(wt.token, "pct"), mode: "pct" };
+  }
+  // FC-2: a fielding composer COUNT (fc__…) pairs with its per-match variant
+  // (fc__…_per_match) in PERMATCH mode — the display counterpart of the enumerated
+  // fielding count/per-match toggle (catches ⇄ catches_per_match), resolved from the
+  // key structure so it is never listed as its own row. ns-agnostic (the key
+  // self-encodes tally/dim/value).
+  const fc = parseComposedFieldingKey(key);
+  if (fc && !fc.perMatch) {
+    return { count: key, alt: makeComposedFieldingKey(fc.tally, fc.dim, fc.value, true), mode: "permatch" };
   }
   return null;
 }
@@ -347,6 +361,19 @@ export function createColumnsPicker({
   // (columnsPaletteModel) is unchanged, and gi stays the DISCIPLINE_ORDER index so
   // buildColumnsGroups(gi) still resolves the right discipline.
   ownDisciplineOnly = false,
+  // FC-2 (player pop-up Fielding mode → filter-style picker): OPT-IN callback, true
+  // while the pop-up is in its FIELDING mode. The pop-up's getDiscipline() maps that
+  // mode to a REAL metrics ns ("batting") so every metrics-layer call resolves
+  // unchanged; this flag carries the fielding-only UI intent the ns can't express:
+  //   • the Add-columns bar shows ONLY the Match + Fielding dropdowns (the fielding
+  //     record is whole-player; there is no batting/bowling column family here), and
+  //   • the Match dropdown drops Impact (PoM) — the pop-up's fielding query builds no
+  //     pom_cte, so an Impact column would not compute (matches DOES, via fld_matches_cte).
+  // The leaderboard omits it (→ false), so its four-dropdown bar + Match section stay
+  // byte-identical. The fielding COMPOSER entries themselves live in the Fielding
+  // section for ALL plain-ns callers (leaderboard included), gated only by data
+  // availability — this flag governs WHICH dropdowns render, not the composers.
+  getFieldingMode,
 }) {
   // Render the per-column Sort-by + Highlight controls only when the full W2
   // contract is supplied (leaderboard). Absent → the pop-up's plain checkbox
@@ -431,6 +458,9 @@ export function createColumnsPicker({
     if (rs) return { count: makeComposedRunSourceKey(rs.token, "runs"), alt: makeComposedRunSourceKey(rs.token, "pct"), mode: "pct" };
     const wt = parseComposedWicketTypeKey(key);
     if (wt) return { count: makeComposedWicketTypeKey(wt.token, "count"), alt: makeComposedWicketTypeKey(wt.token, "pct"), mode: "pct" };
+    // FC-2: resolve the count/per-match pair from EITHER a fielding composer variant.
+    const fc = parseComposedFieldingKey(key);
+    if (fc) return { count: makeComposedFieldingKey(fc.tally, fc.dim, fc.value, false), alt: makeComposedFieldingKey(fc.tally, fc.dim, fc.value, true), mode: "permatch" };
     return null;
   }
 
@@ -967,6 +997,78 @@ export function createColumnsPicker({
     Object.entries(COMPOSED_PARAM_OP_TOKEN).map(([k, v]) => [v, k])
   );
 
+  // ── Fielding composers (FC-2) ────────────────────────────────────────────────
+  // Six dimension composers over the fc__ family (metrics.js): pick a base TALLY +
+  // tick/define a dimension's value(s) → one standalone fc__ column per value, each
+  // with the count↔per-match toggle. Kinds are namespaced `fc_*` so they never
+  // collide with the batting/bowling DIM_COMPOSER_KINDS, and route through the SAME
+  // R4-A compose editor. Offered in the Fielding section for ALL plain-ns callers
+  // (leaderboard Fielding dropdown AND the pop-up Fielding mode). NO metrics.js
+  // change: these helpers only GENERATE fc__ keys; the resolver + prune already exist.
+  const FC_COMPOSER_KINDS = ["fc_phase", "fc_over", "fc_inns", "fc_pos", "fc_hand", "fc_bstyle"];
+  const FC_COMPOSER_LABEL = {
+    fc_phase: "Phase", fc_over: "Over Range", fc_inns: "Innings",
+    fc_pos: "Dismissed Position", fc_hand: "Dismissed Hand", fc_bstyle: "Bowler Style",
+  };
+  // The metrics.js fc__ `dim` token a composer kind carries, and back.
+  const FC_KIND_DIM = { fc_phase: "phase", fc_over: "over", fc_inns: "inns", fc_pos: "pos", fc_hand: "hand", fc_bstyle: "bstyle" };
+  const FC_DIM_KIND = { phase: "fc_phase", over: "fc_over", inns: "fc_inns", pos: "fc_pos", hand: "fc_hand", bstyle: "fc_bstyle" };
+  // over / pos are USER-DEFINED numeric ranges (1-based) — a "define a range" editor,
+  // not a fixed tick-box list.
+  const FC_RANGE_KINDS = new Set(["fc_over", "fc_pos"]);
+  // The 5 base tallies (fc__ `tally` tokens) — the compose editor's stat <select>.
+  // These labels MIRROR metrics.js _FC_TALLIES for display; the KEY drives the SQL, so
+  // a label can never move a number. (metrics.js is off-limits, so the UI carries the
+  // display vocab.)
+  const FC_TALLY_OPTIONS = [
+    { value: "catches", label: "Catches" },
+    { value: "cab", label: "Caught & bowled" },
+    { value: "stumpings", label: "Stumpings" },
+    { value: "runouts", label: "Run-outs" },
+    { value: "dismissals", label: "Fielding Dismissals" },
+  ];
+  // Finite dimension value tokens + labels (mirror metrics.js _FC_PHASE / _FC_HAND /
+  // _FC_BSTYLE_*). over / pos have no fixed list (user-defined ranges).
+  const FC_PHASE_VALUES = [
+    { token: "pp", label: "Powerplay" }, { token: "mid", label: "Middle Overs" }, { token: "death", label: "Death Overs" },
+  ];
+  const FC_HAND_VALUES = [{ token: "l", label: "vs LHB" }, { token: "r", label: "vs RHB" }];
+  const FC_BSTYLE_VALUES = [
+    { token: "pace", label: "Pace" }, { token: "spin", label: "Spin" },
+    { token: "offspin", label: "Off-spin" }, { token: "legspin", label: "Leg-spin" },
+    { token: "slaorthodox", label: "Slow left-arm orthodox" }, { token: "lawristspin", label: "Left-arm wrist-spin" },
+    { token: "medium", label: "Medium" }, { token: "mediumfast", label: "Medium-fast" },
+    { token: "fastmedium", label: "Fast-medium" }, { token: "fast", label: "Fast" }, { token: "slowmedium", label: "Slow-medium" },
+  ];
+  // Innings ordinal labels (mirror metrics.js _fcOrdinal). Format-aware: red-ball adds 3rd/4th.
+  const FC_INNINGS_LABEL = { "1": "1st inns", "2": "2nd inns", "3": "3rd inns", "4": "4th inns" };
+  function fcInningsTokens(formats) {
+    return (formats || []).includes("Red Ball") ? ["1", "2", "3", "4"] : ["1", "2"];
+  }
+  /** Label for a fielding COMPOSER kind (fielding kinds + the batting/bowling ones). */
+  function composerKindLabel(kind) {
+    return COMPOSER_KIND_LABEL[kind] || FC_COMPOSER_LABEL[kind] || kind;
+  }
+  /** The chip / row-suffix label for a user-defined over/pos range key. */
+  function fcRangeChipLabel(key) {
+    const p = parseComposedFieldingKey(key);
+    if (!p) return key;
+    const [lo, hi] = p.value.split("_");
+    if (p.dim === "over") return hi ? `Overs ${lo}–${hi}` : `Over ${lo}`;
+    return hi ? `Pos ${lo}–${hi}` : `Pos ${lo}`;
+  }
+  /** Remap a range composer's ticked keys to a new base tally (the stat <select>
+   * change) — composerValueRows can't (ranges are user-defined), so swap the tally
+   * on each key structurally, preserving the dimension range. */
+  function fcRemapRangeTicks(newTally, ticks) {
+    const next = new Set();
+    for (const k of ticks) {
+      const p = parseComposedFieldingKey(k);
+      if (p) next.add(makeComposedFieldingKey(newTally, p.dim, p.value, false));
+    }
+    return next;
+  }
+
   // A monotonic id for a PENDING (empty, no-column-yet) parametric composer row —
   // the owner's "starts empty" ruling: adding Innings Score Range / Wicket Haul
   // opens a blank op+value editor that mints a real column only once a valid value
@@ -987,6 +1089,8 @@ export function createColumnsPicker({
     if (parseComposedInningsKey(key)) return "innings";
     if (parseComposedRunSourceKey(key)) return "runsource";
     if (parseComposedWicketTypeKey(key)) return "wickettype";
+    const fc = parseComposedFieldingKey(key);
+    if (fc) return FC_DIM_KIND[fc.dim] || null;
     return null;
   }
 
@@ -1006,6 +1110,8 @@ export function createColumnsPicker({
     if (kind === "innings") { const p = parseComposedInningsKey(key); return p ? p.baseKey : null; }
     if (kind === "runsource") { const p = parseComposedRunSourceKey(key); return p ? p.axis : null; }
     if (kind === "wickettype") { const p = parseComposedWicketTypeKey(key); return p ? p.axis : null; }
+    // FC-2: a fielding composer row groups by its base TALLY (the compose editor's stat).
+    if (FC_KIND_DIM[kind]) { const p = parseComposedFieldingKey(key); return p ? p.tally : null; }
     return null;
   }
 
@@ -1018,6 +1124,8 @@ export function createColumnsPicker({
     if (kind === "innings") return composedInningsPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "runsource") return ns === "batting" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
     if (kind === "wickettype") return (ns === "batting" || ns === "bowling") ? [{ value: "count", label: "Count" }, { value: "pct", label: "%" }] : [];
+    // FC-2: every fielding composer's stat <select> is the 5 base tallies.
+    if (FC_KIND_DIM[kind]) return FC_TALLY_OPTIONS.slice();
     return [];
   }
 
@@ -1053,12 +1161,33 @@ export function createColumnsPicker({
       }
       return [];
     }
+    // FC-2 fielding composers. sel = the base tally token. FINITE dims render fixed
+    // tick-box rows; the USER-DEFINED range dims (over/pos) carry no fixed list and
+    // are handled by the compose editor's range body (return [] here).
+    if (FC_KIND_DIM[kind]) {
+      const dim = FC_KIND_DIM[kind];
+      const mk = (token) => makeComposedFieldingKey(sel, dim, token, false);
+      if (dim === "phase") return FC_PHASE_VALUES.map((v) => ({ label: v.label, key: mk(v.token), rare: false }));
+      if (dim === "hand") return FC_HAND_VALUES.map((v) => ({ label: v.label, key: mk(v.token), rare: false }));
+      if (dim === "bstyle") return FC_BSTYLE_VALUES.map((v) => ({ label: v.label, key: mk(v.token), rare: false }));
+      if (dim === "inns") return fcInningsTokens(formats).map((t) => ({ label: FC_INNINGS_LABEL[t], key: mk(t), rare: false }));
+      return [];
+    }
     return [];
   }
 
   /** True iff a composer `kind` is offerable for the current ns/format (≥1 metric/axis
    * option AND ≥1 tick-box value for the first option) — the add-menu gate. */
   function composerAvailable(kind, ns, formats) {
+    // FC-2 fielding composers: Bowler Style is gated on the fielding.bowling_group
+    // column's presence (FC-1b pipeline data — hidden until it lands); the range dims
+    // (over/pos) are always offerable (their editor defines values); the finite dims
+    // are offerable iff they have ≥1 value row for the first tally.
+    if (FC_KIND_DIM[kind]) {
+      if (kind === "fc_bstyle") return getFieldingColumnPresent("bowling_group");
+      if (FC_RANGE_KINDS.has(kind)) return true;
+      return composerValueRows(kind, ns, formats, FC_TALLY_OPTIONS[0].value).length > 0;
+    }
     const opts = composerSelectOptions(kind, ns, formats);
     if (!opts.length) return false;
     return composerValueRows(kind, ns, formats, opts[0].value).length > 0;
@@ -1067,6 +1196,8 @@ export function createColumnsPicker({
   /** The default stat/axis selection for a freshly-opened ADD compose editor of
    * `kind`: the first option. null when the kind is unavailable for this ns/format. */
   function defaultComposerSel(kind, ns, formats) {
+    // FC-2: a fielding composer opens on the first base tally ("catches").
+    if (FC_KIND_DIM[kind]) return FC_TALLY_OPTIONS[0].value;
     const opts = composerSelectOptions(kind, ns, formats).map((o) => o.value);
     return opts.length ? opts[0] : null;
   }
@@ -1188,6 +1319,38 @@ export function createColumnsPicker({
     return { html: `<div class="columns-popover__list">${rows.map(inp).join("")}</div>`, empty: false };
   }
 
+  /** FC-2: the compose-editor body for a USER-DEFINED range dim (Over / Dismissed
+   * Position). ADD mode = a From/To input pair + an "Add" button building a removable
+   * CHIP list (the chips ARE the editor's ticked keys → one column each on confirm).
+   * EDIT mode = a single From/To pair pre-filled from the one edited range (no chips);
+   * a change re-mints the single ticked key, Save swaps it in place. `dim` = "over" |
+   * "pos" (1-based; the metric maps over → 0-based over_number, pos stays 1-based). */
+  function fcRangeBodyHTML(editor, dim) {
+    const single = editor.mode === "edit";
+    const noun = dim === "over" ? "over" : "position";
+    const fields = (from, to) =>
+      `<div class="cols-fc-range__fields">
+        <label class="cols-fc-range__field">From <input type="number" class="input cols-fc-range__in" data-role="fc-range-from" min="1" step="1" value="${escHtml(from)}" placeholder="1" /></label>
+        <label class="cols-fc-range__field">To <input type="number" class="input cols-fc-range__in" data-role="fc-range-to" min="1" step="1" value="${escHtml(to)}" placeholder="(same)" /></label>
+        ${single ? "" : `<button type="button" class="btn btn--ghost cols-fc-range__add" data-role="fc-range-add">Add ${escHtml(noun)}</button>`}
+      </div>`;
+    if (single) {
+      const parsed = [...editor.ticks].length ? parseComposedFieldingKey([...editor.ticks][0]) : null;
+      const parts = parsed ? parsed.value.split("_") : [];
+      return `<div class="cols-fc-range">${fields(parts[0] || "", parts[1] || "")}</div>`;
+    }
+    const chips = [...editor.ticks]
+      .map(
+        (k) =>
+          `<span class="cols-fc-chip"><span class="cols-fc-chip__label">${escHtml(fcRangeChipLabel(k))}</span><button type="button" class="cols-fc-chip__x" data-fc-chip-remove="${escHtml(k)}" title="Remove" aria-label="Remove ${escHtml(fcRangeChipLabel(k))}">✕</button></span>`
+      )
+      .join("");
+    return `<div class="cols-fc-range">
+        ${fields("", "")}
+        <div class="cols-fc-chips" data-role="fc-range-chips">${chips || `<span class="cols-compose-editor__empty">No ${escHtml(noun)} ranges added yet.</span>`}</div>
+      </div>`;
+  }
+
   /** The TRANSIENT compose editor (owner ruling R4-A, "compose then add"): a temporary
    * card holding the stat/axis <select> + dimension inputs + Add/Save + Cancel. It is NOT
    * a persistent column row — on confirm it spawns one standalone chosen-column row per
@@ -1196,20 +1359,28 @@ export function createColumnsPicker({
   function composeEditorHTML(editor, ns, formats) {
     const { kind, sel, ticks, mode } = editor;
     const single = mode === "edit";
-    const label = COMPOSER_KIND_LABEL[kind];
+    const label = composerKindLabel(kind);
     const options = composerSelectOptions(kind, ns, formats);
     const selectHTML = options.length
       ? `<select class="select cols-compose-editor__stat" data-role="compose-stat" aria-label="${escHtml(label)} stat">${options
           .map((o) => `<option value="${escHtml(o.value)}"${o.value === sel ? " selected" : ""}>${escHtml(o.label)}</option>`)
           .join("")}</select>`
       : "";
-    const body = composeEditorBody(kind, ns, formats, sel, ticks, single);
-    const bodyHTML = body.empty
-      ? `<div class="cols-compose-editor__empty">No options for the current format.</div>`
-      : body.html;
+    // FC-2: the two USER-DEFINED range dims (Over / Dismissed Position) render a
+    // "define a range" body (from/to inputs → chip list) instead of fixed tick-boxes.
+    let bodyHTML;
+    if (FC_RANGE_KINDS.has(kind)) {
+      bodyHTML = fcRangeBodyHTML(editor, FC_KIND_DIM[kind]);
+    } else {
+      const body = composeEditorBody(kind, ns, formats, sel, ticks, single);
+      bodyHTML = body.empty
+        ? `<div class="cols-compose-editor__empty">No options for the current format.</div>`
+        : body.html;
+    }
     const confirmLabel = single ? "Save" : "Add";
-    // ADD needs ≥1 ticked dimension; EDIT's radio always has exactly one.
-    const confirmDisabled = !single && ticks.size === 0 ? " disabled" : "";
+    // Confirm needs ≥1 selected value — a ticked finite dimension, a defined range, or
+    // (EDIT) the one radio/pre-filled range. (Finite EDIT always has exactly one.)
+    const confirmDisabled = ticks.size === 0 ? " disabled" : "";
     return `<div class="cols-compose-editor" data-compose-mode="${mode}" data-compose-kind="${kind}">
       <div class="cols-compose-editor__head">
         <span class="cols-compose-editor__title">${escHtml(label)}</span>
@@ -1355,11 +1526,37 @@ export function createColumnsPicker({
       ...section("Basic Stats", plainItems(crossBasic)),
       ...section("Detailed Stats", plainItems(crossDetailed)),
     ];
+
+    // FC-2: fielding composer entries (Phase / Over Range / Innings / Dismissed
+    // Position / Dismissed Hand / Bowler Style). Available on plain ns (fielding
+    // metrics are registered under batting/bowling) → they enrich the Fielding
+    // dropdown on the leaderboard AND drive the pop-up's Fielding mode. Bowler Style
+    // self-gates on the data probe (composerAvailable). Additive to the 5 base tallies.
+    const fieldingComposerItems = [];
+    if (isPlainNs) {
+      for (const kind of FC_COMPOSER_KINDS) {
+        if (composerAvailable(kind, ns, formats)) fieldingComposerItems.push({ type: "composer", kind, label: FC_COMPOSER_LABEL[kind] });
+      }
+    }
+    const fieldingSections = [
+      ...section("Fielding Stats", plainItems(fielding)),
+      ...(fieldingComposerItems.length ? [{ name: "Composers", items: fieldingComposerItems }] : []),
+    ];
+
+    // FC-2: in the pop-up's FIELDING mode the Match dropdown offers only "matches"
+    // (its query builds fld_matches_cte); Impact/PoM is dropped (no pom_cte there, so
+    // it would not compute). The leaderboard keeps Impact (fieldingMode false).
+    const fieldingMode = getFieldingMode ? getFieldingMode() : false;
+    const matchSections = [
+      ...section("Basic Stats", plainItems(matchesMetric ? [matchesMetric] : [])),
+      ...(fieldingMode ? [] : section("Impact", plainItems(impact))),
+    ];
+
     return {
-      match: [...section("Basic Stats", plainItems(matchesMetric ? [matchesMetric] : [])), ...section("Impact", plainItems(impact))],
+      match: matchSections,
       batting: bucket === "batting" ? ownSections : crossSections,
       bowling: bucket === "bowling" ? ownSections : crossSections,
-      fielding: section("Fielding Stats", plainItems(fielding)),
+      fielding: fieldingSections,
     };
   }
 
@@ -1373,7 +1570,14 @@ export function createColumnsPicker({
     // discipline's dropdown — no cross-discipline bucket, no Fielding column-family.
     // The leaderboard leaves it off → all four. gi is still the DISCIPLINE_ORDER
     // index below, so a skipped dropdown never shifts another's buildColumnsGroups(gi).
-    const allowedDisc = ownDisciplineOnly ? new Set(["match", disciplineBucket(ns)]) : null;
+    // FC-2: the pop-up's FIELDING mode shows only Match + Fielding (its ns maps to
+    // "batting" for metrics, so disciplineBucket can't tell — the flag does).
+    const fieldingMode = getFieldingMode ? getFieldingMode() : false;
+    const allowedDisc = fieldingMode
+      ? new Set(["match", "fielding"])
+      : ownDisciplineOnly
+      ? new Set(["match", disciplineBucket(ns)])
+      : null;
     const skeletons = DISCIPLINE_ORDER.map((disc, gi) => {
       if (allowedDisc && !allowedDisc.has(disc)) return "";
       const label = disc.charAt(0).toUpperCase() + disc.slice(1);
@@ -1485,10 +1689,63 @@ export function createColumnsPicker({
       statEl.addEventListener("change", () => {
         const ns = getDiscipline();
         const formats = getFormats();
-        editor.ticks = remapTicks(editor.kind, ns, formats, editor.sel, statEl.value, editor.ticks);
+        // FC-2 range dims (over/pos): composerValueRows can't remap user-defined ranges,
+        // so swap the base tally on each ticked key structurally (range preserved).
+        editor.ticks = FC_RANGE_KINDS.has(editor.kind)
+          ? fcRemapRangeTicks(statEl.value, editor.ticks)
+          : remapTicks(editor.kind, ns, formats, editor.sel, statEl.value, editor.ticks);
         editor.sel = statEl.value;
         rerenderInline();
       });
+
+    // FC-2: USER-DEFINED range dims (Over / Dismissed Position) — the "define a range"
+    // controls. ADD: the "Add" button mints an fc__ key from From/To and stages it (a
+    // chip); a chip's × unstages it. EDIT: From/To directly re-mint the single staged
+    // key (no chips). Every mint validates From ≥ 1 (To blank ⇒ single value); the
+    // metric's own _fcParseRange normalises lo ≤ hi, so To < From is accepted + swapped.
+    if (FC_RANGE_KINDS.has(editor.kind)) {
+      const dim = FC_KIND_DIM[editor.kind];
+      const fromEl = rootEl.querySelector('[data-role="fc-range-from"]');
+      const toEl = rootEl.querySelector('[data-role="fc-range-to"]');
+      const mintKey = () => {
+        const from = parseInt(fromEl && fromEl.value, 10);
+        if (!Number.isInteger(from) || from < 1) return null;
+        const hasTo = toEl && toEl.value !== "" && toEl.value != null;
+        const to = hasTo ? parseInt(toEl.value, 10) : null;
+        if (hasTo && (!Number.isInteger(to) || to < 1)) return null;
+        const token = to != null ? `${from}_${to}` : `${from}`;
+        return makeComposedFieldingKey(editor.sel, dim, token, false);
+      };
+      if (editor.mode === "add") {
+        const addBtn = rootEl.querySelector('[data-role="fc-range-add"]');
+        if (addBtn)
+          addBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const key = mintKey();
+            if (!key) return;
+            editor.ticks.add(key);
+            rerenderInline();
+          });
+        rootEl.querySelectorAll("[data-fc-chip-remove]").forEach((btn) => {
+          btn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            editor.ticks.delete(btn.dataset.fcChipRemove);
+            rerenderInline();
+          });
+        });
+      } else {
+        const sync = () => {
+          const key = mintKey();
+          editor.ticks = key ? new Set([key]) : new Set();
+          const confirmBtn = rootEl.querySelector('[data-role="compose-confirm"]');
+          if (confirmBtn) confirmBtn.disabled = editor.ticks.size === 0;
+        };
+        if (fromEl) fromEl.addEventListener("input", sync);
+        if (toEl) toEl.addEventListener("input", sync);
+      }
+    }
 
     // Dimension inputs. ADD (checkbox): toggle the key in the staged set + keep the Add
     // button enabled iff ≥1 ticked — no re-render (native check state + a cheap disabled
@@ -1529,9 +1786,13 @@ export function createColumnsPicker({
             }
           }
         } else {
-          const keys = composerValueRows(editor.kind, ns, formats, editor.sel)
-            .map((r) => r.key)
-            .filter((k) => editor.ticks.has(k));
+          // FC-2 range dims: the staged ticks ARE the user-defined range keys (no fixed
+          // value list to filter against); every other composer filters composerValueRows.
+          const keys = FC_RANGE_KINDS.has(editor.kind)
+            ? [...editor.ticks]
+            : composerValueRows(editor.kind, ns, formats, editor.sel)
+                .map((r) => r.key)
+                .filter((k) => editor.ticks.has(k));
           if (keys.length) applySlots([...(getSlots() || []), ...keys.map((k) => makeSlot(k))]);
         }
         inlineState.editor = null;
@@ -1761,6 +2022,16 @@ export function createColumnsPicker({
     // mounted discipline-palette component so a full re-render can close an open menu.
     inlineState = { el: container, ns, formats: formats.slice(), editor: null, pendingParams: [], sig: null, paletteApi: null };
     renderInline(container, ns, formats);
+    // FC-2: kick the Bowler Style data probe (idempotent, cached per session). It is
+    // ABSENT on R2 today → stays hidden with no re-render; once the FC-1b pipeline
+    // re-run lands the fielding.bowling_group column, the probe resolves TRUE and we
+    // rebuild the menu so the Bowler Style entry auto-appears (only then — the common
+    // absent path never disrupts an open menu).
+    ensureFieldingColumnProbed("bowling_group", () => {
+      if (inlineState && getFieldingColumnPresent("bowling_group")) {
+        renderInline(inlineState.el, getDiscipline(), getFormats());
+      }
+    });
   }
 
   /** Called by the host to keep the picker honest after a re-render / store

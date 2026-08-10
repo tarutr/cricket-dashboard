@@ -67,6 +67,53 @@ export async function probeProfile(column, gender) {
   return rows.length > 0;
 }
 
+// ── Fielding SCHEMA-column presence (FC-2, Bowler Style composer gate) ────────
+// The fielding Bowler Style composer reads fielding.bowling_group / bowling_type,
+// which exist ONLY after the data pipeline re-runs + re-uploads the parquet (FC-1b).
+// So the UI entry is gated on the COLUMN's presence — hidden now, auto-appears once
+// the parquet carries it (data-driven, cross-gender, NO hardcode). This is a SCHEMA
+// probe against information_schema — deliberately NOT `WHERE bowling_group IS NOT
+// NULL`, which THROWS when the column is absent. `column` is a trusted internal
+// literal (never user input). Cached once per session; the SYNC getter defaults
+// FALSE (hidden) until the async probe confirms presence.
+const _fieldingColPresent = new Map(); // column -> bool (resolved)
+const _fieldingColPending = new Map(); // column -> Promise (dedupe in-flight)
+
+export async function probeFieldingColumn(column) {
+  const sql =
+    `SELECT 1 FROM information_schema.columns ` +
+    `WHERE table_name = 'fielding' AND column_name = '${column}' LIMIT 1`;
+  const { rows } = await query(sql);
+  return rows.length > 0;
+}
+
+/** SYNC. Cached presence of fielding.<column>; FALSE until the probe resolves, so a
+ * gated UI entry stays hidden until the column is confirmed present. */
+export function getFieldingColumnPresent(column) {
+  return _fieldingColPresent.get(column) === true;
+}
+
+/** ASYNC (idempotent). Probe fielding.<column> once and cache the bool, then call
+ * onReady() so a mounted surface can re-render (revealing the entry). A failed probe
+ * leaves the column UNresolved (stays hidden) and allows a later retry. */
+export function ensureFieldingColumnProbed(column, onReady) {
+  if (_fieldingColPresent.has(column)) {
+    if (onReady) onReady();
+    return;
+  }
+  if (_fieldingColPending.has(column)) return;
+  const p = probeFieldingColumn(column)
+    .then((present) => {
+      _fieldingColPresent.set(column, present);
+      _fieldingColPending.delete(column);
+      if (onReady) onReady();
+    })
+    .catch(() => {
+      _fieldingColPending.delete(column);
+    });
+  _fieldingColPending.set(column, p);
+}
+
 // ── Numbers-path resolver ────────────────────────────────────────────────────
 // Resolves the five bools state.js's gates key on, per gender, and caches them
 // (gender is the only axis). The cache is module-level so BOTH surfaces that need
