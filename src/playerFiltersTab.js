@@ -66,7 +66,7 @@ import {
   buildFieldingSliceClauses,
 } from "./table.js";
 import { buildScopeClausesTagged, whereWithPinExemption } from "./filters.js";
-import { getMetric, metricDisplayLabel, matchupBucketLabel, DISMISSAL_KINDS } from "./metrics.js";
+import { getMetric, resolveColumnMetric, metricDisplayLabel, matchupBucketLabel, DISMISSAL_KINDS } from "./metrics.js";
 import {
   createInitialState,
   emptyAdvancedBlock,
@@ -79,6 +79,14 @@ import {
   TOSS_RESULT_OPTIONS,
   TOSS_DECISION_OPTIONS,
   inningsNumberLabel,
+  // R5 (2026-08-10): the pop-up's Batting/Bowling column selection is now a Slot[]
+  // ({id,key}), like the leaderboard, so the shared inline picker's multi-instance /
+  // duplicate / per-copy sort+highlight controls light up. These bridge slot-space
+  // (picker + table) and key-space (presets, defaults, the query).
+  keysToSlots,
+  reconcileSlots,
+  slotKeys,
+  distinctSlotKeys,
 } from "./state.js";
 import { createColumnsPicker } from "./columnsPicker.js";
 import { openFilterRowEditor } from "./playerFilterEditor.js";
@@ -842,13 +850,22 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
   let lastScope = null;
 
   // Display sort. `key` = a metric column key, "__label" for the Filter column,
-  // or null for add-order. Pinned rows always float to the top (like the
-  // leaderboard); NO Best/Worst, NO baseline row.
-  const sortState = { key: null, dir: "desc" };
+  // or null for add-order. `slotId` = the specific column-COPY doing the sort (R5:
+  // a stat shown twice is two columns; the arrow lights on exactly one), or null for
+  // the Filter column / no sort. Two-way bound with the picker's per-copy Sort control
+  // (getSort/setSort). Pinned rows always float to the top (like the leaderboard); NO
+  // Best/Worst, NO baseline row.
+  const sortState = { key: null, dir: "desc", slotId: null };
 
-  // Tab-INDEPENDENT column selection (decision 3), lazily seeded per discipline
-  // from the discipline default.
-  const tabColumns = { batting: null, bowling: null };
+  // Tab-INDEPENDENT column selection (decision 3), lazily seeded per discipline from
+  // the discipline default. R5: now a Slot[] ({id,key}) per discipline (was a bare key
+  // array) so the shared inline picker's multi-instance / duplicate / per-copy sort +
+  // highlight all work. The SACRED query never sees slots — columnKeysFor() dedups to
+  // DISTINCT keys before buildQuery, so a no-filter row stays byte-identical.
+  const tabColumnSlots = { batting: null, bowling: null };
+  // R5: per-copy column HIGHLIGHT as SLOT IDS per discipline (display-only — the table
+  // tints the highlighted column; never a query change). Mirrors state.highlightedColumns.
+  const tabHighlights = { batting: [], bowling: [] };
 
   function currentFormats() {
     return (curPageState && curPageState.formats) || ["T20"];
@@ -866,34 +883,101 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     };
   }
 
-  function columnsFor(disc) {
-    // Fielding has a FIXED tally set (no picker / preset), so it isn't cached in
-    // tabColumns — return the fixed keys directly.
+  // ── Column selection (R5: Slot[]-based, bridging to key-space for the query) ──
+
+  /** The Slot[] ({id,key}) for a batting/bowling discipline, lazily seeded from the
+   * discipline default. Fielding has a FIXED tally set (no picker) — handled on the
+   * fielding paths, never here. */
+  function columnSlotsFor(disc) {
+    if (!tabColumnSlots[disc]) tabColumnSlots[disc] = keysToSlots(defaultColumnsFor(disc, currentFormats()));
+    return tabColumnSlots[disc];
+  }
+
+  /** The DISTINCT column keys handed to the query (buildQuery) for a discipline —
+   * slots deduped so each stat's SQL is emitted once (numbers sacred: a no-filter row
+   * stays byte-identical to that player's leaderboard row). Fielding returns its fixed
+   * tally keys. */
+  function columnKeysFor(disc) {
     if (disc === "fielding") return FIELDING_COLUMN_KEYS;
-    if (!tabColumns[disc]) tabColumns[disc] = defaultColumnsFor(disc, currentFormats());
-    return tabColumns[disc];
+    return distinctSlotKeys(columnSlotsFor(disc));
   }
 
-  /** Resolve a column key to its metric object for the CURRENT discipline. Fielding
-   * columns aren't in metrics.js under a "fielding" discipline, so they come from the
-   * fixed fielding metric list; batting/bowling use getMetric. */
-  function metricFor(key) {
-    if (curDiscipline === "fielding") return fieldingColumnMetrics().find((m) => m.key === key) || null;
-    return getMetric(key, curDiscipline);
+  /** The per-copy highlighted SLOT IDS for a discipline (display-only). */
+  function highlightIdsFor(disc) {
+    return tabHighlights[disc] || [];
   }
 
-  // ONE shared columns picker instance (reused across refreshes; its popover
-  // lives on document.body so a table re-render never destroys it).
+  /** The ordered display columns as { slot, metric, highlighted } entries — ONE per
+   * slot (R5 multi-instance: a duplicated stat is two columns). Fielding is the fixed
+   * tally metric list (no slots / highlight). Composed + cross keys resolve via
+   * resolveColumnMetric, exactly as the picker's chosen rows do. */
+  function columnEntries() {
+    if (curDiscipline === "fielding") {
+      return fieldingColumnMetrics().map((metric) => ({ slot: null, metric, highlighted: false }));
+    }
+    const hl = new Set(highlightIdsFor(curDiscipline));
+    return columnSlotsFor(curDiscipline)
+      .map((slot) => ({ slot, metric: resolveColumnMetric(slot.key, curDiscipline), highlighted: hl.has(slot.id) }))
+      .filter((e) => e.metric);
+  }
+
+  // ONE shared columns picker instance (reused across refreshes). R5: mounted INLINE
+  // into a persistent host in the Filters tab (was a floating popover). The pop-up now
+  // passes the FULL leaderboard contract — slots + per-copy sort + per-copy highlight —
+  // so the filter-style chosen-rows list + composers + Add-columns dropdowns all light
+  // up. It KEEPS the pop-up's INSTANT apply (applyColumnSlots → refreshData), NOT the
+  // leaderboard's stage-until-Search (R1 was leaderboard-only). ownDisciplineOnly
+  // restricts the dropdown bar to Match + the current discipline (no cross-discipline,
+  // no Fielding column-family — owner ruling); crossDiscipline stays false. The SACRED
+  // query never sees a slot (columnKeysFor dedups first), so the numbers are untouched.
   const columnsPicker = createColumnsPicker({
-    getColumns: () => columnsFor(curDiscipline),
-    setColumns: (cols) => {
-      tabColumns[curDiscipline] = cols;
-      syncPresetSelect();
-      refreshData(true); // the SELECT list changed → re-query every row
-    },
     getDiscipline: () => curDiscipline,
     getFormats: () => currentFormats(),
+    // Key contract (the shared POPOVER path consults these; inert in inline mode, but
+    // kept honest as a lossless slot⇄key projection so the contract is complete).
+    getColumns: () => slotKeys(columnSlotsFor(curDiscipline)),
+    setColumns: (cols) => applyColumnSlots(reconcileSlots(cols, columnSlotsFor(curDiscipline))),
+    // Slot contract (multi-instance): the picker adds / removes / duplicates / composes
+    // / parametric-edits slots. Every mutation applies INSTANTLY.
+    getSlots: () => columnSlotsFor(curDiscipline),
+    applySlots: (slots) => applyColumnSlots(slots),
+    // Per-copy Sort — two-way bound with the table header via the shared setSort().
+    getSort: () => ({ key: sortState.key, dir: sortState.dir, active: sortState.key != null, slotId: sortState.slotId }),
+    setSort: (key, slotId) => setSort(key, slotId ?? null),
+    // Per-copy Highlight (slot ids). Display-only → repaint the table, never a re-query.
+    getHighlightIds: () => highlightIdsFor(curDiscipline).slice(),
+    setHighlightIds: (ids) => {
+      tabHighlights[curDiscipline] = (ids || []).slice();
+      renderRows();
+    },
+    // Key-based highlight (shared popover path only — inert inline; an id⇄key projection).
+    getHighlights: () => {
+      const hl = new Set(highlightIdsFor(curDiscipline));
+      return columnSlotsFor(curDiscipline).filter((s) => hl.has(s.id)).map((s) => s.key);
+    },
+    setHighlights: (keys) => {
+      const want = new Set(keys);
+      tabHighlights[curDiscipline] = columnSlotsFor(curDiscipline).filter((s) => want.has(s.key)).map((s) => s.id);
+      renderRows();
+    },
+    // R5: Match + own-discipline dropdowns only — no cross-discipline, no Fielding family.
+    ownDisciplineOnly: true,
   });
+
+  /** Apply a freshly-built Slot[] for the current discipline (picker add / remove /
+   * duplicate / compose / param / preset). INSTANT (the pop-up's own model, NOT the
+   * leaderboard's stage-until-Search). Re-queries only when a genuinely NEW distinct
+   * key appears (a real SELECT-list change); a reorder / duplicate / remove / a
+   * count↔% swap onto an already-shown key just re-renders from cache — no needless
+   * "…" flash, and cached data already carries the key. */
+  function applyColumnSlots(slots) {
+    const prevKeys = new Set(columnKeysFor(curDiscipline));
+    tabColumnSlots[curDiscipline] = slots;
+    syncPresetSelect();
+    const addedKey = distinctSlotKeys(slots).some((k) => !prevKeys.has(k));
+    if (addedKey) refreshData(true);
+    else renderRows();
+  }
 
   // ---------- the editor ----------
 
@@ -986,8 +1070,8 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
   // ---------- shell (toolbar + table host), rendered once per discipline ----------
 
   function presetOptionsHTML() {
-    const cols = columnsFor(curDiscipline);
-    const active = activePresetKey(curDiscipline, currentFormats(), cols);
+    // activePresetKey normalises Slot[] → keys, so the slot list matches directly.
+    const active = activePresetKey(curDiscipline, currentFormats(), columnSlotsFor(curDiscipline));
     const opts = COLUMN_PRESET_DEFS[curDiscipline]
       .map((def) => {
         const disabled = def.columns(currentFormats()) == null; // phases off under this format
@@ -1014,12 +1098,20 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
 
   function renderShell() {
     // Fielding has a FIXED column set → no preset / columns picker in fielding mode.
-    const columnsControlsHTML =
-      curDiscipline === "fielding"
-        ? ""
-        : `<div class="filters-tab__toolbar-right">
+    const isFielding = curDiscipline === "fielding";
+    const columnsControlsHTML = isFielding
+      ? ""
+      : `<div class="filters-tab__toolbar-right">
             <select class="select filters-tab__preset" data-role="preset-select" aria-label="Column preset">${presetOptionsHTML()}</select>
             <button type="button" class="btn btn--ghost" data-role="columns-btn" aria-haspopup="true" aria-expanded="false">Columns</button>
+          </div>`;
+    // R5: the shared inline picker (filter-style chosen-rows + Add-columns dropdowns)
+    // lives in a PERSISTENT host revealed by the Columns button (was a floating
+    // popover). Starts collapsed so the tab reads the same until the user opens it.
+    const columnsPanelHTML = isFielding
+      ? ""
+      : `<div class="filters-tab__columns-panel" data-role="columns-panel" hidden>
+            <div class="filters-tab__columns-host" data-role="columns-host"></div>
           </div>`;
     container.innerHTML = `
       <div class="filters-tab">
@@ -1030,6 +1122,7 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
           </div>
           ${columnsControlsHTML}
         </div>
+        ${columnsPanelHTML}
         <p class="filters-tab__reset-notice" data-role="reset-notice" role="status" hidden></p>
         <div class="filters-tab__table-host" data-role="table-host"></div>
       </div>`;
@@ -1051,15 +1144,27 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
       presetSel.addEventListener("change", () => {
         const def = COLUMN_PRESET_DEFS[curDiscipline].find((d) => d.key === presetSel.value);
         const cols = def && def.columns(currentFormats());
-        if (cols) {
-          tabColumns[curDiscipline] = cols;
-          refreshData(true);
-        }
+        // Reconcile the preset's key list onto the current slots (surviving keys keep
+        // their id → their sort/highlight identity carries across a preset change), then
+        // apply through the shared instant path so the inline picker + table re-sync.
+        if (cols) applyColumnSlots(reconcileSlots(cols, columnSlotsFor(curDiscipline)));
       });
     }
 
+    // R5: mount the picker INLINE into its persistent host (batting/bowling only); the
+    // Columns button toggles the host's visibility. mountInline is idempotent, so a
+    // discipline switch (which rebuilds this shell) simply re-mounts onto the new host.
     const columnsBtn = container.querySelector('[data-role="columns-btn"]');
-    if (columnsBtn) columnsPicker.mount(columnsBtn);
+    const columnsHost = container.querySelector('[data-role="columns-host"]');
+    const columnsPanel = container.querySelector('[data-role="columns-panel"]');
+    if (columnsHost) columnsPicker.mountInline(columnsHost);
+    if (columnsBtn && columnsPanel) {
+      columnsBtn.addEventListener("click", () => {
+        const willOpen = columnsPanel.hidden;
+        columnsPanel.hidden = !willOpen;
+        columnsBtn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+      });
+    }
 
     // ONE delegated click handler on the persistent table host: sort headers +
     // per-row pin / edit / delete. Survives every innerHTML re-render of the host.
@@ -1095,7 +1200,10 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     const sortBtn = e.target.closest(".data-table__sort-btn");
     if (sortBtn) {
       const th = sortBtn.closest("[data-sort-key]");
-      if (th) toggleSort(th.dataset.sortKey);
+      // R5: a metric header carries data-sort-slot (the column-COPY id) so clicking it
+      // lands the sort on that exact copy — two-way bound with the picker's per-copy
+      // Sort control. The Filter header has no slot (data-sort-slot absent → null).
+      if (th) setSort(th.dataset.sortKey, th.dataset.sortSlot || null);
       return;
     }
     const actBtn = e.target.closest("[data-act]");
@@ -1116,10 +1224,17 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     }
   }
 
-  function toggleSort(key) {
-    if (sortState.key === key) sortState.dir = sortState.dir === "asc" ? "desc" : "asc";
-    else {
+  /** Set / toggle the display sort. `slotId` identifies the exact column-COPY (R5);
+   * clicking the SAME copy flips direction, a NEW copy (or the Filter column) sets a
+   * fresh sort at the default direction. Shared by table-header clicks AND the picker's
+   * per-copy Sort control (getSort/setSort), keeping the two in sync. */
+  function setSort(key, slotId = null) {
+    const sameCol = slotId != null ? sortState.slotId === slotId : sortState.key === key && sortState.slotId == null;
+    if (sameCol) {
+      sortState.dir = sortState.dir === "asc" ? "desc" : "asc";
+    } else {
       sortState.key = key;
+      sortState.slotId = slotId;
       sortState.dir = key === "__label" ? "asc" : "desc";
     }
     renderRows();
@@ -1128,15 +1243,15 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
   function syncPresetSelect() {
     const presetSel = container.querySelector('[data-role="preset-select"]');
     if (!presetSel) return;
-    const active = activePresetKey(curDiscipline, currentFormats(), columnsFor(curDiscipline));
+    const active = activePresetKey(curDiscipline, currentFormats(), columnSlotsFor(curDiscipline));
     presetSel.value = active ?? "__custom";
   }
 
   // ---------- ordering ----------
 
-  function valForSort(data, metric) {
-    if (!data || data.__error || !metric) return null;
-    const v = data[metric.key];
+  function valForSort(data, colKey) {
+    if (!data || data.__error || !colKey) return null;
+    const v = data[colKey];
     if (v == null) return null;
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
@@ -1157,10 +1272,12 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
         return sortState.dir === "asc" ? la.localeCompare(lb) : lb.localeCompare(la);
       };
     } else {
-      const metric = metricFor(sortState.key);
+      // Sort by the metric column's KEY (both copies of a duplicated stat hold the same
+      // value, so the key drives the order; the slot id only decides which arrow lights).
+      const colKey = sortState.key;
       cmp = (a, b) => {
-        const va = valForSort(rowData.get(a.id), metric);
-        const vb = valForSort(rowData.get(b.id), metric);
+        const va = valForSort(rowData.get(a.id), colKey);
+        const vb = valForSort(rowData.get(b.id), colKey);
         if (va == null && vb == null) return 0;
         if (va == null) return 1;
         if (vb == null) return -1;
@@ -1172,31 +1289,30 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
 
   // ---------- table render (cache-only; no queries fired here) ----------
 
-  function metricColumns() {
-    if (curDiscipline === "fielding") return fieldingColumnMetrics();
-    return columnsFor(curDiscipline)
-      .map((key) => getMetric(key, curDiscipline))
-      .filter(Boolean);
+  /** True iff this column ENTRY is the one currently sorting the rows: a metric copy
+   * matches on its slot id (R5 per-copy); a fielding column (no slot) matches on key. */
+  function entryIsSorted(entry) {
+    if (sortState.key == null) return false;
+    return entry.slot ? sortState.slotId === entry.slot.id : sortState.key === entry.metric.key;
   }
 
-  function sortArrow(key) {
-    return sortState.key === key ? (sortState.dir === "asc" ? " ▲" : " ▼") : "";
-  }
-
-  function headerHTML(metrics) {
+  function headerHTML(entries) {
     const labelSorted = sortState.key === "__label" ? " is-sorted" : "";
-    const metricThs = metrics
-      .map((m) => {
-        const sorted = sortState.key === m.key ? " is-sorted" : "";
-        return `<th data-sort-key="${escAttr(m.key)}" class="data-table__th${sorted}" scope="col"><button type="button" class="data-table__sort-btn">${escHtml(
+    const metricThs = entries
+      .map((e) => {
+        const m = e.metric;
+        const sorted = entryIsSorted(e) ? " is-sorted" : "";
+        const hl = e.highlighted ? " is-highlighted" : "";
+        const arrow = entryIsSorted(e) ? (sortState.dir === "asc" ? " ▲" : " ▼") : "";
+        const slotAttr = e.slot ? ` data-sort-slot="${escAttr(e.slot.id)}"` : "";
+        return `<th data-sort-key="${escAttr(m.key)}"${slotAttr} class="data-table__th${sorted}${hl}" scope="col"><button type="button" class="data-table__sort-btn">${escHtml(
           m.shortLabel || m.label || m.key
-        )}${sortArrow(m.key)}</button></th>`;
+        )}${arrow}</button></th>`;
       })
       .join("");
+    const labelArrow = sortState.key === "__label" ? (sortState.dir === "asc" ? " ▲" : " ▼") : "";
     return `<thead><tr>
-        <th data-sort-key="__label" class="data-table__th data-table__th--sticky${labelSorted}" scope="col"><button type="button" class="data-table__sort-btn">Filter${sortArrow(
-          "__label"
-        )}</button></th>
+        <th data-sort-key="__label" class="data-table__th data-table__th--sticky${labelSorted}" scope="col"><button type="button" class="data-table__sort-btn">Filter${labelArrow}</button></th>
         ${metricThs}
       </tr></thead>`;
   }
@@ -1224,21 +1340,26 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     </td>`;
   }
 
-  /** A row's data cells from the cache: loading "…", error banner, or values. */
-  function dataCellsHTML(row, metrics) {
+  /** A row's data cells from the cache: loading "…", error banner, or values. One <td>
+   * per column ENTRY (R5: a duplicated stat is two columns; highlighted entries tint). */
+  function dataCellsHTML(row, entries) {
     const data = rowData.get(row.id);
-    if (data === undefined) return metrics.map(() => `<td class="data-table__td filters-tab__cell--loading">…</td>`).join("");
+    if (data === undefined) return entries.map(() => `<td class="data-table__td filters-tab__cell--loading">…</td>`).join("");
     if (data && data.__error) {
-      const span = metrics.length || 1;
+      const span = entries.length || 1;
       return `<td class="data-table__td filters-tab__cell--error" colspan="${span}">Couldn't load this row.</td>`;
     }
-    return metrics
-      .map((m) => `<td class="data-table__td" data-key="${escAttr(m.key)}">${escHtml(formatValue(m, data ? data[m.key] : null))}</td>`)
+    return entries
+      .map((e) => {
+        const colKey = e.slot ? e.slot.key : e.metric.key;
+        const hl = e.highlighted ? " is-highlighted" : "";
+        return `<td class="data-table__td${hl}" data-key="${escAttr(colKey)}">${escHtml(formatValue(e.metric, data ? data[colKey] : null))}</td>`;
+      })
       .join("");
   }
 
-  function rowCellsHTML(row, metrics) {
-    return labelCellHTML(row) + dataCellsHTML(row, metrics);
+  function rowCellsHTML(row, entries) {
+    return labelCellHTML(row) + dataCellsHTML(row, entries);
   }
 
   function renderRows() {
@@ -1254,15 +1375,22 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     }
     if (rows.length === 0) {
       host.innerHTML = `<p class="player-page__note player-page__note--muted">No filtered rows yet</p>`;
-      columnsPicker.refresh(container.querySelector('[data-role="columns-btn"]'));
+      refreshColumnsPicker();
       return;
     }
-    const metrics = metricColumns();
+    const entries = columnEntries();
     const body = orderedRows()
-      .map((row) => `<tr data-row-id="${escAttr(row.id)}">${rowCellsHTML(row, metrics)}</tr>`)
+      .map((row) => `<tr data-row-id="${escAttr(row.id)}">${rowCellsHTML(row, entries)}</tr>`)
       .join("");
-    host.innerHTML = `<div class="table-scroll"><table class="data-table">${headerHTML(metrics)}<tbody>${body}</tbody></table></div>`;
-    columnsPicker.refresh(container.querySelector('[data-role="columns-btn"]'));
+    host.innerHTML = `<div class="table-scroll"><table class="data-table">${headerHTML(entries)}<tbody>${body}</tbody></table></div>`;
+    refreshColumnsPicker();
+  }
+
+  /** Keep the inline picker in step after a render — but NOT in fielding mode, where
+   * no inline host is mounted (fielding has a fixed tally set, no picker). */
+  function refreshColumnsPicker() {
+    if (curDiscipline === "fielding") return;
+    columnsPicker.refresh();
   }
 
   /** Patch ONE resolved row's cells in place (used when add-order is stable, so
@@ -1271,7 +1399,7 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     const host = container.querySelector('[data-role="table-host"]');
     if (!host) return;
     const tr = host.querySelector(`tr[data-row-id="${CSS.escape(row.id)}"]`);
-    if (tr) tr.innerHTML = rowCellsHTML(row, metricColumns());
+    if (tr) tr.innerHTML = rowCellsHTML(row, columnEntries());
   }
 
   // ---------- data (queries) ----------
@@ -1281,7 +1409,8 @@ export function mountPlayerFiltersTab(container, { store, playerId, discipline, 
     const player = curPlayerId;
     const ps = curPageState;
     const disc = curDiscipline;
-    const cols = columnsFor(curDiscipline);
+    // DISTINCT keys (slots deduped) → each stat's SQL emitted once; numbers sacred.
+    const cols = columnKeysFor(curDiscipline);
     fetchRow(row, player, ps, disc, cols)
       .then((data) => {
         if (token !== fetchToken) return;

@@ -337,6 +337,16 @@ export function createColumnsPicker({
   // + count badges. Cross keys flow through the SAME data-key checkbox + W2
   // sort/highlight machinery as any other column (their key is x__<disc>__<base>).
   crossDiscipline = false,
+  // R5 (player pop-up column picker → filter-style, 2026-08-10): OPT-IN restriction
+  // of the "Add columns" dropdown bar to Match + the CURRENT discipline's own
+  // dropdown only — the player pop-up passes true because its picker is scoped to
+  // its own discipline toggle (owner ruling: NO cross-discipline, and NO Fielding
+  // column-family — Fielding is the pop-up's SEPARATE mode, not an addable column
+  // family here). The leaderboard omits it (false) → all four dropdowns render, so
+  // its bar is byte-identical. Purely which TRIGGERS emit; the palette CONTENT
+  // (columnsPaletteModel) is unchanged, and gi stays the DISCIPLINE_ORDER index so
+  // buildColumnsGroups(gi) still resolves the right discipline.
+  ownDisciplineOnly = false,
 }) {
   // Render the per-column Sort-by + Highlight controls only when the full W2
   // contract is supplied (leaderboard). Absent → the pop-up's plain checkbox
@@ -380,6 +390,12 @@ export function createColumnsPicker({
   }
 
   function close() {
+    // Inline mode: also close any open floating discipline palette so it never orphans
+    // on <body> — e.g. the player pop-up's destroy() (R5) tears the picker down while a
+    // dropdown could be open. No-op when nothing is open; for the leaderboard's
+    // renderPrompt/Clear this is reached only when no palette is open (its capturing
+    // dismiss consumes any outside click first), so that behaviour is unchanged.
+    if (inlineState && inlineState.paletteApi) inlineState.paletteApi.closeCurrent();
     if (!openState) return;
     const { el, onDocClick, onKeydown, onScroll, onResize } = openState;
     el.remove();
@@ -1353,7 +1369,13 @@ export function createColumnsPicker({
    * like the filters section). */
   function buildAddMenuHTML(ns, formats) {
     const model = columnsPaletteModel(ns, formats);
+    // R5: the player pop-up (ownDisciplineOnly) shows only Match + the CURRENT
+    // discipline's dropdown — no cross-discipline bucket, no Fielding column-family.
+    // The leaderboard leaves it off → all four. gi is still the DISCIPLINE_ORDER
+    // index below, so a skipped dropdown never shifts another's buildColumnsGroups(gi).
+    const allowedDisc = ownDisciplineOnly ? new Set(["match", disciplineBucket(ns)]) : null;
     const skeletons = DISCIPLINE_ORDER.map((disc, gi) => {
+      if (allowedDisc && !allowedDisc.has(disc)) return "";
       const label = disc.charAt(0).toUpperCase() + disc.slice(1);
       const disabled = (model[disc] || []).length === 0;
       return paletteSkeletonHTML(gi, {

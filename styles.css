@@ -4952,6 +4952,17 @@ a { color: var(--color-accent); }
   font-size: 0.9rem;
 }
 
+/* R5: the pop-up's inline column picker (the shared filter-style chosen-rows list +
+   the Add-columns dropdown bar), revealed by the Columns button. A bordered panel so
+   it reads as a distinct region above the table; the shared .cols-picker inside owns
+   its own internal layout, so this host just carries the frame + padding. */
+.filters-tab__columns-panel {
+  padding: var(--space-3);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-panel);
+}
+
 /* The Filters tab reuses the leaderboard's .table-scroll / .data-table so the
    cells, sticky first column and horizontal scroll all inherit the real styling.
    This host just carries the rounded frame. */
