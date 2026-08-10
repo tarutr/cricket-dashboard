@@ -3794,11 +3794,9 @@ export function paramExistenceHaving(baseMetric, operator, values, discipline) {
 // KEY = `fc__<tally>__<dim>__<value>`  (+ `_per_match` for the per-match variant,
 // mirroring the enumerated per-match fielding keys `catches_per_match`, …).
 //   tally ∈ {catches, cab, stumpings, runouts, dismissals}  (the plan's 5)
-//   dim   ∈ {phase, over, inns, pos, hand}   — 5 of the plan's 6 ACTIVE. The 6th,
-//           `bstyle` (Bowler Style pace/spin/detailed), is RESERVED but INACTIVE:
-//           fielding_events carries the RAW Cricsheet bowling style, not the
-//           normalised bowling_group/bowling_type the owner's vocabulary means —
-//           a data-source ruling is needed first (STOP-RULE; see the FC-1 report).
+//   dim   ∈ {phase, over, inns, pos, hand, bstyle}           (the plan's 6, all
+//           ACTIVE — bstyle lit up in FC-1b once the pace/spin grouping was carried
+//           onto the fielding_events export, mirroring the matchup surface).
 //   value depends on the dim (see below). NO token contains `__`, and the
 //   `_per_match` suffix uses SINGLE underscores, so `key.split("__")` after the
 //   prefix recovers exactly [tally, dim, value] and the per-match suffix rides on
@@ -3843,22 +3841,43 @@ const _FC_HAND = new Map([
   ["r", { pred: "out_hand = 'Right-hand bat'", label: "vs RHB", short: "vRHB" }],
 ]);
 
-// BOWLER-STYLE dim — RESERVED, NOT YET IMPLEMENTED (FC-1 STOP-RULE flag). The
-// plan's 6th dimension is "Bowler Style (pace/spin/detailed)". That vocabulary
-// (Pace/Spin groups; Off-spin/Leg-spin/Medium/Fast fine types) is the profile's
-// NORMALISED `bowling_group` / `bowling_type` — the same the matchup "Vs Spin"
-// uses. BUT fielding_events.bowler_style carries the RAW Cricsheet style instead
-// ('Right-arm offbreak', 'Legbreak googly', 'Left-arm slow', 'Right-arm bowler',
-// …), verified against the live view; the normalised columns are NOT on the
-// fielding parquet, and player_profiles is not registered as a query-time table.
-// So "pace/spin/detailed" cannot be reproduced on the fielding view without a
-// DATA change (add bowling_type/bowling_group to the fielding export — out of
-// FC-1 scope) or a player_profiles join, AND some raw styles ('*-arm slow',
-// 'Right-arm bowler') don't classify into pace/spin without a cricket ruling.
-// This is an owner decision → the `bstyle` token is reserved but inactive; the
-// resolver returns null for it (so no fc__…__bstyle__… key resolves yet). The
-// other 5 dimensions are fully implemented + verified. See the FC-1 report.
-const _FC_DIM_SET = new Set(["phase", "over", "inns", "pos", "hand"]);
+// BOWLER-STYLE dim (FC-1b, owner ruled 2026-08-10: carry the grouping ON the
+// fielding data). The wicket-taking bowler's Pace/Spin GROUP + detailed TYPE now
+// ride on each fielding event as `bowling_group` / `bowling_type` — added to the
+// fielding_events export projection using the IDENTICAL derivation the matchup
+// surface uses (sql_matchup_batting's `mb`: COALESCE(profile.bowling_type,
+// profile.bowling_group,'(unmapped)') AS bowling_type; COALESCE(profile.
+// bowling_group,'(unmapped)') AS bowling_group). So fielding Bowler Style == the
+// matchup "vs Spin" grouping byte-for-byte, and its predicates read those two NEW
+// fielding_cte columns.
+//   GROUP tokens  pace/spin  → `bowling_group = 'Pace'/'Spin'` (all pace/all spin).
+//   DETAIL tokens             → `bowling_type = '<value>'`, one per SPECIFIC style
+//     in the matchup's fine vocabulary (the values verified live in
+//     matchup_batting.bowling_type). The bare group-fallback types ('Pace'/'Spin'
+//     "unspecified") and '(unmapped)' are NOT standalone detail tokens — they are
+//     covered by the pace/spin GROUP tokens (and '(unmapped)' is excluded exactly
+//     like the matchup fine picker's `bowling_type <> '(unmapped)'`), which also
+//     keeps the detail tokens collision-free with the pace/spin group tokens.
+// NB: these predicates reference columns that exist on fielding_events only AFTER
+// the pipeline re-runs — FC-2 must gate the Bowler Style UI entry on the column's
+// presence (data-driven availability). See the FC-1b report.
+const _FC_BSTYLE_GROUP = new Map([
+  ["pace", "Pace"],
+  ["spin", "Spin"],
+]);
+const _FC_BSTYLE_DETAIL = new Map([
+  ["offspin",     "Off-spin"],
+  ["legspin",     "Leg-spin"],
+  ["slaorthodox", "Slow left-arm orthodox"],
+  ["lawristspin", "Left-arm wrist-spin"],
+  ["medium",      "Medium"],
+  ["mediumfast",  "Medium-fast"],
+  ["fastmedium",  "Fast-medium"],
+  ["fast",        "Fast"],
+  ["slowmedium",  "Slow-medium"],
+]);
+
+const _FC_DIM_SET = new Set(["phase", "over", "inns", "pos", "hand", "bstyle"]);
 
 /** 1st/2nd/3rd/4th… for innings labels. */
 function _fcOrdinal(n) {
@@ -3883,6 +3902,16 @@ function _fcParseRange(value) {
 function _fcDimResolve(dim, value) {
   if (dim === "phase") return _FC_PHASE.get(value) || null;
   if (dim === "hand") return _FC_HAND.get(value) || null;
+  if (dim === "bstyle") {
+    // GROUP (pace/spin) → the new fielding bowling_group column; DETAIL → the new
+    // bowling_type column. Values are hardcoded from the owner vocabulary (no user
+    // free-text), so no escaping surface; a `''` guard is kept for hygiene.
+    const grp = _FC_BSTYLE_GROUP.get(value);
+    if (grp) return { pred: `bowling_group = '${grp}'`, label: grp, short: grp };
+    const det = _FC_BSTYLE_DETAIL.get(value);
+    if (det) return { pred: `bowling_type = '${det.replace(/'/g, "''")}'`, label: det, short: det };
+    return null;
+  }
   if (dim === "over") {
     // USER-DEFINED 1-based over(s) → 0-based over_number (over 1 = over_number 0).
     const r = _fcParseRange(value);
@@ -4013,8 +4042,8 @@ export function eligibleComposedFieldingKeys(discipline) {
     phase: [..._FC_PHASE.keys()],
     inns: ["1", "2", "3", "4"],
     hand: [..._FC_HAND.keys()],
-    // `bstyle` is RESERVED but inactive (see _FC_DIM_SET) — pending an owner
-    // ruling on the fielding view's raw-style vs normalised pace/spin source.
+    // FC-1b: pace/spin groups + the specific detailed bowling_type tokens.
+    bstyle: [..._FC_BSTYLE_GROUP.keys(), ..._FC_BSTYLE_DETAIL.keys()],
   };
   const keys = [];
   for (const tally of _FC_TALLIES.keys()) {

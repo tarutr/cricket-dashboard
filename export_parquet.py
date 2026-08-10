@@ -2144,6 +2144,18 @@ def sql_fielding_events():
         d.bowler_id,
         d.bowler AS bowler_name,
         wp.bowling_style AS bowler_style,
+        -- FC-1b (fielding composers, Bowler Style dim): carry the wicket-taking
+        -- bowler's Pace/Spin group + detailed type on each fielding event, using
+        -- the IDENTICAL derivation the matchup surface uses (sql_matchup_batting's
+        -- `mb`): COALESCE(profile.bowling_type, profile.bowling_group,'(unmapped)')
+        -- for the detailed type; COALESCE(profile.bowling_group,'(unmapped)') for
+        -- the group. `wp` is the SAME player_profiles-on-bowler join the matchup's
+        -- `pp` is (wp.player_id = d.bowler_id), so fielding Bowler Style == matchup
+        -- grouping byte-for-byte. Gender-agnostic (keyed by player_id, no gender
+        -- gate) — works for women when their data lands. PURELY ADDITIVE: two new
+        -- columns; every existing column's value is unchanged.
+        COALESCE(wp.bowling_type, wp.bowling_group, '(unmapped)') AS bowling_type,
+        COALESCE(wp.bowling_group, '(unmapped)') AS bowling_group,
         {phase_expr} AS phase,
         c.substitute
     FROM credited c

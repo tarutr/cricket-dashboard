@@ -56,7 +56,28 @@ from both groups. Measure divergence vs profile bowling_group during verify; fla
   keys, NOT range keys; isComposedFieldingColumnKey keeps range keys alive.
 - App boots + live Search: 0 console errors, leaderboard renders (Karanbir top).
 
-## STOP-RULE FLAG: bstyle (Bowler Style) dimension NOT built — fielding_events carries RAW
-## Cricsheet bowling_style (Right-arm offbreak/Legbreak/Left-arm slow/Right-arm bowler/…),
-## NOT the normalised bowling_group/bowling_type the owner's pace/spin/detailed means.
-## player_profiles not registered in browser DB. Needs owner ruling. Other 5 dims DONE.
+## STOP-RULE FLAG (FC-1): bstyle needed a data source ruling — RESOLVED below.
+
+## FC-1b (owner ruled 2026-08-10: ADD grouping to the fielding data) — DONE + verified
+- export_parquet.py sql_fielding_events(): ADDED 2 columns to the projection —
+  `COALESCE(wp.bowling_type, wp.bowling_group,'(unmapped)') AS bowling_type` and
+  `COALESCE(wp.bowling_group,'(unmapped)') AS bowling_group`, using the SAME `wp`
+  (player_profiles-on-bowler) join. IDENTICAL to matchup mb (sql_matchup_batting
+  lines 1406-1407, `pp` alias). Additive-only: git diff = ONE hunk, +2 cols + comment;
+  no other column/parquet touched. py_compile OK.
+- metrics.js bstyle branch LIT UP: pace/spin → bowling_group='Pace'/'Spin'; detailed
+  tokens (offspin/legspin/slaorthodox/lawristspin/medium/mediumfast/fastmedium/fast/
+  slowmedium) → bowling_type='<value>'. Bare-group 'Pace'/'Spin' bowling_type + '(unmapped)'
+  EXCLUDED from detail (covered by groups; mirrors matchup fine picker's <> '(unmapped)';
+  keeps detail tokens collision-free with pace/spin group tokens). Folded into
+  eligibleComposedFieldingKeys (now 200 finite keys; bstyle = 11 tokens × 5 tallies × 2).
+- VERIFIED: node --check metrics.js OK; resolver returns correct SQL for pace/spin/each
+  detail + null for unmapped/grp_spin/xyz; getMetric resolves batting+bowling, null matchup;
+  eligibleColumnKeys (page-fresh) has pace + offspin_per_match, ranges stay structural;
+  anchors byte-identical (2813/Karanbir 2454, SA Yadav 60/1544/29.13/150.34); other 5 dims
+  intact; 0 console errors.
+- LIVE GAP (expected): bstyle predicates read bowling_group/bowling_type which exist on
+  fielding_events ONLY after the pipeline re-runs — so no live bstyle compute yet.
+- FC-2 availability signal: offer Bowler Style ONLY when fielding_events has bowling_group
+  (column-presence probe: information_schema.columns / DESCRIBE fielding, cached like the
+  dataAvailability.js probes). Hidden until pipeline re-run; data-driven, no crash, women-ready.
