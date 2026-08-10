@@ -2282,28 +2282,81 @@ a { color: var(--color-accent); }
 .cols-param-row__noun { font-weight: 600; font-size: 0.9rem; flex: 0 0 auto; }
 .cols-param-row__remove { margin-left: auto; }
 
-/* Dimension/category composer chosen row (Phase/Ball/Innings/Runs-by-Source/
-   Wicket-Type): a titled card holding the composer's tick-box / count-% editor
-   inline (reuses .columns-popover__list rows) + a × that removes the row and all
-   its columns. */
-.cols-composer-row {
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-sm, 4px);
+/* Edit pencil on a composer-made standalone row (Phase/Ball/Innings/Runs-by-Source/
+   Wicket-Type) — re-opens that column's compose editor in place. Same muted →
+   brighten-on-hover treatment as the sibling Sort/Duplicate glyph buttons; STROKED
+   like the duplicate glyph. Plain rows carry no pencil (nothing to compose). */
+.col-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5em;
   background: none;
+  border: none;
+  cursor: pointer;
+  padding: var(--space-1);
+  color: var(--color-muted);
+  opacity: 0.55;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 0.85em;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+.col-edit-btn svg {
+  width: 1em;
+  height: 1em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  display: block;
+}
+.col-edit-btn:hover { opacity: 1; color: var(--color-fg); }
+
+/* Transient compose editor (R4-A "compose then add"): a temporary card holding the
+   stat/axis <select> + dimension inputs (checkboxes in ADD mode → several columns at
+   once; radios in EDIT mode → one column) + Add/Save + Cancel. On confirm it spawns
+   standalone chosen-column rows and closes — it is NEVER a persistent column row. A
+   stronger border + panel tint mark it as an in-progress editor, not a column. */
+.cols-compose-editor {
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--color-panel);
   padding: var(--space-2);
 }
-.cols-composer-row__head {
+.cols-compose-editor__head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   margin-bottom: var(--space-2);
 }
-.cols-composer-row__title { font-weight: 600; font-size: 0.9rem; flex: 0 0 auto; }
-/* One-metric-per-row model (owner ruling): the row's single metric-or-count/%
-   <select> sits after the title; the × is pushed to the far right. */
-.cols-composer-row__metric { flex: 0 1 auto; min-width: 0; max-width: 60%; }
-.cols-composer-row__head .cols-composer-remove { margin-left: auto; }
-.cols-composer-row__empty { color: var(--color-muted); font-size: 0.9rem; }
+.cols-compose-editor__title { font-weight: 600; font-size: 0.9rem; flex: 0 0 auto; }
+.cols-compose-editor__stat { flex: 0 1 auto; min-width: 0; max-width: 60%; }
+.cols-compose-editor__empty { color: var(--color-muted); font-size: 0.9rem; }
+.cols-compose-editor__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.cols-compose-confirm,
+.cols-compose-cancel {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm, 4px);
+  border: 1px solid var(--color-line-strong);
+  cursor: pointer;
+}
+.cols-compose-confirm {
+  background: var(--color-active-bg);
+  color: var(--color-active-fg);
+  border-color: var(--color-active-bg);
+}
+.cols-compose-confirm:hover:not(:disabled) { background: var(--color-accent-strong); border-color: var(--color-accent-strong); }
+.cols-compose-confirm:disabled { opacity: 0.4; cursor: default; }
+.cols-compose-cancel { background: none; color: var(--color-fg); }
+.cols-compose-cancel:hover { background: var(--color-bg); }
 
 /* Add menus. */
 .cols-add__label {
