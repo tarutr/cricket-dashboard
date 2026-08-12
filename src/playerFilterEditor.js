@@ -31,10 +31,12 @@ import { escHtml, escAttr } from "./html.js";
 import { mountSearchSelect } from "./searchSelect.js";
 
 // T-2e: the batting-position LIST slice + the matchup-Vs pick. Batting position ticks
-// order positions 1..11 (compiled to `batting_position IN (…)` by the tab's slice
+// order positions 1..12 (compiled to `batting_position IN (…)` by the tab's slice
 // engine); the key is shared with playerFiltersTab.js's conditionToInningsWhere.
+// 1-12 matches the matchup "Batting position" control + the actual data's max
+// position (owner directive "don't limit the data", enum-fixes pass).
 const BATTING_POSITION_KEY = "batting_position";
-const BATTING_POSITIONS = Array.from({ length: 11 }, (_, i) => i + 1);
+const BATTING_POSITIONS = Array.from({ length: 12 }, (_, i) => i + 1);
 /** A LIST condition (batting position multi-select) carries a `positions` array. */
 const isListCond = (cond) => Array.isArray(cond.positions);
 
@@ -390,7 +392,7 @@ export function openFilterRowEditor(hostDoc, deps) {
   // ── draft condition rows ──────────────────────────────────────────────────────
   function condRowHTML(cond, ci) {
     const base = conditionBaseName(cond, discipline, draft.scope.formats || formats);
-    // T-2e: Batting position — a LIST multi-select (tick order positions 1..11).
+    // T-2e: Batting position — a LIST multi-select (tick order positions 1..12).
     if (isListCond(cond)) {
       const sel = new Set((cond.positions || []).map(Number));
       const boxes = BATTING_POSITIONS.map(

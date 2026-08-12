@@ -1,5 +1,12 @@
 # Fielding Composers — build plan (owner-signed-off design, 2026-08-10)
 
+> **STATUS: BUILT + committed on `ball-layer` (nothing pushed) — 2026-08-10.** FC-1 `a6bbfd4` (fc__ family, 5 dims),
+> FC-1b `6ec00ad` (Bowler Style 6th dim, matchup-parity grouping added to the fielding export), FC-2 `ab5f661`
+> (composer UI on leaderboard + player pop-up). Anchors byte-identical throughout; sacred builders untouched; verified
+> by independent DuckDB (SKY Ct PP/Mid/Death 7/11/6) + cross-wave diff review + node --check. **5 dims LIVE now;
+> Bowler Style is DORMANT until the owner re-runs the data pipeline** (the export gained bowling_group/bowling_type;
+> the UI entry is gated on that column's presence). OUTSTANDING GATE = owner's LIVE review (R0–R6 + these composers).
+
 > NEW feature, BEYOND the R0–R6 columns reconciliation (which is done + awaiting the owner's live review). Independent
 > of that review. Contract: CLAUDE.md (numbers sacred — `buildFieldingCteSql` is SACRED; §4.1). Design pinned with the
 > owner in chat 2026-08-10.

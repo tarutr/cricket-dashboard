@@ -266,7 +266,7 @@ export function mountBattingPosition(container, store, onChange, { embedded = fa
   return { sync };
 }
 
-const REGULAR_POSITIONS = Array.from({ length: 11 }, (_, i) => i + 1);
+const REGULAR_POSITIONS = Array.from({ length: 12 }, (_, i) => i + 1);
 
 /**
  * Mount the "R. Pos." (regular position) multi-select (decision 46). Binds to
@@ -290,7 +290,7 @@ export function mountRegularPositions(container, store, onChange, { embedded = f
 
   // Wave F1: the R. Pos. checkbox panel is the unified PANEL component now
   // (mountSearchMultiSelect, searchable:false → the P checkbox-panel look for the
-  // fixed 1–11 vocabulary), not the bespoke `.dropdown__*` markup. It still writes
+  // fixed 1–12 vocabulary), not the bespoke `.dropdown__*` markup. It still writes
   // the SAME numeric state.regularPositions, so the query is byte-identical.
   //
   // The toggle summary is VALUE-based ("1, 2, 3" ≤3, "N selected" ≥4, else "Any
@@ -437,7 +437,7 @@ function mountFieldingSlicePicker(container, store, onChange, { field, options, 
   return { sync };
 }
 
-/** Fielding: dismissed-batter position slice (state.fielding.positions, 1–11). */
+/** Fielding: dismissed-batter position slice (state.fielding.positions, 1–12). */
 export function mountFieldingPosition(container, store, onChange, opts = {}) {
   return mountFieldingSlicePicker(container, store, onChange, {
     field: "positions",

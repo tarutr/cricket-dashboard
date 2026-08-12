@@ -365,8 +365,10 @@ export const FIELDING_PHASE_OPTIONS = [
   { value: "mid", label: "Middle" },
   { value: "death", label: "Death" },
 ];
-/** Dismissed-batter positions offered by the fielding position slice (1–11). */
-export const FIELDING_POSITIONS = Array.from({ length: 11 }, (_, i) => i + 1);
+/** Dismissed-batter positions offered by the fielding position slice (1–12 —
+ * matches the actual data's max batting position; owner directive
+ * "don't limit the data", enum-fixes pass). */
+export const FIELDING_POSITIONS = Array.from({ length: 12 }, (_, i) => i + 1);
 
 // ── Match-context filters (Wave 6, owner-approved design) ───────────────────
 // Categorical WHERE filters that narrow the innings set by the MATCH's

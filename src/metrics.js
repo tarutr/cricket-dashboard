@@ -1768,7 +1768,7 @@ const MATCHUP_BATTING_METRICS = [
   },
   {
     key: "boundary_pct",
-    label: "Boundary %",
+    label: "Boundary Ball %",
     shortLabel: "Bdry%",
     discipline: "matchup_batting",
     source: "matchup",
@@ -1830,7 +1830,7 @@ const MATCHUP_BATTING_METRICS = [
   // note) — defined here so the picker/vocabulary is ready when they arrive.
   {
     key: "dis_bowled",
-    label: "Out Bowled",
+    label: "Bowled",
     shortLabel: "Bwd",
     discipline: "matchup_batting",
     source: "matchup",
@@ -1843,7 +1843,7 @@ const MATCHUP_BATTING_METRICS = [
   },
   {
     key: "dis_lbw",
-    label: "Out LBW",
+    label: "LBW",
     shortLabel: "LBW",
     discipline: "matchup_batting",
     source: "matchup",
@@ -1856,7 +1856,7 @@ const MATCHUP_BATTING_METRICS = [
   },
   {
     key: "dis_caught",
-    label: "Out Caught",
+    label: "Caught",
     shortLabel: "Ct",
     discipline: "matchup_batting",
     source: "matchup",
@@ -1869,7 +1869,7 @@ const MATCHUP_BATTING_METRICS = [
   },
   {
     key: "dis_caught_and_bowled",
-    label: "Out Caught & Bowled",
+    label: "Caught & Bowled",
     shortLabel: "C&B",
     discipline: "matchup_batting",
     source: "matchup",
@@ -1882,7 +1882,7 @@ const MATCHUP_BATTING_METRICS = [
   },
   {
     key: "dis_stumped",
-    label: "Out Stumped",
+    label: "Stumped",
     shortLabel: "St",
     discipline: "matchup_batting",
     source: "matchup",
@@ -1895,7 +1895,7 @@ const MATCHUP_BATTING_METRICS = [
   },
   {
     key: "dis_hit_wicket",
-    label: "Out Hit Wicket",
+    label: "Hit Wicket",
     shortLabel: "HW",
     discipline: "matchup_batting",
     source: "matchup",
@@ -1987,8 +1987,8 @@ const MATCHUP_BATTING_METRICS = [
   // when they arrive (same posture as the phase/dis_* matchup metrics above).
   {
     key: "running_sr",
-    label: "Running Strike Rate",
-    shortLabel: "Run SR",
+    label: "NBSR",
+    shortLabel: "NBSR",
     discipline: "matchup_batting",
     source: "matchup",
     sqlExpression:
@@ -1999,7 +1999,7 @@ const MATCHUP_BATTING_METRICS = [
   },
   {
     key: "boundary_runs_pct",
-    label: "% Runs from Boundaries",
+    label: "Boundary Run %",
     shortLabel: "Bdry Run%",
     discipline: "matchup_batting",
     source: "matchup",
@@ -2262,8 +2262,8 @@ const MATCHUP_BOWLING_METRICS = [
   },
   {
     key: "dot_pct",
-    label: "Dot Ball %",
-    shortLabel: "Dot%",
+    label: "Dot Ball % Conceded",
+    shortLabel: "Dot% Con",
     discipline: "matchup_bowling",
     source: "matchup",
     sqlExpression: "SUM(dots) * 100.0 / NULLIF(SUM(balls), 0)",
@@ -2295,7 +2295,7 @@ const MATCHUP_BOWLING_METRICS = [
   // in the shared Bowling · Detailed group — it resolves here once this def exists).
   {
     key: "boundary_runs_pct",
-    label: "% Runs from Boundaries",
+    label: "Boundary Run %",
     shortLabel: "Bdry Run%",
     discipline: "matchup_bowling",
     source: "matchup",
@@ -3922,7 +3922,8 @@ function _fcDimResolve(dim, value) {
     return { pred: `over_number BETWEEN ${lo0} AND ${hi0}`, label: `Overs ${r.lo}–${r.hi}`, short: `Ov ${r.lo}-${r.hi}` };
   }
   if (dim === "pos") {
-    // USER-DEFINED dismissed-batter batting position(s), 1-based (1–11), NO offset.
+    // USER-DEFINED dismissed-batter batting position(s), 1-based (1–12 data max;
+    // the from/to inputs carry no hard upper bound), NO offset.
     const r = _fcParseRange(value);
     if (!r || r.lo < 1) return null;
     if (!r.isRange) return { pred: `out_batting_position = ${r.lo}`, label: `Pos ${r.lo}`, short: `Pos ${r.lo}` };
