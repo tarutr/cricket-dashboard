@@ -639,14 +639,12 @@ export function createColumnsPicker({
   // conditions and the pop-up's own popover (buildPickerHTML, untouched) keep
   // offering them exactly as before.
   //
-  // E2 tidy T1 (owner 2026-08-08): the standalone `boundary_runs` (batting
-  // "Boundary Runs") is also hidden from the OFFERING — the Runs-by-Source
-  // composer's "Boundaries" source covers it. Same hidden-not-deleted posture:
-  // the metric DEF stays in metrics.js (the composer's "Boundaries" row + its %
-  // still reference boundary_runs / boundary_runs_pct, and the pop-up popover
-  // keeps offering it). boundary_runs is a BATTING-only key (bowling carries only
-  // boundary_runs_pct), so this is inert on the bowling table. "Boundary Balls"
-  // is NOT hidden (it isn't dual-homed in a composer).
+  // Columns-popup rework Wave A (#28, owner 2026-08-12): the standalone
+  // `boundary_runs` ("Boundary Runs") RESTORED as an own offered batting Detailed
+  // column — the owner's flag-off review wanted it back as a plain column
+  // alongside the Runs-by-Source composer's "Boundaries" source, not hidden
+  // behind it. It stays a "count" key in COLUMN_TOGGLE_PAIRS.batting (toggle to
+  // "Boundary Run %" / boundary_runs_pct still works). No longer in this set.
   //
   // enum-fixes pass (owner-authorized removal): `four_wicket_hauls` ("Four-Wicket
   // Hauls") is REMOVED from the Bowling columns offering — `five_wicket_hauls`
@@ -654,7 +652,7 @@ export function createColumnsPicker({
   // the metric DEF (and its sqlExpression) stays in metrics.js untouched, so any
   // other consumer (pop-up popover, filters, graph) keeps offering it — this only
   // hides the column from THIS picker.
-  const HIDDEN_COLUMN_KEYS = new Set(["player_of_match", "wickets_per_innings", "boundary_runs", "four_wicket_hauls"]);
+  const HIDDEN_COLUMN_KEYS = new Set(["player_of_match", "wickets_per_innings", "four_wicket_hauls"]);
 
   const BATTING_BASIC_ORDER = [
     "innings", "r_pos", "runs", "balls_faced", "dismissals", "high_score", "fours", "sixes",
@@ -1440,7 +1438,7 @@ export function createColumnsPicker({
     // Compose-then-add: the transient ADD editor sits at the bottom of the list.
     if (editor && editor.mode === "add") rows.push(composeEditorHTML(editor, ns, formats));
     const body = rows.filter(Boolean).join("");
-    const empty = body ? "" : `<div class="cols-chosen__empty">No columns yet — add some from the menus below.</div>`;
+    const empty = body ? "" : `<div class="cols-chosen__empty">No columns yet — add some from the menus above.</div>`;
     return `<div class="cols-chosen" data-role="cols-chosen">${empty}${body}</div>`;
   }
 
@@ -1554,11 +1552,19 @@ export function createColumnsPicker({
     // FC-2: in the pop-up's FIELDING mode the Match dropdown offers only "matches"
     // (its query builds fld_matches_cte); Impact/PoM is dropped (no pom_cte there, so
     // it would not compute). The leaderboard keeps Impact (fieldingMode false).
+    //
+    // Columns-popup rework Wave A (#26, owner 2026-08-12): the Match dropdown's
+    // "Basic Stats" / "Impact" sub-headings were never owner-approved — flattened
+    // to a SINGLE unnamed group (Player Matches, Player of the Match Count, Matches
+    // Won/Lost/Tied, No Result, Toss Won). `section("", …)` still gates on non-empty
+    // (unchanged behaviour), and the empty group-header this produces collapses via
+    // styles.css `.palette__group-header:empty` — display/layout only, no metric
+    // added/removed/reordered.
     const fieldingMode = getFieldingMode ? getFieldingMode() : false;
-    const matchSections = [
-      ...section("Basic Stats", plainItems(matchesMetric ? [matchesMetric] : [])),
-      ...(fieldingMode ? [] : section("Impact", plainItems(impact))),
-    ];
+    const matchItems = fieldingMode
+      ? plainItems(matchesMetric ? [matchesMetric] : [])
+      : plainItems([...(matchesMetric ? [matchesMetric] : []), ...impact]);
+    const matchSections = section("", matchItems);
 
     return {
       match: matchSections,
@@ -1654,9 +1660,14 @@ export function createColumnsPicker({
     rerenderInline();
   }
 
-  /** The whole leaderboard Columns section: chosen rows + add menus. */
+  /** The whole leaderboard Columns section: add menus + chosen rows.
+   * Columns-popup rework Wave A (#17, owner 2026-08-12): the four discipline
+   * dropdowns now render ABOVE the chosen-columns list (previously below) —
+   * layout/order only, `wireChosen`/`mountColumnPalettes`/`rerenderInline` all
+   * locate their targets via querySelector (data-role attrs), not DOM position,
+   * so this reorder is a no-op for wiring. */
   function buildInlineHTML(ns, formats) {
-    return `<div class="cols-picker">${buildChosenHTML(ns, formats)}${buildAddMenuHTML(ns, formats)}</div>`;
+    return `<div class="cols-picker">${buildAddMenuHTML(ns, formats)}${buildChosenHTML(ns, formats)}</div>`;
   }
 
   // ── Compose editor + edit-pencil wiring (in the CHOSEN-rows region) ──────────
@@ -2003,8 +2014,10 @@ export function createColumnsPicker({
     chosenHost.replaceWith(fresh);
     wireChosen(container);
     inlineState.sig = inlineSignature(ns, formats);
-    // keepOpenOnPick: adding a column grows the chosen list ABOVE the dropdown bar, which
-    // shifts the (still-open) discipline trigger — re-anchor the open menu to it.
+    // keepOpenOnPick: the dropdown bar now sits ABOVE the chosen list (#17), so
+    // adding a column no longer shifts the (still-open) discipline trigger — this
+    // reposition is now a defensive no-op, kept for any other layout shift (e.g.
+    // window resize) while a palette is open.
     if (inlineState.paletteApi) inlineState.paletteApi.repositionCurrent();
   }
 

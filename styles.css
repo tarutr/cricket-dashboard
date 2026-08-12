@@ -1049,6 +1049,10 @@ a { color: var(--color-accent); }
 }
 .palette__group:first-child .palette__group-header { padding-top: var(--space-1); }
 .palette__group-note { text-transform: none; letter-spacing: 0; font-weight: 400; font-style: italic; }
+/* Columns-popup rework Wave A (#26): a group built with an empty name (the
+   flattened Match dropdown) renders no visible sub-heading — collapses the
+   header bar instead of showing an empty gap. */
+.palette__group-header:empty { display: none; padding: 0; }
 
 .palette__row,
 .palette__variant-row {

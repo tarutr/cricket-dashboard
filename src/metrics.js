@@ -567,7 +567,11 @@ const BATTING_METRICS = [
   // is_not_boundary rule, so they ARE the boundary balls).
   {
     key: "running_sr",
-    label: "NBSR",
+    // Columns-popup rework Wave A (#19, owner 2026-08-12): `label` reverted to the
+    // full name (an earlier pass wrongly collapsed it to "NBSR") — the FILTER leaf
+    // (paletteGroups.js) reads `label`. `shortLabel` stays "NBSR" — the COLUMN
+    // header (table.js) reads `shortLabel`, unaffected.
+    label: "Non-Boundary Strike Rate",
     shortLabel: "NBSR",
     discipline: "batting",
     source: "innings",
@@ -971,10 +975,14 @@ const BOWLING_METRICS = [
   // denominator stay consistent. Fewer boundary runs conceded is better, mirroring
   // the existing Boundary % Conceded convention. (Display rename to "Boundary Run
   // %" — batting + bowling together — is Wave R2, display-only; number unaffected.)
+  // Columns-popup rework Wave A (#20, owner 2026-08-12): "Conceded" appended to
+  // both label + shortLabel — this bowling metric's label/shortLabel were byte-
+  // identical to the BATTING boundary_runs_pct's ("Boundary Run %" / "Bdry Run%"),
+  // a genuine collision the owner flagged. Number/sqlExpression unchanged.
   {
     key: "boundary_runs_pct",
-    label: "Boundary Run %",
-    shortLabel: "Bdry Run%",
+    label: "Boundary Run % Conceded",
+    shortLabel: "Bdry Run% Con",
     discipline: "bowling",
     source: "innings",
     sqlExpression: "(4 * SUM(fours_conceded) + 6 * SUM(sixes_conceded)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
@@ -1987,7 +1995,10 @@ const MATCHUP_BATTING_METRICS = [
   // when they arrive (same posture as the phase/dis_* matchup metrics above).
   {
     key: "running_sr",
-    label: "NBSR",
+    // Columns-popup rework Wave A (#19, owner 2026-08-12): same revert as plain
+    // batting's running_sr above — full name in `label` (filter leaf), "NBSR"
+    // stays in `shortLabel` (column header).
+    label: "Non-Boundary Strike Rate",
     shortLabel: "NBSR",
     discipline: "matchup_batting",
     source: "matchup",
@@ -2293,10 +2304,13 @@ const MATCHUP_BOWLING_METRICS = [
   // Boundary % Conceded convention above). Placed in the matchup-bowling Detailed
   // Stats palette group (drawer.js line already calls leafMetric("boundary_runs_pct")
   // in the shared Bowling · Detailed group — it resolves here once this def exists).
+  // Columns-popup rework Wave A (#20, owner 2026-08-12): "Conceded" appended,
+  // matching the plain-bowling boundary_runs_pct rename (same collision with the
+  // matchup_batting metric of the same key/label). Number unchanged.
   {
     key: "boundary_runs_pct",
-    label: "Boundary Run %",
-    shortLabel: "Bdry Run%",
+    label: "Boundary Run % Conceded",
+    shortLabel: "Bdry Run% Con",
     discipline: "matchup_bowling",
     source: "matchup",
     sqlExpression: "(4 * SUM(fours_conceded) + 6 * SUM(sixes_conceded)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",

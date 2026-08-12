@@ -82,11 +82,14 @@ import { windowPhaseBallsAllowed } from "./drawerInnings.js";
 //   • Progression SR (first-10 / 11–20 / 21+) — subsumed by Batter/Bowler Ball
 //     Range + Strike Rate.
 //   • Wickets per Innings, Not Out % — owner cuts. Dismissals Effected —
-//     re-summed from catches+stumpings+run-outs. Boundary % Conceded (balls-based)
-//     — replaced by Boundary Run %.
+//     re-summed from catches+stumpings+run-outs.
+//   Columns-popup rework Wave A (#25, owner 2026-08-12): "Boundary % Conceded"
+//   (balls-based) is RESTORED as a bowling Detailed filter leaf below — the
+//   owner's flag-off review wanted both the balls-based % and Boundary Run %
+//   offered, not one replacing the other. No longer in this set.
 const DELETED_FILTER_METRIC_KEYS = new Set([
   "sr_first10", "sr_11_20", "sr_21plus",
-  "wickets_per_innings", "not_out_pct", "dismissals_effected", "boundary_pct_conceded",
+  "wickets_per_innings", "not_out_pct", "dismissals_effected",
 ]);
 const isDeletedFilterMetric = (m) => Boolean(m.isPhaseMetric) || DELETED_FILTER_METRIC_KEYS.has(m.key);
 
@@ -381,7 +384,9 @@ export function createPaletteGroupsBuilder(deps) {
         // R2 (2026-08-09): the leaderboard filter is a full-operator existence gate
         // on the innings' runs (≥/≤/=/between chosen in the editor), so the add-menu
         // leaf reads "Innings Score" on BOTH surfaces — the hardcoded "≥ N" is gone.
-        leafMetric("innings_score_ge", "Innings Score"),
+        // Columns-popup rework Wave A (#18, owner 2026-08-12): "(Min/Max)" appended
+        // so the leaf's purpose (a range-editor filter, not a fixed "≥ N") is clear.
+        leafMetric("innings_score_ge", "Innings Score (Min/Max)"),
       ]);
       pushGroup("Batting · Detailed Stats", [
         leafMetric("average", "Batting Average"),
@@ -390,7 +395,10 @@ export function createPaletteGroupsBuilder(deps) {
         leafMetric("boundary_pct", "Boundary Ball %"),
         leafMetric("boundary_runs_pct", "Boundary Run %"),
         leafMetric("dot_pct", "Dot Ball %"),
-        leafMetric("running_sr", "NBSR"),
+        // Columns-popup rework Wave A (#19, owner 2026-08-12): the FILTER leaf reads
+        // the full metric name; the metrics.js `shortLabel` ("NBSR") still drives the
+        // compact COLUMN header (table.js reads shortLabel, not label — unaffected).
+        leafMetric("running_sr", "Non-Boundary Strike Rate"),
         leafMetric("balls_faced_share", "Percentage of Balls Faced"),
         metricFamily("Balls per…", [["balls_per_boundary", "Boundary"], ["balls_per_four", "4"], ["balls_per_six", "6"]]),
         metricFamily("% Runs in…", [
@@ -431,7 +439,9 @@ export function createPaletteGroupsBuilder(deps) {
         // (four_wicket_hauls / five_wicket_hauls) stay in metrics.js as columns.
         // R2 (2026-08-09): full-operator existence gate on the innings' wickets, so
         // the add-menu leaf reads "Wicket Hauls" on BOTH surfaces (see Innings Score).
-        leafMetric("wicket_hauls_ge", "Wicket Hauls"),
+        // Columns-popup rework Wave A (#18, owner 2026-08-12): "(Min/Max)" appended,
+        // matching the Innings Score rename above.
+        leafMetric("wicket_hauls_ge", "Wicket Hauls (Min/Max)"),
       ]);
       pushGroup("Bowling · Detailed Stats", [
         leafMetric("average", "Bowling Average"),
@@ -439,7 +449,16 @@ export function createPaletteGroupsBuilder(deps) {
         leafMetric("strike_rate", "Bowling Strike Rate"),
         metricFamily("Extras", [["extras_wides", "Wides"], ["extras_noballs", "No-balls"]]),
         leafMetric("dot_pct", "Dot Ball % Conceded"),
-        leafMetric("boundary_runs_pct", "Boundary Run %"),
+        // Columns-popup rework Wave A (#25, owner 2026-08-12): restored — was cut in
+        // the filter-rejig (decision 68) on the theory Boundary Run % replaced it; the
+        // owner's flag-off review wants both offered (this is balls-based, Boundary
+        // Run % below is runs-based — different denominators, not duplicates).
+        leafMetric("boundary_pct_conceded", "Boundary % Conceded"),
+        // Columns-popup rework Wave A (#20, owner 2026-08-12): "Conceded" appended —
+        // this label collided verbatim with the BATTING "Boundary Run %" leaf above
+        // (same full label AND shortLabel "Bdry Run%"); metrics.js now disambiguates
+        // via label + a distinct shortLabel ("Bdry Run% Con").
+        leafMetric("boundary_runs_pct", "Boundary Run % Conceded"),
       ]);
     }
 
