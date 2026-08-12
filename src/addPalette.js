@@ -98,20 +98,43 @@ export function createAddPalette({ buildGroups, keepOpenOnPick = false }) {
   function portalPanel(toggleEl, panelEl, { onOpen } = {}) {
     const home = { parent: panelEl.parentNode, next: panelEl.nextSibling };
     let opened = false;
+    // #23 (columns-popup rework Wave B): open into a FIXED full-view panel that shows
+    // the whole list regardless of where the trigger sits — flipping UP when the
+    // natural height doesn't fit below (so an add-menu low in the pop-up no longer
+    // opens downward into a cramped sliver). This reuses the GRAPH dropdown technique
+    // (src/graph/graph.js `positionFixedPanel`): measure the panel's natural height,
+    // pick the side that fits (else the roomier one), and clamp maxHeight to that
+    // side's free space with internal scroll. Purely presentational (no query path).
     function position() {
       const r = toggleEl.getBoundingClientRect();
       const margin = 8;
+      const gap = 6;
       panelEl.style.position = "fixed";
       panelEl.style.zIndex = "1000"; // above the .filters-popup panel (z-index:100)
       panelEl.style.minWidth = `${Math.round(r.width)}px`;
-      panelEl.style.top = `${Math.round(r.bottom + 6)}px`;
+      panelEl.style.maxHeight = ""; // clear any prior clamp so scrollHeight = natural height
       const width = panelEl.offsetWidth || Math.round(r.width);
+      const desired = panelEl.scrollHeight;
       let left = Math.min(r.left, window.innerWidth - width - margin);
       left = Math.max(margin, left);
       panelEl.style.left = `${Math.round(left)}px`;
       panelEl.style.right = "auto";
-      const maxH = Math.max(160, Math.round(window.innerHeight - (r.bottom + 6) - margin));
-      panelEl.style.maxHeight = `${maxH}px`;
+      const spaceBelow = window.innerHeight - r.bottom - gap - margin;
+      const spaceAbove = r.top - gap - margin;
+      // Down if the natural height fits below; else up if it fits above; else the roomier side.
+      let openDown;
+      if (spaceBelow >= desired) openDown = true;
+      else if (spaceAbove >= desired) openDown = false;
+      else openDown = spaceBelow >= spaceAbove;
+      if (openDown) {
+        panelEl.style.top = `${Math.round(r.bottom + gap)}px`;
+        panelEl.style.bottom = "auto";
+        panelEl.style.maxHeight = `${Math.max(160, Math.round(spaceBelow))}px`;
+      } else {
+        panelEl.style.top = "auto";
+        panelEl.style.bottom = `${Math.round(window.innerHeight - r.top + gap)}px`;
+        panelEl.style.maxHeight = `${Math.max(160, Math.round(spaceAbove))}px`;
+      }
       panelEl.style.overflowY = "auto";
     }
     const onScroll = () => { if (opened) position(); };
@@ -155,7 +178,7 @@ export function createAddPalette({ buildGroups, keepOpenOnPick = false }) {
       document.removeEventListener("click", onDocClick, true);
       document.removeEventListener("keydown", onKeydown, true);
       panelEl.hidden = true;
-      for (const p of ["position", "zIndex", "minWidth", "top", "left", "right", "maxHeight", "overflowY"]) panelEl.style[p] = "";
+      for (const p of ["position", "zIndex", "minWidth", "top", "left", "right", "bottom", "maxHeight", "overflowY"]) panelEl.style[p] = "";
       if (home.next && home.next.parentNode === home.parent) home.parent.insertBefore(panelEl, home.next);
       else home.parent.appendChild(panelEl);
       toggleEl.setAttribute("aria-expanded", "false");

@@ -998,6 +998,14 @@ export function createColumnsPicker({
     phase: "Phase Range", ball: "Ball Range", innings: "Innings Range",
     runsource: "Runs by Source", wickettype: "Wicket Type",
   };
+  // #35 (columns-popup rework Wave B): the count/% AXIS is NOT a selectable choice in
+  // the compose editor — it is ONLY the post-add per-row toggle. Runs by Source and
+  // Wicket Type are the two composers whose "stat" IS that count/% axis, so their
+  // compose editor renders NO stat/axis <select>: the axis defaults to the count
+  // variant on ADD and is preserved silently on EDIT (composerSelForKey), while the
+  // per-row count/% control does the switching. Every other composer keeps its real
+  // stat select (base metric for Phase/Ball/Innings, base tally for the fc_ family).
+  const AXIS_ONLY_COMPOSER_KINDS = new Set(["runsource", "wickettype"]);
   // opToken (ge/le/eq/bt) → the operator <select>'s value (gte/lte/eq/between).
   const _PARAM_OPTOKEN_TO_KEY = Object.fromEntries(
     Object.entries(COMPOSED_PARAM_OP_TOKEN).map(([k, v]) => [v, k])
@@ -1312,6 +1320,25 @@ export function createColumnsPicker({
   function composeEditorBody(kind, ns, formats, sel, ticks, single) {
     const rows = composerValueRows(kind, ns, formats, sel);
     if (!rows.length) return { html: "", empty: true };
+    // #35 (columns-popup rework Wave B): EDIT re-picks exactly ONE dimension value, so
+    // it renders a single-select <select> ("like picking a filter"), not the ADD
+    // multi-tick grid. Rare batting-Dismissals kinds sit under an <optgroup> so the
+    // common/rare split still reads; the selected option is the row's one staged key.
+    if (single) {
+      const selectedKey = [...ticks][0];
+      const opt = (r) =>
+        `<option value="${escHtml(r.key)}"${r.key === selectedKey ? " selected" : ""}>${escHtml(r.label)}</option>`;
+      const common = rows.filter((r) => !r.rare);
+      const rare = rows.filter((r) => r.rare);
+      const rareHTML = rare.length ? `<optgroup label="Rare dismissals">${rare.map(opt).join("")}</optgroup>` : "";
+      return {
+        html: `<select class="select cols-compose-editor__dim" data-role="compose-dim-select" aria-label="Dimension value">${common
+          .map(opt)
+          .join("")}${rareHTML}</select>`,
+        empty: false,
+      };
+    }
+    // ADD mode: the multi-tick grid (spawns several columns at once).
     const inp = (r) => composeDimInputHTML(r.key, r.label, single, ticks.has(r.key));
     if (rows.some((r) => r.rare)) {
       const common = rows.filter((r) => !r.rare);
@@ -1366,7 +1393,10 @@ export function createColumnsPicker({
     const { kind, sel, ticks, mode } = editor;
     const single = mode === "edit";
     const label = composerKindLabel(kind);
-    const options = composerSelectOptions(kind, ns, formats);
+    // #35: axis-only composers (Runs by Source / Wicket Type) show NO stat/axis select —
+    // count/% is the per-row toggle, not an editor choice. `sel` is still the count
+    // variant (ADD) or the column's own preserved axis (EDIT); it just isn't offered.
+    const options = AXIS_ONLY_COMPOSER_KINDS.has(kind) ? [] : composerSelectOptions(kind, ns, formats);
     const selectHTML = options.length
       ? `<select class="select cols-compose-editor__stat" data-role="compose-stat" aria-label="${escHtml(label)} stat">${options
           .map((o) => `<option value="${escHtml(o.value)}"${o.value === sel ? " selected" : ""}>${escHtml(o.label)}</option>`)
@@ -1782,6 +1812,15 @@ export function createColumnsPicker({
         if (confirmBtn) confirmBtn.disabled = editor.ticks.size === 0;
       });
     });
+
+    // #35: EDIT-mode dimension <select> — change the single staged key. Save (confirm)
+    // stays enabled since a re-edit always has exactly one value selected. No re-render:
+    // the <select> already shows its own new value, and the key is applied on Save.
+    const dimSelectEl = rootEl.querySelector('[data-role="compose-dim-select"]');
+    if (dimSelectEl)
+      dimSelectEl.addEventListener("change", () => {
+        editor.ticks = new Set([dimSelectEl.value]);
+      });
 
     // Confirm: ADD spawns one standalone slot per ticked dimension (in composerValueRows
     // order); EDIT swaps the edited slot's key in place (id preserved → its sort/highlight/

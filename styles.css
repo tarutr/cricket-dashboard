@@ -829,9 +829,37 @@ a { color: var(--color-accent); }
   border: 1px solid var(--color-line);
   border-radius: var(--radius-sm, 4px);
   background: none;
+  /* #6 (columns-popup rework Wave B): the filter rows adopt the columns-section row
+     look — same 0.9rem font as .cols-chosen-row__label (the owner prefers the columns
+     look). Width is set alongside .cols-chosen-row in the shared rule below. */
+  font-size: 0.9rem;
 }
 
-.cond-row__line { display: flex; align-items: flex-start; gap: var(--space-2); max-width: 100%; }
+/* The main line spans the full row so the remove × can sit hard right, matching the
+   columns chosen-row (label grows, controls pinned right). */
+.cond-row__line { display: flex; align-items: flex-start; gap: var(--space-2); width: 100%; max-width: 100%; }
+
+/* #6: BOTH the filter-section rows and the columns-section rows are 75% of the
+   container width on desktop + tablet, and full width on mobile — one shared width so
+   the two sections line up (owner prefers the columns look). Covers the filter cond
+   rows, the columns chosen/param rows, and the transient compose editor. The
+   .cols-chosen-row / .cols-param-row / .cols-compose-editor base rules (further down)
+   set no width, so this is the single source of their width. Display-only. */
+.cond-row,
+.cols-chosen-row,
+.cols-param-row,
+.cols-compose-editor {
+  width: 75%;
+  max-width: 100%;
+}
+@media (max-width: 640px) {
+  .cond-row,
+  .cols-chosen-row,
+  .cols-param-row,
+  .cols-compose-editor {
+    width: 100%;
+  }
+}
 
 .cond-row__main {
   display: flex;
@@ -927,7 +955,7 @@ a { color: var(--color-accent); }
 .dwin__range { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
 .dwin__chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .dwin__chip { min-height: 32px; padding: var(--space-1) var(--space-3); font-size: 0.85rem; }
-.dwin__num { width: 4.5rem; flex: 0 0 auto; }
+.dwin__num { width: 4rem; flex: 0 0 auto; text-align: center; }
 .dwin__to,
 .dwin__unit { color: var(--color-muted); font-size: 0.85rem; }
 
@@ -979,7 +1007,8 @@ a { color: var(--color-accent); }
 .event-seasons__name { font-size: 0.9rem; font-weight: 600; }
 .event-seasons__loading { margin: 0; }
 
-.cond-row__remove { flex-shrink: 0; }
+/* #6: push the remove × hard right within the row (columns chosen-row language). */
+.cond-row__remove { flex-shrink: 0; margin-left: auto; }
 
 .cond-row__and { color: var(--color-muted); font-size: var(--text-md); }
 
@@ -1125,11 +1154,14 @@ a { color: var(--color-accent); }
 
 /* ── Date presets + required note (task 1B-2) ───────────────────────────────── */
 .date-range__input { min-height: 40px; flex: 1 1 8.5rem; min-width: 0; }
-.cond-row__value-input { flex: 0 1 6rem; min-width: 4rem; }
+/* #21 (columns-popup rework Wave B): numeric filter value boxes are sized to their
+   short entry (1–4 chars) and CENTRE-align the digits, instead of a wide left-aligned
+   bar for a one/two-character value. Compact fixed width (was flex:0 1 6rem). */
+.cond-row__value-input { flex: 0 0 auto; width: 4.25rem; min-width: 3rem; text-align: center; }
 /* Param-threshold N box (R2b: Innings Score ≥ [N] runs, Wicket Hauls ≥ [N] wickets):
    a compact fixed width so the "<metric> ≥ [N] <unit> <operator> <value>" row stays
    tidy and wraps cleanly on narrow (375px) viewports. */
-.cond-row__n-input { flex: 0 0 4rem; min-width: 3.25rem; }
+.cond-row__n-input { flex: 0 0 auto; width: 4rem; min-width: 3.25rem; text-align: center; }
 
 .date-presets { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
 
@@ -2337,6 +2369,8 @@ a { color: var(--color-accent); }
 }
 .cols-compose-editor__title { font-weight: 600; font-size: 0.9rem; flex: 0 0 auto; }
 .cols-compose-editor__stat { flex: 0 1 auto; min-width: 0; max-width: 60%; }
+/* #35: EDIT-mode dimension-value dropdown (single-select, replaces the tick grid). */
+.cols-compose-editor__dim { max-width: 100%; }
 .cols-compose-editor__empty { color: var(--color-muted); font-size: 0.9rem; }
 .cols-compose-editor__actions {
   display: flex;
@@ -5163,7 +5197,9 @@ a { color: var(--color-accent); }
 .pfe-cond__name { font-weight: 600; }
 .pfe-cond__op,
 .pfe-cond__and { color: var(--color-muted); font-size: 0.9rem; }
-.pfe-cond__val { width: 5.5rem; }
+/* #21: the pop-up "Add Filter Row" numeric value box mirrors the leaderboard one —
+   sized to its short entry + centre-aligned digits (was a wide 5.5rem left box). */
+.pfe-cond__val { width: 4.25rem; text-align: center; }
 .pfe-cond__ctrl { flex: 0 0 auto; }
 /* R3 harmonisation: the matchup-Vs row's control is now a mounted search-select
    PANEL (searchSelect.js), not a plain <select> — its toggle button is width:100%
