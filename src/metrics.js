@@ -229,7 +229,7 @@ const BATTING_METRICS = [
   },
   {
     key: "boundary_pct",
-    label: "Boundary %",
+    label: "Boundary Ball %",
     shortLabel: "Bdry%",
     discipline: "batting",
     source: "innings",
@@ -567,7 +567,7 @@ const BATTING_METRICS = [
   // is_not_boundary rule, so they ARE the boundary balls).
   {
     key: "running_sr",
-    label: "Non-Boundary Strike Rate",
+    label: "NBSR",
     shortLabel: "NBSR",
     discipline: "batting",
     source: "innings",
@@ -579,7 +579,7 @@ const BATTING_METRICS = [
   },
   {
     key: "boundary_runs_pct",
-    label: "% Runs from Boundaries",
+    label: "Boundary Run %",
     shortLabel: "Bdry Run%",
     discipline: "batting",
     source: "innings",
@@ -774,18 +774,18 @@ const BATTING_METRICS = [
 // Exported for the player page's dismissal fingerprint (R2) — the UI derives
 // its bar labels/keys from this table so the kind list stays defined once.
 export const DISMISSAL_KINDS = [
-  { kind: "caught", key: "out_caught", label: "Out Caught", short: "Ct" },
-  { kind: "bowled", key: "out_bowled", label: "Out Bowled", short: "Bwd" },
-  { kind: "lbw", key: "out_lbw", label: "Out LBW", short: "LBW" },
+  { kind: "caught", key: "out_caught", label: "Caught", short: "Ct" },
+  { kind: "bowled", key: "out_bowled", label: "Bowled", short: "Bwd" },
+  { kind: "lbw", key: "out_lbw", label: "LBW", short: "LBW" },
   { kind: "run out", key: "out_run_out", label: "Run Out", short: "RO" },
-  { kind: "stumped", key: "out_stumped", label: "Out Stumped", short: "St" },
-  { kind: "caught and bowled", key: "out_caught_and_bowled", label: "Out Caught & Bowled", short: "C&B" },
-  { kind: "hit wicket", key: "out_hit_wicket", label: "Out Hit Wicket", short: "HW" },
+  { kind: "stumped", key: "out_stumped", label: "Stumped", short: "St" },
+  { kind: "caught and bowled", key: "out_caught_and_bowled", label: "Caught & Bowled", short: "C&B" },
+  { kind: "hit wicket", key: "out_hit_wicket", label: "Hit Wicket", short: "HW" },
   { kind: "retired out", key: "out_retired_out", label: "Retired Out", short: "Ret Out" },
-  { kind: "obstructing the field", key: "out_obstructing_the_field", label: "Out Obstructing the Field", short: "Obs" },
-  { kind: "handled the ball", key: "out_handled_the_ball", label: "Out Handled the Ball", short: "HB" },
+  { kind: "obstructing the field", key: "out_obstructing_the_field", label: "Obstructing the Field", short: "Obs" },
+  { kind: "handled the ball", key: "out_handled_the_ball", label: "Handled the Ball", short: "HB" },
   { kind: "timed out", key: "out_timed_out", label: "Timed Out", short: "TO" },
-  { kind: "hit the ball twice", key: "out_hit_the_ball_twice", label: "Out Hit the Ball Twice", short: "2x" },
+  { kind: "hit the ball twice", key: "out_hit_the_ball_twice", label: "Hit the Ball Twice", short: "2x" },
 ];
 for (const d of DISMISSAL_KINDS) {
   const countExpr = `SUM(CASE WHEN dismissal_kind = '${d.kind}' THEN 1 ELSE 0 END)`;
@@ -935,8 +935,8 @@ const BOWLING_METRICS = [
   },
   {
     key: "dot_pct",
-    label: "Dot Ball %",
-    shortLabel: "Dot%",
+    label: "Dot Ball % Conceded",
+    shortLabel: "Dot% Con",
     discipline: "bowling",
     source: "innings",
     sqlExpression: "SUM(dots) * 100.0 / NULLIF(SUM(balls), 0)",
@@ -973,7 +973,7 @@ const BOWLING_METRICS = [
   // %" — batting + bowling together — is Wave R2, display-only; number unaffected.)
   {
     key: "boundary_runs_pct",
-    label: "% Runs from Boundaries",
+    label: "Boundary Run %",
     shortLabel: "Bdry Run%",
     discipline: "bowling",
     source: "innings",

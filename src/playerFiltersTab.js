@@ -456,7 +456,7 @@ function describeFieldingRow(f) {
   list(f.cities, "City");
   list(f.seasons, "Season");
   list(f.stage, "Stage");
-  list(f.result, "Result", (r) => RESULT_LABEL[r] || r);
+  list(f.result, "Match Result", (r) => RESULT_LABEL[r] || r);
   list(f.tossResult, "Toss", (r) => TOSS_RESULT_LABEL[r] || r);
   list(f.tossDecision, "Toss", (d) => TOSS_DECISION_LABEL[d] || d);
   return out;

@@ -125,7 +125,7 @@ const SINGLETON_DEFS = [
     clear: (st) => st.set({ stage: [] }),
   },
   {
-    key: "mc_result", label: "Result",
+    key: "mc_result", label: "Match Result",
     mount: (h, st, oc) => mountResult(h, st, oc, { embedded: true }),
     active: (s) => (s.result || []).length > 0,
     seed: (st) => {
@@ -174,13 +174,13 @@ const SINGLETON_DEFS = [
     clear: (st) => st.set({ deliveryWindow: withDeliveryWindowPiece(st.get().deliveryWindow, "overs", null) }),
   },
   {
-    key: "win_balls", label: "Team ball range",
+    key: "win_balls", label: "Team Ball Range",
     mount: (h, st, oc) => mountWindowBalls(h, st, oc, { embedded: true }),
     active: (s) => Boolean(s.deliveryWindow && s.deliveryWindow.balls),
     clear: (st) => st.set({ deliveryWindow: withDeliveryWindowPiece(st.get().deliveryWindow, "balls", null) }),
   },
   {
-    key: "win_player", label: "Batter/Bowler ball range",
+    key: "win_player", label: "Batter/Bowler Ball Range",
     mount: (h, st, oc) => mountWindowPlayer(h, st, oc, { embedded: true }),
     active: (s) => Boolean(s.deliveryWindow && s.deliveryWindow.player),
     clear: (st) => st.set({ deliveryWindow: withDeliveryWindowPiece(st.get().deliveryWindow, "player", null) }),

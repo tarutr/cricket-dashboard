@@ -196,9 +196,10 @@ const RARE_DISMISSAL_KINDS = new Set([
   "hit the ball twice",
 ]);
 
-// Display labels for the picker rows — shorter than metrics.js's own `label`
-// (which is prefixed "Out …" for the count metric's own column header, not
-// needed again here since the section header already reads "Dismissals").
+// Display labels for the picker rows — mostly identical to metrics.js's own
+// `label` now that its "Out " prefix was dropped (enum-fixes pass); "Run out"
+// / "Hit wicket" / etc. keep the picker's own sentence-case style here since
+// the section header already reads "Dismissals".
 const DISMISSAL_ROW_LABEL = {
   out_caught: "Caught",
   out_bowled: "Bowled",
@@ -646,7 +647,14 @@ export function createColumnsPicker({
   // keeps offering it). boundary_runs is a BATTING-only key (bowling carries only
   // boundary_runs_pct), so this is inert on the bowling table. "Boundary Balls"
   // is NOT hidden (it isn't dual-homed in a composer).
-  const HIDDEN_COLUMN_KEYS = new Set(["player_of_match", "wickets_per_innings", "boundary_runs"]);
+  //
+  // enum-fixes pass (owner-authorized removal): `four_wicket_hauls` ("Four-Wicket
+  // Hauls") is REMOVED from the Bowling columns offering — `five_wicket_hauls`
+  // ("Five-Wicket Hauls") stays exactly as-is. Same hidden-not-deleted posture:
+  // the metric DEF (and its sqlExpression) stays in metrics.js untouched, so any
+  // other consumer (pop-up popover, filters, graph) keeps offering it — this only
+  // hides the column from THIS picker.
+  const HIDDEN_COLUMN_KEYS = new Set(["player_of_match", "wickets_per_innings", "boundary_runs", "four_wicket_hauls"]);
 
   const BATTING_BASIC_ORDER = [
     "innings", "r_pos", "runs", "balls_faced", "dismissals", "high_score", "fours", "sixes",
@@ -660,7 +668,7 @@ export function createColumnsPicker({
     "innings", "wickets", "balls", "overs", "runs_conceded", "maidens",
     "extras_wides", "extras_noballs", "fours_conceded", "sixes_conceded", "dot_balls_conceded", "best",
   ];
-  const BOWLING_DETAILED_ORDER = ["economy", "average", "strike_rate"];
+  const BOWLING_DETAILED_ORDER = ["economy", "average", "strike_rate", "boundary_pct_conceded", "boundary_runs_pct"];
 
   // Columns content rework Wave B: the owner-approved v5 layout (columns-content-
   // audit) places two COUNTING totals — Boundary Balls / Boundary Runs — in the

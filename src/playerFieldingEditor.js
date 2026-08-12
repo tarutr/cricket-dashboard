@@ -204,9 +204,9 @@ export function openFieldingRowEditor(hostDoc, deps) {
           <div class="pfe__scope-row">
             <span class="pfe__scope-key">Dates</span>
             <div class="pfe__dates">
-              <input type="month" class="input pfe__date" data-role="date-from" aria-label="From month" />
+              <input type="date" class="input pfe__date" data-role="date-from" aria-label="From date" />
               <span class="pfe__date-sep">to</span>
-              <input type="month" class="input pfe__date" data-role="date-to" aria-label="To month" />
+              <input type="date" class="input pfe__date" data-role="date-to" aria-label="To date" />
             </div>
           </div>
         </div>

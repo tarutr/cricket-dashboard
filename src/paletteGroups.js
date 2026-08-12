@@ -161,10 +161,13 @@ export function createPaletteGroupsBuilder(deps) {
    * dropdown used — partitionFilterMetrics(eligibleMetrics(ns)) minus the deletes —
    * but the palette shows EXACTLY the spec's target list: every leaf is placed
    * by name (R2b removed the former "leftoverLeaves" catch-all that auto-appended
-   * any un-placed eligible metric to Detailed). Consequence, flagged for the owner:
-   * a handful of matchup-namespace metrics that were only reachable via that
-   * catch-all (Balls Faced / Dismissals in matchup_batting; Fours Conceded / Sixes
-   * Conceded in matchup_bowling) are no longer offered as filters in Vs mode.
+   * any un-placed eligible metric to Detailed). At the time, this dropped a handful
+   * of matchup-namespace metrics that were only reachable via that catch-all
+   * (Balls Faced / Dismissals in matchup_batting; Fours Conceded / Sixes Conceded
+   * in matchup_bowling) — since restored by name: Balls Faced in Wave R2c (see the
+   * "Matchup-namespace restore" comment below), and Dismissals / Fours Conceded /
+   * Sixes Conceded in R4-B (owner ruling 6, 2026-08-09, see the matching comments
+   * below). All four are offered as filters in Vs mode again today.
    *
    * `surface` ("leaderboard" default | "popup") — see file header. Only the
    * Player Profile group (#1) varies by surface; every other group is built
@@ -386,7 +389,7 @@ export function createPaletteGroupsBuilder(deps) {
         leafMetric("balls_per_dismissal", "Balls per Dismissal"),
         leafMetric("boundary_pct", "Boundary Ball %"),
         leafMetric("boundary_runs_pct", "Boundary Run %"),
-        leafMetric("dot_pct", "Dot %"),
+        leafMetric("dot_pct", "Dot Ball %"),
         leafMetric("running_sr", "NBSR"),
         leafMetric("balls_faced_share", "Percentage of Balls Faced"),
         metricFamily("Balls per…", [["balls_per_boundary", "Boundary"], ["balls_per_four", "4"], ["balls_per_six", "6"]]),
@@ -435,7 +438,7 @@ export function createPaletteGroupsBuilder(deps) {
         leafMetric("economy", "Economy"),
         leafMetric("strike_rate", "Bowling Strike Rate"),
         metricFamily("Extras", [["extras_wides", "Wides"], ["extras_noballs", "No-balls"]]),
-        leafMetric("dot_pct", "Dot %"),
+        leafMetric("dot_pct", "Dot Ball % Conceded"),
         leafMetric("boundary_runs_pct", "Boundary Run %"),
       ]);
     }
@@ -560,7 +563,7 @@ export function createPaletteGroupsBuilder(deps) {
       };
       pushGroup("Fielding Stats", [
         fieldingWicketTypeFamily(),
-        singleFamily("Wickets by Batting Position", "fld_pos", FIELDING_POSITIONS.map((n) => [`Position ${n}`, preselectFielding("positions", n)])),
+        singleFamily("Dismissed batter's position", "fld_pos", FIELDING_POSITIONS.map((n) => [`Position ${n}`, preselectFielding("positions", n)])),
       ]);
     }
 

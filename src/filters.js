@@ -354,9 +354,11 @@ export function clauseSqlList(clauses) {
  * D4 Piece 3 opt-ins (both default OFF because some callers query views that
  * lack the columns, e.g. player_matches):
  *   oppositionColumn — the view's opposition column (bowling_team for batting,
- *     batting_team for bowling). The opposition filter applies ONLY while
- *     teamType === "international" (decision 20; the controls grey out
- *     elsewhere, so an inert selection must never filter silently).
+ *     batting_team for bowling). Decision 51 (R5-F #14) reversed the old
+ *     international-only gate (decision 20): the opposition filter now applies
+ *     whenever state.opposition is non-empty, for club/domestic scope too, on
+ *     the same raw team names the Team filter uses (see oppositionFilterActive
+ *     in state.js).
  *   includePositions — apply the batting-position filter (batting innings
  *     views only; positions are a batting concept, inert in bowling).
  *

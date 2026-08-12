@@ -130,8 +130,8 @@ const SINGLETON_TYPES = [
   // render first among the singleton rows, grouped under the "Delivery" optgroup.
   { key: "win_phase", label: "Phase", group: "Delivery", ballOnly: true },
   { key: "win_overs", label: "Over range", group: "Delivery", ballOnly: true },
-  { key: "win_balls", label: "Ball range", group: "Delivery", ballOnly: true },
-  { key: "win_player", label: "Player balls", group: "Delivery", ballOnly: true },
+  { key: "win_balls", label: "Team Ball Range", group: "Delivery", ballOnly: true },
+  { key: "win_player", label: "Batter/Bowler Ball Range", group: "Delivery", ballOnly: true },
   // "Matchup (Vs)" (R3.2; relabelled Wave A1 item 1; R5-A #5 moved it to the
   // FIRST entry INSIDE the "Advanced metrics" optgroup, directly above Dot Ball
   // %): the matchup opponent selector, mirroring the toolbar's bonded Vs control
@@ -196,7 +196,7 @@ const SINGLETON_TYPES = [
   // "Rain-affected matches" (mc_method) is gone — its method logic now lives in
   // the Result Condition sub-picker NESTED inside Result (state.resultCondition,
   // FIX B / polish item 4). Stage has moved up into the "Match" group (see above).
-  { key: "mc_result", label: "Result", group: "Match context" },
+  { key: "mc_result", label: "Match Result", group: "Match context" },
   { key: "mc_toss_result", label: "Toss result", group: "Match context" },
   { key: "mc_toss_decision", label: "Toss decision", group: "Match context" },
 ];
