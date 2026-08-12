@@ -825,7 +825,10 @@ a { color: var(--color-accent); }
   align-items: flex-start;
   align-self: flex-start;
   gap: var(--space-1);
-  padding: var(--space-2);
+  /* Owner fix (2026-08-12, Wave B row-height parity): vertical padding tightened
+     from var(--space-2) — see the shared control-height rule below (after the
+     width block) for why 2.8px is the derived value, not a round token. */
+  padding: 2.8px var(--space-2);
   border: 1px solid var(--color-line);
   border-radius: var(--radius-sm, 4px);
   background: none;
@@ -861,6 +864,66 @@ a { color: var(--color-accent); }
   }
 }
 
+/* Owner fix (2026-08-12, Wave B row-height parity): a filter row (.cond-row) and
+   a param row (.cols-param-row) hold REAL controls — a native operator <select> +
+   value <input>, a search-select/dropdown toggle button (Team/Event/Venue/Role/
+   Hand/…), or the compose editor's dimension/stat <select> — which all carry the
+   shared .select/.input class and its 40px min-height. A column CHOSEN row
+   (.cols-chosen-row) has no such control, just a label + small icon buttons, so it
+   reads ~18px shorter (39.6px vs 58px) even though both rows share the same card
+   look. On desktop/tablet, shrink these controls to the same 32px floor already
+   used elsewhere for compact controls (.icon-btn, .dwin__chip, .segmented--small)
+   and tighten their vertical padding to match (0.75rem→0.25rem horizontal-only
+   change would be wrong — this is var(--space-1) vertical, var(--space-3)
+   horizontal unchanged) — verified empirically (getBoundingClientRect) to land
+   .cond-row/.cols-param-row's total height at 39.6px, matching .cols-chosen-row
+   exactly. Reverted on mobile above (≤640px) — see that block's note. Scoped
+   strictly to these three containers; the shared .select/.input rule elsewhere,
+   and the toolbar/date-range/team-dropdown controls that also use it, are
+   untouched. */
+.cond-row .select,
+.cond-row .input,
+.cols-param-row .select,
+.cols-param-row .input,
+.cols-compose-editor .select,
+.cols-compose-editor .input {
+  min-height: 32px;
+  padding: var(--space-1) var(--space-3);
+}
+
+/* Owner fix (2026-08-12, Wave B row-height parity) continued: on mobile the
+   shrink above is reversed — controls stay at the shared .select/.input
+   default (40px, comfortable/finger-sized) instead of the desktop/tablet
+   32px, and the icon-button-only rows grow via min-height to meet them
+   instead. This block MUST come after the base rule above (equal-specificity
+   selectors resolve by source order, not by which one sits in a media query)
+   — do not move it earlier or the revert silently loses the cascade. */
+@media (max-width: 640px) {
+  .cond-row .select,
+  .cond-row .input,
+  .cols-param-row .select,
+  .cols-param-row .input,
+  .cols-compose-editor .select,
+  .cols-compose-editor .input {
+    min-height: 40px;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  /* 47.6px = a single-control condition row's actual mobile height once the
+     control above reverts to 40px (row padding stays the tightened 2.8px set
+     on .cond-row/.cols-param-row, ~line 828/2386 — that's whitespace, not a
+     "control", so it isn't reverted here): 2×2.8 + 2 (border) + 40 (control)
+     = 47.6. Multi-control rows (operator + value, or a param row's
+     op+value+unit) wrap onto 2 lines at ~380px regardless of control height,
+     so they'll naturally exceed this floor — harmless, min-height only
+     raises the shorter rows. */
+  .cols-chosen-row,
+  .cols-param-row,
+  .cols-compose-editor {
+    min-height: 47.6px;
+  }
+}
+
 .cond-row__main {
   display: flex;
   align-items: center;
@@ -870,7 +933,12 @@ a { color: var(--color-accent); }
   min-width: 0;
 }
 
-.cond-row__type { font-weight: 600; flex: 0 0 auto; min-width: 6.5rem; }
+/* Owner fix (2026-08-12): the filter row's metric-name label reads BOLD + bigger than
+   the columns section's chosen-row label (.cols-chosen-row__label — normal weight,
+   0.9rem) even though .cond-row already sets the same 0.9rem font-size — font-weight
+   was the mismatch. Dropped to normal so a filter row and a column row read identical
+   (min-width keeps the label column aligned across condition types). */
+.cond-row__type { font-weight: 400; flex: 0 0 auto; min-width: 6.5rem; }
 
 .cond-row__value { flex: 0 1 auto; min-width: 0; }
 
@@ -1156,12 +1224,21 @@ a { color: var(--color-accent); }
 .date-range__input { min-height: 40px; flex: 1 1 8.5rem; min-width: 0; }
 /* #21 (columns-popup rework Wave B): numeric filter value boxes are sized to their
    short entry (1–4 chars) and CENTRE-align the digits, instead of a wide left-aligned
-   bar for a one/two-character value. Compact fixed width (was flex:0 1 6rem). */
-.cond-row__value-input { flex: 0 0 auto; width: 4.25rem; min-width: 3rem; text-align: center; }
+   bar for a one/two-character value. Compact fixed width (was flex:0 1 6rem).
+   Owner fix (2026-08-12): 4.25rem clipped the "value" placeholder to "valu" — a
+   number input's own spin-button box eats into the padded content area on top of
+   the text itself (measured: "value" needs ~37px, but only ~22px was left once the
+   spinner and 12px/side padding were subtracted from 4.25rem). 5.5rem clears the
+   placeholder with room to spare while a typed 1–2 digit value still reads compact,
+   centred, nowhere near the old full-width bar the owner originally flagged. */
+.cond-row__value-input { flex: 0 0 auto; width: 5.5rem; min-width: 3rem; text-align: center; }
 /* Param-threshold N box (R2b: Innings Score ≥ [N] runs, Wicket Hauls ≥ [N] wickets):
    a compact fixed width so the "<metric> ≥ [N] <unit> <operator> <value>" row stays
-   tidy and wraps cleanly on narrow (375px) viewports. */
-.cond-row__n-input { flex: 0 0 auto; width: 4rem; min-width: 3.25rem; text-align: center; }
+   tidy and wraps cleanly on narrow (375px) viewports. NOTE (2026-08-12 audit): no
+   current template applies this class (the param-N box markup uses .dwin__num) — it
+   is unused CSS today. Widened anyway for consistency with .cond-row__value-input /
+   .pfe-cond__val in case it comes back into use; inert until something references it. */
+.cond-row__n-input { flex: 0 0 auto; width: 5.5rem; min-width: 3.25rem; text-align: center; }
 
 .date-presets { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
 
@@ -2310,7 +2387,10 @@ a { color: var(--color-accent); }
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  padding: var(--space-2);
+  /* Owner fix (2026-08-12, Wave B row-height parity): tightened from
+     var(--space-2) — same derivation as .cond-row (see the shared
+     control-height rule after the width block, ~line 866). */
+  padding: 2.8px var(--space-2);
   border: 1px solid var(--color-line);
   border-radius: var(--radius-sm, 4px);
   background: none;
@@ -5198,8 +5278,12 @@ a { color: var(--color-accent); }
 .pfe-cond__op,
 .pfe-cond__and { color: var(--color-muted); font-size: 0.9rem; }
 /* #21: the pop-up "Add Filter Row" numeric value box mirrors the leaderboard one —
-   sized to its short entry + centre-aligned digits (was a wide 5.5rem left box). */
-.pfe-cond__val { width: 4.25rem; text-align: center; }
+   sized to its short entry + centre-aligned digits (was a wide 5.5rem left box).
+   Owner fix (2026-08-12): 4.25rem was too far the other way — matches
+   .cond-row__value-input's fix, back to 5.5rem, which fits a short typed value
+   (or the leaderboard box's "value" placeholder, on the sibling class) without
+   returning to the original oversized full-width bar. */
+.pfe-cond__val { width: 5.5rem; text-align: center; }
 .pfe-cond__ctrl { flex: 0 0 auto; }
 /* R3 harmonisation: the matchup-Vs row's control is now a mounted search-select
    PANEL (searchSelect.js), not a plain <select> — its toggle button is width:100%

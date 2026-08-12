@@ -297,10 +297,17 @@ export function createAddPalette({ buildGroups, keepOpenOnPick = false }) {
               vRow.style.display = show ? "" : "none";
               if (vRow.dataset.label.includes(q)) { variantMatch = true; highlight(vRow, q); } else clearHi(vRow);
             });
-            const open = selfMatch || variantMatch;
-            wrap.hidden = !open;
-            row.classList.toggle("is-open", open);
-            row.setAttribute("aria-expanded", String(open));
+            // Owner fix (2026-08-12): sub-options must never render inline until the
+            // parent entry is PICKED (clicked) — a search match, even one that lands
+            // on a variant, must NOT auto-open the family. The family row itself still
+            // surfaces below (selfMatch || variantMatch) so it stays findable by typing
+            // either its own name or a variant's; opening it stays a manual click, same
+            // as the collapsed default. (Which variants end up display:none above is
+            // still useful: if the row is later clicked open, it reflects the last
+            // search rather than dumping every variant back in.)
+            wrap.hidden = true;
+            row.classList.remove("is-open");
+            row.setAttribute("aria-expanded", "false");
           }
           const show = selfMatch || variantMatch;
           row.style.display = show ? "" : "none";
@@ -316,6 +323,11 @@ export function createAddPalette({ buildGroups, keepOpenOnPick = false }) {
     function pickFirstVisible() {
       for (const r of listEl.querySelectorAll(".palette__row, .palette__variant-row")) {
         if (r.style.display === "none" || r.classList.contains("is-disabled") || r.classList.contains("palette__row--family")) continue;
+        // A variant row can carry style.display:"" (it matched the search) while its
+        // family stays collapsed (owner fix above never auto-opens it) — offsetParent
+        // catches that "matched but not actually shown" case so Enter can't act on an
+        // option the user never saw, matching the same pick-then-choose rule.
+        if (!r.offsetParent) continue;
         r.click();
         return;
       }
