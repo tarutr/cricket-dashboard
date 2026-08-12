@@ -1476,8 +1476,8 @@ export function mountOpponentPlayer(container, store, onChange, { embedded = fal
 }
 
 // Game-count meta label (ROUND 3, task 4): "1,013 games" — localized thousands
-// separator, the word "games" spelled out. Shown on Team/Event/Venue rows.
-// (Opposition passes showGames:false — it keeps its own plain list, no meta.)
+// separator, the word "games" spelled out. Shown on Team/Opposition/Event/Venue
+// rows (Opposition turned on — owner #13, columns rejig wave C).
 function gamesMeta(o) {
   return o && o.games != null ? `${Number(o.games).toLocaleString()} games` : "";
 }
@@ -2151,6 +2151,6 @@ export function mountOpposition(container, store, onChange, { embedded = false, 
     plural: "opponents",
     ariaLabel: "Against opposition",
     searchPlaceholder: "Search teams…",
-    showGames: false,
+    showGames: true,
   });
 }

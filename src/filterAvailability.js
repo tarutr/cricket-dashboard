@@ -43,8 +43,10 @@
 
 import { probeMatchup, probeProfile } from "./dataAvailability.js";
 
-// The five availability keys the palette leaves + singleton rows consult.
-export const AVAIL_KEYS = ["vsBowlingStyle", "vsBattingHand", "profileRole", "profileHand", "profileBowling"];
+// The availability keys the palette leaves + singleton rows consult.
+// profileBowlingArm (owner #8, columns rejig wave C): the "Bowling hand"
+// filter, mirroring profileBowling's own probe/offer wiring exactly.
+export const AVAIL_KEYS = ["vsBowlingStyle", "vsBattingHand", "profileRole", "profileHand", "profileBowling", "profileBowlingArm"];
 
 // Cache/probe signature: gender is the only axis (formats fixed to ALL_FORMATS).
 const genderSig = (s) => (s && s.gender) || "male";
@@ -82,11 +84,12 @@ export function createFilterAvailability() {
       probeProfile("role_group", g),
       probeProfile("batting_style", g),
       probeProfile("bowling_type", g),
+      probeProfile("bowling_arm", g),
     ])
-      .then(([vsB, vsH, pR, pH, pBowl]) => {
+      .then(([vsB, vsH, pR, pH, pBowl, pBowlArm]) => {
         if (loadingSig !== g) return; // a newer load (gender switched) owns the cache
         sig = g;
-        avail = { vsBowlingStyle: vsB, vsBattingHand: vsH, profileRole: pR, profileHand: pH, profileBowling: pBowl };
+        avail = { vsBowlingStyle: vsB, vsBattingHand: vsH, profileRole: pR, profileHand: pH, profileBowling: pBowl, profileBowlingArm: pBowlArm };
         loadingSig = null;
         if (onReady) onReady();
       })

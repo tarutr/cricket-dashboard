@@ -164,19 +164,20 @@ function serializeQueryState(state) {
 }
 
 /** Preferred display order for the fine "Bowling type" optgroup: named styles
- * in cricket-sensible order, then any unlisted style alphabetically, then the
- * bare pace/spin buckets last (decision 24 — bare-slow bowlers surface here
- * as the group name, labelled "…(unspecified)" via matchupBucketLabel). */
+ * in cricket-sensible order (pace-first — owner #9), then any unlisted style
+ * alphabetically, then the bare pace/spin buckets last (decision 24 —
+ * bare-slow bowlers surface here as the group name, labelled "…(unspecified)"
+ * via matchupBucketLabel). */
 const BOWLING_TYPE_PREFERENCE = [
+  "Fast",
+  "Fast-medium",
+  "Medium-fast",
+  "Medium",
+  "Slow-medium",
   "Off-spin",
   "Leg-spin",
   "Slow left-arm orthodox",
   "Left-arm wrist-spin",
-  "Slow-medium",
-  "Medium",
-  "Medium-fast",
-  "Fast-medium",
-  "Fast",
 ];
 
 export function orderBowlingTypes(values) {

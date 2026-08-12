@@ -102,7 +102,9 @@ const DIMS = [
   { key: "innings",      field: "inningsNumbers", group: "Delivery", label: "Innings number",    control: "checklist", numeric: true, stored: true,
     options: (ctx) => inningsNumberOptions(ctx.formats).map((o) => ({ value: INNINGS_NUMBER_FILTER.toStored(o.value), label: o.label })) },
   { key: "city",         field: "cities",        group: "Match",     label: "City",              control: "checklist", source: "fielding", column: "city" },
-  { key: "season",       field: "seasons",       group: "Match",     label: "Season",            control: "checklist", source: "matches", column: "season" },
+  // reverse: true — loadDimOptions returns ascending (ORDER BY 1); Season reads
+  // newest-first (owner #13-adjacent), matching the Event ▸ Season sub-picker.
+  { key: "season",       field: "seasons",       group: "Match",     label: "Season",            control: "checklist", source: "matches", column: "season", reverse: true },
   { key: "stage",        field: "stage",         group: "Match",     label: "Stage",             control: "checklist", source: "matches", column: "event_stage", canonical: true },
   { key: "result",       field: "result",        group: "Match",     label: "Match result",      control: "checklist", options: () => RESULT_OUTCOME_OPTIONS },
   { key: "tossResult",   field: "tossResult",    group: "Match",     label: "Toss result",       control: "checklist", options: () => TOSS_RESULT_OPTIONS },
@@ -260,9 +262,10 @@ export function openFieldingRowEditor(hostDoc, deps) {
           // on the Batter role dim specifically (loadDimOptions only strips
           // NULL/""); every other dim keeps whatever values it loads.
           const rawVals = dim.column === "out_role" ? vals.filter((v) => v !== "Unknown") : vals;
+          const orderedVals = dim.reverse ? [...rawVals].reverse() : rawVals;
           dimOptions[dim.key] = dim.canonical
             ? [...new Set(rawVals.map((v) => canonicalStage(v)))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((v) => ({ value: v, label: v }))
-            : rawVals.map((v) => ({ value: v, label: String(v) }));
+            : orderedVals.map((v) => ({ value: v, label: String(v) }));
           rebuildPalette(); // the offered set / an open control's options may have changed
           if (activeDims.has(dim.key)) renderConditions();
         })

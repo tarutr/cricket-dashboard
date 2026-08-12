@@ -3879,16 +3879,20 @@ const _FC_BSTYLE_GROUP = new Map([
   ["pace", "Pace"],
   ["spin", "Spin"],
 ]);
+// Pace-first (owner #9): Fast · Fast-medium · Medium-fast · Medium ·
+// Slow-medium, then Spin: Off-spin · Leg-spin · Slow left-arm orthodox ·
+// Left-arm wrist-spin. Display order only — mirrors table.js's
+// BOWLING_TYPE_PREFERENCE and columnsPicker.js's FC_BSTYLE_VALUES.
 const _FC_BSTYLE_DETAIL = new Map([
+  ["fast",        "Fast"],
+  ["fastmedium",  "Fast-medium"],
+  ["mediumfast",  "Medium-fast"],
+  ["medium",      "Medium"],
+  ["slowmedium",  "Slow-medium"],
   ["offspin",     "Off-spin"],
   ["legspin",     "Leg-spin"],
   ["slaorthodox", "Slow left-arm orthodox"],
   ["lawristspin", "Left-arm wrist-spin"],
-  ["medium",      "Medium"],
-  ["mediumfast",  "Medium-fast"],
-  ["fastmedium",  "Fast-medium"],
-  ["fast",        "Fast"],
-  ["slowmedium",  "Slow-medium"],
 ]);
 
 const _FC_DIM_SET = new Set(["phase", "over", "inns", "pos", "hand", "bstyle"]);

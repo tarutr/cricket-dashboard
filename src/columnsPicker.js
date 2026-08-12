@@ -1047,12 +1047,17 @@ export function createColumnsPicker({
     { token: "pp", label: "Powerplay" }, { token: "mid", label: "Middle Overs" }, { token: "death", label: "Death Overs" },
   ];
   const FC_HAND_VALUES = [{ token: "l", label: "vs LHB" }, { token: "r", label: "vs RHB" }];
+  // Pace-first (owner #9): Fast · Fast-medium · Medium-fast · Medium ·
+  // Slow-medium, then Spin: Off-spin · Leg-spin · Slow left-arm orthodox ·
+  // Left-arm wrist-spin. Display order only — mirrors table.js's
+  // BOWLING_TYPE_PREFERENCE and drawer.js's BOWLING_TYPE_ORDER.
   const FC_BSTYLE_VALUES = [
     { token: "pace", label: "Pace" }, { token: "spin", label: "Spin" },
+    { token: "fast", label: "Fast" }, { token: "fastmedium", label: "Fast-medium" },
+    { token: "mediumfast", label: "Medium-fast" }, { token: "medium", label: "Medium" },
+    { token: "slowmedium", label: "Slow-medium" },
     { token: "offspin", label: "Off-spin" }, { token: "legspin", label: "Leg-spin" },
     { token: "slaorthodox", label: "Slow left-arm orthodox" }, { token: "lawristspin", label: "Left-arm wrist-spin" },
-    { token: "medium", label: "Medium" }, { token: "mediumfast", label: "Medium-fast" },
-    { token: "fastmedium", label: "Fast-medium" }, { token: "fast", label: "Fast" }, { token: "slowmedium", label: "Slow-medium" },
   ];
   // Innings ordinal labels (mirror metrics.js _fcOrdinal). Format-aware: red-ball adds 3rd/4th.
   const FC_INNINGS_LABEL = { "1": "1st inns", "2": "2nd inns", "3": "3rd inns", "4": "4th inns" };

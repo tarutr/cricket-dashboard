@@ -77,14 +77,14 @@ export const FORMAT_BUCKETS = [
 
 /** Fresh, all-cleared profile-filter block. */
 export function emptyProfile() {
-  return { roleGroup: null, roleSub: null, battingHand: null, bowlingType: null, teams: [] };
+  return { roleGroup: null, roleSub: null, battingHand: null, bowlingType: null, bowlingArm: null, teams: [] };
 }
 
 /** True if any profile filter is currently narrowing the set. */
 export function hasActiveProfileFilter(profile) {
   if (!profile) return false;
   return Boolean(
-    profile.roleGroup || profile.roleSub || profile.battingHand || profile.bowlingType || (profile.teams && profile.teams.length)
+    profile.roleGroup || profile.roleSub || profile.battingHand || profile.bowlingType || profile.bowlingArm || (profile.teams && profile.teams.length)
   );
 }
 
@@ -160,6 +160,8 @@ export function profileSemiJoinSql(state, idColumn) {
   if (p.roleSub) preds.push(`role_subgroup = '${escSql(p.roleSub)}'`);
   if (p.battingHand) preds.push(`batting_style = '${escSql(p.battingHand)}'`);
   if (p.bowlingType) preds.push(`bowling_type = '${escSql(p.bowlingType)}'`);
+  // Bowling hand (owner #8): dedicated `bowling_arm` column ("Right"/"Left").
+  if (p.bowlingArm) preds.push(`bowling_arm = '${escSql(p.bowlingArm)}'`);
   if (p.teams && p.teams.length) {
     const teamPreds = p.teams
       .map((t) => `list_contains(string_split(teams_played_for, '|'), '${escSql(t)}')`)
@@ -183,6 +185,7 @@ function profileScopeTokens(state) {
   if (p.roleSub) tokens.push(p.roleSub);
   if (p.battingHand) tokens.push(p.battingHand);
   if (p.bowlingType) tokens.push(p.bowlingType);
+  if (p.bowlingArm) tokens.push(p.bowlingArm);
   if (p.teams && p.teams.length) {
     // "Historic team" mode (owner decision 46) — mirrors the pill's "Ever played for: …".
     tokens.push(p.teams.length <= 2 ? `Ever played for: ${p.teams.join(", ")}` : `Ever played for: ${p.teams.length} teams`);

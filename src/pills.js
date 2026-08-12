@@ -227,6 +227,7 @@ export function mountPills(
       if (p.roleSub) pills.push(profilePill("roleSub", p.roleSub));
       if (p.battingHand) pills.push(profilePill("battingHand", p.battingHand));
       if (p.bowlingType) pills.push(profilePill("bowlingType", p.bowlingType));
+      if (p.bowlingArm) pills.push(profilePill("bowlingArm", p.bowlingArm));
       // The "Historic team" (Ever played for) pill is gone — owner 1B-2 removed
       // the Current/Historic distinction; profile.teams is no longer set by any
       // UI, so there is nothing to render here.

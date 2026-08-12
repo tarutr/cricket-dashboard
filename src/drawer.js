@@ -87,10 +87,16 @@ import { escHtml, escAttr } from "./html.js";
 const ROLE_GROUP_ORDER = ["Batter", "Allrounder", "Bowler"];
 const ROLE_SUB_ORDER = ["Opening", "Top-order", "Middle-order", "Wicketkeeper", "Batting allrounder", "Bowling allrounder"];
 const BATTING_HAND_ORDER = ["Right-hand bat", "Left-hand bat"];
+// Pace-first (owner #9): Fast · Fast-medium · Medium-fast · Medium ·
+// Slow-medium, then Spin: Off-spin · Leg-spin · Slow left-arm orthodox ·
+// Left-arm wrist-spin. Display order only — mirrors table.js's
+// BOWLING_TYPE_PREFERENCE and columnsPicker.js's FC_BSTYLE_VALUES.
 const BOWLING_TYPE_ORDER = [
+  "Fast", "Fast-medium", "Medium-fast", "Medium", "Slow-medium",
   "Off-spin", "Leg-spin", "Slow left-arm orthodox", "Left-arm wrist-spin",
-  "Slow-medium", "Medium", "Medium-fast", "Fast-medium", "Fast",
 ];
+// Bowling hand (owner #8): data-driven values are "Right" / "Left" only.
+const BOWLING_HAND_ORDER = ["Right", "Left"];
 
 function orderBy(present, order) {
   const set = new Set(present);
@@ -146,6 +152,9 @@ const SINGLETON_TYPES = [
   { key: "opposition", label: "Opposition", group: "Player" },
   { key: "hand", label: "Batting hand", group: "Player" },
   { key: "bowling", label: "Bowling style", group: "Player" },
+  // Bowling hand (owner #8, columns rejig wave C): dedicated `bowling_arm`
+  // profile column ("Right"/"Left"). Mirrors the "bowling" row exactly.
+  { key: "bowlingHand", label: "Bowling hand", group: "Player" },
   { key: "role", label: "Role", group: "Player" },
   { key: "rpos", label: "R. Pos.", group: "Basic" },
   // Innings Number (filter-rejig Wave R2c): the REPLACEMENT for "Innings order" —
@@ -302,7 +311,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   availability.ensureLoaded(store.get(), availabilityOnReady);
 
   // ── Profile options + editors ──────────────────────────────────────────────
-  let profileOptions = { roleGroups: [], subByGroup: {}, bowlingTypes: [], battingHands: [] };
+  let profileOptions = { roleGroups: [], subByGroup: {}, bowlingTypes: [], battingHands: [], bowlingHands: [] };
   let profileOptionsLoadToken = 0;
   let profileOptionsErrored = false;
 
@@ -332,6 +341,8 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const handHost = editorHosts.hand.querySelector('[data-role="prof-hand"]');
   editorHosts.bowling.innerHTML = `<div data-role="prof-bowling"></div>`;
   const bowlingHost = editorHosts.bowling.querySelector('[data-role="prof-bowling"]');
+  editorHosts.bowlingHand.innerHTML = `<div data-role="prof-bowlingHand"></div>`;
+  const bowlingHandHost = editorHosts.bowlingHand.querySelector('[data-role="prof-bowlingHand"]');
 
   const roleGroupSel = mountSearchSelect(roleGroupHost, {
     searchable: false,
@@ -375,6 +386,17 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     allowEmptyLabel: "Any",
     onChange: (val) => {
       setProfile({ bowlingType: val || null });
+      onChange();
+    },
+  });
+  const bowlingHandSel = mountSearchSelect(bowlingHandHost, {
+    searchable: false,
+    portal: true,
+    ariaLabel: "Bowling hand",
+    placeholder: "Any",
+    allowEmptyLabel: "Any",
+    onChange: (val) => {
+      setProfile({ bowlingArm: val || null });
       onChange();
     },
   });
@@ -495,6 +517,8 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     handSel.setValue(p.battingHand);
     bowlingSel.setOptions(toOptions(profileOptions.bowlingTypes));
     bowlingSel.setValue(p.bowlingType);
+    bowlingHandSel.setOptions(toOptions(profileOptions.bowlingHands));
+    bowlingHandSel.setValue(p.bowlingArm);
   }
 
   async function loadProfileOptions() {
@@ -506,7 +530,8 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
           [
             `SELECT`,
             `  (SELECT list(DISTINCT bowling_type) FROM profiles WHERE bowling_type IS NOT NULL) AS bowling_types,`,
-            `  (SELECT list(DISTINCT batting_style) FROM profiles WHERE batting_style IS NOT NULL) AS batting_styles`,
+            `  (SELECT list(DISTINCT batting_style) FROM profiles WHERE batting_style IS NOT NULL) AS batting_styles,`,
+            `  (SELECT list(DISTINCT bowling_arm) FROM profiles WHERE bowling_arm IS NOT NULL) AS bowling_arms`,
           ].join("\n")
         ),
       ]);
@@ -524,6 +549,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
         subByGroup,
         bowlingTypes: orderBy(optRow.bowling_types ?? [], BOWLING_TYPE_ORDER),
         battingHands: orderBy(optRow.batting_styles ?? [], BATTING_HAND_ORDER),
+        bowlingHands: orderBy(optRow.bowling_arms ?? [], BOWLING_HAND_ORDER),
       };
       profileOptionsErrored = false;
     } catch (e) {
@@ -655,6 +681,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       // is belt-and-suspenders against a stale value ever resurfacing here.
       case "hand": return s.discipline === "batting" && Boolean(s.profile.battingHand);
       case "bowling": return Boolean(s.profile.bowlingType);
+      // Bowling hand (owner #8): mirrors "bowling" — no discipline gate (a
+      // player's bowling arm is meaningful whichever discipline you're viewing).
+      case "bowlingHand": return Boolean(s.profile.bowlingArm);
       case "vs": return matchupVsActive(s); // present iff a Vs bucket applies to the current discipline
       // R5-A #8: R. Pos. (regularPositions) and the striker position (positions)
       // are now separate rows. R. Pos. is a batting concept — present in batting
@@ -701,6 +730,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "role": return availability.isAvailable("profileRole", s);
       case "hand": return availability.isAvailable("profileHand", s);
       case "bowling": return availability.isAvailable("profileBowling", s);
+      case "bowlingHand": return availability.isAvailable("profileBowlingArm", s);
       case "vs":
       case "strikerpos":
         return availability.isAvailable(s.discipline === "batting" ? "vsBowlingStyle" : "vsBattingHand", s);
@@ -750,6 +780,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "role": setProfile({ roleGroup: null, roleSub: null }); break;
       case "hand": setProfile({ battingHand: null }); break;
       case "bowling": setProfile({ bowlingType: null }); break;
+      case "bowlingHand": setProfile({ bowlingArm: null }); break;
       case "vs": store.set({ matchupVs: null }); break;
       case "rpos": store.set({ regularPositions: [] }); break;
       case "inn_num": store.set({ inningsNumber: [] }); break;
@@ -1244,6 +1275,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       if (p.roleSub) n++;
       if (p.battingHand) n++;
       if (p.bowlingType) n++;
+      if (p.bowlingArm) n++;
     }
     if (positionsFilterActive(s)) n++;
     if (regularPositionsFilterActive(s)) n++;

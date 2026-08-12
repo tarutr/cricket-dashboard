@@ -101,7 +101,7 @@ const stripOutPrefix = (label) => label.replace(/^Out\s+/, "");
 
 // T-F3: the "popup" surface's Player-Profile exclusions (see file header). Any
 // other surface (i.e. "leaderboard") excludes nothing — same 6 leaves as today.
-const POPUP_EXCLUDED_PLAYER_PROFILE_LEAVES = new Set(["role", "hand", "bowling", "rpos", "potm_count"]);
+const POPUP_EXCLUDED_PLAYER_PROFILE_LEAVES = new Set(["role", "hand", "bowling", "bowlingHand", "rpos", "potm_count"]);
 
 // T-2c: the SCOPE SINGLETONS the player pop-up ("popup" surface) now OFFERS as
 // per-row filters (owner 2026-08-03). Each flows through the row's clean-state
@@ -288,6 +288,10 @@ export function createPaletteGroupsBuilder(deps) {
       isFilterAvailable("profileRole", s) && !excludeLeaf("role") ? leafSingle("role", "Playing role") : null,
       isFilterAvailable("profileHand", s) && disc === "batting" && !excludeLeaf("hand") ? leafSingle("hand", "Batting hand") : null,
       isFilterAvailable("profileBowling", s) && !excludeLeaf("bowling") ? leafSingle("bowling", "Bowling style") : null,
+      // Bowling hand (owner #8): dedicated `bowling_arm` profile column
+      // ("Right"/"Left"). Mirrors Bowling style exactly — same group, same
+      // single-select panel, same data-driven availability, same popup exclusion.
+      isFilterAvailable("profileBowlingArm", s) && !excludeLeaf("bowlingHand") ? leafSingle("bowlingHand", "Bowling hand") : null,
       disc === "batting" && !excludeLeaf("rpos") ? leafSingle("rpos", "Regular batting position") : null,
       // PotM Count (R2b): the filterable count of Player-of-the-Match awards
       // (metrics.js `potm_count`), between Regular batting position and Team. The
