@@ -1054,6 +1054,79 @@ const BOWLING_METRICS = [
     additive: true,
     kind: "total",
   },
+  // ── Runs Conceded by Source — % filter metrics (Wave C #24, 2026-08-12) ───────
+  // The FILTER-surface half of the bowling "Runs Conceded by Source" family (the
+  // bowling mirror of the batting "% Runs in…" family). Each is the SHARE of a
+  // bowler's TOTAL runs conceded (SUM(runs_conceded), which INCLUDES wides +
+  // no-balls) that came from ONE of the five sources — 4s / 6s / off-the-bat
+  // Non-Boundary / Wides / No-balls — which partition runs_conceded exactly, so the
+  // five shares sum to 100. These are REAL catalogued metrics (so leafMetric resolves
+  // them as leaderboard filters, mirroring how the batting family uses the catalogued
+  // runs_<src>_pct); the COLUMN surface is the composed `rsc__` family (below), whose
+  // % sqlExpression is BYTE-IDENTICAL to each of these (equivalence gate — a column
+  // and its filter never disagree). Hidden from the leaderboard COLUMN picker
+  // (columnsPicker D3_ENUMERATED_HIDDEN_KEYS) so the composer is the sole column home.
+  // All components are EXISTING stored bowling-view columns (runs_conceded /
+  // fours_conceded / sixes_conceded / wides_runs / noball_runs — each already applying
+  // the SPEC §4.1 boundary + runs-conceded rules); Non-Boundary is DERIVED. Descriptive
+  // composition splits (different sources have different good/bad valence), so
+  // higherIsBetter null — matching every batting "% Runs in…" sibling. Denominator
+  // NULLIF-guarded (0 runs conceded → NULL, never Infinity).
+  {
+    key: "runs_conc_4s_pct",
+    label: "% Runs Conceded in 4s",
+    shortLabel: "4s Con%",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "(4 * SUM(fours_conceded)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_conc_6s_pct",
+    label: "% Runs Conceded in 6s",
+    shortLabel: "6s Con%",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "(6 * SUM(sixes_conceded)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_conc_nonbdry_pct",
+    label: "% Runs Conceded in Non-Boundary",
+    shortLabel: "NB Con%",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "(SUM(runs_conceded) - SUM(wides_runs) - SUM(noball_runs) - 4 * SUM(fours_conceded) - 6 * SUM(sixes_conceded)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_conc_wides_pct",
+    label: "% Runs Conceded in Wides",
+    shortLabel: "Wd Con%",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "(SUM(wides_runs)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_conc_noballs_pct",
+    label: "% Runs Conceded in No-balls",
+    shortLabel: "Nb Con%",
+    discipline: "bowling",
+    source: "innings",
+    sqlExpression: "(SUM(noball_runs)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
   // Wicket-haul milestone counts (Wave 0): innings in which the bowler took
   // exactly 4 (four-fer) vs 5-or-more (five-fer) BOWLER-CREDITED wickets — the
   // per-innings `wickets` column the view already carries (bowled/lbw/caught/
@@ -2655,6 +2728,8 @@ export function getMetric(key, discipline) {
     //   • bl__<bucket>__<base> (D2) — faced-ball-bucket precomputed components.
     //   • in__<iToken>__<base> (D2) — conditional aggregation over innings_number.
     //   • rs__<source>__<axis> (D3) — run-source run-total / % of runs (batting).
+    //   • rsc__<source>__<axis> (#24) — runs-conceded-by-source run-total / % of
+    //     runs conceded (bowling): 4s / 6s / Non-Boundary / Wides / No-balls.
     //   • wt__<type>__<axis>   (D3) — wicket-type count / % (both disciplines).
     //   • isr__/wh__<op>__<v>  (D4) — parametric threshold count (op ∈ ge/le/eq/bt):
     //     Innings Score Range (batting) / Wicket Haul (bowling).
@@ -2671,6 +2746,7 @@ export function getMetric(key, discipline) {
       resolveComposedBallMetric(key, discipline) ??
       resolveComposedInningsMetric(key, discipline) ??
       resolveComposedRunSourceMetric(key, discipline) ??
+      resolveComposedRunSourceConcededMetric(key, discipline) ??
       resolveComposedWicketTypeMetric(key, discipline) ??
       resolveComposedParamMetric(key, discipline) ??
       resolveComposedFieldingMetric(key, discipline)
@@ -3447,6 +3523,127 @@ export function eligibleComposedRunSourceKeys(discipline) {
   for (const d of COMPOSED_RUNSOURCE_DIMS) {
     keys.push(makeComposedRunSourceKey(d.token, "runs"));
     keys.push(makeComposedRunSourceKey(d.token, "pct"));
+  }
+  return keys;
+}
+
+// ── Composed BOWLING RUNS-CONCEDED-BY-SOURCE × count/% columns (Wave C #24) ─────
+// The bowling MIRROR of the batting Runs-by-Source family above. The "Runs Conceded
+// by Source" composer generates, per source, a column that is EITHER the runs the
+// bowler conceded from that source (Count) OR its share of TOTAL runs conceded (%),
+// via the Wave-C count/% toggle. FIVE sources partition SUM(runs_conceded) exactly:
+//   4s (fours_conceded×4) · 6s (sixes_conceded×6) · Non-Boundary (off-the-bat
+//   non-boundary runs, DERIVED) · Wides (wides_runs) · No-balls (noball_runs).
+// The five counts sum to SUM(runs_conceded); the % denominator is SUM(runs_conceded)
+// — which INCLUDES wides + no-balls (the extras ARE two of the five sources) — so the
+// five %s sum to 100. Bowling-only (run-concession composition is a bowling concept).
+//
+// Non-Boundary is DERIVED (no stored column): SUM(runs_conceded) − SUM(wides_runs) −
+// SUM(noball_runs) − 4·SUM(fours_conceded) − 6·SUM(sixes_conceded). Since runs_conceded
+// = runs_batter + noballs + wides (SPEC §4.1, byes/leg-byes excluded), subtracting the
+// wide + no-ball extras leaves SUM(runs_batter) — off-the-bat runs — and subtracting
+// the off-bat boundary runs leaves the off-the-bat NON-boundary runs (1s/2s/3s + ran
+// 4s/6s), always ≥ 0. All other components are EXISTING stored bowling-view columns
+// (runs_conceded / fours_conceded / sixes_conceded / wides_runs / noball_runs, each
+// already applying the SPEC §4.1 boundary + runs-conceded rules) — pure arithmetic on
+// existing SUM aggregates, no new raw/pipeline data.
+//
+// EQUIVALENCE GATE (Rule 1): each source's % sqlExpression is BYTE-IDENTICAL to the
+// catalogued bowling filter metric of the same source (runs_conc_<src>_pct above) —
+// the composer's % column and the "% Runs Conceded in…" filter never disagree. The
+// count side is the same run-total numerator without the /runs_conceded share.
+//
+// KEY = `rsc__<sourceToken>__<axis>`  axis ∈ {runs (count), pct}. Source tokens carry
+// only single underscores (4s, nonbdry, noballs); no catalogued key starts with
+// `rsc__` (verified); axis carries no underscore — so splitting on the FIRST `__`
+// after the prefix recovers {token, axis}. (Distinct from the batting `rs__` prefix.)
+const COMPOSED_RUNSOURCE_CONC_PREFIX = "rsc__";
+const COMPOSED_RUNSOURCE_CONC_AXES = new Set(["runs", "pct"]);
+// token, composer ROW label (short, per owner: "4s"/"6s"/"Non-Boundary"/"Wides"/
+// "No-balls" — the "conceded" context comes from the family namespace), run-total
+// numerator (SUM-wrapped), and the count/% column labels+shorts. The % label/short
+// REPRODUCE the catalogued runs_conc_<src>_pct filter metric's display.
+const COMPOSED_RUNSOURCE_CONC_DIMS = [
+  { token: "4s",      rowLabel: "4s",           num: "4 * SUM(fours_conceded)", countLabel: "Runs Conceded in 4s",           countShort: "4s Con Runs", pctLabel: "% Runs Conceded in 4s",           pctShort: "4s Con%" },
+  { token: "6s",      rowLabel: "6s",           num: "6 * SUM(sixes_conceded)", countLabel: "Runs Conceded in 6s",           countShort: "6s Con Runs", pctLabel: "% Runs Conceded in 6s",           pctShort: "6s Con%" },
+  { token: "nonbdry", rowLabel: "Non-Boundary", num: "SUM(runs_conceded) - SUM(wides_runs) - SUM(noball_runs) - 4 * SUM(fours_conceded) - 6 * SUM(sixes_conceded)", countLabel: "Runs Conceded in Non-Boundary", countShort: "NB Con Runs", pctLabel: "% Runs Conceded in Non-Boundary", pctShort: "NB Con%" },
+  { token: "wides",   rowLabel: "Wides",        num: "SUM(wides_runs)",         countLabel: "Runs Conceded in Wides",        countShort: "Wd Con Runs", pctLabel: "% Runs Conceded in Wides",        pctShort: "Wd Con%" },
+  { token: "noballs", rowLabel: "No-balls",     num: "SUM(noball_runs)",        countLabel: "Runs Conceded in No-balls",     countShort: "Nb Con Runs", pctLabel: "% Runs Conceded in No-balls",     pctShort: "Nb Con%" },
+];
+const _RUNSOURCE_CONC_BY_TOKEN = new Map(COMPOSED_RUNSOURCE_CONC_DIMS.map((d) => [d.token, d]));
+const _RUNSOURCE_CONC_TOKEN_SET = new Set(COMPOSED_RUNSOURCE_CONC_DIMS.map((d) => d.token));
+
+/** Build the composed runs-conceded-by-source column key for `sourceToken` on `axis`. */
+export function makeComposedRunSourceConcededKey(sourceToken, axis) {
+  return `${COMPOSED_RUNSOURCE_CONC_PREFIX}${sourceToken}__${axis}`;
+}
+/** Parse a composed runs-conceded-by-source key → { token, axis }, or null. Split on
+ * the FIRST `__` after the `rsc__` prefix (source tokens carry no `__`; axis is a
+ * bare word). Returns null for the batting `rs__` prefix (rsc__ startsWith is exact). */
+export function parseComposedRunSourceConcededKey(key) {
+  if (typeof key !== "string" || !key.startsWith(COMPOSED_RUNSOURCE_CONC_PREFIX)) return null;
+  const rest = key.slice(COMPOSED_RUNSOURCE_CONC_PREFIX.length);
+  const sep = rest.indexOf("__");
+  if (sep <= 0) return null;
+  const token = rest.slice(0, sep);
+  const axis = rest.slice(sep + 2);
+  if (!_RUNSOURCE_CONC_TOKEN_SET.has(token) || !COMPOSED_RUNSOURCE_CONC_AXES.has(axis)) return null;
+  return { token, axis };
+}
+/** Build the VIRTUAL metric for a composed runs-conceded-by-source column (bowling
+ * only). Count axis = the run-total numerator (kind "total"); pct axis = that numerator
+ * over SUM(runs_conceded) — byte-identical to the catalogued runs_conc_<src>_pct. source
+ * stays "innings" so buildQuery's inningsMetrics loop projects it like any real metric. */
+function buildComposedRunSourceConcededMetric(token, axis, discipline) {
+  if (discipline !== "bowling") return null;
+  const dim = _RUNSOURCE_CONC_BY_TOKEN.get(token);
+  if (!dim || !COMPOSED_RUNSOURCE_CONC_AXES.has(axis)) return null;
+  const key = makeComposedRunSourceConcededKey(token, axis);
+  if (axis === "runs") {
+    return {
+      key, baseToken: token, isComposedRunSourceConc: true,
+      label: dim.countLabel, shortLabel: dim.countShort,
+      discipline: "bowling", source: "innings",
+      sqlExpression: dim.num,
+      higherIsBetter: null, format: "int",
+      isPhaseMetric: null, zeroIsData: true, additive: true, kind: "total",
+    };
+  }
+  return {
+    key, baseToken: token, isComposedRunSourceConc: true,
+    label: dim.pctLabel, shortLabel: dim.pctShort,
+    discipline: "bowling", source: "innings",
+    sqlExpression: `(${dim.num}) * 100.0 / NULLIF(SUM(runs_conceded), 0)`,
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false, kind: "percent",
+  };
+}
+/** Resolve a composed runs-conceded-by-source COLUMN key to its virtual metric, or
+ * null. Called by getMetric (so resolveColumnMetric picks it up too). */
+export function resolveComposedRunSourceConcededMetric(key, discipline) {
+  const parsed = parseComposedRunSourceConcededKey(key);
+  if (!parsed) return null;
+  return buildComposedRunSourceConcededMetric(parsed.token, parsed.axis, discipline);
+}
+/** Ordered composer rows for the bowling "Runs Conceded by Source" composer: the 5
+ * composed sources. Each row = { rowLabel, countKey, pctKey } → a Wave-C count/%
+ * toggle row in columnsPicker. (No catalogued-reuse row — unlike batting's
+ * Boundaries; the five sources are all composed keys.) */
+export function composedRunSourceConcededRows() {
+  return COMPOSED_RUNSOURCE_CONC_DIMS.map((d) => ({
+    rowLabel: d.rowLabel,
+    countKey: makeComposedRunSourceConcededKey(d.token, "runs"),
+    pctKey: makeComposedRunSourceConcededKey(d.token, "pct"),
+  }));
+}
+/** Every composed runs-conceded-by-source column key (bowling only) — folded into
+ * eligibleColumnKeys so they survive a re-render. */
+export function eligibleComposedRunSourceConcededKeys(discipline) {
+  if (discipline !== "bowling") return [];
+  const keys = [];
+  for (const d of COMPOSED_RUNSOURCE_CONC_DIMS) {
+    keys.push(makeComposedRunSourceConcededKey(d.token, "runs"));
+    keys.push(makeComposedRunSourceConcededKey(d.token, "pct"));
   }
   return keys;
 }

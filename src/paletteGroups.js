@@ -463,6 +463,17 @@ export function createPaletteGroupsBuilder(deps) {
         // (same full label AND shortLabel "Bdry Run%"); metrics.js now disambiguates
         // via label + a distinct shortLabel ("Bdry Run% Con").
         leafMetric("boundary_runs_pct", "Boundary Run % Conceded"),
+        // Wave C #24 (2026-08-12): the bowling mirror of the batting "% Runs in…"
+        // family — filter a bowler on the SHARE of total runs conceded (which includes
+        // wides + no-balls) coming from each of the five sources. The five partition
+        // runs_conceded exactly, so the shares sum to 100. Catalogued runs_conc_*_pct
+        // metrics (COLUMN home = the Runs Conceded by Source composer). Non-Boundary =
+        // off-the-bat non-boundary runs (derived); source labels stay short.
+        metricFamily("% Runs Conceded in…", [
+          ["runs_conc_4s_pct", "4s"], ["runs_conc_6s_pct", "6s"],
+          ["runs_conc_nonbdry_pct", "Non-Boundary"],
+          ["runs_conc_wides_pct", "Wides"], ["runs_conc_noballs_pct", "No-balls"],
+        ]),
       ]);
     }
 

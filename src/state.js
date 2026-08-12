@@ -39,6 +39,7 @@ import {
   eligibleComposedBallKeys,
   eligibleComposedInningsKeys,
   eligibleComposedRunSourceKeys,
+  eligibleComposedRunSourceConcededKeys,
   eligibleComposedWicketTypeKeys,
   eligibleComposedFieldingKeys,
   isParamComposedColumnKey,
@@ -1106,6 +1107,13 @@ export function eligibleColumnKeys(discipline, formats) {
   // extra keys just never match). Boundaries' composer row reuses the catalogued
   // boundary_runs / boundary_runs_pct keys, already covered by eligibleMetrics above.
   for (const key of eligibleComposedRunSourceKeys(discipline)) {
+    keys.add(key);
+  }
+  // Wave C #24: composed runs-conceded-by-source (rsc__<src>__<axis>, bowling) column
+  // keys are valid columns too — fold them in so a composed Runs-Conceded-by-Source
+  // column survives a re-render. Format-agnostic; returns [] off bowling. Byte-
+  // identical when none is present (the extra keys just never match).
+  for (const key of eligibleComposedRunSourceConcededKeys(discipline)) {
     keys.add(key);
   }
   for (const key of eligibleComposedWicketTypeKeys(discipline)) {

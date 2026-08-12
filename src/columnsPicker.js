@@ -57,6 +57,8 @@ import {
   // Columns content rework D3 (runs-by-source + wicket-type composers).
   composedRunSourceRows, makeComposedRunSourceKey, parseComposedRunSourceKey,
   makeComposedWicketTypeKey, parseComposedWicketTypeKey,
+  // Wave C #24 (runs-conceded-by-source composer, bowling — mirrors runs-by-source).
+  composedRunSourceConcededRows, makeComposedRunSourceConcededKey, parseComposedRunSourceConcededKey,
   // Columns content rework D4 (parametric Innings Score Range + Wicket Haul composers).
   composedParamDescriptor, makeComposedParamKey, parseComposedParamKey, COMPOSED_PARAM_OP_TOKEN,
   // FC-2: the fielding-composer key scheme (tally × dimension × value → fc__ column).
@@ -110,6 +112,12 @@ function togglePairByCount(key, ns) {
   const rs = parseComposedRunSourceKey(key);
   if (rs && rs.axis === "runs") {
     return { count: key, alt: makeComposedRunSourceKey(rs.token, "pct"), mode: "pct" };
+  }
+  // Wave C #24: a runs-conceded-by-source COUNT (rsc__…__runs) pairs with its %
+  // alternate — same key-derived pairing as the batting rs__ family above.
+  const rsc = parseComposedRunSourceConcededKey(key);
+  if (rsc && rsc.axis === "runs") {
+    return { count: key, alt: makeComposedRunSourceConcededKey(rsc.token, "pct"), mode: "pct" };
   }
   const wt = parseComposedWicketTypeKey(key);
   if (wt && wt.axis === "count") {
@@ -457,6 +465,9 @@ export function createColumnsPicker({
     }
     const rs = parseComposedRunSourceKey(key);
     if (rs) return { count: makeComposedRunSourceKey(rs.token, "runs"), alt: makeComposedRunSourceKey(rs.token, "pct"), mode: "pct" };
+    // Wave C #24: resolve the count/% pair from EITHER runs-conceded-by-source variant.
+    const rsc = parseComposedRunSourceConcededKey(key);
+    if (rsc) return { count: makeComposedRunSourceConcededKey(rsc.token, "runs"), alt: makeComposedRunSourceConcededKey(rsc.token, "pct"), mode: "pct" };
     const wt = parseComposedWicketTypeKey(key);
     if (wt) return { count: makeComposedWicketTypeKey(wt.token, "count"), alt: makeComposedWicketTypeKey(wt.token, "pct"), mode: "pct" };
     // FC-2: resolve the count/per-match pair from EITHER a fielding composer variant.
@@ -707,6 +718,11 @@ export function createColumnsPicker({
     "runs_5s_pct", "runs_6s_run_pct", "runs_6s_boundary_pct",
     // bowling wicket types:
     "wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket",
+    // Wave C #24: bowling runs-conceded-by-source % — these catalogued metrics are the
+    // FILTER surface ("% Runs Conceded in…"); their COLUMN home is the Runs Conceded by
+    // Source composer (rsc__ keys), so hide the catalogued keys from the plain picker to
+    // avoid a display-identical duplicate (exactly like the batting runs_*_pct above).
+    "runs_conc_4s_pct", "runs_conc_6s_pct", "runs_conc_nonbdry_pct", "runs_conc_wides_pct", "runs_conc_noballs_pct",
   ]);
 
   // Columns content rework D4: the enumerated ≥-N-only threshold columns are REPLACED
@@ -993,10 +1009,10 @@ export function createColumnsPicker({
   // path (buildPickerHTML / open) is untouched — flat checkbox list, byte-identical.
 
   // Fixed order + labels for the dimension / category composers (compose editors).
-  const DIM_COMPOSER_KINDS = ["phase", "ball", "innings", "runsource", "wickettype"];
+  const DIM_COMPOSER_KINDS = ["phase", "ball", "innings", "runsource", "runsourceconc", "wickettype"];
   const COMPOSER_KIND_LABEL = {
     phase: "Phase Range", ball: "Ball Range", innings: "Innings Range",
-    runsource: "Runs by Source", wickettype: "Wicket Type",
+    runsource: "Runs by Source", runsourceconc: "Runs Conceded by Source", wickettype: "Wicket Type",
   };
   // #35 (columns-popup rework Wave B): the count/% AXIS is NOT a selectable choice in
   // the compose editor — it is ONLY the post-add per-row toggle. Runs by Source and
@@ -1005,7 +1021,7 @@ export function createColumnsPicker({
   // variant on ADD and is preserved silently on EDIT (composerSelForKey), while the
   // per-row count/% control does the switching. Every other composer keeps its real
   // stat select (base metric for Phase/Ball/Innings, base tally for the fc_ family).
-  const AXIS_ONLY_COMPOSER_KINDS = new Set(["runsource", "wickettype"]);
+  const AXIS_ONLY_COMPOSER_KINDS = new Set(["runsource", "runsourceconc", "wickettype"]);
   // opToken (ge/le/eq/bt) → the operator <select>'s value (gte/lte/eq/between).
   const _PARAM_OPTOKEN_TO_KEY = Object.fromEntries(
     Object.entries(COMPOSED_PARAM_OP_TOKEN).map(([k, v]) => [v, k])
@@ -1107,6 +1123,7 @@ export function createColumnsPicker({
     if (parseComposedBallKey(key)) return "ball";
     if (parseComposedInningsKey(key)) return "innings";
     if (parseComposedRunSourceKey(key)) return "runsource";
+    if (parseComposedRunSourceConcededKey(key)) return "runsourceconc";
     if (parseComposedWicketTypeKey(key)) return "wickettype";
     const fc = parseComposedFieldingKey(key);
     if (fc) return FC_DIM_KIND[fc.dim] || null;
@@ -1128,6 +1145,7 @@ export function createColumnsPicker({
     if (kind === "ball") { const p = parseComposedBallKey(key); return p ? p.baseKey : null; }
     if (kind === "innings") { const p = parseComposedInningsKey(key); return p ? p.baseKey : null; }
     if (kind === "runsource") { const p = parseComposedRunSourceKey(key); return p ? p.axis : null; }
+    if (kind === "runsourceconc") { const p = parseComposedRunSourceConcededKey(key); return p ? p.axis : null; }
     if (kind === "wickettype") { const p = parseComposedWicketTypeKey(key); return p ? p.axis : null; }
     // FC-2: a fielding composer row groups by its base TALLY (the compose editor's stat).
     if (FC_KIND_DIM[kind]) { const p = parseComposedFieldingKey(key); return p ? p.tally : null; }
@@ -1142,6 +1160,7 @@ export function createColumnsPicker({
     if (kind === "ball") return composedBallPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "innings") return composedInningsPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "runsource") return ns === "batting" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
+    if (kind === "runsourceconc") return ns === "bowling" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
     if (kind === "wickettype") return (ns === "batting" || ns === "bowling") ? [{ value: "count", label: "Count" }, { value: "pct", label: "%" }] : [];
     // FC-2: every fielding composer's stat <select> is the 5 base tallies.
     if (FC_KIND_DIM[kind]) return FC_TALLY_OPTIONS.slice();
@@ -1166,6 +1185,12 @@ export function createColumnsPicker({
       // sel = "runs" (count) | "pct". Each source's key is its count OR % variant;
       // "Boundaries" reuses the catalogued boundary_runs / boundary_runs_pct pair.
       return composedRunSourceRows().map((r) => ({ label: r.rowLabel, key: sel === "pct" ? r.pctKey : r.countKey, rare: false }));
+    }
+    if (kind === "runsourceconc") {
+      if (ns !== "bowling") return [];
+      // Wave C #24: the bowling mirror. sel = "runs" (count) | "pct". Each of the 5
+      // sources (4s / 6s / Non-Boundary / Wides / No-balls) is its count OR % variant.
+      return composedRunSourceConcededRows().map((r) => ({ label: r.rowLabel, key: sel === "pct" ? r.pctKey : r.countKey, rare: false }));
     }
     if (kind === "wickettype") {
       if (ns === "batting") {
