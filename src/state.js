@@ -47,6 +47,7 @@ import {
   makeComposedPhaseKey,
   makeComposedBallKey,
   makeComposedWicketTypeKey,
+  parseComposedWicketTypeKey,
   // Wave D — D2 (auto-manage mapping): the composed-param + wicket-type helpers a
   // numeric FILTER condition maps to its COLUMN key with.
   COMPOSED_PARAM_OP_TOKEN,
@@ -1324,6 +1325,26 @@ function addOriginTag(arr, tag) {
   return [...(arr || []), tag];
 }
 
+/** Two column keys are the SAME auto-manage identity: equal, OR both composed
+ * wicket-type keys of the same type-token (count ⇄ % are ONE column shown two ways).
+ * So a Dismissal-Type filter is satisfied — and its prune honoured — by EITHER axis,
+ * and toggling a filter-added wicket-type column count↔% never re-adds the sibling. */
+function sameColumnIdentity(a, b) {
+  if (a === b) return true;
+  const pa = parseComposedWicketTypeKey(a);
+  const pb = parseComposedWicketTypeKey(b);
+  return !!(pa && pb && pa.token === pb.token);
+}
+/** True if any pruned key shares `key`'s auto-manage identity. */
+function isPrunedIdentity(pruned, key) {
+  for (const p of pruned) if (sameColumnIdentity(p, key)) return true;
+  return false;
+}
+/** Delete every pruned entry sharing `key`'s auto-manage identity. */
+function clearPrunedIdentity(pruned, key) {
+  for (const p of [...pruned]) if (sameColumnIdentity(p, key)) pruned.delete(p);
+}
+
 /** A leaderboard column key is addable now iff it's a currently-eligible column key,
  * OR a value-dynamic parametric-composed / fielding-composed key (both kept alive
  * structurally, exactly like pruneIneligibleState above). Guards the auto-add so a
@@ -1508,7 +1529,7 @@ export function reconcileLeaderboardColumns(state, { firstSearch = false } = {})
 
   // Q3b: a filter that became active SINCE the last Search clears its columns' prune.
   for (const { tag, cols } of sources) {
-    if (!prevTags.has(tag)) for (const c of cols) pruned.delete(c);
+    if (!prevTags.has(tag)) for (const c of cols) clearPrunedIdentity(pruned, c);
   }
 
   // Drop filter origins whose filter is no longer active (Q1a — remove-on-remove).
@@ -1529,8 +1550,8 @@ export function reconcileLeaderboardColumns(state, { firstSearch = false } = {})
   };
   for (const { tag, cols } of sources) {
     for (const c of cols) {
-      if (pruned.has(c)) continue;
-      const existing = slots.find((s) => s.key === c);
+      if (isPrunedIdentity(pruned, c)) continue;
+      const existing = slots.find((s) => sameColumnIdentity(s.key, c));
       if (existing) {
         origins[existing.id] = addOriginTag(origins[existing.id], tag);
       } else {
@@ -1615,7 +1636,7 @@ export function reconcileManualColumnEdit(state, disc, newSlots) {
   for (const s of newSlots) {
     if (!oldById.has(s.id)) {
       origins[s.id] = ["manual"];
-      pruned.delete(s.key); // a manual re-add clears the prune (Q3c)
+      clearPrunedIdentity(pruned, s.key); // a manual re-add clears the prune (Q3c)
     }
   }
   for (const s of oldSlots) {
