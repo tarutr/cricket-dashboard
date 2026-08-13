@@ -48,6 +48,9 @@ import {
   slotKeys,
   distinctSlotKeys,
   reconcileSlots,
+  // Wave D — D2: Option-B column-model engine (preset-on-pick + manual add/remove).
+  applyLeaderboardPresetPatch,
+  reconcileManualColumnEdit,
 } from "./state.js";
 
 const VIEW_FOR_DISCIPLINE = { batting: "batting", bowling: "bowling" };
@@ -2351,9 +2354,12 @@ export function mountTable(
           syncToolbar(); // revert the select to the real current preset/custom
           return;
         }
-        // E1a: a preset is a KEY array — reconcile into Slot[] so keys the preset
-        // shares with the current columns keep their slot id (highlight/sort follow).
-        store.set({ columns: { ...s.columns, [s.discipline]: reconcileSlots(cols, s.columns[s.discipline]) } });
+        // Wave D — D2 (Q2a): a preset PICK swaps the OLD preset's columns for the new
+        // ones (tagged "preset", moved to the front) and KEEPS filter + manual columns
+        // — an explicit user action that applies even under "Keep Selected Columns".
+        // Staged into the pending store like before; applied on Search.
+        const patch = applyLeaderboardPresetPatch(s, cols);
+        store.set(patch || { columns: { ...s.columns, [s.discipline]: reconcileSlots(cols, s.columns[s.discipline]) } });
         syncToolbar();
       });
     }
@@ -2769,7 +2775,12 @@ export function mountTable(
    * the SLOT path (stageColumnSlots) share one implementation. */
   function stageColumnSlotsCore(pickerNs, newSlots) {
     const live = store.get();
-    store.set({ columns: { ...live.columns, [pickerNs]: newSlots } });
+    // Wave D — D2: route the picker's manual edit through the origin/prune reconciler
+    // — a genuine add stamps "manual" (+ clears that key's prune), a ✕ prunes the key,
+    // and the sort resets to the default if its column was removed (fixing the stale-
+    // NULL-sort gap). A count/% swap or composer edit is a no-op for bookkeeping (both
+    // preserve the slot id). Matchup namespaces write columns only (no bookkeeping).
+    store.set(reconcileManualColumnEdit(live, pickerNs, newSlots));
     syncToolbar();
   }
 

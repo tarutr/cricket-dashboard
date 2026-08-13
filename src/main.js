@@ -5,20 +5,17 @@
 // and do the initial render.
 
 import { initDB, getManifest, prewarmBallEngine, setDeliveryWindow, setOpponentPlayer } from "./db.js";
-import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, pruneDeliveryWindowForFormats, effectiveNamespace, slotKeys, reconcileSlots } from "./state.js";
+import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, pruneDeliveryWindowForFormats, effectiveNamespace, slotKeys, reconcileSlots, reconcileLeaderboardColumns, applyLeaderboardPresetPatch, defaultLeaderboardSort } from "./state.js";
 import { resolveDataAvail, getResolvedDataAvail } from "./dataAvailability.js";
-import { isConditionComplete } from "./advanced.js";
 import { mountFilters } from "./filters.js";
 import { mountFilterDrawer } from "./drawer.js";
 import { mountPills } from "./pills.js";
 import { mountTable } from "./table.js";
 import { mountOmnisearch } from "./omnisearch.js";
 import { mountPlayerPopup } from "./playerPopup.js";
-import { getMetric, COMPOSED_PARAM_OP_TOKEN, composedParamDescriptor, makeComposedParamKey } from "./metrics.js";
+import { getMetric } from "./metrics.js";
 import { mountGraph } from "./graph/graph.js";
 import { showToast } from "./toast.js";
-
-const DEFAULT_SORT_KEY = { batting: "runs", bowling: "wickets" };
 
 const initStatusEl = document.getElementById("init-status");
 const appContentEl = document.getElementById("app-content");
@@ -218,12 +215,21 @@ function reapplyDefaultColumnsIfUnmodified() {
   // customized this discipline's columns.
   if (state.keepColumns) return;
   const discipline = state.discipline;
+  if (discipline !== "batting" && discipline !== "bowling") return;
+  // Wave D — D2: the PLAIN leaderboard opens with NO columns (#1); the first Search
+  // (reconcileLeaderboardColumns) owns seeding Core. So this discipline/format resync
+  // does nothing until that discipline has been seeded — keeping columns empty until
+  // the user actually searches, and never re-seeding over a customised set.
+  if (!(state.columnsSeeded || {})[discipline]) return;
   if (!columnsAreDefault(discipline)) return; // user customized — leave alone
   const next = defaultColumnsFor(discipline, state.formats); // KEY array
   lastAppliedDefaults[discipline] = next;
-  // E1a: reconcile the default KEY array into Slot[] so keys shared with the current
-  // columns (e.g. the Test/MDM SR→BpD swap keeps runs/average/…) keep their slot id.
-  store.set({ columns: { ...state.columns, [discipline]: reconcileSlots(next, state.columns[discipline]) } });
+  // Wave D — D2: re-apply Core origin-aware (tags "preset", keeps any filter/manual
+  // columns, resets sort only if its column dropped). This is the "preset re-apply on
+  // discipline/format change" the Keep toggle freezes (Q4a) — hence the Keep guard
+  // above. Falls back to the plain E1a reconcile if the helper declines.
+  const patch = applyLeaderboardPresetPatch(state, next);
+  store.set(patch || { columns: { ...state.columns, [discipline]: reconcileSlots(next, state.columns[discipline]) } });
 }
 
 /** Count badge on the toolbar's "Filters" button (F2 — repointed from the old
@@ -535,106 +541,41 @@ function togglePin(id, name) {
 }
 
 /**
- * R5-B #6: on a POPUP Search, auto-add a column for every numeric stat CONDITION
- * whose metric isn't already visible, so the user can see (and rank by) what they
- * filtered on — e.g. a Best-Bowling condition surfaces the Best Bowling column and
- * the table ranks by it, instead of an unrelated default. Resolves each condition's
- * metric in the CURRENT effective namespace (so a matchup condition adds a matchup
- * column) and appends any missing one to state.columns[ns]; it's removable via the
- * Columns picker afterward. The sort is set to the FIRST complete filtered metric so
- * the ranking is meaningful — whether that metric was just added OR was already a
- * visible column (R6 #3: Best Bowling ships in the default bowling columns, so keying
- * the rank off the first *added* metric used to leave a Best-Bowling filter ranking by
- * the unrelated default, raw Wickets, instead of the BBI figure).
- *
- * SCOPE FLAGS (see report): (a) with MULTIPLE conditions on different metrics, any
- * missing ones are added and the table ranks by the FIRST filtered metric; (b) this runs on every
- * popup Search regardless of the "Keep Selected Columns" toggle — Keep-Columns
- * governs the default-resync on a discipline/format change, a separate concern, so
- * it does not suppress showing a freshly-filtered column. Display/state only:
- * buildQuery just SELECTs one more existing metric expression — no aggregation
- * change, and with no conditions this is a no-op (anchor byte-identical).
- *
- * R2 (2026-08-09) — PARAMETRIC AUTO-COLUMN LINK (Innings Score / Wicket Hauls,
- * leaderboard only): a completed parametric FILTER surfaces its MATCHING count
- * COLUMN, not the base parametric metric key. The column key is built from the
- * filter's own (operator, value(s)) via makeComposedParamKey — the SAME key the
- * existence-gate compiles from — so the column ("# innings, score [op] N") ≡ the
- * filter by construction. Because a column is added only when absent, the owner's
- * rules fall out for free: ONE-SHOT (a re-Search with the same complete filter finds
- * the column already present → no duplicate), ACCUMULATE ((op,N) is baked into the
- * key, so ">50" and "<40" are distinct columns that both persist), and REMOVING the
- * filter LEAVES the column (nothing here ever removes a column). Guard: an unset
- * operator → no opToken → skipped (mirrors paramExistenceHaving's null), though
- * isConditionComplete already drops such a row upstream.
- *
- * R2 follow-up (2026-08-10) — TOOLBAR PARAMETRIC LINK ONLY: `opts.paramOnly` restricts
- * this pass to parametric conditions alone (skips every other condition entirely, so
- * neither its column nor its sort is touched). Called with `paramOnly: true` from a
- * TOOLBAR Search — the general R5-B #6 rule ("a toolbar Search never edits
- * filters/columns" for non-parametric conditions) is unchanged; only the Innings-Score
- * / Wicket-Hauls auto-column now also seeds there. A popup Search keeps calling this
- * with no options (paramOnly defaults false) — byte-identical to R2.
+ * Wave D — D2 (Option B, owner 2026-08-13): the leaderboard's column-management pass,
+ * run on EVERY Search. It delegates to state.js's reconcileLeaderboardColumns, which:
+ *   • seeds the Core preset on the FIRST Search of a discipline (first-open is empty);
+ *   • ADDS a column for every active filter per the owner-confirmed mapping (metric
+ *     condition → its column, dismissal-type → the Wicket Type composer column, PotM /
+ *     R.Pos / Match Result / Toss / player-attribute singletons → their column(s);
+ *     scope / match-context filters map to NO column);
+ *   • DROPS a filter's column when that filter is removed, unless a preset / manual /
+ *     other-filter source still keeps it (Q1a);
+ *   • honours the session prune memory (a ✕'d column stays gone through plain Searches,
+ *     Q3) and the "Keep Selected Columns" freeze (Q4a — a no-op then);
+ *   • sets the sort to the default (innings, else the first column) on the first seed
+ *     and resets it there only when its column is gone — never to the filtered metric.
+ * Display/state ONLY: it changes WHICH columns show (each an independent SELECT), never
+ * a query builder or a number — the anchors are byte-identical for any given column set.
+ * Idempotent, so a toolbar Search that changed no filter leaves the columns untouched.
  */
-function autoAddFilteredColumns({ paramOnly = false } = {}) {
+function autoManageColumns() {
   const state = store.get();
   const ns = effectiveNamespace(state);
-  // E1a: work in KEY space (state.columns[ns] is Slot[]) — append missing filtered
-  // metric keys, then reconcile back into Slot[] below so existing columns keep ids.
-  const cols = slotKeys(state.columns[ns] || []);
-  const added = [];
-  // R6 #3: the FIRST complete, rankable filtered metric — whether it was just
-  // added here OR was already a visible column. The table ranks by THIS on a
-  // popup Search. Keying the rank off the first *added* metric (the old
-  // behaviour) silently dropped the ranking whenever the filtered metric already
-  // shipped in the default columns — e.g. Best Bowling is in the default bowling
-  // preset, so a Best-Bowling filter added no column, set no sort, and left the
-  // table on its unrelated default (raw Wickets) instead of ranking by the BBI
-  // figure (best__sort = wickets desc, then runs asc). Tracking the first
-  // filtered metric regardless of prior visibility fixes that while keeping the
-  // "filter a metric → rank by it" intent consistent across every metric.
-  let firstFilteredKey = null;
-  for (const g of state.advanced.groups || []) {
-    for (const c of g.conds) {
-      if (!isConditionComplete(c)) continue;
-      const m = getMetric(c.metricKey, ns);
-      // Skip non-column placeholders (R. Pos. / composition never render as a
-      // rankable data column) and metrics that don't exist in this namespace.
-      if (!m || m.kind === "position" || m.kind === "composition") continue;
-      // R2: a parametric filter maps to its composed count-column key (isr__/wh__),
-      // NOT the base parametric metric key (which is a filter-only aggregate). Built
-      // from the SAME (op, value(s)) the existence-gate uses → column ≡ filter.
-      const isParam = !!(m.paramTemplate && m.param);
-      // R2 toolbar follow-up: paramOnly (a TOOLBAR Search) skips every non-parametric
-      // condition outright — it neither seeds a column nor becomes firstFilteredKey/
-      // the sort target, keeping the general R5-B #6 "toolbar never edits columns"
-      // rule intact for everything except the parametric count-column link.
-      if (paramOnly && !isParam) continue;
-      let colKey = c.metricKey;
-      if (isParam) {
-        const opToken = COMPOSED_PARAM_OP_TOKEN[c.operator];
-        const desc = composedParamDescriptor(ns);
-        if (!opToken || !desc) continue; // unset operator / non-plain ns → no column
-        const values = c.operator === "between" ? [c.v1, c.v2] : [c.v1];
-        colKey = makeComposedParamKey(desc.prefix, opToken, values);
-      }
-      if (firstFilteredKey === null) firstFilteredKey = colKey;
-      if (cols.includes(colKey) || added.includes(colKey)) continue;
-      cols.push(colKey);
-      added.push(colKey);
-    }
-  }
-  // No complete, rankable condition → no-op (store untouched, anchors byte-identical).
-  if (firstFilteredKey === null) return;
-  const firstMetric = getMetric(firstFilteredKey, ns);
-  const dir = firstMetric && firstMetric.higherIsBetter === false ? "asc" : "desc";
-  const patch = { sort: { key: firstFilteredKey, dir } };
-  // Only touch columns when something was actually added — an already-visible
-  // filtered metric needs no column change, just the rank above. E1a: reconcile the
-  // appended KEY list into Slot[] (existing keys keep their slot id; the new one gets
-  // a fresh slot).
-  if (added.length) patch.columns = { ...state.columns, [ns]: reconcileSlots(cols, state.columns[ns]) };
+  // Option B applies to the PLAIN batting/bowling leaderboard only — the matchup
+  // namespaces keep their fixed defaults + restricted picker.
+  if (ns !== "batting" && ns !== "bowling") return;
+  const seeding = !((state.columnsSeeded || {})[state.discipline]);
+  // reconcileLeaderboardColumns owns the whole Option-B pass: first-Search Core seed,
+  // filter→column add/remove per the mapping + origins, prune-stick, and the sort
+  // default/reset. It returns null (no-op) when "Keep Selected Columns" is ON (Q4a) or
+  // in matchup mode. Display/state only — no query builder or number moves.
+  const patch = reconcileLeaderboardColumns(state);
+  if (!patch) return;
   store.set(patch);
+  // Keep lastAppliedDefaults honest for the discipline/format resync path: right after
+  // a (re)seed the columns ARE that discipline's default, so a later format change can
+  // still re-derive the owner's Red-Ball SR→BpD swap.
+  if (seeding) lastAppliedDefaults[state.discipline] = defaultColumnsFor(state.discipline, state.formats);
 }
 
 /**
@@ -759,10 +700,14 @@ function boot() {
         // is exactly what the old segmented-toggle click handler used to do;
         // filters.js then calls onChange() → onFiltersChanged().
         () => {
-          const state = store.get();
           reapplyDefaultColumnsIfUnmodified();
-          if (!getMetric(state.sort.key, state.discipline)) {
-            store.set({ sort: { key: DEFAULT_SORT_KEY[state.discipline], dir: "desc" } });
+          // Wave D — D2: when the sort metric doesn't exist in the new discipline, fall
+          // back to that discipline's DEFAULT sort (innings-if-shown-else-first column,
+          // #3) rather than the old raw runs/wickets. reconcileLeaderboardColumns re-
+          // confirms this on the next Search; pre-Search the table isn't shown.
+          const s2 = store.get();
+          if (!getMetric(s2.sort.key, s2.discipline)) {
+            store.set({ sort: defaultLeaderboardSort(s2.columns[s2.discipline] || [], s2.discipline) });
           }
         }
       );
@@ -895,20 +840,20 @@ function boot() {
         // (and their no-innings flags); a TOOLBAR Search (fromToolbar) commits
         // toolbar-only tweaks, so pins PERSIST. Do this BEFORE the applied snapshot
         // so the cleared pins are part of the committed baseline.
-        // R5-B #6: also auto-add a column for any filtered metric not yet visible
-        // and rank by it (popup Search only — a toolbar Search never edits filters).
-        // R2 follow-up (2026-08-10, owner): the PARAMETRIC auto-column (Innings Score /
-        // Wicket Hauls) is an exception — it now seeds on a TOOLBAR Search too, via the
-        // SAME adder scoped to `paramOnly` (skips every other condition, so a Best-
-        // Bowling / etc. filter still adds nothing from the toolbar — R5-B #6 unchanged
-        // for everything else).
+        // Wave D — D2: the Option-B column engine runs on EVERY Search (both popup and
+        // toolbar), reconciling the shown columns to the active filters via the owner-
+        // confirmed mapping (add on filter-add, drop on filter-remove unless a preset /
+        // manual / other filter keeps it), seeding Core on the first Search, honouring
+        // the session prune memory and the "Keep Selected Columns" freeze. It is
+        // idempotent, so a toolbar Search that changed no filter is a no-op for columns.
+        // (This replaces the old add-only autoAddFilteredColumns + its paramOnly toolbar
+        // carve-out; the sort is now the default/remembered sort, never the filtered
+        // metric.) Pin reset stays a POPUP-Search-only concern.
         if (!fromToolbar) {
           if ((store.get().pinnedPlayers || []).length) store.set({ pinnedPlayers: [] });
           noInningsPinIds = new Set();
-          autoAddFilteredColumns();
-        } else {
-          autoAddFilteredColumns({ paramOnly: true });
         }
+        autoManageColumns();
         // R3.2: Search is the moment ALL pending edits (popup filters AND the
         // toolbar controls — dates, Vs, preset, columns, sort, player search /
         // pins) BECOME applied. Commit the snapshot and refresh the pills +

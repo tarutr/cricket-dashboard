@@ -47,9 +47,15 @@ import {
   makeComposedPhaseKey,
   makeComposedBallKey,
   makeComposedWicketTypeKey,
+  // Wave D — D2 (auto-manage mapping): the composed-param + wicket-type helpers a
+  // numeric FILTER condition maps to its COLUMN key with.
+  COMPOSED_PARAM_OP_TOKEN,
+  composedParamDescriptor,
+  makeComposedParamKey,
   // Wave D — D1: the finite profile attribute column keys valid for a discipline.
   profileColumnKeys,
 } from "./metrics.js";
+import { isConditionComplete } from "./advanced.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 
 /**
@@ -756,17 +762,17 @@ export function emptyAdvancedBlock() {
 export function createInitialState(maxMonth) {
   const dateTo = maxMonth ?? null;
   const dateFrom = null;
-  // E1a: every namespace's columns are Slot[] ({id, key}) from the start (matchup
-  // included, owner ruling), built with fresh ids from the key-array defaults. The
-  // default sort references the batting "runs" slot by id so the arrow attaches to
-  // that specific slot (with a by-key fallback in the render for safety).
+  // E1a: every namespace's columns are Slot[] ({id, key}). Wave D — D2 (Option B,
+  // owner 2026-08-13): the PLAIN leaderboard opens with NO pre-chosen columns [#1] —
+  // the app auto-adds the Core preset + any filter columns on the FIRST Search
+  // (reconcileLeaderboardColumns). The MATCHUP namespaces keep their fixed defaults
+  // (a restricted picker, outside the Option-B auto-manage model).
   const columns = {
-    batting: keysToSlots(DEFAULT_COLUMNS.batting),
-    bowling: keysToSlots(DEFAULT_COLUMNS.bowling),
+    batting: [],
+    bowling: [],
     matchup_batting: keysToSlots(DEFAULT_MATCHUP_COLUMNS.matchup_batting),
     matchup_bowling: keysToSlots(DEFAULT_MATCHUP_COLUMNS.matchup_bowling),
   };
-  const initialSortSlot = columns.batting.find((s) => s.key === "runs") || null;
   return {
     view: "table", // "table" | "graph" (SPEC §6 Graph Builder)
     discipline: "batting",
@@ -887,7 +893,12 @@ export function createInitialState(maxMonth) {
     // foundation). The render attributes the ▲/▼ arrow by slotId, falling back to
     // key when slotId is null — with today's unique-key columns the two agree, so
     // it is byte-identical.
-    sort: { key: "runs", dir: "desc", slotId: initialSortSlot ? initialSortSlot.id : null },
+    // Wave D — D2: default sort is INNINGS descending [#3] once innings is a shown
+    // column (it is, in the first-Search Core preset); reconcileLeaderboardColumns
+    // resolves the slotId + re-derives the default (innings-if-shown-else-first
+    // column) whenever columns change. Pre-Search there are no leaderboard columns,
+    // so slotId is null (nothing renders until the first Search seeds Core).
+    sort: { key: "innings", dir: "desc", slotId: null },
     keepColumns: false, // "Keep Selected Columns" toggle (4d/A5): OFF (default) lets a
                    // discipline/format change re-sync the visible columns to that scope's
                    // default (main.js's reapplyDefaultColumnsIfUnmodified, unless already
@@ -895,6 +906,31 @@ export function createInitialState(maxMonth) {
                    // order are currently showing simply carry into the next Search.
                    // Display-only — never read by any query builder.
     columns,
+    // ── Wave D — D2 column-model engine (Option B, owner 2026-08-13) ──────────
+    // Per-column ORIGIN, keyed by SLOT ID: which source(s) put a leaderboard column
+    // on screen — "preset" (from the chosen preset), "manual" (hand-added in the
+    // picker), or "filter:<sourceTag>" (auto-added because a filter maps to it). A
+    // column shows while its origin set is non-empty; a filter's source is dropped
+    // when that filter is removed and the column goes iff nothing else keeps it
+    // (Q1a). Keyed by slot id (not key) so a count/% swap or composer edit — both
+    // preserve the slot id — keeps its origin for free. PLAIN batting/bowling only
+    // (matchup uses fixed defaults). DISPLAY-ONLY: absent from serializeQueryState,
+    // so an origin change never lights Search.
+    columnOrigins: { batting: {}, bowling: {} },
+    // Session PRUNED memory, keyed by COLUMN KEY per discipline: keys the user removed
+    // via the picker ✕. A pruned key is NOT auto-re-added on a plain Search (Q3); the
+    // prune clears only on (a) re-picking a preset that includes it, (b) ADDING a
+    // filter that maps to it, or (c) a manual re-add. DISPLAY-ONLY.
+    prunedColumns: { batting: [], bowling: [] },
+    // First-Search seed latch per discipline: false until the app has auto-added the
+    // Core preset for that discipline (the first Search). Keeps first-open empty [#1]
+    // and stops Core being re-seeded over a later preset pick / customisation.
+    columnsSeeded: { batting: false, bowling: false },
+    // The PREVIOUS Search's active filter-source tags per discipline — so a filter
+    // that became active SINCE the last Search (a fresh add) clears its column's prune
+    // (Q3b), while a filter that merely stayed active does not (prune sticks, Q3).
+    // DISPLAY-ONLY.
+    filterSourcesPrev: { batting: [], bowling: [] },
     // Highlighted columns (columns-rejig W2, 2026-08-07; E1a): the SLOT IDS the
     // leaderboard tints with a soft accent wash — a purely COSMETIC emphasis
     // toggled from the Columns section's 🖍️ control, per namespace exactly like
@@ -1264,6 +1300,332 @@ export function pruneIneligibleState(store) {
     ...(archiveChanged ? { advancedByDiscipline: newArchive } : {}),
   });
   return true;
+}
+
+// ── Wave D — D2: the Option-B column-management engine (leaderboard only) ─────
+// A leaderboard column carries a SET of ORIGINS (state.columnOrigins[disc], keyed by
+// slot id) — "preset" / "manual" / "filter:<tag>". The app only ever ADDS columns
+// (Option B); the user prunes with the picker ✕. These helpers are the ONE place the
+// origin set, the pruned memory, and the filter→column mapping live. They are pure —
+// they return a store patch (or null); the caller does the store.set — and DISPLAY-
+// ONLY (they change WHICH columns show, never a query builder or a number: adding /
+// removing a column only adds / drops one independent SELECT expression).
+
+/** Add `tag` to an origin array (idempotent), tolerant of undefined. */
+function addOriginTag(arr, tag) {
+  if (arr && arr.includes(tag)) return arr;
+  return [...(arr || []), tag];
+}
+
+/** A leaderboard column key is addable now iff it's a currently-eligible column key,
+ * OR a value-dynamic parametric-composed / fielding-composed key (both kept alive
+ * structurally, exactly like pruneIneligibleState above). Guards the auto-add so a
+ * filter can never seed a column the picker/table couldn't render. */
+export function isLeaderboardColumnAddable(key, discipline, formats) {
+  return (
+    eligibleColumnKeys(discipline, formats).has(key) ||
+    isParamComposedColumnKey(key, discipline) ||
+    isComposedFieldingColumnKey(key, discipline)
+  );
+}
+
+/** The COLUMN key a Dismissal-Type numeric condition maps to — the composed Wicket
+ * Type COUNT column for the discipline (out_<kind>[_pct] batting / wkt_<kind> bowling
+ * → wt__<token>__count) — or null when `metricKey` is not a dismissal-type condition.
+ * Validated against the discipline's eligible composed wicket-type keys so a stray
+ * `wkt_`-prefixed metric (none today) falls through to the same-key mapping. */
+function dismissalTypeColumnKey(metricKey, discipline) {
+  let token = null;
+  if (discipline === "batting" && metricKey.startsWith("out_")) {
+    token = metricKey.slice(4).replace(/_pct$/, "");
+  } else if (discipline === "bowling" && metricKey.startsWith("wkt_")) {
+    token = metricKey.slice(4);
+  }
+  if (!token) return null;
+  const colKey = makeComposedWicketTypeKey(token, "count");
+  return eligibleComposedWicketTypeKeys(discipline).includes(colKey) ? colKey : null;
+}
+
+/** The COLUMN key a numeric FILTER condition maps to (same-key, dismissal-type→wt__,
+ * or parametric→composed), or null when it has no rankable column (a position /
+ * composition placeholder, or a metric that doesn't resolve in this namespace). */
+function conditionColumnKey(cond, discipline) {
+  const dt = dismissalTypeColumnKey(cond.metricKey, discipline);
+  if (dt) return dt;
+  const m = getMetric(cond.metricKey, discipline);
+  if (!m || m.kind === "position" || m.kind === "composition") return null;
+  if (m.paramTemplate && m.param) {
+    const opToken = COMPOSED_PARAM_OP_TOKEN[cond.operator];
+    const desc = composedParamDescriptor(discipline);
+    if (!opToken || !desc) return null;
+    const values = cond.operator === "between" ? [cond.v1, cond.v2] : [cond.v1];
+    return makeComposedParamKey(desc.prefix, opToken, values);
+  }
+  return cond.metricKey;
+}
+
+/**
+ * The active FILTER → COLUMN map for the plain leaderboard: an array of
+ * { tag, cols } where `tag` uniquely identifies the filter (the origin source it
+ * stamps) and `cols` are the column key(s) it maps to. Owner-confirmed mapping —
+ * scope / match-context filters map to NO column and are simply absent here.
+ * Returns [] for a matchup namespace (Option B doesn't manage matchup columns).
+ */
+export function activeLeaderboardFilterSources(state) {
+  const disc = state.discipline;
+  if (effectiveNamespace(state) !== disc) return []; // matchup mode
+  const out = [];
+  const push = (tag, cols) => {
+    const valid = cols.filter((c) => isLeaderboardColumnAddable(c, disc, state.formats));
+    if (valid.length) out.push({ tag, cols: valid });
+  };
+
+  // Singleton / categorical filters (mirror the pills' own "active" predicates).
+  if (regularPositionsFilterActive(state)) push("filter:regularPositions", ["r_pos"]);
+  if (potmYNFilterActive(state)) push("filter:potm_yn", ["potm_count"]);
+  if (resultFilterActive(state)) push("filter:mc_result", ["res_won", "res_lost", "res_tied", "res_no_result"]);
+  if (tossResultFilterActive(state)) push("filter:mc_toss_result", ["res_toss_won"]);
+
+  // Player-attribute filters (men-only by DATA — profile is empty for women, so this
+  // is data-driven, not gender-hardcoded). One column per active profile field.
+  const p = state.profile || {};
+  const PROFILE_MAP = [
+    ["roleGroup", "attr_role_group"],
+    ["roleSub", "attr_role_subgroup"],
+    ["battingHand", "attr_batting_style"],
+    ["bowlingType", "attr_bowling_type"],
+    ["bowlingArm", "attr_bowling_arm"],
+  ];
+  for (const [field, colKey] of PROFILE_MAP) {
+    if (p[field]) push(`filter:profile:${field}`, [colKey]);
+  }
+
+  // Numeric stat conditions → their column (same-key / dismissal-type / parametric).
+  // One source tag per distinct COLUMN key, so several conditions on one metric share
+  // the column and it survives while any of them is active.
+  const seen = new Set();
+  for (const g of state.advanced.groups || []) {
+    for (const c of g.conds) {
+      if (!isConditionComplete(c)) continue;
+      const colKey = conditionColumnKey(c, disc);
+      if (!colKey || seen.has(colKey)) continue;
+      seen.add(colKey);
+      push(`filter:cond:${colKey}`, [colKey]);
+    }
+  }
+  return out;
+}
+
+/** Default leaderboard sort [#3]: INNINGS descending if innings is a shown column,
+ * else the first (left-most) column, in that metric's natural direction. Returns a
+ * safe innings placeholder when there are no columns yet. */
+export function defaultLeaderboardSort(slots, discipline) {
+  const innings = (slots || []).find((s) => s.key === "innings");
+  const slot = innings || (slots && slots[0]) || null;
+  if (!slot) return { key: "innings", dir: "desc", slotId: null };
+  const m = getMetric(slot.key, discipline);
+  const dir = m && m.higherIsBetter === false ? "asc" : "desc";
+  return { key: slot.key, dir, slotId: slot.id };
+}
+
+/** True while the active sort still points at a shown column (or the always-present
+ * Player "name" pseudo-column) — matched by slot id when known, else by key. */
+function sortStillShown(sort, slots) {
+  if (!sort) return false;
+  if (sort.key === "name") return true;
+  return (slots || []).some((s) => (sort.slotId != null ? s.id === sort.slotId : s.key === sort.key));
+}
+
+/** Apply `presetKeys` onto the working slots/origins/pruned (mutates origins + pruned,
+ * returns the new slot array). Preset columns move to the FRONT (preset-first order,
+ * #14); a key already shown is reused (keeps its id + other origins) and re-tagged
+ * "preset"; the OLD preset's columns lose their "preset" tag and drop only if nothing
+ * else (filter / manual) keeps them (Q2a). Prunes clear for the new preset's keys. */
+function applyPresetToWorking(slots, origins, pruned, presetKeys) {
+  for (const s of slots) if (origins[s.id]) origins[s.id] = origins[s.id].filter((x) => x !== "preset");
+  const bySlotKey = new Map();
+  for (const s of slots) if (!bySlotKey.has(s.key)) bySlotKey.set(s.key, s);
+  const usedIds = new Set();
+  const presetSlots = [];
+  for (const k of presetKeys) {
+    pruned.delete(k);
+    const reuse = bySlotKey.get(k);
+    if (reuse && !usedIds.has(reuse.id)) {
+      usedIds.add(reuse.id);
+      origins[reuse.id] = addOriginTag(origins[reuse.id], "preset");
+      presetSlots.push(reuse);
+    } else {
+      const slot = makeSlot(k);
+      origins[slot.id] = ["preset"];
+      presetSlots.push(slot);
+    }
+  }
+  const rest = slots.filter((s) => !usedIds.has(s.id) && (origins[s.id] || []).length > 0);
+  return [...presetSlots, ...rest];
+}
+
+/** GC origin entries whose slot id is no longer present. */
+function gcOrigins(origins, slots) {
+  const live = new Set(slots.map((s) => s.id));
+  for (const id of Object.keys(origins)) if (!live.has(id)) delete origins[id];
+}
+
+/**
+ * The Search-time Option-B reconciler (PLAIN leaderboard). Returns a store patch or
+ * null (no change / not applicable). `firstSearch` (or an unseeded discipline) seeds
+ * the Core preset. Otherwise: newly-added filters clear their column's prune; stale
+ * filter origins drop; every active filter's column is (re-)ensured unless pruned;
+ * columns whose managed origin set emptied are removed; the sort resets to the default
+ * when its column is gone (or on the first seed). Frozen entirely when "Keep Selected
+ * Columns" is ON (Q4a) — only the user's OWN preset-pick / manual add-remove still act.
+ */
+export function reconcileLeaderboardColumns(state, { firstSearch = false } = {}) {
+  const disc = state.discipline;
+  if (disc !== "batting" && disc !== "bowling") return null;
+  if (effectiveNamespace(state) !== disc) return null; // matchup mode: no auto-manage
+  if (state.keepColumns) return null; // Keep ON freezes ALL automatic management (Q4a)
+
+  let slots = (state.columns[disc] || []).map((s) => ({ ...s }));
+  const origins = { ...((state.columnOrigins || {})[disc] || {}) };
+  const pruned = new Set((state.prunedColumns || {})[disc] || []);
+  const seeded = Boolean((state.columnsSeeded || {})[disc]);
+  const seeding = firstSearch || !seeded;
+
+  if (seeding) {
+    slots = applyPresetToWorking(slots, origins, pruned, defaultColumnsFor(disc, state.formats));
+  }
+
+  const sources = activeLeaderboardFilterSources(state);
+  const activeTags = new Set(sources.map((s) => s.tag));
+  const prevTags = new Set((state.filterSourcesPrev || {})[disc] || []);
+
+  // Q3b: a filter that became active SINCE the last Search clears its columns' prune.
+  for (const { tag, cols } of sources) {
+    if (!prevTags.has(tag)) for (const c of cols) pruned.delete(c);
+  }
+
+  // Drop filter origins whose filter is no longer active (Q1a — remove-on-remove).
+  for (const s of slots) {
+    const o = origins[s.id];
+    if (o) origins[s.id] = o.filter((src) => !src.startsWith("filter:") || activeTags.has(src));
+  }
+
+  // Add each active filter's column (skip pruned / ineligible). New filter columns go
+  // after the last preset-or-filter column, before any purely-manual tail (#14).
+  const insertBoundary = () => {
+    let idx = 0;
+    for (let i = 0; i < slots.length; i++) {
+      const o = origins[slots[i].id] || [];
+      if (o.some((x) => x === "preset" || x.startsWith("filter:"))) idx = i + 1;
+    }
+    return idx;
+  };
+  for (const { tag, cols } of sources) {
+    for (const c of cols) {
+      if (pruned.has(c)) continue;
+      const existing = slots.find((s) => s.key === c);
+      if (existing) {
+        origins[existing.id] = addOriginTag(origins[existing.id], tag);
+      } else {
+        const slot = makeSlot(c);
+        origins[slot.id] = [tag];
+        slots.splice(insertBoundary(), 0, slot);
+      }
+    }
+  }
+
+  // Remove slots whose MANAGED origin set emptied. A slot with no origin entry at all
+  // (an unmanaged legacy column) is left alone — never auto-removed.
+  slots = slots.filter((s) => {
+    const o = origins[s.id];
+    if (o === undefined) return true;
+    if (o.length > 0) return true;
+    delete origins[s.id];
+    return false;
+  });
+  gcOrigins(origins, slots);
+
+  // Sort [#3/#7]: default on the first seed; otherwise remember the user's sort until
+  // its column is gone, then fall back to the default. NO force-include anywhere.
+  let sort = state.sort;
+  if (seeding || !sortStillShown(sort, slots)) sort = defaultLeaderboardSort(slots, disc);
+
+  return {
+    columns: { ...state.columns, [disc]: slots },
+    columnOrigins: { ...(state.columnOrigins || {}), [disc]: origins },
+    prunedColumns: { ...(state.prunedColumns || {}), [disc]: [...pruned] },
+    columnsSeeded: { ...(state.columnsSeeded || {}), [disc]: true },
+    filterSourcesPrev: { ...(state.filterSourcesPrev || {}), [disc]: [...activeTags] },
+    sort,
+  };
+}
+
+/**
+ * Preset applied ON PICK (the toolbar <select>) or on a discipline/format resync:
+ * swap the old preset's columns for `presetKeys`, KEEP filter + manual columns (Q2a),
+ * clear prunes for the new preset's keys, and mark the discipline seeded. Sort resets
+ * to the default only if its column was dropped. Returns a store patch. Honors the
+ * caller's Keep guard elsewhere — an explicit preset PICK is a user action that still
+ * applies under Keep (Q4a); the resync caller gates itself on Keep.
+ */
+export function applyLeaderboardPresetPatch(state, presetKeys) {
+  const disc = state.discipline;
+  if (disc !== "batting" && disc !== "bowling") return null;
+  const origins = { ...((state.columnOrigins || {})[disc] || {}) };
+  const pruned = new Set((state.prunedColumns || {})[disc] || []);
+  const working = (state.columns[disc] || []).map((s) => ({ ...s }));
+  const slots = applyPresetToWorking(working, origins, pruned, presetKeys);
+  gcOrigins(origins, slots);
+  let sort = state.sort;
+  if (!sortStillShown(sort, slots)) sort = defaultLeaderboardSort(slots, disc);
+  return {
+    columns: { ...state.columns, [disc]: slots },
+    columnOrigins: { ...(state.columnOrigins || {}), [disc]: origins },
+    prunedColumns: { ...(state.prunedColumns || {}), [disc]: [...pruned] },
+    columnsSeeded: { ...(state.columnsSeeded || {}), [disc]: true },
+    sort,
+  };
+}
+
+/**
+ * The picker's manual column edit (leaderboard). Diffs the new slot array against the
+ * live one BY SLOT ID so a count/% swap or composer edit (both preserve the id) is a
+ * no-op for origin/prune, while a genuine add stamps "manual" + clears that key's
+ * prune and a genuine ✕ prunes the key + drops its origin. Sort resets to the default
+ * when the removed slot was the active sort. Matchup namespaces skip all bookkeeping
+ * (plain columns write only). Returns a store patch.
+ */
+export function reconcileManualColumnEdit(state, disc, newSlots) {
+  if (disc !== "batting" && disc !== "bowling") {
+    return { columns: { ...state.columns, [disc]: newSlots } };
+  }
+  const oldSlots = state.columns[disc] || [];
+  const oldById = new Map(oldSlots.map((s) => [s.id, s]));
+  const newById = new Map(newSlots.map((s) => [s.id, s]));
+  const newKeys = new Set(newSlots.map((s) => s.key));
+  const origins = { ...((state.columnOrigins || {})[disc] || {}) };
+  const pruned = new Set((state.prunedColumns || {})[disc] || []);
+  for (const s of newSlots) {
+    if (!oldById.has(s.id)) {
+      origins[s.id] = ["manual"];
+      pruned.delete(s.key); // a manual re-add clears the prune (Q3c)
+    }
+  }
+  for (const s of oldSlots) {
+    if (!newById.has(s.id)) {
+      delete origins[s.id];
+      if (!newKeys.has(s.key)) pruned.add(s.key); // a ✕ removal is a session prune (Q3)
+    }
+  }
+  gcOrigins(origins, newSlots);
+  let sort = state.sort;
+  if (!sortStillShown(sort, newSlots)) sort = defaultLeaderboardSort(newSlots, disc);
+  return {
+    columns: { ...state.columns, [disc]: newSlots },
+    columnOrigins: { ...(state.columnOrigins || {}), [disc]: origins },
+    prunedColumns: { ...(state.prunedColumns || {}), [disc]: [...pruned] },
+    sort,
+  };
 }
 
 /**
