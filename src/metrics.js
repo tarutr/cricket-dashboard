@@ -2749,7 +2749,11 @@ export function getMetric(key, discipline) {
       resolveComposedRunSourceConcededMetric(key, discipline) ??
       resolveComposedWicketTypeMetric(key, discipline) ??
       resolveComposedParamMetric(key, discipline) ??
-      resolveComposedFieldingMetric(key, discipline)
+      resolveComposedFieldingMetric(key, discipline) ??
+      // Wave D — D1: player-profile attribute columns (attr_<field>), virtual text
+      // metrics projected out of the profile_cte join (buildQuery). null for any
+      // non-attr key / wrong discipline, so every other caller is unchanged.
+      resolveProfileColumnMetric(key, discipline)
     );
   }
   return METRICS.find((m) => m.key === key) ?? null;
@@ -2847,6 +2851,80 @@ export function resolveColumnMetric(key, ns) {
   const base = getMetric(parsed.baseKey, parsed.discipline);
   if (!base) return null;
   return makeVirtualCrossMetric(base, key, parsed.discipline);
+}
+
+// ── Player-profile ATTRIBUTE columns (Wave D — D1, 2026-08-13) ────────────────
+// The app's FIRST text data columns: the existing "Player Profile" FILTERS turned
+// into leaderboard COLUMNS — same names, same underlying `profiles` fields (one row
+// per player_id). They are player-level CONSTANTS (not innings aggregates), so —
+// exactly like the cross-discipline / composed columns above — they are NOT in the
+// static per-discipline METRICS catalogue (keeping eligibleMetrics / the graph /
+// benchmark / the filter palette / presets all byte-identical). Instead they are
+// VIRTUAL metrics resolved on the fly by resolveProfileColumnMetric (folded into
+// getMetric's fallback chain below), projected in buildQuery via a `profile_cte`
+// LEFT JOIN (MAX(profile_cte.<field>) — the same functionally-dependent-join
+// projection R. Pos. / pom_cte use), and offered explicitly in the leaderboard
+// Columns picker's "Player Profile" section. Availability MIRRORS the profile
+// filters' discipline gating (paletteGroups.js): Batting hand is batting-only; the
+// other four are offered in both disciplines. Men-only BY DATA today (profiles is
+// men-only) → they read blank ("—") for players without a profile; NOT
+// gender-hardcoded (owner "remove the hardcode everywhere"), exactly like R. Pos.
+//
+// Key scheme: `attr_<field>` — identifier-safe (no quoting), collides with no plain
+// metric key (none starts with "attr_") nor any composed/cross prefix (x__ / ph__ /
+// bl__ / in__ / rs__ / rsc__ / wt__ / isr__ / wh__ / fc__), so getMetric's fallback
+// discriminates it unambiguously. The CTE aliases each field `pr_<field>` so an
+// unqualified scope-clause column can never bind to it (the same collision-safe
+// prefixing xdisc_cte's xd_ / r_pos_cte's pos_ use).
+export const PROFILE_COLUMN_SPECS = [
+  { key: "attr_role_group", field: "role_group", label: "Playing role", disciplines: ["batting", "bowling"] },
+  { key: "attr_role_subgroup", field: "role_subgroup", label: "Detailed role", disciplines: ["batting", "bowling"] },
+  { key: "attr_batting_style", field: "batting_style", label: "Batting hand", disciplines: ["batting"] },
+  { key: "attr_bowling_type", field: "bowling_type", label: "Bowling style", disciplines: ["batting", "bowling"] },
+  { key: "attr_bowling_arm", field: "bowling_arm", label: "Bowling hand", disciplines: ["batting", "bowling"] },
+];
+const _PROFILE_SPEC_BY_KEY = new Map(PROFILE_COLUMN_SPECS.map((s) => [s.key, s]));
+
+/** The profile-column SPECS ({key,label,field}) offerable for `discipline` — the
+ * discipline-gating that mirrors the profile FILTERS (Batting hand batting-only,
+ * the rest both). [] for a matchup namespace (profile columns are plain-only). */
+export function profileColumnSpecs(discipline) {
+  return PROFILE_COLUMN_SPECS.filter((s) => s.disciplines.includes(discipline));
+}
+
+/** The valid profile-column KEYS for `discipline` (a finite set folded into
+ * eligibleColumnKeys so a picked profile column survives a re-render/prune). */
+export function profileColumnKeys(discipline) {
+  return profileColumnSpecs(discipline).map((s) => s.key);
+}
+
+/** Resolve an `attr_<field>` key to its VIRTUAL text metric for `discipline`, or
+ * null (not a profile key, or the key's field is not offered in this discipline —
+ * e.g. Batting hand while bowling, or any of them in a matchup namespace). Called
+ * by getMetric (so resolveColumnMetric picks it up too — a profile key is not a
+ * cross key, so resolveColumnMetric falls through to getMetric). A text column:
+ * format "str", higherIsBetter false (so the first sort click is A→Z, like the
+ * Player-name column), kind "attribute" (never total/rate/percent/peak, so the
+ * graph's rate/percent chart filters never draw it — a further belt-and-braces
+ * beyond it not being in eligibleMetrics). */
+function resolveProfileColumnMetric(key, discipline) {
+  const spec = _PROFILE_SPEC_BY_KEY.get(key);
+  if (!spec) return null;
+  if (!spec.disciplines.includes(discipline)) return null;
+  return {
+    key: spec.key,
+    label: spec.label,
+    shortLabel: spec.label,
+    discipline,
+    source: "profiles",
+    sqlExpression: `MAX(profile_cte.pr_${spec.field})`,
+    higherIsBetter: false,
+    format: "str",
+    kind: "attribute",
+    zeroIsData: false,
+    isPhaseMetric: null,
+    columnTitle: `${spec.label} — from the player profile (blank where no profile exists)`,
+  };
 }
 
 // ── Composed PHASE×metric columns (columns content rework D1, 2026-08-08) ──────

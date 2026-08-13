@@ -63,6 +63,8 @@ import {
   composedParamDescriptor, makeComposedParamKey, parseComposedParamKey, COMPOSED_PARAM_OP_TOKEN,
   // FC-2: the fielding-composer key scheme (tally × dimension × value → fc__ column).
   makeComposedFieldingKey, parseComposedFieldingKey,
+  // Wave D — D1: the player-profile attribute columns' offerable specs per discipline.
+  profileColumnSpecs,
 } from "./metrics.js";
 // FC-2: the Bowler Style composer is gated on the presence of fielding.bowling_group
 // (added by the FC-1b pipeline re-run) — a data-driven schema probe, cached per session.
@@ -370,6 +372,14 @@ export function createColumnsPicker({
   // (columnsPaletteModel) is unchanged, and gi stays the DISCIPLINE_ORDER index so
   // buildColumnsGroups(gi) still resolves the right discipline.
   ownDisciplineOnly = false,
+  // Wave D — D1: OPT-IN player-profile ATTRIBUTE columns (Playing role / Detailed
+  // role / Batting hand / Bowling style / Bowling hand). When true AND the current
+  // namespace is plain batting/bowling, the picker adds a "Player Profile" section
+  // to the current discipline's Add-columns dropdown, offering the discipline's
+  // profileColumnSpecs (Batting hand batting-only; the rest both) as plain addable
+  // columns. Leaderboard only — the player pop-up leaves it false, so its picker
+  // stays byte-identical (profile columns in the pop-up are a later stage).
+  profileColumns = false,
   // FC-2 (player pop-up Fielding mode → filter-style picker): OPT-IN callback, true
   // while the pop-up is in its FIELDING mode. The pop-up's getDiscipline() maps that
   // mode to a REAL metrics ns ("batting") so every metrics-layer call resolves
@@ -1582,10 +1592,21 @@ export function createColumnsPicker({
       if (desc) composerItems.push({ type: "param", prefix: desc.prefix, label: desc.sectionLabel });
     }
 
+    // Wave D — D1: the player-profile attribute columns (Playing role / Detailed
+    // role / Batting hand / Bowling style / Bowling hand) as a "Player Profile"
+    // section in this discipline's OWN dropdown — leaderboard only (profileColumns),
+    // plain ns only. profileColumnSpecs gates discipline (Batting hand batting-only).
+    // They are NOT in eligibleMetrics (virtual text columns resolved by getMetric),
+    // so they are listed explicitly here rather than partitioned out of `all`.
+    const profileItems =
+      profileColumns && isPlainNs
+        ? profileColumnSpecs(ns).map((p) => ({ type: "plain", key: p.key, label: p.label }))
+        : [];
     const ownSections = [
       ...section("Basic Stats", plainItems(ownBasic)),
       ...section("Detailed Stats", plainItems(ownDetailed)),
       ...(isPlainNs ? [] : section("Dismissals", plainItems(dismissal))),
+      ...section("Player Profile", profileItems),
       ...(composerItems.length ? [{ name: "Composers", items: composerItems }] : []),
     ];
     const crossSections = [

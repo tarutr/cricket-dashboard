@@ -780,6 +780,13 @@ export const isResultMetric = (m) => m && m.source === "result";
  * gates the ADDITIONAL pmatch_cte build+join. Exported so the Graph Builder's
  * per-player fetch attaches the IDENTICAL join with the SAME predicate. */
 export const isPerMatchMetric = (m) => m && m.perMatch === true;
+/** Player-profile ATTRIBUTE metric(s) (Playing role / Detailed role / Batting hand
+ * / Bowling style / Bowling hand, source "profiles", Wave D — D1) — surfaced via
+ * the per-player `profile_cte` join, the SAME per-player LEFT-JOIN + MAX() shape as
+ * pom_cte/result_cte. They are player-level CONSTANTS (text), never innings
+ * aggregates, so they are EXCLUDED from inningsMetrics and projected alongside the
+ * fielding/pom/result columns. Exported for the same graph-fetch reuse posture. */
+export const isProfileMetric = (m) => m && m.source === "profiles";
 
 /** SQL WHERE predicates for the fielding SLICE conditions (fielding rebuild) —
  * the fielding metric's OWN dims, applied inside `fielding_cte` so the
@@ -1004,6 +1011,39 @@ export function buildPomCteSql(state) {
     "  FROM player_matches",
     `  WHERE ${pomWhereSql}`,
     "  GROUP BY player_id",
+    ")",
+  ].join("\n");
+}
+
+/**
+ * Build the `profile_cte` definition (Wave D — D1) — a per-player lookup of the
+ * five PLAYER-PROFILE attributes (Playing role / Detailed role / Batting hand /
+ * Bowling style / Bowling hand) from the `profiles` view, LEFT-JOINed by player id
+ * into the batting/bowling GROUP BY and projected as MAX(profile_cte.pr_<field>).
+ *
+ * Unlike pom_cte / result_cte, it carries NO scope WHERE: `profiles` is a static
+ * one-row-per-player ATTRIBUTE table (verified: 7,220 rows = 7,220 distinct
+ * player_ids — no fan-out), with no gender/format/date/team columns to scope by.
+ * A player's role/hand/style is a constant of who they are, so the outer query's
+ * own WHERE (which players survive) is the only restriction needed; the 1:1 join
+ * never multiplies innings rows, so every existing aggregate stays byte-identical.
+ * Each field is aliased `pr_<field>` (the collision-safe prefix xdisc_cte's xd_ /
+ * r_pos_cte's pos_ use) so an unqualified scope-clause column can never bind to it,
+ * and the join key `player_id` is aliased `profile_player_id` (never batter_id/
+ * bowler_id). Built + joined ONLY when ≥1 profile column is visible (buildQuery's
+ * wantsProfile gate); with none, buildQuery emits byte-identical SQL. There is no
+ * advanced-condition leg — profile attributes are COLUMNS, never filter conditions.
+ */
+export function buildProfileCteSql() {
+  return [
+    "profile_cte AS (",
+    "  SELECT player_id AS profile_player_id,",
+    "         role_group AS pr_role_group,",
+    "         role_subgroup AS pr_role_subgroup,",
+    "         batting_style AS pr_batting_style,",
+    "         bowling_type AS pr_bowling_type,",
+    "         bowling_arm AS pr_bowling_arm",
+    "  FROM profiles",
     ")",
   ].join("\n");
 }
@@ -1246,7 +1286,16 @@ export function buildQuery(state, visibleColumns, opts = {}) {
 
   const inningsMetrics = visibleColumns
     .map((key) => getMetric(key, discipline))
-    .filter((m) => m && m.source !== "player_matches" && m.source !== "fielding_events" && m.source !== "result");
+    .filter(
+      (m) =>
+        m &&
+        m.source !== "player_matches" &&
+        m.source !== "fielding_events" &&
+        m.source !== "result" &&
+        // Wave D — D1: profile attribute columns are player-level constants surfaced
+        // via profile_cte (like fielding/pom/result), NOT innings aggregates.
+        m.source !== "profiles"
+    );
 
   // R. Pos. column (task 5, B1 Wave 5 polish): batting-only, opts this ONE
   // metric out of the generic "interpolate metric.sqlExpression verbatim"
@@ -1308,15 +1357,43 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   const resultCols = visibleColumns
     .map((key) => getMetric(key, discipline))
     .filter(isResultMetric);
-  for (const m of [...fieldingEventCols, ...pomCols, ...resultCols]) {
+  // Wave D — D1: player-profile attribute columns (source "profiles") — surfaced via
+  // the per-player `profile_cte` LEFT JOIN, projected as MAX(profile_cte.pr_<field>)
+  // exactly like the pom/result columns. There is no advanced-condition leg (profile
+  // attributes are COLUMNS, never filter conditions), so wantsProfile is column-only.
+  const profileCols = visibleColumns
+    .map((key) => getMetric(key, discipline))
+    .filter(isProfileMetric);
+  for (const m of [...fieldingEventCols, ...pomCols, ...resultCols, ...profileCols]) {
     selectParts.push(`${m.sqlExpression} AS ${m.key}`);
   }
+  // Wave D — TASK B: PotM (Y/N) leaderboard filter (state.potmYN, subset of
+  // {"yes","no"}). A HAVING-style gate on the SAME per-player PotM award count the
+  // PotM Count column/filter use (pom_cte.player_of_match = SUM of the 0/1 flag).
+  // Yes = won ≥1 PotM in scope; No = 0 (COALESCE the LEFT-JOIN NULL — no pom row —
+  // to 0). A binary partition, so Yes⊕No: exactly ONE selected narrows; both or
+  // neither is a no-op (byte-identical). Forces pom_cte to be built + joined (see
+  // wantsPom) so the HAVING can reference it. Not wired to the PotM Count column
+  // (a later stage). Computed here so wantsPom below can see potmYNActive.
+  const potmYNSel = Array.isArray(state.potmYN) ? state.potmYN : [];
+  const potmYes = potmYNSel.includes("yes");
+  const potmNo = potmYNSel.includes("no");
+  const potmYNActive = potmYes !== potmNo; // XOR — exactly one chosen
+  const potmYNHaving = !potmYNActive
+    ? null
+    : potmYes
+    ? "COALESCE(MAX(pom_cte.player_of_match), 0) >= 1"
+    : "COALESCE(MAX(pom_cte.player_of_match), 0) = 0";
+
   const wantsFielding =
     fieldingEventCols.length > 0 ||
     advancedReferencesMetric(state.advanced, discipline, isFieldingEventMetric);
   const wantsPom =
     pomCols.length > 0 ||
-    advancedReferencesMetric(state.advanced, discipline, isPomMetric);
+    advancedReferencesMetric(state.advanced, discipline, isPomMetric) ||
+    // Wave D — TASK B: an active PotM (Y/N) gate references pom_cte in HAVING, so the
+    // CTE must be built + joined even with no PotM column/condition visible.
+    potmYNActive;
   // Gated exactly like wantsPom: a Result COLUMN visible OR a Result STAT CONDITION
   // active. With neither, result_cte is never built/joined → SQL byte-identical.
   const wantsResult =
@@ -1332,6 +1409,10 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   const wantsPmatch =
     fieldingEventCols.some(isPerMatchMetric) ||
     advancedReferencesMetric(state.advanced, discipline, isPerMatchMetric);
+  // Wave D — D1: the profile_cte is wanted iff a profile attribute COLUMN is visible
+  // (no condition leg — profile attributes are never filter conditions). With none,
+  // wantsProfile is false and the emitted SQL is byte-identical to today.
+  const wantsProfile = profileCols.length > 0;
 
   // Cross-discipline columns (columns-rejig W3, OQ1 — the all-rounder view): a
   // column keyed to the OTHER discipline (e.g. `x__bowling__strike_rate` on a
@@ -1442,6 +1523,12 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   let pmatchCteSql = null;
   if (wantsPmatch) pmatchCteSql = buildPmatchCteSql(state);
 
+  // Profile attribute subquery (Wave D — D1): a per-player attribute lookup over
+  // `profiles` (built by buildProfileCteSql, no scope — see its doc). Only built
+  // when a profile attribute column is visible; with none, `sql` is byte-identical.
+  let profileCteSql = null;
+  if (wantsProfile) profileCteSql = buildProfileCteSql();
+
   // Cross-discipline subquery (columns-rejig W3): pre-aggregate the OTHER
   // discipline's view to ONE row per player, honoring the same core scope the
   // fielding CTE honors (retargeted to that discipline's columns — see
@@ -1462,6 +1549,11 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   const havingParts = [];
   const advHaving = advancedToHaving(state.advanced, discipline);
   if (advHaving) havingParts.push(advHaving);
+  // Wave D — TASK B: the PotM (Y/N) gate is a HAVING predicate over pom_cte (built
+  // above via wantsPom). null when the filter is inactive (both/neither chosen), so
+  // no HAVING is contributed and the query stays byte-identical. Pinned players are
+  // exempt from it like every other HAVING predicate (gateWithPinExemption below).
+  if (potmYNHaving) havingParts.push(potmYNHaving);
   // Pinned players are exempt from every HAVING/stat-condition predicate too
   // (task 3b: "HAVING/stat-condition post-filters must not drop pinned
   // rows") — idCol is the raw GROUP BY column (not the `id` alias), always
@@ -1523,6 +1615,7 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   if (wantsPom) cteDefs.push(pomCteSql);
   if (wantsResult) cteDefs.push(resultCteSql);
   if (wantsPmatch) cteDefs.push(pmatchCteSql);
+  if (wantsProfile) cteDefs.push(profileCteSql);
   if (wantsCross) cteDefs.push(crossCteSql);
 
   let fromSql = view;
@@ -1541,6 +1634,10 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // pm_player_id is the same id space pom_cte/result_cte join on, so it never
   // multiplies innings rows.
   if (wantsPmatch) fromSql += ` LEFT JOIN pmatch_cte ON pmatch_cte.pm_player_id = ${idCol}`;
+  // Profile attributes (Wave D — D1): 1:1 LEFT JOIN by the unified player id —
+  // profile_player_id is the same id space pom_cte/result_cte join on (profiles is
+  // one row per player_id), so it never multiplies innings rows.
+  if (wantsProfile) fromSql += ` LEFT JOIN profile_cte ON profile_cte.profile_player_id = ${idCol}`;
   // Cross-discipline (columns-rejig W3): 1:1 LEFT JOIN by the unified player id —
   // xd_player_id is the other discipline's batter_id/bowler_id, the same id space
   // fielding_cte/pom_cte join on, so it never multiplies innings rows.
@@ -1696,7 +1793,11 @@ export function formatValue(metric, value) {
  * still governs "—" for genuine no-data; that's a different, still-live rule. */
 function dataCellHTML(metric, row, isHighlighted = false, slotId = null) {
   const value = row[metric.key];
-  const text = formatValue(metric, value);
+  // Wave D — D1: TEXT columns (format "str": the profile attributes) render the raw
+  // string, HTML-ESCAPED (arbitrary profile text must never inject markup). Numeric
+  // formats produce digit/symbol strings with no HTML-special chars, so escaping
+  // them is a harmless no-op — but scoping the escape to str keeps this byte-safe.
+  const text = metric.format === "str" ? escHtml(formatValue(metric, value)) : formatValue(metric, value);
   // data-key (task 9): lets the live drag-reorder preview find "the cell in
   // THIS row belonging to column X" without any index arithmetic — see
   // wireColumnDrag's onMove.
@@ -1745,11 +1846,15 @@ function sortValue(row, metric) {
 }
 
 function compareRows(a, b, metric, dir) {
-  // Player name (task 6): client-side alphabetical, case/diacritic-insensitive.
-  // NULL/blank names sort last regardless of direction (§8.5), same as numerics.
-  if (metric.key === "name") {
-    const na = a.name == null ? "" : String(a.name);
-    const nb = b.name == null ? "" : String(b.name);
+  // Player name (task 6) AND Wave D — D1 profile attribute columns (format "str"):
+  // client-side alphabetical, case/diacritic-insensitive. NULL/blank sorts last
+  // regardless of direction (§8.5), same as numerics. `higherIsBetter:false` on
+  // these makes the first sort click asc (A→Z). The accessor is `row.name` for the
+  // structural Player column, `row[metric.key]` for a str metric column.
+  if (metric.key === "name" || metric.format === "str") {
+    const accessor = metric.key === "name" ? "name" : metric.key;
+    const na = a[accessor] == null ? "" : String(a[accessor]);
+    const nb = b[accessor] == null ? "" : String(b[accessor]);
     if (na === "" && nb === "") return 0;
     if (na === "") return 1;
     if (nb === "") return -1;
@@ -1959,6 +2064,12 @@ export function mountTable(
     // W3: expose the OTHER discipline's columns as an interim cross-discipline
     // group (the all-rounder view) — leaderboard only; the pop-up leaves it off.
     crossDiscipline: true,
+    // Wave D — D1: offer the five player-profile ATTRIBUTE columns (Playing role /
+    // Detailed role / Batting hand / Bowling style / Bowling hand) in a "Player
+    // Profile" section of the current discipline's Add-columns dropdown. Leaderboard
+    // only — the pop-up leaves it off, so its picker stays byte-identical (profile
+    // columns in the pop-up are a later stage).
+    profileColumns: true,
   });
   // Columns-rejig W1: the leaderboard's picker now lives INLINE inside the
   // leaderboard popup's "Columns" section (index.html #fpop-columns-host), not as

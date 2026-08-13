@@ -47,6 +47,8 @@ import {
   makeComposedPhaseKey,
   makeComposedBallKey,
   makeComposedWicketTypeKey,
+  // Wave D — D1: the finite profile attribute column keys valid for a discipline.
+  profileColumnKeys,
 } from "./metrics.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 
@@ -423,6 +425,13 @@ export const TOSS_DECISION_OPTIONS = [
   { value: "bat", label: "Chose to bat" },
   { value: "field", label: "Chose to field" },
 ];
+// PotM (Y/N) filter options (Wave D — TASK B): a binary Yes/No over the player's
+// PotM award count in scope (Yes = won ≥1, No = 0). Mirrors the categorical toss
+// singletons above; picking both (or neither) is a no-op (potmYNFilterActive).
+export const POTM_YN_OPTIONS = [
+  { value: "yes", label: "Won a Player of the Match" },
+  { value: "no", label: "Never Player of the Match" },
+];
 // INNINGS_ORDER_OPTIONS (batted first / bowled first) was removed with
 // mc_innings_order — the spec's replacement, Innings Number ▸, uses
 // inningsNumberOptions() below instead (waveR2-cleanup).
@@ -495,6 +504,14 @@ export function tossResultFilterActive(state) {
 /** True if the Toss decision filter (state.tossDecision) is narrowing the set. */
 export function tossDecisionFilterActive(state) {
   return Array.isArray(state.tossDecision) && state.tossDecision.length > 0;
+}
+/** True if the PotM (Y/N) filter (state.potmYN) is narrowing the set (Wave D —
+ * TASK B). "yes" and "no" partition the roster, so it narrows ONLY when EXACTLY
+ * one is chosen — both (or neither) selects everyone and is a no-op (byte-identical),
+ * mirroring how the "All" sentinels leave Result/Stage inactive. */
+export function potmYNFilterActive(state) {
+  const sel = Array.isArray(state.potmYN) ? state.potmYN : [];
+  return sel.includes("yes") !== sel.includes("no");
 }
 // ── Innings Number (filter-rejig Wave R2c) ───────────────────────────────────
 // The REPLACEMENT for the old batted-first/chased "Innings order": narrows to
@@ -806,6 +823,11 @@ export function createInitialState(maxMonth) {
                        // tokens (won/lost/drawn/tied/no_result). See RESULT_OPTIONS.
     tossResult: [],    // subset of {"won","lost"} — row team ==/<> toss_winner
     tossDecision: [],  // subset of {"bat","field"} — matches.toss_decision
+    potmYN: [],        // PotM (Y/N) filter (Wave D — TASK B): subset of {"yes","no"}. A
+                       // HAVING gate on the per-player PotM award count (pom_cte) — "yes" =
+                       // won ≥1 PotM in scope, "no" = 0. A binary partition, so ["yes","no"]
+                       // (both) or [] (neither) is a no-op → query byte-identical; exactly one
+                       // narrows. See potmYNFilterActive + buildQuery's potmYNHaving.
     // inningsOrder (batted first / bowled first) was removed with mc_innings_order
     // (waveR2-cleanup) — see inningsNumber below, its replacement.
     inningsNumber: [], // Innings Number (filter-rejig Wave R2c): 1-based DISPLAY innings numbers
@@ -1130,6 +1152,14 @@ export function eligibleColumnKeys(discipline, formats) {
   for (const key of eligibleComposedFieldingKeys(discipline)) {
     keys.add(key);
   }
+  // Wave D — D1: the five player-profile attribute column keys (attr_<field>) are
+  // valid leaderboard columns too — fold them in (per discipline: Batting hand is
+  // batting-only) so a picked profile column survives a re-render / prune. They are
+  // format-agnostic and [] for a matchup namespace. Byte-identical when none is
+  // present (the extra keys just never match a chosen column).
+  for (const key of profileColumnKeys(discipline)) {
+    keys.add(key);
+  }
   return keys;
 }
 
@@ -1443,6 +1473,9 @@ export function createStore(initial) {
     }
     if (tossResultFilterActive(s)) parts.push(labelsFor(s.tossResult, TOSS_RESULT_OPTIONS).join(", "));
     if (tossDecisionFilterActive(s)) parts.push(labelsFor(s.tossDecision, TOSS_DECISION_OPTIONS).join(", "));
+    // PotM (Y/N) (Wave D — TASK B): honest token only when narrowing (exactly one
+    // of Yes/No chosen — potmYNFilterActive), mirroring the pill.
+    if (potmYNFilterActive(s)) parts.push(s.potmYN.includes("yes") ? "won Player of the Match" : "no Player of the Match");
     // Innings Number (Wave R2c): the 1-based innings the player batted/bowled in.
     if (inningsNumberFilterActive(s)) {
       const sorted = [...s.inningsNumber].sort((a, b) => a - b);

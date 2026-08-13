@@ -36,6 +36,7 @@ import {
   resultFilterActive,
   tossResultFilterActive,
   tossDecisionFilterActive,
+  potmYNFilterActive,
   inningsNumberFilterActive,
   stageFilterActive,
   resultConditionFilterActive,
@@ -68,6 +69,7 @@ import {
   mountResult,
   mountTossResult,
   mountTossDecision,
+  mountPotmYN,
   mountInningsNumber,
   mountStage,
   mountWindowPhase,
@@ -156,6 +158,12 @@ const SINGLETON_TYPES = [
   // profile column ("Right"/"Left"). Mirrors the "bowling" row exactly.
   { key: "bowlingHand", label: "Bowling hand", group: "Player" },
   { key: "role", label: "Role", group: "Player" },
+  // PotM (Y/N) (Wave D — TASK B): a fixed Yes/No categorical singleton (state.potmYN)
+  // — "Won a Player of the Match" vs "Never Player of the Match" in scope. Sits in the
+  // Player Profile group beside the PotM Count filter. Both genders, both disciplines
+  // (a whole-match award), every format — so no menOnly/ballOnly/matchup/discipline
+  // gate. buildQuery turns exactly-one selection into a HAVING gate on pom_cte.
+  { key: "potm_yn", label: "PotM (Y/N)", group: "Player" },
   { key: "rpos", label: "R. Pos.", group: "Basic" },
   // Innings Number (filter-rejig Wave R2c): the REPLACEMENT for "Innings order" —
   // narrows to the innings the player batted/bowled in (1st/2nd white-ball, 1st–4th
@@ -584,6 +592,8 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const resultController = mountResult(editorHosts.mc_result, store, onChange, { embedded: true });
   const tossResultController = mountTossResult(editorHosts.mc_toss_result, store, onChange, { embedded: true });
   const tossDecisionController = mountTossDecision(editorHosts.mc_toss_decision, store, onChange, { embedded: true });
+  // PotM (Y/N) (Wave D — TASK B): a fixed Yes/No categorical singleton (state.potmYN).
+  const potmYNController = mountPotmYN(editorHosts.potm_yn, store, onChange, { embedded: true });
   const inningsNumberController = mountInningsNumber(editorHosts.inn_num, store, onChange, { embedded: true });
   const stageController = mountStage(editorHosts.mc_stage, store, onChange, { embedded: true, onOptionsLoaded: onCascadeOptionsLoaded });
   // Delivery window (Wave 3, decision 67; UI-A REWORK): the four separate window
@@ -712,6 +722,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "mc_result": return (s.result || []).length > 0;
       case "mc_toss_result": return (s.tossResult || []).length > 0;
       case "mc_toss_decision": return (s.tossDecision || []).length > 0;
+      // PotM (Y/N): present once its row is added (Yes/No picked, or either) — the
+      // row stays visible while the user decides. Narrowing is a separate question
+      // (potmYNFilterActive: exactly one picked); presence just governs the row.
+      case "potm_yn": return (s.potmYN || []).length > 0;
       case "mc_stage": return (s.stage || []).length > 0;
       default: return false;
     }
@@ -794,6 +808,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "mc_result": store.set({ result: [], resultCondition: [] }); break;
       case "mc_toss_result": store.set({ tossResult: [] }); break;
       case "mc_toss_decision": store.set({ tossDecision: [] }); break;
+      case "potm_yn": store.set({ potmYN: [] }); break;
       case "mc_stage": store.set({ stage: [] }); break;
     }
   }
@@ -949,6 +964,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     resultController.sync();
     tossResultController.sync();
     tossDecisionController.sync();
+    potmYNController.sync();
     inningsNumberController.sync();
     stageController.sync();
     winPhaseController.sync();
@@ -1289,6 +1305,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     if (resultFilterActive(s)) n++;
     if (tossResultFilterActive(s)) n++;
     if (tossDecisionFilterActive(s)) n++;
+    // PotM (Y/N) (Wave D — TASK B): counts only when narrowing (exactly one of
+    // Yes/No — potmYNFilterActive); both/neither is a no-op sentinel like Result "All".
+    if (potmYNFilterActive(s)) n++;
     if (inningsNumberFilterActive(s)) n++;
     if (stageFilterActive(s)) n++;
     if (resultConditionFilterActive(s)) n++;

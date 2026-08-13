@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
+import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
@@ -327,6 +327,13 @@ export function mountPills(
     if (tossDecisionFilterActive(s)) {
       const captured = [...s.tossDecision];
       pills.push({ key: "mc_toss_decision", label: labelsFor(s.tossDecision, TOSS_DECISION_OPTIONS).join(", "), remove: () => store.set({ tossDecision: [] }), restore: () => store.set({ tossDecision: captured }) });
+    }
+    // PotM (Y/N) (Wave D — TASK B): one removable pill when narrowing (exactly one of
+    // Yes/No — potmYNFilterActive). ×/+ captures + restores the whole array; a HAVING
+    // gate on pom_cte in buildQuery, so it always narrows in every plain view.
+    if (potmYNFilterActive(s)) {
+      const captured = [...s.potmYN];
+      pills.push({ key: "potm_yn", label: s.potmYN.includes("yes") ? "Won a Player of the Match" : "Never Player of the Match", remove: () => store.set({ potmYN: [] }), restore: () => store.set({ potmYN: captured }) });
     }
     // Innings Number (Wave R2c): removable chip, mirroring the old Innings-order
     // pill it replaces (label from inningsNumberLabel — format-independent

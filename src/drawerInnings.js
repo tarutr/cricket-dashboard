@@ -62,6 +62,7 @@ import {
   STAGE_NONE_LABEL,
   TOSS_RESULT_OPTIONS,
   TOSS_DECISION_OPTIONS,
+  POTM_YN_OPTIONS,
   inningsNumberOptions,
   inningsNumberLabel,
 } from "./state.js";
@@ -824,6 +825,15 @@ export function mountTossResult(container, store, onChange, opts = {}) {
 export function mountTossDecision(container, store, onChange, opts = {}) {
   return mountTokenMultiSelect(container, store, onChange, {
     field: "tossDecision", options: TOSS_DECISION_OPTIONS, anyLabel: "Any toss decision", label: "Toss decision", ...opts,
+  });
+}
+/** PotM (Y/N) filter (state.potmYN; Wave D — TASK B) — Won a Player of the Match /
+ * Never Player of the Match, over the player's PotM award count in scope. Same
+ * checkbox multi-select shape as the toss singletons; buildQuery turns exactly-one
+ * selection into a HAVING gate on pom_cte (both/neither is a no-op). */
+export function mountPotmYN(container, store, onChange, opts = {}) {
+  return mountTokenMultiSelect(container, store, onChange, {
+    field: "potmYN", options: POTM_YN_OPTIONS, anyLabel: "Any PotM status", label: "PotM (Y/N)", ...opts,
   });
 }
 // ── Innings Number picker (state.inningsNumber; filter-rejig Wave R2c) ─────────

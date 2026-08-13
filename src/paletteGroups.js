@@ -297,6 +297,12 @@ export function createPaletteGroupsBuilder(deps) {
       // (metrics.js `potm_count`), between Regular batting position and Team. The
       // old `player_of_match` (Impact section) is no longer offered as a filter.
       !excludeLeaf("potm_count") ? leafMetric("potm_count", "PotM Count") : null,
+      // PotM (Y/N) (Wave D — TASK B): the LEADERBOARD's Yes/No singleton filter
+      // (state.potmYN → a HAVING gate on the pom_cte award count), beside PotM Count.
+      // leafSingle self-WITHHOLDS it on the "popup" surface (potm_yn is not in
+      // POPUP_SCOPE_SINGLETON_KEYS), so the pop-up keeps its OWN per-innings "PotM
+      // (Y/N)" slice (metricKey "potm", added below) untouched — no collision.
+      leafSingle("potm_yn", "PotM (Y/N)"),
       // Pop-up (T-2b-ii, owner 2026-08-03): PotM as a per-innings Y/N slice
       // (metrics.js has no `potm` metric — this is a bespoke boolean condition the
       // slice engine resolves via a match-award EXISTS). Replaces PotM Count here.
