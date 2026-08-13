@@ -54,6 +54,9 @@ import {
   makeComposedParamKey,
   // Wave D — D1: the finite profile attribute column keys valid for a discipline.
   profileColumnKeys,
+  // Wave D — D3: the ONE shared parametric applied-label helper (pills.js twin).
+  composedParamPrefixForBase,
+  paramAppliedLabel,
 } from "./metrics.js";
 import { isConditionComplete } from "./advanced.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
@@ -614,16 +617,20 @@ function conditionIsComplete(c) {
 }
 
 function conditionScopeLabel(c, state) {
+  // Wave D3 (owner-locked table): Innings Score / Wicket Hauls show the BARE
+  // operator-formatted text ("60s", ">3WI", "50–99", …) — no metric-name prefix — via
+  // the ONE shared paramAppliedLabel helper. Sync twin of pills.conditionPillLabel.
+  const paramPrefix = composedParamPrefixForBase(c.metricKey);
+  if (paramPrefix) {
+    const applied = paramAppliedLabel(paramPrefix, c.operator, c.v1, c.v2);
+    if (applied != null) return applied;
+  }
   const ns = effectiveNamespace(state);
   const inNs = metricsFor(ns).find((m) => m.key === c.metricKey);
   const metric = inNs || getMetric(c.metricKey);
   // metricDisplayLabel keeps the "(Innings)" suffix logic in sync with pills.js
   // (this function is the hand-duplicated twin noted above) — Wave A1 item 4.
   let label = metric ? metricDisplayLabel(metric, state.formats) : c.metricKey;
-  // R2 (2026-08-09): strip the parametric "≥ N" token ("Innings Score ≥ N" →
-  // "Innings Score") so the subtitle reads "Innings Score ≥ 50", not a doubled
-  // "≥ N ≥ 50". Sync twin of pills.conditionPillLabel.
-  if (metric && metric.paramTemplate && metric.param) label = label.replace(/\s*[≥≤=]\s*N\b.*$/, "").trim();
   // Best Bowling (Wave A2 item 2): "Best Bowling ≥2W for ≤9R" — matches pills.js.
   if (conditionIsBowlingFigures(c)) return `${label} ≥${c.v1}W for ≤${c.v2}R`;
   if (c.operator === "between") return `${label} ${c.v1}–${c.v2}`;

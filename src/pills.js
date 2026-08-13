@@ -18,7 +18,7 @@
 import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
-import { metricsFor, getMetric, metricDisplayLabel } from "./metrics.js";
+import { metricsFor, getMetric, metricDisplayLabel, composedParamPrefixForBase, paramAppliedLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
 
 // Symbol style (not a word phrasing like "at least 300") — matches the worked
@@ -37,13 +37,16 @@ function metricLabelFor(metricKey, state) {
 }
 
 function conditionPillLabel(cond, state) {
+  // Wave D3 (owner-locked table): Innings Score / Wicket Hauls pills show the BARE
+  // operator-formatted text ("60s", ">3WI", "50–99", …) — no metric-name prefix — via
+  // the ONE shared paramAppliedLabel helper (also used by the composed COLUMN and by
+  // state.conditionScopeLabel, so all three surfaces agree by construction).
+  const paramPrefix = composedParamPrefixForBase(cond.metricKey);
+  if (paramPrefix) {
+    const applied = paramAppliedLabel(paramPrefix, cond.operator, cond.v1, cond.v2);
+    if (applied != null) return applied;
+  }
   let label = metricLabelFor(cond.metricKey, state);
-  // R2 (2026-08-09): parametric threshold metrics carry a "≥ N" token in their
-  // catalogue label ("Innings Score ≥ N") — strip it so the pill reads "Innings
-  // Score ≥ 50" (the user's chosen operator + value), not a doubled "≥ N ≥ 50".
-  // Same strip the drawer + pop-up apply; sync twin of state.conditionScopeLabel.
-  const pm = getMetric(cond.metricKey);
-  if (pm && pm.paramTemplate && pm.param) label = label.replace(/\s*[≥≤=]\s*N\b.*$/, "").trim();
   // Best Bowling (Wave A2 item 2): two-box "≥ W wickets for ≤ R runs" — render
   // as "Best Bowling ≥2W for ≤9R" (W = v1, R = v2).
   if (isBowlingFiguresCondition(cond)) return `${label} ≥${cond.v1}W for ≤${cond.v2}R`;

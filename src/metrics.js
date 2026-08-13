@@ -1505,19 +1505,21 @@ const BOWLING_METRICS = [
 // batting and bowling leaderboards"). `section` "fielding"/"impact" places them
 // under those sub-headers in the column picker and the "+ Add condition…" list;
 // higherIsBetter true (more dismissals / awards ranks better).
+// shortLabel values carry the "F. " prefix (Wave D3, owner-locked table) — the
+// TABLE HEADER only; `label` (picker row / menu) is untouched.
 const FIELDING_METRIC_SPECS = [
-  { key: "catches", label: "Catches", shortLabel: "Ct", section: "fielding",
+  { key: "catches", label: "Catches", shortLabel: "F. Catch", section: "fielding",
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.catches)" },
   // Caught & bowled (Wave R2d): the c&b-only subset of `catches` (which still
   // folds c&b in, unchanged). A distinct fielding count so "Fielding Wicket Type ▸
   // Caught & bowled" can filter on c&b alone. Reads the new fielding_cte.
   // caught_and_bowled column (buildFieldingCteSql), projected with MAX() like its
   // three siblings. Additive: no existing catch/stumping/run-out number changes.
-  { key: "caught_and_bowled", label: "Caught & bowled", shortLabel: "C&B", section: "fielding",
+  { key: "caught_and_bowled", label: "Caught & bowled", shortLabel: "F. C&B", section: "fielding",
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.caught_and_bowled)" },
-  { key: "stumpings", label: "Stumpings", shortLabel: "St", section: "fielding",
+  { key: "stumpings", label: "Stumpings", shortLabel: "F. Stumping", section: "fielding",
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.stumpings)" },
-  { key: "run_outs", label: "Run-outs", shortLabel: "RO", section: "fielding",
+  { key: "run_outs", label: "Run-outs", shortLabel: "F. Run-out", section: "fielding",
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.run_outs)" },
   { key: "dismissals_effected", label: "Fielding Dismissals", shortLabel: "F. Wkts", section: "fielding",
     source: "fielding_events",
@@ -3746,21 +3748,36 @@ export function eligibleComposedRunSourceConcededKeys(discipline) {
 // axis carries no underscore — split on the FIRST `__` after the prefix.
 const COMPOSED_WICKETTYPE_PREFIX = "wt__";
 const COMPOSED_WICKETTYPE_AXES = new Set(["count", "pct"]);
-// Batting: token → { kind (dismissal_kind value), label, short } from DISMISSAL_KINDS
-// (defined above) so the composed count/% labels stay identical to the retiring
-// out_*/out_*_pct. Token = kind with spaces → underscores.
+// Batting: token → { kind (dismissal_kind value), label, short, outShort } from
+// DISMISSAL_KINDS (defined above) so the composed count/% CATALOGUE label stays
+// identical to the retiring out_*/out_*_pct. Token = kind with spaces → underscores.
+// `outShort` (Wave D3, owner-locked table) is the TABLE-HEADER-only shortLabel —
+// "Out " + the dismissal's readable name (e.g. "Out Caught"), EXCEPT "caught and
+// bowled" which uses the existing "C&B" short form ("Out C&B") rather than the
+// verbose full label — set LOCALLY here, never mutating DISMISSAL_KINDS itself
+// (its own `short` field stays untouched — the Dismissal-Type FILTER still reads it).
 const _WT_BATTING = new Map(
-  DISMISSAL_KINDS.map((d) => [d.kind.replace(/ /g, "_"), { kind: d.kind, label: d.label, short: d.short }])
+  DISMISSAL_KINDS.map((d) => [
+    d.kind.replace(/ /g, "_"),
+    {
+      kind: d.kind,
+      label: d.label,
+      short: d.short,
+      outShort: `Out ${d.kind === "caught and bowled" ? d.short : d.label}`,
+    },
+  ])
 );
 // Bowling: the six bowler-credited kinds → { col (the wickets_<col> view column the
 // wkt_* defs read), label, short } — reproducing the wkt_* display for the count side.
+// `short` doubles as the table-header shortLabel (Wave D3): plain basic names, with
+// "C&B" (not "c&b") and "Hit Wicket" (not "Hit Wkt") per the owner-locked table.
 const _WT_BOWLING = new Map([
   ["bowled",            { col: "bowled",            label: "Bowled",          short: "Bowled" }],
   ["lbw",               { col: "lbw",               label: "LBW",             short: "LBW" }],
   ["caught",            { col: "caught",            label: "Caught",          short: "Caught" }],
-  ["caught_and_bowled", { col: "caught_and_bowled", label: "Caught & Bowled", short: "c&b" }],
+  ["caught_and_bowled", { col: "caught_and_bowled", label: "Caught & Bowled", short: "C&B" }],
   ["stumped",           { col: "stumped",           label: "Stumped",         short: "Stumped" }],
-  ["hit_wicket",        { col: "hit_wicket",        label: "Hit Wicket",      short: "Hit Wkt" }],
+  ["hit_wicket",        { col: "hit_wicket",        label: "Hit Wicket",      short: "Hit Wicket" }],
 ]);
 
 /** Build the composed wicket-type column key for `typeToken` on `axis`. */
@@ -3791,7 +3808,9 @@ function buildComposedWicketTypeMetric(token, axis, discipline) {
     if (axis === "count") {
       return {
         key, baseToken: token, isComposedWicketType: true,
-        label: spec.label, shortLabel: spec.short,
+        // shortLabel (table header) = "Out <name>" (Wave D3); label (picker row /
+        // menu) stays the plain dismissal name — untouched.
+        label: spec.label, shortLabel: spec.outShort,
         discipline: "batting", source: "innings",
         sqlExpression: countSql,
         higherIsBetter: null, format: "int",
@@ -3800,7 +3819,7 @@ function buildComposedWicketTypeMetric(token, axis, discipline) {
     }
     return {
       key, baseToken: token, isComposedWicketType: true,
-      label: `${spec.label} %`, shortLabel: `${spec.short} %`,
+      label: `${spec.label} %`, shortLabel: `${spec.outShort} %`,
       discipline: "batting", source: "innings",
       sqlExpression: `${countSql} * 100.0 / NULLIF(SUM(dismissed), 0)`,
       higherIsBetter: null, format: "pct1",
@@ -3889,7 +3908,42 @@ const COMPOSED_PARAM_SPECS = {
 export const COMPOSED_PARAM_OP_TOKEN = { gte: "ge", lte: "le", eq: "eq", between: "bt" };
 const _PARAM_OP_KEY = { ge: "gte", le: "lte", eq: "eq", bt: "between" };
 const _PARAM_OP_SQL = { le: "<=", eq: "=" }; // `ge` delegates to paramSqlExpression; `bt` is BETWEEN
-const _PARAM_OP_LABEL = { ge: "≥", le: "≤", eq: "=" };
+
+/**
+ * ONE shared applied-label formatter for the two parametric families (Wave D3,
+ * owner-locked table). `prefix` is the composed-param family (isr = Innings Score,
+ * wh = Wicket Hauls); `operator` is the OPERATORS key (gte/lte/eq/between); v1/v2 are
+ * the raw (order-unnormalised) numbers. This is the SOLE place either family's
+ * applied text is generated — the pill (pills.js conditionPillLabel), its
+ * hand-duplicated subtitle twin (state.js conditionScopeLabel), and the composed
+ * COLUMN's label/shortLabel (buildComposedParamMetric below) all call this, so the
+ * three surfaces can never drift. Returns null for an unknown prefix/operator (the
+ * caller falls back to its own generic phrasing).
+ */
+export function paramAppliedLabel(prefix, operator, v1, v2) {
+  const n1 = Math.trunc(Number(v1));
+  if (operator === "between") {
+    const n2 = Math.trunc(Number(v2));
+    const lo = Math.min(n1, n2);
+    const hi = Math.max(n1, n2);
+    if (prefix === "isr") return `${lo}–${hi}`;
+    if (prefix === "wh") return `${lo}–${hi}WI`;
+    return null;
+  }
+  if (prefix === "isr") {
+    if (operator === "gte") return `${n1}s`;
+    if (operator === "lte") return `<${n1}`;
+    if (operator === "eq") return `${n1}`;
+    return null;
+  }
+  if (prefix === "wh") {
+    if (operator === "gte") return `>${n1}WI`;
+    if (operator === "lte") return `<${n1}WI`;
+    if (operator === "eq") return `${n1}WI`;
+    return null;
+  }
+  return null;
+}
 
 /** Build the composed parametric column key. `values` = [N] for ge/le/eq, [N, M]
  * for bt (order-normalised so bt 50_30 and 30_50 make the same key). */
@@ -3939,13 +3993,12 @@ function buildComposedParamMetric(prefix, opToken, values, discipline) {
   if (!base) return null;
   const min = base.param && base.param.min != null ? base.param.min : 0;
   const vs = values.map((v) => Math.max(min, Math.trunc(Number(v))));
-  let sql, opLabel;
+  let sql;
   if (opToken === "bt") {
     if (vs.length !== 2) return null;
     const lo = Math.min(vs[0], vs[1]);
     const hi = Math.max(vs[0], vs[1]);
     sql = `SUM(CASE WHEN ${spec.column} BETWEEN ${lo} AND ${hi} THEN 1 ELSE 0 END)`;
-    opLabel = `${lo}–${hi}`;
   } else {
     const n = vs[0];
     // EQUIVALENCE: reproduce the enumerated metric's ≥ N sqlExpression exactly by
@@ -3953,8 +4006,11 @@ function buildComposedParamMetric(prefix, opToken, values, discipline) {
     sql = opToken === "ge"
       ? paramSqlExpression(base, n)
       : `SUM(CASE WHEN ${spec.column} ${_PARAM_OP_SQL[opToken]} ${n} THEN 1 ELSE 0 END)`;
-    opLabel = `${_PARAM_OP_LABEL[opToken]} ${n}`;
   }
+  // Wave D3 (owner-locked table): the applied column's label AND shortLabel are BOTH
+  // the bare operator-formatted text ("60s", ">3WI", …) — no noun prefix. Same string
+  // the pill/subtitle show, via the ONE shared paramAppliedLabel helper.
+  const appliedLabel = paramAppliedLabel(prefix, _PARAM_OP_KEY[opToken], vs[0], vs[1]);
   return {
     key: makeComposedParamKey(prefix, opToken, vs),
     baseKey: spec.baseKey,
@@ -3962,8 +4018,8 @@ function buildComposedParamMetric(prefix, opToken, values, discipline) {
     discipline: base.discipline,
     source: base.source, // "innings"
     sqlExpression: sql,
-    label: `${spec.noun} ${opLabel}`,
-    shortLabel: `${spec.shortNoun} ${opLabel}`,
+    label: appliedLabel,
+    shortLabel: appliedLabel,
     higherIsBetter: base.higherIsBetter,
     format: base.format, // "int"
     isPhaseMetric: base.isPhaseMetric, // null
@@ -4018,7 +4074,7 @@ export function composedParamDescriptor(discipline) {
 /** Composed-param PREFIX (isr / wh) for a base parametric metric key, or null.
  * The inverse of COMPOSED_PARAM_SPECS[prefix].baseKey — lets the parametric FILTER
  * find the count-column key scheme for the metric the user picked. */
-function composedParamPrefixForBase(baseKey) {
+export function composedParamPrefixForBase(baseKey) {
   for (const [prefix, spec] of Object.entries(COMPOSED_PARAM_SPECS)) {
     if (spec.baseKey === baseKey) return prefix;
   }
@@ -4103,11 +4159,15 @@ const _FC_PER_MATCH = "_per_match";
 // FIELDING_METRIC_SPECS: catches folds c&b in; dismissals = catches ∪ stumpings ∪
 // run-outs = the four disjoint credited kinds (so it equals catches + stumpings +
 // run_outs, the base dismissals_effected definition).
+// `short` carries the "F. " prefix (Wave D3, owner-locked table) — it feeds BOTH
+// the composed fc__ breakdown columns' shortLabel (`tally.short + " " + dim.short`,
+// e.g. "F. Catch Powerplay") and mirrors FIELDING_METRIC_SPECS' own shortLabel
+// change above, so the base tally column and its breakdown slices agree.
 const _FC_TALLIES = new Map([
-  ["catches",    { pred: "kind IN ('caught', 'caught and bowled')", label: "Catches", short: "Ct" }],
-  ["cab",        { pred: "kind = 'caught and bowled'", label: "Caught & bowled", short: "C&B" }],
-  ["stumpings",  { pred: "kind = 'stumped'", label: "Stumpings", short: "St" }],
-  ["runouts",    { pred: "kind = 'run out'", label: "Run-outs", short: "RO" }],
+  ["catches",    { pred: "kind IN ('caught', 'caught and bowled')", label: "Catches", short: "F. Catch" }],
+  ["cab",        { pred: "kind = 'caught and bowled'", label: "Caught & bowled", short: "F. C&B" }],
+  ["stumpings",  { pred: "kind = 'stumped'", label: "Stumpings", short: "F. Stumping" }],
+  ["runouts",    { pred: "kind = 'run out'", label: "Run-outs", short: "F. Run-out" }],
   ["dismissals", { pred: "kind IN ('caught', 'caught and bowled', 'stumped', 'run out')", label: "Fielding Dismissals", short: "F. Wkts" }],
 ]);
 
