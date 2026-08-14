@@ -890,6 +890,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
       <select class="select" data-role="discipline" aria-label="Discipline">
         <option value="batting">Batting</option>
         <option value="bowling">Bowling</option>
+        <option value="fielding">Fielding</option>
       </select>
     </div>
 
@@ -1077,9 +1078,29 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
   });
   wirePortalDropdown(els.teamtypeToggle, els.teamtypePanel);
 
+  // The Fielding discipline option (3rd scope) is DATA-DRIVEN, never gender-hardcoded:
+  // it is OFFERED only where fielding data exists for the current gender (dataAvail.fielding,
+  // resolved by dataAvailability.js's probeFielding). Captured once so it can be detached /
+  // re-attached (removal, not the `hidden` attribute, for cross-browser reliability) as the
+  // availability map resolves. Fielding events exist for BOTH genders today, so this shows
+  // in both; the gate only hides it if a gender ever has no fielding data.
+  const fieldingDisciplineOpt = els.discipline.querySelector('option[value="fielding"]');
+
+  function syncDisciplineOptions() {
+    if (!fieldingDisciplineOpt) return;
+    const av = store.get().dataAvail;
+    // Optimistic-show until the per-gender map resolves (matchupVsActive-style default,
+    // display-only): show unless the map is present AND explicitly reports no fielding data.
+    const show = !av || typeof av.fielding !== "boolean" || av.fielding;
+    const attached = fieldingDisciplineOpt.parentNode === els.discipline;
+    if (show && !attached) els.discipline.appendChild(fieldingDisciplineOpt);
+    else if (!show && attached) els.discipline.removeChild(fieldingDisciplineOpt);
+  }
+
   function render() {
     const state = store.get();
     els.gender.value = state.gender;
+    syncDisciplineOptions();
     els.discipline.value = state.discipline;
     syncFormatDropdown();
     syncTeamTypeDropdown();

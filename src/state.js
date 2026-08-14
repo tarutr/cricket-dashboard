@@ -758,6 +758,16 @@ export function reconcileSlots(newKeys, oldSlots) {
 const DEFAULT_COLUMNS = {
   batting: ["matches", "innings", "runs", "average", "strike_rate", "high_score", "fours", "sixes"],
   bowling: ["matches", "innings", "wickets", "average", "economy", "strike_rate", "best"],
+  // Fielding (3rd leaderboard scope): a FIXED tally set — Matches · Catches ·
+  // Stumpings · Run-outs · Total dismissals. Matches FIRST so defaultLeaderboardSort
+  // defaults the fielding board to Matches-desc (there is no "innings" column to
+  // prefer). These keys resolve under the "batting" metrics catalogue (fielding
+  // tallies are registered there — there is no "fielding" metrics discipline), via
+  // table.js's metricNsFor() fielding→batting mapping. Unlike batting/bowling (which
+  // open EMPTY and seed Core on first Search), fielding seeds this fixed set at init:
+  // it has NO auto-column reconcile / picker this step (fielding filters + auto-columns
+  // are the NEXT step), so the set is constant.
+  fielding: ["matches", "catches", "stumpings", "run_outs", "dismissals_effected"],
 };
 
 // Matchup-mode default column sets (D4 R3 follow-up, restricted picker): equal
@@ -806,6 +816,10 @@ export function createInitialState(maxMonth) {
     bowling: [],
     matchup_batting: keysToSlots(DEFAULT_MATCHUP_COLUMNS.matchup_batting),
     matchup_bowling: keysToSlots(DEFAULT_MATCHUP_COLUMNS.matchup_bowling),
+    // Fielding opens with its FIXED tally set already seeded (not the Option-B empty
+    // batting/bowling start): the fielding board has no auto-column reconcile/picker
+    // this step, so the five columns are constant from load. See DEFAULT_COLUMNS.fielding.
+    fielding: keysToSlots(DEFAULT_COLUMNS.fielding),
   };
   return {
     view: "table", // "table" | "graph" (SPEC §6 Graph Builder)
@@ -975,6 +989,7 @@ export function createInitialState(maxMonth) {
       bowling: [],
       matchup_batting: [],
       matchup_bowling: [],
+      fielding: [],
     },
     // Numeric stat conditions (SPEC §5.2). R5-A #7 (decision 50) made them
     // PER-DISCIPLINE: `advanced` always holds the CURRENT discipline's conditions
@@ -1302,17 +1317,25 @@ export function pruneIneligibleState(store) {
   const allowed = eligibleColumnKeys(s.discipline, s.formats);
 
   const cols = s.columns[s.discipline]; // Slot[] (E1a)
+  // Fielding (3rd scope): a FIXED tally set with no phase/format-eligibility to prune
+  // and no "fielding" metrics namespace to validate against (its keys resolve under
+  // "batting"), so `allowed` would be empty here and wrongly strip every column. The
+  // set is constant this step — leave it untouched. (One of the {batting,bowling}-only
+  // gates made fielding-graceful.)
+  const isPlainDiscipline = s.discipline === "batting" || s.discipline === "bowling";
   // D4: parametric composed columns (isr__/wh__) are value-dynamic — not enumerable
   // into the finite `allowed` set — so keep them via a structural check. E1a: filter
   // SLOTS by their key (preserving each survivor's slot id → highlight/sort follow).
   // FC-1: value-dynamic fielding composers (fc__…__over/pos__<range>) are an
   // infinite value space too — keep them alive with the same structural check.
-  const prunedCols = cols.filter(
-    (sl) =>
-      allowed.has(sl.key) ||
-      isParamComposedColumnKey(sl.key, s.discipline) ||
-      isComposedFieldingColumnKey(sl.key, s.discipline)
-  );
+  const prunedCols = isPlainDiscipline
+    ? cols.filter(
+        (sl) =>
+          allowed.has(sl.key) ||
+          isParamComposedColumnKey(sl.key, s.discipline) ||
+          isComposedFieldingColumnKey(sl.key, s.discipline)
+      )
+    : cols;
   const colsChanged = prunedCols.length !== cols.length;
 
   // Matchup namespaces (D4 R3 follow-up, restricted picker): the same phase

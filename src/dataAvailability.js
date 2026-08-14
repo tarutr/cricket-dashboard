@@ -67,6 +67,24 @@ export async function probeProfile(column, gender) {
   return rows.length > 0;
 }
 
+/**
+ * FIELDING DATA exists for the gender iff there is at least one NON-SUBSTITUTE
+ * wicket-credit row in scope — the population the fielding leaderboard (3rd scope)
+ * and the sacred fielding CTE rank over (buildFieldingCteSql excludes substitutes).
+ * Fast existence check (LIMIT 1), gender-only axis like the matchup/profile probes.
+ * Fielding events come from wicket_fielders (fielder_id + kind), which — unlike the
+ * men-only PROFILE tables — exist for every match, so this is true for BOTH genders
+ * today; the gate is DATA-driven (not gender-hardcoded), so it stays correct if a
+ * gender ever has no fielding data.
+ */
+export async function probeFielding(gender) {
+  const sql =
+    `SELECT 1 FROM fielding ` +
+    `WHERE ${coreFor(gender)} AND substitute IS NOT TRUE LIMIT 1`;
+  const { rows } = await query(sql);
+  return rows.length > 0;
+}
+
 // ── Fielding SCHEMA-column presence (FC-2, Bowler Style composer gate) ────────
 // The fielding Bowler Style composer reads fielding.bowling_group / bowling_type,
 // which exist ONLY after the data pipeline re-runs + re-uploads the parquet (FC-1b).
@@ -122,7 +140,7 @@ export function ensureFieldingColumnProbed(column, onReady) {
 // path names; filterAvailability.js maps the SAME probes to its own offer-path
 // names (vsBowlingStyle/vsBattingHand/…).
 
-const _cache = new Map(); // gender -> { matchupBatting, matchupBowling, profileRole, profileHand, profileBowling }
+const _cache = new Map(); // gender -> { matchupBatting, matchupBowling, profileRole, profileHand, profileBowling, fielding }
 const _pending = new Map(); // gender -> Promise (dedupe in-flight loads)
 
 /** SYNC. The resolved availability object for `gender`, or null if not yet
@@ -147,9 +165,10 @@ export function resolveDataAvail(gender) {
     probeProfile("role_group", g),
     probeProfile("batting_style", g),
     probeProfile("bowling_type", g),
+    probeFielding(g),
   ])
-    .then(([matchupBatting, matchupBowling, profileRole, profileHand, profileBowling]) => {
-      const avail = { matchupBatting, matchupBowling, profileRole, profileHand, profileBowling };
+    .then(([matchupBatting, matchupBowling, profileRole, profileHand, profileBowling, fielding]) => {
+      const avail = { matchupBatting, matchupBowling, profileRole, profileHand, profileBowling, fielding };
       _cache.set(g, avail);
       _pending.delete(g);
       return avail;

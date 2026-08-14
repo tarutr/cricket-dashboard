@@ -107,6 +107,20 @@ function effectiveDiscipline(state) {
   return effectiveNamespace(state);
 }
 
+/** The METRICS-catalogue namespace for the current state — used ONLY to RESOLVE a
+ * column/sort key to its metric definition (label / format / higherIsBetter /
+ * sqlExpression), NOT to key `state.columns[ns]`. Fielding (3rd scope) is the sole
+ * divergence: its tallies (catches/stumpings/run_outs/dismissals_effected/matches)
+ * are registered under "batting" (there is no "fielding" metrics discipline — see
+ * metrics.js FIELDING_METRIC_SPECS), so metric lookups map fielding→"batting" while
+ * the column STATE stays under effectiveDiscipline()="fielding" (state.columns.fielding).
+ * This mirrors the player pop-up's fielding mode (playerFiltersTab.js: getDiscipline →
+ * "batting", column state keyed "fielding"). For every non-fielding state it is exactly
+ * effectiveDiscipline(state), so batting/bowling/matchup resolution is byte-identical. */
+function metricNsFor(state) {
+  return state.discipline === "fielding" ? "batting" : effectiveDiscipline(state);
+}
+
 /** Serialize exactly the state fields that determine the query results AND
  * how they're rendered — feeds lastQueryStateKey, mountTable's simple "has a
  * result ever been loaded" sentinel (hasResults()), kept in step at every
@@ -935,7 +949,7 @@ export function buildFieldingExtraSliceClauses(state) {
  * table and the graph. buildQuery's emitted SQL is byte-identical to before the
  * extraction (verified by a node harness diff across every scenario).
  */
-export function buildFieldingCteSql(state, composedFieldingCols = []) {
+export function buildFieldingCteSql(state, composedFieldingCols = [], opts = {}) {
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
   const fieldingSliceClauses = buildFieldingSliceClauses(state);
   const fldClauses = buildScopeClausesTagged(state, {
@@ -980,6 +994,17 @@ export function buildFieldingCteSql(state, composedFieldingCols = []) {
     if (!m || !m.fieldingCteAlias || !m.fieldingCteCaseSql || seenAlias.has(m.fieldingCteAlias)) continue;
     seenAlias.add(m.fieldingCteAlias);
     selectCols.push(`         ${m.fieldingCteCaseSql} AS ${m.fieldingCteAlias}`);
+  }
+  // Fielding-as-3rd-scope (opts.includeName): project the fielder's NAME so the CTE can
+  // stand alone as a BASE table (the leaderboard's fielding ranking selects it directly
+  // — buildFieldingLeaderboardQuery — rather than reading it off a joined batting/bowling
+  // view). MAX() keeps GROUP BY at `fielder_id` alone, so the per-fielder tallies are
+  // BYTE-IDENTICAL (an extra aggregate projection over the same groups changes no group
+  // and no other aggregate). DEFAULT-OFF: with includeName falsy this line is never added,
+  // so the emitted CTE string is byte-identical for the three existing callers (buildQuery
+  // bolt-on, graph/charts.js, the pop-up's buildFieldingRowQuery — all call with ≤2 args).
+  if (opts && opts.includeName) {
+    selectCols.push("         MAX(fielder_name) AS fielder_name");
   }
   return [
     "fielding_cte AS (",
@@ -1200,6 +1225,72 @@ export function buildCrossDisciplineCteSql(state, discipline, crossCols) {
 }
 
 /**
+ * Build the FIELDING leaderboard query (3rd scope) — a ranked list of FIELDERS with
+ * the fixed default columns Matches · Catches · Stumpings · Run-outs · Total
+ * dismissals. Returns { sql, matchesSql:null }.
+ *
+ * SHAPE (mirrors the pop-up's buildFieldingRowQuery, MINUS its single-player
+ * `WHERE id='<player>'` wrap — this returns ALL fielders):
+ *   WITH fielding_cte AS (…SACRED per-fielder tallies + fielder_name…),
+ *        pmatch_cte   AS (…per-player match COUNT over player_matches…)
+ *   SELECT fielding_cte.fld_player_id AS id,
+ *          fielding_cte.fielder_name  AS name,
+ *          COALESCE(pmatch_cte.match_count, 0) AS matches,
+ *          fielding_cte.catches AS catches,
+ *          fielding_cte.stumpings AS stumpings,
+ *          fielding_cte.run_outs AS run_outs,
+ *          (fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs)
+ *            AS dismissals_effected
+ *   FROM fielding_cte
+ *   LEFT JOIN pmatch_cte ON pmatch_cte.pm_player_id = fielding_cte.fld_player_id
+ *
+ * BASE = the SACRED buildFieldingCteSql (one row per fielder over the EVENT-GRAIN
+ * `fielding` view), UNCHANGED except the additive opts.includeName projection. It
+ * already threads the FULL leaderboard scope — core (gender/format/date/team-type)
+ * + team (fielding_team) + OPPOSITION + event/venue + profile, pin-exempt — plus the
+ * name search, and excludes substitutes; with NO fielding filters this step, its slice
+ * clauses are empty, so the tallies equal the pop-up's un-sliced fielding numbers.
+ *
+ * MATCHES = pmatch_cte.match_count = COUNT(DISTINCT match_id) over `player_matches`
+ * (the matches the fielder APPEARED in), the SAME per-player denominator the
+ * leaderboard's per-match fielding metrics and the Player Matches column use — NOT
+ * fld_matches_cte (matches with ≥1 dismissal, the wrong denominator). Fielding has no
+ * innings concept, so Matches is the appearance count, not an innings count. A fielder
+ * in fielding_cte is a non-substitute playing member, so they always have a pmatch row;
+ * COALESCE(...,0) is a defensive floor. Ranking is over ALL fielders with ≥1 credit in
+ * scope (fielding_cte is the base). Client-side sort (applySort) defaults to Matches-desc
+ * (state.js defaultLeaderboardSort → the first column when there is no "innings" column).
+ *
+ * NOTE (deferred to the fielding-FILTERS step): pmatch_cte cannot honour an OPPOSITION /
+ * match-context scope (player_matches has no opposition column), so under an active
+ * Opposition/Result/etc. filter the tallies narrow but Matches stays the whole-scope
+ * appearance count — a per-scope "matches fielded vs X" honesty question the next step owns.
+ */
+export function buildFieldingLeaderboardQuery(state) {
+  // SACRED CTE as a BASE table, with the fielder name projected (opts.includeName).
+  // No fielding composers this step → 2nd arg [].
+  const cte = buildFieldingCteSql(state, [], { includeName: true });
+  const pmatch = buildPmatchCteSql(state); // UNCHANGED — the Matches denominator
+  const selectCols = [
+    "fielding_cte.fld_player_id AS id",
+    "fielding_cte.fielder_name AS name",
+    "COALESCE(pmatch_cte.match_count, 0) AS matches",
+    "fielding_cte.catches AS catches",
+    "fielding_cte.stumpings AS stumpings",
+    "fielding_cte.run_outs AS run_outs",
+    "(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs) AS dismissals_effected",
+  ];
+  const fromSql =
+    "FROM fielding_cte\nLEFT JOIN pmatch_cte ON pmatch_cte.pm_player_id = fielding_cte.fld_player_id";
+  const sql = [
+    "WITH " + [cte, pmatch].join(",\n"),
+    "SELECT " + selectCols.join(",\n       "),
+    fromSql,
+  ].join("\n");
+  return { sql, matchesSql: null };
+}
+
+/**
  * Build the main grouped SQL query for the current state + visible columns.
  * Returns { sql, matchesSql } — matchesSql is null unless "matches"
  * is visible AND still answerable from player_matches (see below). While a
@@ -1243,6 +1334,17 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // player actually played WITHIN the ball filter. Absent/false ⇒ inningsLevel is
   // unchanged ⇒ every existing 2-arg caller (leaderboard, graph) is BYTE-IDENTICAL.
   const inningsMatches = Boolean(opts && opts.inningsMatches);
+
+  // Fielding (3rd leaderboard scope): a ranked list of FIELDERS, not batters/bowlers.
+  // It is a fully separate, self-contained query off the SACRED fielding CTE as a base
+  // table (see buildFieldingLeaderboardQuery) — none of the batting/bowling innings-view
+  // logic below applies (fielding has no innings grain). matchupVsActive is already false
+  // for fielding (its dim gates require batting/bowling), so this branch is the only
+  // fielding path. visibleColumns is ignored: the fielding board's column set is the fixed
+  // five (Matches · Catches · Stumpings · Run-outs · Total dismissals) this step.
+  if (discipline === "fielding") {
+    return buildFieldingLeaderboardQuery(state);
+  }
 
   if (matchupVsActive(state)) {
     return buildMatchupQuery(state, discipline, visibleColumns);
@@ -1965,7 +2067,18 @@ export function mountTable(
   // popover lives on document.body so a reload never destroys it; load()/enterView()
   // call columnsPicker.refresh(...) after every re-render to re-anchor + re-sync it.
   const columnsPicker = createColumnsPicker({
-    getDiscipline: () => effectiveDiscipline(store.get()),
+    // metricNsFor (not effectiveDiscipline): the picker RESOLVES metrics under this
+    // namespace, so on the fielding board it maps fielding→"batting" (the fielding
+    // tallies + the fixed columns all resolve there — an empty "fielding" namespace
+    // would break the inline picker). The column STATE the picker reads/writes stays
+    // effectiveDiscipline-keyed (getColumns/getSlots/setColumns below → state.columns.
+    // fielding), exactly the pop-up's fielding-mode split. Byte-identical for batting/
+    // bowling/matchup (metricNsFor === effectiveDiscipline there). NOTE: this step ships
+    // NO fielding picker — the add-menu shows the batting vocabulary on the fielding
+    // board (the toolbar Columns button is hidden; the fielding picker/composers are the
+    // NEXT step). Staging a column here can never move a number: the fielding query is
+    // fixed (buildFieldingLeaderboardQuery ignores visibleColumns).
+    getDiscipline: () => metricNsFor(store.get()),
     getFormats: () => store.get().formats,
     // New Team composer (Step 1, 2026-08-14): the composer's searchable value picker
     // sources its team list here — a leaderboard-only host callback the picker gates
@@ -2214,6 +2327,11 @@ export function mountTable(
    * change to something that doesn't permit it, in matchup mode same as plain. */
   function pruneInvalidColumns() {
     const state = store.get();
+    // Fielding (3rd scope): a FIXED tally set — no phase/format eligibility to prune,
+    // and no "fielding" metrics namespace to validate against (eligibleColumnKeys would
+    // come back empty and wrongly drop every column). Leave the set untouched. (One of
+    // the {batting,bowling}-only gates made fielding-graceful.)
+    if (state.discipline === "fielding") return;
     const ns = effectiveDiscipline(state);
     const formats = state.formats;
     const cols = state.columns[ns];
@@ -2386,7 +2504,11 @@ export function mountTable(
     if (presetSelectEl) {
       presetSelectEl.addEventListener("change", () => {
         const s = store.get();
-        const def = COLUMN_PRESET_DEFS[s.discipline].find((d) => d.key === presetSelectEl.value);
+        // Defensive: fielding (3rd scope) has no presets and its select is hidden, so this
+        // never fires there — but guard the indexing so a stray event can't throw.
+        const defs = COLUMN_PRESET_DEFS[s.discipline];
+        if (!defs) return;
+        const def = defs.find((d) => d.key === presetSelectEl.value);
         const cols = def ? def.columns(s.formats) : null;
         if (!cols) {
           syncToolbar(); // revert the select to the real current preset/custom
@@ -2654,7 +2776,10 @@ export function mountTable(
 
   /** Sort `rows` by the store's current sort (metric column). */
   function applySort(rows, s) {
-    const metric = resolveSortMetric(s.sort.key, effectiveDiscipline(s));
+    // metricNsFor (not effectiveDiscipline): a fielding sort key resolves under the
+    // "batting" catalogue (fielding tallies are registered there). Byte-identical for
+    // batting/bowling/matchup (metricNsFor === effectiveDiscipline there).
+    const metric = resolveSortMetric(s.sort.key, metricNsFor(s));
     return metric ? rows.slice().sort((a, b) => compareRows(a, b, metric, s.sort.dir)) : rows;
   }
 
@@ -2859,7 +2984,9 @@ export function mountTable(
     if (sameAsActive) {
       sort = { key, dir: cur.dir === "asc" ? "desc" : "asc", slotId: sid };
     } else {
-      const metric = resolveSortMetric(key, nsF);
+      // metricNsFor (not nsF): a fielding column's default sort direction reads its
+      // metric under "batting". Byte-identical for batting/bowling/matchup.
+      const metric = resolveSortMetric(key, metricNsFor(frozen));
       sort = { key, dir: metric && metric.higherIsBetter === false ? "asc" : "desc", slotId: sid };
     }
     store.set({ sort }); // pending store (excluded from dirty → no Search light)
@@ -2905,7 +3032,7 @@ export function mountTable(
     if (sameAsActive) {
       sort = { key, dir: cur.dir === "asc" ? "desc" : "asc", slotId: sid };
     } else {
-      const metric = resolveSortMetric(key, nsL);
+      const metric = resolveSortMetric(key, metricNsFor(live)); // fielding→"batting"; else === nsL
       sort = { key, dir: metric && metric.higherIsBetter === false ? "asc" : "desc", slotId: sid };
     }
     store.set({ sort }); // PENDING only — no lastLoadedState change, no re-sort, no re-render
@@ -3290,16 +3417,26 @@ export function mountTable(
     // the format selection doesn't permit it; whole control greyed in matchup
     // mode (presets don't apply there) or before the first search.
     if (presetSelectEl) {
-      if (presetOptionsDiscipline !== discipline) buildPresetOptions(discipline);
-      for (const opt of presetSelectEl.options) {
-        if (opt.value === "__custom") continue;
-        const def = COLUMN_PRESET_DEFS[discipline].find((d) => d.key === opt.value);
-        opt.disabled = def ? def.columns(live.formats) === null : true;
+      // Fielding (3rd scope): a FIXED tally set with NO presets (COLUMN_PRESET_DEFS has
+      // no "fielding" entry) — hide the control (presets stay HIDDEN for fielding, like
+      // the pop-up). Guarded FIRST so the COLUMN_PRESET_DEFS[discipline] indexing below
+      // never runs for fielding (it would throw). Auto-column management + a fielding
+      // picker are the NEXT step.
+      if (discipline === "fielding") {
+        presetSelectEl.hidden = true;
+      } else {
+        presetSelectEl.hidden = false;
+        if (presetOptionsDiscipline !== discipline) buildPresetOptions(discipline);
+        for (const opt of presetSelectEl.options) {
+          if (opt.value === "__custom") continue;
+          const def = COLUMN_PRESET_DEFS[discipline].find((d) => d.key === opt.value);
+          opt.disabled = def ? def.columns(live.formats) === null : true;
+        }
+        const key = matchupOn ? null : activePresetKey(discipline, live.formats, live.columns[discipline]);
+        presetSelectEl.value = key || "__custom";
+        presetSelectEl.disabled = !results || matchupOn;
+        presetSelectEl.title = matchupOn ? "Presets don't apply in matchup (Vs) mode — use Columns" : "";
       }
-      const key = matchupOn ? null : activePresetKey(discipline, live.formats, live.columns[discipline]);
-      presetSelectEl.value = key || "__custom";
-      presetSelectEl.disabled = !results || matchupOn;
-      presetSelectEl.title = matchupOn ? "Presets don't apply in matchup (Vs) mode — use Columns" : "";
     }
 
     // Bonded Vs (pending) — visibility is DATA-DRIVEN (Group 3 sweep, owner
@@ -3318,8 +3455,10 @@ export function mountTable(
       const availKey = discipline === "batting" ? "matchupBatting" : "matchupBowling";
       const av = live.dataAvail;
       // Optimistic until resolved: show unless the map is present AND explicitly
-      // reports the discipline's matchup data absent for this gender.
-      const showVs = !av || typeof av[availKey] !== "boolean" || av[availKey];
+      // reports the discipline's matchup data absent for this gender. Fielding (3rd
+      // scope) has no matchup (matchupVsActive is false there), so hide it outright —
+      // otherwise matchupVsOptionsHTML's non-batting branch would show batter-hand options.
+      const showVs = discipline !== "fielding" && (!av || typeof av[availKey] !== "boolean" || av[availKey]);
       if (!showVs) {
         vsWrapEl.hidden = true;
       } else {
@@ -3332,7 +3471,13 @@ export function mountTable(
     // Columns button (owner, W1 fix 2): always enabled — it's a shortcut into
     // the popup's Columns section, configurable before the first search runs.
     // Every OTHER toolbar control's enabled/disabled logic is untouched.
-    if (columnsBtnEl) columnsBtnEl.disabled = false;
+    // Fielding (3rd scope): the column set is FIXED this step (no picker / composers —
+    // the fielding picker is the NEXT step), so hide the Columns button rather than open
+    // a picker whose "fielding" namespace has no metrics to add. Shown for batting/bowling.
+    if (columnsBtnEl) {
+      columnsBtnEl.hidden = discipline === "fielding";
+      columnsBtnEl.disabled = false;
+    }
 
     // Search button — dirty iff pending ≠ applied; enabled iff dirty AND
     // searchable (both dates present). Mirrors the graph's Update-chart button:
@@ -3471,6 +3616,10 @@ export function mountTable(
     scrollEl.classList.toggle("is-name-expanded", nameExpanded);
 
     const ns = effectiveDiscipline(state);
+    // metricNsFor: the column-STATE key is `ns` (state.columns[ns] — "fielding" for the
+    // fielding board), but each key RESOLVES to its metric under metricNsFor (fielding→
+    // "batting"). For batting/bowling/matchup metricNsFor === ns, so this is byte-identical.
+    const mns = metricNsFor(state);
     // E1a: render one column PER SLOT. Each entry keeps the slot's id (for per-slot
     // highlight/sort attribution) alongside its resolved metric. Two slots sharing a
     // key resolve to the same metric and read the SAME row value (row[key]) — the
@@ -3478,7 +3627,7 @@ export function mountTable(
     // handles plain keys (like getMetric) AND cross-discipline keys (W3).
     const slots = state.columns[ns] || [];
     const cols = slots
-      .map((sl) => ({ slotId: sl.id, m: resolveColumnMetric(sl.key, ns) }))
+      .map((sl) => ({ slotId: sl.id, m: resolveColumnMetric(sl.key, mns) }))
       .filter((c) => c.m);
 
     // W2/E1a highlight set: the display-only SLOT IDS the user has 🖍️-toggled.
@@ -3712,11 +3861,20 @@ export function mountTable(
       // sort nothing. Falls back to runs/wickets desc, same defaults main.js
       // uses on a plain discipline switch.
       const preState = store.get();
-      if (!resolveSortMetric(preState.sort.key, effectiveDiscipline(preState))) {
-        // E1a: attach the fallback sort to its slot (the slot showing runs/wickets
-        // in the effective namespace), so the arrow lands on the right column.
+      // metricNsFor: a fielding sort key resolves under "batting", so the fielding
+      // board's Matches/Catches sort never wrongly trips this fallback. Byte-identical
+      // for batting/bowling/matchup (metricNsFor === effectiveDiscipline there).
+      if (!resolveSortMetric(preState.sort.key, metricNsFor(preState))) {
+        // E1a: attach the fallback sort to its slot (the slot showing the fallback key
+        // in the effective namespace), so the arrow lands on the right column. Fielding
+        // falls back to Matches (its first/left-most column); batting→runs, bowling→wickets.
         const fbNs = effectiveDiscipline(preState);
-        const fbKey = preState.discipline === "batting" ? "runs" : "wickets";
+        const fbKey =
+          preState.discipline === "batting"
+            ? "runs"
+            : preState.discipline === "fielding"
+            ? "matches"
+            : "wickets";
         const fbSlot = (preState.columns[fbNs] || []).find((s) => s.key === fbKey) || null;
         store.set({ sort: { key: fbKey, dir: "desc", slotId: fbSlot ? fbSlot.id : null } });
       }
