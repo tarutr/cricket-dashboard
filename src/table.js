@@ -1017,6 +1017,69 @@ export function buildFieldingCteSql(state, composedFieldingCols = [], opts = {})
 }
 
 /**
+ * Fielding "Matches" honesty switch — SHARED by the fielding LEADERBOARD
+ * (buildFieldingLeaderboardQuery) and the player pop-up's fielding rows
+ * (playerFiltersTab.js buildFieldingRowQuery), so the two can NEVER drift. It is
+ * the fielding analogue of the batting/bowling `inningsLevel` switch on "matches":
+ *   • NOT narrowed → Matches = the fielder's APPEARANCE count (buildPmatchCteSql =
+ *     COUNT(DISTINCT match_id) over player_matches) — matches PLAYED in scope, the
+ *     honest whole-scope denominator (also what the per-match fielding metrics ÷).
+ *   • NARROWED → player_matches has no opposition / dismissal-dim columns, so it
+ *     cannot honour the narrowing; Matches switches to COUNT(DISTINCT match_id) over
+ *     the SAME filtered `fielding` rows the fielding_cte aggregates (matches with ≥1
+ *     credit inside the active filter) — the fielding analogue of batting's
+ *     "matches in the slice".
+ *
+ * `fieldingMatchesNarrowed`: opposition folds into the fielding CTE's WHERE (via
+ * buildScopeClausesTagged's oppositionColumn) and buildFieldingSliceClauses folds in
+ * the fielding filter set PLUS its own match-context (buildFieldingExtraSliceClauses).
+ * These are the ONLY predicates the fielding source narrows by that player_matches
+ * cannot honour, so together they EXACTLY define when the two denominators diverge.
+ * Top-level match-context (state.stage/result/…) is inert for fielding — the pop-up
+ * omits it and the leaderboard's fielding CTE never joins mctx — so it is NOT part of
+ * the predicate. With neither active this returns false, so both call sites keep the
+ * pmatch appearance count and every fielding-Matches value is byte-identical to today's
+ * leaderboard (its un-narrowed value was already pmatch appearances).
+ */
+export function fieldingMatchesNarrowed(state) {
+  return oppositionFilterActive(state) || buildFieldingSliceClauses(state).length > 0;
+}
+
+/**
+ * The `fld_matches_cte` body (CTE body WITHOUT the leading "WITH") — one row per
+ * fielder, COUNT(DISTINCT match_id) over the FILTERED `fielding` rows (matches with
+ * ≥1 credit inside the active scope+slice). Used ONLY when fieldingMatchesNarrowed
+ * is true. Its WHERE mirrors buildFieldingCteSql's BY CONSTRUCTION — the SAME
+ * buildScopeClausesTagged opts + whereWithPinExemption + optional name search +
+ * "substitute IS NOT TRUE" + buildFieldingSliceClauses — so the count can never
+ * diverge from the fielding_cte tallies it sits beside. Extracted from the pop-up's
+ * former inline copy so the leaderboard and pop-up share ONE definition (the pop-up's
+ * clean state carries no search, so its emitted string is byte-identical to before).
+ */
+export function buildFldMatchesCteSql(state) {
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  const fldClauses = buildScopeClausesTagged(state, {
+    includeTeams: true,
+    teamColumn: "fielding_team",
+    idColumn: "fielder_id",
+    oppositionColumn: "opposition",
+  });
+  if (state.search && state.search.trim()) {
+    fldClauses.push(bypassableClause(`fielder_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
+  }
+  const fldScopeSql = whereWithPinExemption(fldClauses, "fielder_id", pins);
+  const matchesWhere = [fldScopeSql, "substitute IS NOT TRUE", ...buildFieldingSliceClauses(state)].join(" AND ");
+  return [
+    "fld_matches_cte AS (",
+    "  SELECT fielder_id AS fld_player_id, COUNT(DISTINCT match_id) AS matches",
+    "  FROM fielding",
+    `  WHERE ${matchesWhere}`,
+    "  GROUP BY fielder_id",
+    ")",
+  ].join("\n");
+}
+
+/**
  * Build the `pom_cte` definition (Player-of-the-Match, source player_matches) —
  * same "CTE body without leading WITH" convention as buildFieldingCteSql. A
  * whole-match award, so it stays on player_matches (which has no opposition/
@@ -1251,39 +1314,51 @@ export function buildCrossDisciplineCteSql(state, discipline, crossCols) {
  * name search, and excludes substitutes; with NO fielding filters this step, its slice
  * clauses are empty, so the tallies equal the pop-up's un-sliced fielding numbers.
  *
- * MATCHES = pmatch_cte.match_count = COUNT(DISTINCT match_id) over `player_matches`
- * (the matches the fielder APPEARED in), the SAME per-player denominator the
- * leaderboard's per-match fielding metrics and the Player Matches column use — NOT
- * fld_matches_cte (matches with ≥1 dismissal, the wrong denominator). Fielding has no
- * innings concept, so Matches is the appearance count, not an innings count. A fielder
- * in fielding_cte is a non-substitute playing member, so they always have a pmatch row;
+ * MATCHES honours the SHARED fielding switch fieldingMatchesNarrowed (so the pop-up's
+ * fielding rows can never disagree with this board):
+ *   • NOT narrowed → pmatch_cte.match_count = COUNT(DISTINCT match_id) over
+ *     `player_matches` (matches the fielder APPEARED in), the SAME per-player
+ *     denominator the per-match fielding metrics and the Player Matches column use.
+ *     Fielding has no innings concept, so the un-narrowed Matches is the appearance
+ *     count, not an innings count — byte-identical to this board's original behaviour.
+ *   • NARROWED (an OPPOSITION filter or any fielding SLICE active) → player_matches
+ *     has no opposition / dismissal-dim column and cannot honour the narrowing, so
+ *     Matches switches to fld_matches_cte = COUNT(DISTINCT match_id) over the SAME
+ *     filtered `fielding` rows the fielding_cte tallies come from (matches with ≥1
+ *     credit inside the active filter) — the fielding analogue of batting's "matches
+ *     in the slice". This resolves the former "matches fielded vs X" honesty gap.
+ * A fielder in fielding_cte is a non-substitute playing member with ≥1 credit in the
+ * (narrowed) scope, so they always have the matching pmatch / fld_matches row;
  * COALESCE(...,0) is a defensive floor. Ranking is over ALL fielders with ≥1 credit in
  * scope (fielding_cte is the base). Client-side sort (applySort) defaults to Matches-desc
  * (state.js defaultLeaderboardSort → the first column when there is no "innings" column).
- *
- * NOTE (deferred to the fielding-FILTERS step): pmatch_cte cannot honour an OPPOSITION /
- * match-context scope (player_matches has no opposition column), so under an active
- * Opposition/Result/etc. filter the tallies narrow but Matches stays the whole-scope
- * appearance count — a per-scope "matches fielded vs X" honesty question the next step owns.
  */
 export function buildFieldingLeaderboardQuery(state) {
   // SACRED CTE as a BASE table, with the fielder name projected (opts.includeName).
   // No fielding composers this step → 2nd arg [].
   const cte = buildFieldingCteSql(state, [], { includeName: true });
-  const pmatch = buildPmatchCteSql(state); // UNCHANGED — the Matches denominator
+  // Matches denominator via the SHARED switch (reused by the pop-up so they can't drift):
+  // un-narrowed = appearances (pmatch_cte); narrowed = matches-with-a-credit (fld_matches_cte).
+  const narrowed = fieldingMatchesNarrowed(state);
+  const matchesCte = narrowed ? buildFldMatchesCteSql(state) : buildPmatchCteSql(state);
+  const matchesExpr = narrowed
+    ? "COALESCE(fld_matches_cte.matches, 0) AS matches"
+    : "COALESCE(pmatch_cte.match_count, 0) AS matches";
+  const joinSql = narrowed
+    ? "LEFT JOIN fld_matches_cte ON fld_matches_cte.fld_player_id = fielding_cte.fld_player_id"
+    : "LEFT JOIN pmatch_cte ON pmatch_cte.pm_player_id = fielding_cte.fld_player_id";
   const selectCols = [
     "fielding_cte.fld_player_id AS id",
     "fielding_cte.fielder_name AS name",
-    "COALESCE(pmatch_cte.match_count, 0) AS matches",
+    matchesExpr,
     "fielding_cte.catches AS catches",
     "fielding_cte.stumpings AS stumpings",
     "fielding_cte.run_outs AS run_outs",
     "(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs) AS dismissals_effected",
   ];
-  const fromSql =
-    "FROM fielding_cte\nLEFT JOIN pmatch_cte ON pmatch_cte.pm_player_id = fielding_cte.fld_player_id";
+  const fromSql = "FROM fielding_cte\n" + joinSql;
   const sql = [
-    "WITH " + [cte, pmatch].join(",\n"),
+    "WITH " + [cte, matchesCte].join(",\n"),
     "SELECT " + selectCols.join(",\n       "),
     fromSql,
   ].join("\n");

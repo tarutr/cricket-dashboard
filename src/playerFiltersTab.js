@@ -63,12 +63,15 @@ import {
   buildQuery,
   formatValue,
   buildFieldingCteSql,
-  buildFieldingSliceClauses,
   // FC-2: the per-player match-count CTE (per-match fielding denominator) — reused
   // UNCHANGED so a pop-up per-match value == the leaderboard's (same definition).
   buildPmatchCteSql,
+  // Fielding "Matches" honesty switch — SHARED with the leaderboard so the two can
+  // never drift: un-narrowed = appearances (pmatch_cte), narrowed = matches-with-a-
+  // credit (fld_matches_cte, whose body buildFldMatchesCteSql now owns for both).
+  fieldingMatchesNarrowed,
+  buildFldMatchesCteSql,
 } from "./table.js";
-import { buildScopeClausesTagged, whereWithPinExemption } from "./filters.js";
 import { getMetric, resolveColumnMetric, metricDisplayLabel, matchupBucketLabel, DISMISSAL_KINDS, parseComposedFieldingKey, makeComposedFieldingKey } from "./metrics.js";
 import {
   createInitialState,
@@ -363,12 +366,15 @@ function conditionsToInningsWhere(conditions, discipline) {
 // NUMBERS SACRED (CLAUDE.md Rule 1): the tallies come from table.js's EXPORTED,
 // UNCHANGED buildFieldingCteSql — the exact per-fielder CTE the leaderboard's own
 // fielding columns use — so a NO-FILTER fielding row equals that player's
-// leaderboard fielding numbers BY CONSTRUCTION. This module only (a) reuses that
-// CTE verbatim, (b) reuses buildFieldingSliceClauses for the slice dims, (c)
-// reuses buildScopeClausesTagged + whereWithPinExemption for scope, and (d) adds a
-// parallel per-fielder COUNT(DISTINCT match_id) "matches" CTE (buildFieldingCteSql
-// carries no match_id and must not be modified). buildQuery / buildMatchupQuery /
-// conditionToHaving are entirely untouched.
+// leaderboard fielding numbers BY CONSTRUCTION (Matches included — see below). This
+// module only (a) reuses that CTE verbatim and (b) resolves "Matches" through the
+// SHARED fielding switch fieldingMatchesNarrowed (table.js): un-narrowed = the
+// fielder's appearance count (buildPmatchCteSql), == the leaderboard's un-narrowed
+// Matches; narrowed (opposition or any fielding slice) = COUNT(DISTINCT match_id)
+// over the filtered fielding rows (buildFldMatchesCteSql, the SHARED body). Because
+// both the switch and the narrowed-Matches CTE now live in table.js, the pop-up and
+// leaderboard cannot drift. buildQuery / buildMatchupQuery / conditionToHaving are
+// entirely untouched.
 //
 // SCOPE COVERAGE (top-level state, via buildFieldingCteSql's buildScopeClausesTagged
 // — matches the leaderboard fielding column, so no leaderboard change): core (gender
@@ -550,27 +556,33 @@ function fieldingRowSelectExpr(key) {
  * Build ONE fielding row's whole-scope SQL (player-agnostic — fetchFieldingRow outer-
  * wraps `WHERE id = '<player>'`, the established idiom). ALWAYS selects, per fielder:
  * id + the six base columns (catches, caught_and_bowled, stumpings, run_outs,
- * dismissals_effected = catches+stumpings+run_outs, matches = COUNT(DISTINCT match_id))
- * — byte-identical to the pre-FC-2 fixed table.
+ * dismissals_effected = catches+stumpings+run_outs, matches).
+ *
+ * MATCHES honours the SHARED fielding switch fieldingMatchesNarrowed (table.js), the
+ * SAME source the fielding LEADERBOARD uses — so the pop-up and leaderboard agree
+ * UN-narrowed and narrow IDENTICALLY (they can't drift):
+ *   • NOT narrowed → appearances = buildPmatchCteSql.match_count (COUNT(DISTINCT
+ *     match_id) over player_matches) — EXACTLY the leaderboard's un-narrowed Matches.
+ *   • NARROWED (opposition OR any fielding slice) → buildFldMatchesCteSql = COUNT(
+ *     DISTINCT match_id) over the SAME filtered `fielding` rows the fielding_cte
+ *     tallies come from (matches with ≥1 credit inside the active filter).
+ * Before this switch the pop-up ALWAYS used fld_matches_cte, so un-narrowed it showed
+ * matches-with-a-credit and DISAGREED with the leaderboard's appearance count for the
+ * same player (owner-confirmed defect) — now fixed.
  *
  * FC-2: `cols` (the pop-up's requested fielding column keys) ADDS projections beyond the
  * base 6 — fc__ composer counts (injected into fielding_cte via the UNCHANGED
  * buildFieldingCteSql 2nd arg) and per-match variants (base OR fc__, dividing by
  * pmatch_cte.match_count from the UNCHANGED buildPmatchCteSql). With no cols (or only
  * base-6 cols) the emitted SQL is the former base query → the base-tally NUMBERS are
- * unchanged (the extra fielding_cte SUM(CASE) columns + the LEFT-JOINed pmatch_cte are
+ * unchanged (the extra fielding_cte SUM(CASE) columns + the LEFT-JOINed CTEs are
  * additive and never alter catches/stumpings/…). NO sacred builder is modified.
  *
- * Tallies come from the SACRED buildFieldingCteSql UNCHANGED. The parallel
- * fld_matches_cte's WHERE is rebuilt from the SAME exported primitives
- * buildFieldingCteSql uses internally (buildScopeClausesTagged with the identical
- * opts + whereWithPinExemption + "substitute IS NOT TRUE" + buildFieldingSliceClauses),
- * so it is byte-identical to the sacred CTE's WHERE BY CONSTRUCTION.
- *
- * ⚠ COUPLING: this mirrors buildFieldingCteSql's scope construction (table.js). If
- * that function's scope/slice/substitute construction ever changes, mirror it here —
- * or the "matches" count could diverge from the four tallies. (The four tallies
- * always track it automatically, since they come straight from the sacred CTE.)
+ * Tallies come from the SACRED buildFieldingCteSql UNCHANGED. The narrowed Matches CTE
+ * is the SHARED buildFldMatchesCteSql, whose WHERE mirrors buildFieldingCteSql's BY
+ * CONSTRUCTION (same scope+slice+substitute), so the count can never diverge from the
+ * four tallies. Both call sites now import that one definition — no local mirror to
+ * keep in sync.
  */
 export function buildFieldingRowQuery(state, cols) {
   const requested = Array.isArray(cols) ? cols : [];
@@ -585,27 +597,12 @@ export function buildFieldingRowQuery(state, cols) {
   }
   const cte = buildFieldingCteSql(state, composedFieldingCols); // SACRED — 2nd arg is the FC-1 gate
 
-  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
-  const fldClauses = buildScopeClausesTagged(state, {
-    includeTeams: true,
-    teamColumn: "fielding_team",
-    idColumn: "fielder_id",
-    oppositionColumn: "opposition",
-  });
-  // The pop-up's clean state carries no search; buildFieldingCteSql's search clause
-  // (fielder_name ILIKE …) is therefore never emitted, so it is faithfully omitted
-  // here too. (If a future caller ever set state.search, the two WHEREs would need
-  // it added in both places — see the coupling note above.)
-  const fldScopeSql = whereWithPinExemption(fldClauses, "fielder_id", pins);
-  const matchesWhere = [fldScopeSql, "substitute IS NOT TRUE", ...buildFieldingSliceClauses(state)].join(" AND ");
-  const matchesCte = [
-    "fld_matches_cte AS (",
-    "  SELECT fielder_id AS fld_player_id, COUNT(DISTINCT match_id) AS matches",
-    "  FROM fielding",
-    `  WHERE ${matchesWhere}`,
-    "  GROUP BY fielder_id",
-    ")",
-  ].join("\n");
+  // Matches: SHARED switch with the leaderboard (un-narrowed = appearances; narrowed =
+  // matches-with-a-credit). See the doc comment above.
+  const narrowed = fieldingMatchesNarrowed(state);
+  const matchesExpr = narrowed
+    ? "fld_matches_cte.matches AS matches"
+    : "COALESCE(pmatch_cte.match_count, 0) AS matches";
 
   // Extra projections (requested keys beyond the base 6): fc__ counts + per-match.
   const selectCols = [
@@ -615,7 +612,7 @@ export function buildFieldingRowQuery(state, cols) {
     "fielding_cte.stumpings AS stumpings",
     "fielding_cte.run_outs AS run_outs",
     "(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs) AS dismissals_effected",
-    "fld_matches_cte.matches AS matches",
+    matchesExpr,
   ];
   let wantsPmatch = false;
   const seen = new Set(FIELDING_BASE_KEYS);
@@ -628,10 +625,15 @@ export function buildFieldingRowQuery(state, cols) {
     selectCols.push(`${expr.sql} AS ${key}`); // key is identifier-safe (fc__… / …_per_match)
   }
 
-  const cteDefs = [cte, matchesCte];
-  let fromSql =
-    "FROM fielding_cte\nLEFT JOIN fld_matches_cte ON fld_matches_cte.fld_player_id = fielding_cte.fld_player_id";
-  if (wantsPmatch) {
+  const cteDefs = [cte];
+  let fromSql = "FROM fielding_cte";
+  if (narrowed) {
+    cteDefs.push(buildFldMatchesCteSql(state)); // SHARED — the matches-with-a-credit denominator
+    fromSql += "\nLEFT JOIN fld_matches_cte ON fld_matches_cte.fld_player_id = fielding_cte.fld_player_id";
+  }
+  // pmatch_cte is needed for the Matches column when NOT narrowed (appearances), and/or
+  // for any per-match column (wantsPmatch). Build + join it ONCE when either applies.
+  if (!narrowed || wantsPmatch) {
     cteDefs.push(buildPmatchCteSql(state)); // UNCHANGED — the leaderboard's per-match denominator
     fromSql += "\nLEFT JOIN pmatch_cte ON pmatch_cte.pm_player_id = fielding_cte.fld_player_id";
   }
