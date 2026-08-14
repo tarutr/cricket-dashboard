@@ -3617,7 +3617,7 @@ export function resolveBattingPositionSetMetric(key, discipline) {
   if (key !== BATTING_POSITION_SET_KEY || discipline !== "batting") return null;
   return {
     key: BATTING_POSITION_SET_KEY,
-    label: "Batting positions",
+    label: "Batting Position",
     shortLabel: "B. Pos.",
     discipline,
     source: "innings",

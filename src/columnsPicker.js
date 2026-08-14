@@ -1616,14 +1616,21 @@ export function createColumnsPicker({
         : [];
     // Chunk 1B: the B. Pos. which-values column (batting-only, plain ns) is a virtual
     // list column (not in eligibleMetrics), so it is listed EXPLICITLY here like the
-    // profile items — appended to Basic Stats. It also auto-appears with the Batting-
-    // position filter (state.js). PLACEMENT choice (see report — flagged for owner).
+    // profile items. It also auto-appears with the Batting-position filter (state.js).
+    // Owner 2026-08-14: place it in Basic Stats right AFTER "Innings" (mirroring the
+    // Batting-position FILTER's spot after Innings Number), not at the end.
     const bposItem =
       isPlainNs && ns === "batting"
-        ? [{ type: "plain", key: BATTING_POSITION_SET_KEY, label: "Batting positions" }]
+        ? [{ type: "plain", key: BATTING_POSITION_SET_KEY, label: "Batting Position" }]
         : [];
+    const basicItems = plainItems(ownBasic);
+    const bposInnIdx = basicItems.findIndex((it) => it.key === "innings");
+    const basicWithBpos =
+      bposInnIdx >= 0
+        ? [...basicItems.slice(0, bposInnIdx + 1), ...bposItem, ...basicItems.slice(bposInnIdx + 1)]
+        : [...basicItems, ...bposItem];
     const ownSections = [
-      ...section("Basic Stats", [...plainItems(ownBasic), ...bposItem]),
+      ...section("Basic Stats", basicWithBpos),
       ...section("Detailed Stats", plainItems(ownDetailed)),
       ...(isPlainNs ? [] : section("Dismissals", plainItems(dismissal))),
       ...section("Player Profile", profileItems),
