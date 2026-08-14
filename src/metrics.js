@@ -2722,6 +2722,12 @@ export function getMetric(key, discipline) {
       // discipline, so every existing caller is unchanged (same ?? fall-through).
       resolveComposedPositionMetric(key, discipline) ??
       resolveBattingPositionSetMetric(key, discipline) ??
+      // Wave 2A.3: the Innings-Number / Team / Opposition "which values" list
+      // columns (both disciplines). null for any other key, so every other
+      // caller is unchanged.
+      resolveInningsNumberSetMetric(key, discipline) ??
+      resolveTeamSetMetric(key, discipline) ??
+      resolveOppositionSetMetric(key, discipline) ??
       // Wave D — D1: player-profile attribute columns (attr_<field>), virtual text
       // metrics projected out of the profile_cte join (buildQuery). null for any
       // non-attr key / wrong discipline, so every other caller is unchanged.
@@ -3636,6 +3642,120 @@ export function resolveBattingPositionSetMetric(key, discipline) {
  * eligibleColumnKeys so a chosen / auto-added B. Pos. column survives a re-render. */
 export function battingPositionSetColumnKeys(discipline) {
   return discipline === "batting" ? [BATTING_POSITION_SET_KEY] : [];
+}
+
+// ── Innings Number / Team / Opposition "which values" columns (filter/column
+//    rework Wave 2A.3, 2026-08-14) ──────────────────────────────────────────────
+// Three more WHICH-VALUES columns, generalising the B. Pos. pattern above: per
+// player, the DISTINCT SET of a scope dimension's raw values present in the
+// (scoped/filtered) rows. Auto-appears with its filter (state.js
+// activeLeaderboardFilterSources) and is manually addable from the Columns
+// picker. Unlike bpos_set (batting_position exists only on the batting view),
+// all three read a column present on BOTH the batting and bowling views, so
+// neither is discipline-restricted.
+//
+// NO NEW JOIN (verified against table.js buildQuery, 2026-08-14): innings_number
+// and batting_team/bowling_team are raw columns of the batting/bowling view
+// itself, projected in the ordinary per-metric SELECT loop exactly like
+// batting_position — no CTE, no LEFT JOIN. (Stage/Event/Venue which-values
+// columns are NOT built here — Event/Venue have no raw column reachable without
+// a genuinely NEW join, and Stage's `mctx` join in buildQuery is gated on the
+// Stage/Result/Toss FILTERS being active, not on column presence, so an
+// unfiltered Stage column would reference an unjoined alias. Flagged to the
+// owner rather than guessed at — see the Wave 2A worker report.)
+//
+// Innings-Number is stored 0-based (innings_number); the list is shown in the
+// same 1-based DISPLAY numbering as the Innings Number filter (+1), matching
+// inningsNumberLabel/the in__ composer's own token mapping. Team = the row's OWN
+// side (batting_team for batting, bowling_team for bowling — TEAM_COL in
+// table.js); Opposition = the OTHER side (OPP_COL in table.js) — both plain
+// team-name string lists, format "list" like B. Pos.
+const SCOPE_TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
+const SCOPE_OPP_COL = { batting: "bowling_team", bowling: "batting_team" };
+
+export const INNINGS_NUMBER_SET_KEY = "inn_set";
+export const TEAM_SET_KEY = "team_set";
+export const OPPOSITION_SET_KEY = "opp_set";
+
+/** Resolve the Innings-Number which-values key to its VIRTUAL list metric (both
+ * disciplines), or null. Called by getMetric. */
+export function resolveInningsNumberSetMetric(key, discipline) {
+  if (key !== INNINGS_NUMBER_SET_KEY || (discipline !== "batting" && discipline !== "bowling")) return null;
+  return {
+    key: INNINGS_NUMBER_SET_KEY,
+    label: "Innings Number",
+    shortLabel: "Inns #",
+    discipline,
+    source: "innings",
+    sqlExpression: "list(DISTINCT innings_number + 1 ORDER BY innings_number + 1)",
+    sortExpression: "MIN(innings_number)",
+    higherIsBetter: false,
+    format: "list",
+    kind: "attribute",
+    zeroIsData: false,
+    isPhaseMetric: null,
+    columnTitle: "Innings numbers present in the filtered rows",
+  };
+}
+/** The Innings-Number which-values key offerable for `discipline` (both) —
+ * folded into eligibleColumnKeys so a chosen / auto-added column survives a
+ * re-render. */
+export function inningsNumberSetColumnKeys(discipline) {
+  return discipline === "batting" || discipline === "bowling" ? [INNINGS_NUMBER_SET_KEY] : [];
+}
+
+/** Resolve the Team which-values key to its VIRTUAL list metric (both
+ * disciplines) — the player's OWN side — or null. Called by getMetric. */
+export function resolveTeamSetMetric(key, discipline) {
+  const col = SCOPE_TEAM_COL[discipline];
+  if (key !== TEAM_SET_KEY || !col) return null;
+  return {
+    key: TEAM_SET_KEY,
+    label: "Team",
+    shortLabel: "Team",
+    discipline,
+    source: "innings",
+    sqlExpression: `list(DISTINCT ${col} ORDER BY ${col})`,
+    sortExpression: `MIN(${col})`,
+    higherIsBetter: false,
+    format: "list",
+    kind: "attribute",
+    zeroIsData: false,
+    isPhaseMetric: null,
+    columnTitle: "Teams the player represented in the filtered rows",
+  };
+}
+/** The Team which-values key offerable for `discipline` (both) — folded into
+ * eligibleColumnKeys so a chosen / auto-added column survives a re-render. */
+export function teamSetColumnKeys(discipline) {
+  return SCOPE_TEAM_COL[discipline] ? [TEAM_SET_KEY] : [];
+}
+
+/** Resolve the Opposition which-values key to its VIRTUAL list metric (both
+ * disciplines) — the OTHER side — or null. Called by getMetric. */
+export function resolveOppositionSetMetric(key, discipline) {
+  const col = SCOPE_OPP_COL[discipline];
+  if (key !== OPPOSITION_SET_KEY || !col) return null;
+  return {
+    key: OPPOSITION_SET_KEY,
+    label: "Opposition",
+    shortLabel: "Opp.",
+    discipline,
+    source: "innings",
+    sqlExpression: `list(DISTINCT ${col} ORDER BY ${col})`,
+    sortExpression: `MIN(${col})`,
+    higherIsBetter: false,
+    format: "list",
+    kind: "attribute",
+    zeroIsData: false,
+    isPhaseMetric: null,
+    columnTitle: "Opponents faced in the filtered rows",
+  };
+}
+/** The Opposition which-values key offerable for `discipline` (both) — folded
+ * into eligibleColumnKeys so a chosen / auto-added column survives a re-render. */
+export function oppositionSetColumnKeys(discipline) {
+  return SCOPE_OPP_COL[discipline] ? [OPPOSITION_SET_KEY] : [];
 }
 
 // ── Composed RUN-SOURCE × count/% columns (columns content rework D3, 2026-08-08)

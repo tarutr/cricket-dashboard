@@ -57,6 +57,8 @@ import {
   // Chunk 1B: the per-position breakdown composer (pos__) + the B. Pos. which-values column key.
   makeComposedPositionKey, composedPositionPool, composedPositionTokens, COMPOSED_POSITION_LABEL,
   parseComposedPositionKey, BATTING_POSITION_SET_KEY,
+  // Wave 2A.3: the Innings-Number / Team / Opposition which-values column keys.
+  INNINGS_NUMBER_SET_KEY, TEAM_SET_KEY, OPPOSITION_SET_KEY,
   // Columns content rework D3 (runs-by-source + wicket-type composers).
   composedRunSourceRows, makeComposedRunSourceKey, parseComposedRunSourceKey,
   makeComposedWicketTypeKey, parseComposedWicketTypeKey,
@@ -1623,12 +1625,23 @@ export function createColumnsPicker({
       isPlainNs && ns === "batting"
         ? [{ type: "plain", key: BATTING_POSITION_SET_KEY, label: "Batting Position" }]
         : [];
+    // Wave 2A.3: the Innings-Number / Team / Opposition which-values columns (both
+    // disciplines, plain ns) — same "virtual list column, listed explicitly" shape as
+    // bposItem above, placed right after it (interim default placement pending owner
+    // sign-off — see the Wave 2A worker report).
+    const scopeSetItems = isPlainNs
+      ? [
+          { type: "plain", key: INNINGS_NUMBER_SET_KEY, label: "Innings Number" },
+          { type: "plain", key: TEAM_SET_KEY, label: "Team" },
+          { type: "plain", key: OPPOSITION_SET_KEY, label: "Opposition" },
+        ]
+      : [];
     const basicItems = plainItems(ownBasic);
     const bposInnIdx = basicItems.findIndex((it) => it.key === "innings");
     const basicWithBpos =
       bposInnIdx >= 0
-        ? [...basicItems.slice(0, bposInnIdx + 1), ...bposItem, ...basicItems.slice(bposInnIdx + 1)]
-        : [...basicItems, ...bposItem];
+        ? [...basicItems.slice(0, bposInnIdx + 1), ...bposItem, ...scopeSetItems, ...basicItems.slice(bposInnIdx + 1)]
+        : [...basicItems, ...bposItem, ...scopeSetItems];
     const ownSections = [
       ...section("Basic Stats", basicWithBpos),
       ...section("Detailed Stats", plainItems(ownDetailed)),

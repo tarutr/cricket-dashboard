@@ -46,12 +46,26 @@ import {
   eligibleComposedPositionKeys,
   battingPositionSetColumnKeys,
   BATTING_POSITION_SET_KEY,
+  // Wave 2A.3: the Innings-Number / Team / Opposition "which values" column keys.
+  inningsNumberSetColumnKeys,
+  teamSetColumnKeys,
+  oppositionSetColumnKeys,
+  INNINGS_NUMBER_SET_KEY,
+  TEAM_SET_KEY,
+  OPPOSITION_SET_KEY,
   isParamComposedColumnKey,
   isComposedFieldingColumnKey,
   makeComposedPhaseKey,
   makeComposedBallKey,
   makeComposedWicketTypeKey,
   parseComposedWicketTypeKey,
+  // Wave 2A.1/2A.2: the run-source / runs-conceded-by-source composed-key helpers
+  // a numeric FILTER condition resolves its COLUMN through, and the same-identity
+  // (count⇄%) pairing the auto-manage dedup needs.
+  makeComposedRunSourceKey,
+  parseComposedRunSourceKey,
+  makeComposedRunSourceConcededKey,
+  parseComposedRunSourceConcededKey,
   // Wave D — D2 (auto-manage mapping): the composed-param + wicket-type helpers a
   // numeric FILTER condition maps to its COLUMN key with.
   COMPOSED_PARAM_OP_TOKEN,
@@ -292,6 +306,13 @@ export function effectiveNamespace(state) {
  * normalization for both filters is a deferred post-round to-do. */
 export function oppositionFilterActive(state) {
   return Array.isArray(state.opposition) && state.opposition.length > 0;
+}
+
+/** True if the Team filter (`state.teams`) is currently narrowing the set — the
+ * player's OWN side, on the same raw team-name values buildScopeClauses' includeTeams
+ * predicate already uses (filters.js). Wave 2A.3's which-values column auto-add. */
+export function teamsFilterActive(state) {
+  return Array.isArray(state.teams) && state.teams.length > 0;
 }
 
 /** True if the opponent-player head-to-head filter is currently narrowing the
@@ -1203,6 +1224,18 @@ export function eligibleColumnKeys(discipline, formats) {
   for (const key of battingPositionSetColumnKeys(discipline)) {
     keys.add(key);
   }
+  // Wave 2A.3: the Innings-Number / Team / Opposition "which values" column keys
+  // (both disciplines, format-agnostic) — fold them in so a chosen / auto-added
+  // column survives a re-render / prune. Byte-identical when none is present.
+  for (const key of inningsNumberSetColumnKeys(discipline)) {
+    keys.add(key);
+  }
+  for (const key of teamSetColumnKeys(discipline)) {
+    keys.add(key);
+  }
+  for (const key of oppositionSetColumnKeys(discipline)) {
+    keys.add(key);
+  }
   return keys;
 }
 
@@ -1325,14 +1358,26 @@ function addOriginTag(arr, tag) {
 }
 
 /** Two column keys are the SAME auto-manage identity: equal, OR both composed
- * wicket-type keys of the same type-token (count ⇄ % are ONE column shown two ways).
- * So a Dismissal-Type filter is satisfied — and its prune honoured — by EITHER axis,
- * and toggling a filter-added wicket-type column count↔% never re-adds the sibling. */
+ * wicket-type keys of the same type-token, OR both composed run-source keys of the
+ * same source-token, OR both composed runs-conceded-by-source keys of the same
+ * source-token (count ⇄ % are ONE column shown two ways in every one of these three
+ * families — mirrors columnsPicker.js's own togglePairByCount pairing, Wave 2A.2). So
+ * a Dismissal-Type / Run-Source / Runs-Conceded filter is satisfied — and its prune
+ * honoured — by EITHER axis, and toggling a filter-added column count↔% never re-adds
+ * the sibling, and a hand-composed column of the SAME source/axis-pair the filter
+ * would also add collapses onto the one slot instead of duplicating it. */
 function sameColumnIdentity(a, b) {
   if (a === b) return true;
-  const pa = parseComposedWicketTypeKey(a);
-  const pb = parseComposedWicketTypeKey(b);
-  return !!(pa && pb && pa.token === pb.token);
+  const wta = parseComposedWicketTypeKey(a);
+  const wtb = parseComposedWicketTypeKey(b);
+  if (wta && wtb) return wta.token === wtb.token;
+  const rsa = parseComposedRunSourceKey(a);
+  const rsb = parseComposedRunSourceKey(b);
+  if (rsa && rsb) return rsa.token === rsb.token;
+  const rsca = parseComposedRunSourceConcededKey(a);
+  const rscb = parseComposedRunSourceConcededKey(b);
+  if (rsca && rscb) return rsca.token === rscb.token;
+  return false;
 }
 /** True if any pruned key shares `key`'s auto-manage identity. */
 function isPrunedIdentity(pruned, key) {
@@ -1373,12 +1418,42 @@ function dismissalTypeColumnKey(metricKey, discipline) {
   return eligibleComposedWicketTypeKeys(discipline).includes(colKey) ? colKey : null;
 }
 
+/** The COLUMN key a batting Run-Source (`runs_<src>_pct`) / bowling Runs-Conceded-
+ * by-Source (`runs_conc_<src>_pct`) ENUMERATED filter metric maps to — its composed
+ * `rs__`/`rsc__` PCT column, the composer's sole column surface for that family
+ * (D3/#24 — the enumerated keys are hidden from the picker, columnsPicker.js's
+ * D3_ENUMERATED_HIDDEN_KEYS) — or null when `metricKey` isn't one of these.
+ * Wave 2A.1: fixes the pre-existing same-key fallback, which used to auto-add the
+ * hidden enumerated key as its OWN column, duplicating a hand-composed rs__/rsc__
+ * column of the same source. Token mapping: strip the "runs_"/"_pct" (batting) or
+ * "runs_conc_"/"_pct" (bowling) wrapper; batting's "boundary" segment reads "bdry"
+ * in the composed token (4s_boundary -> 4s_bdry, 6s_boundary -> 6s_bdry) — every
+ * other token matches verbatim. Validated against the discipline's eligible composed
+ * keys (mirrors dismissalTypeColumnKey above), so a derivation slip falls through to
+ * null (the caller's same-key fallback) rather than emitting a bad column key. */
+function runSourceColumnKey(metricKey, discipline) {
+  if (discipline === "batting" && metricKey.startsWith("runs_") && metricKey.endsWith("_pct")) {
+    const token = metricKey.slice(5, -4).replace("boundary", "bdry");
+    const colKey = makeComposedRunSourceKey(token, "pct");
+    return eligibleComposedRunSourceKeys(discipline).includes(colKey) ? colKey : null;
+  }
+  if (discipline === "bowling" && metricKey.startsWith("runs_conc_") && metricKey.endsWith("_pct")) {
+    const token = metricKey.slice(10, -4);
+    const colKey = makeComposedRunSourceConcededKey(token, "pct");
+    return eligibleComposedRunSourceConcededKeys(discipline).includes(colKey) ? colKey : null;
+  }
+  return null;
+}
+
 /** The COLUMN key a numeric FILTER condition maps to (same-key, dismissal-type→wt__,
- * or parametric→composed), or null when it has no rankable column (a position /
- * composition placeholder, or a metric that doesn't resolve in this namespace). */
+ * run-source/runs-conceded→rs__/rsc__, or parametric→composed), or null when it has
+ * no rankable column (a position / composition placeholder, or a metric that
+ * doesn't resolve in this namespace). */
 function conditionColumnKey(cond, discipline) {
   const dt = dismissalTypeColumnKey(cond.metricKey, discipline);
   if (dt) return dt;
+  const rs = runSourceColumnKey(cond.metricKey, discipline);
+  if (rs) return rs;
   const m = getMetric(cond.metricKey, discipline);
   if (!m || m.kind === "composition") return null;
   if (m.paramTemplate && m.param) {
@@ -1416,6 +1491,13 @@ export function activeLeaderboardFilterSources(state) {
   if (potmYNFilterActive(state)) push("filter:potm_yn", ["potm_count"]);
   if (resultFilterActive(state)) push("filter:mc_result", ["res_won", "res_lost", "res_tied", "res_no_result"]);
   if (tossResultFilterActive(state)) push("filter:mc_toss_result", ["res_toss_won"]);
+  // Wave 2A.3: the Innings-Number / Team / Opposition which-values columns —
+  // generalising the B. Pos. rule above to three more scope categorical filters.
+  // Both disciplines (unlike positions, batting-only); push() re-validates
+  // addability per discipline/format.
+  if (inningsNumberFilterActive(state)) push("filter:innings_number", [INNINGS_NUMBER_SET_KEY]);
+  if (teamsFilterActive(state)) push("filter:teams", [TEAM_SET_KEY]);
+  if (oppositionFilterActive(state)) push("filter:opposition", [OPPOSITION_SET_KEY]);
 
   // Player-attribute filters (men-only by DATA — profile is empty for women, so this
   // is data-driven, not gender-hardcoded). One column per active profile field.
