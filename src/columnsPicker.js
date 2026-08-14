@@ -93,7 +93,7 @@ import { mountSearchMultiSelect } from "./searchSelect.js";
 // FC-2: the Bowler Style composer is gated on the presence of fielding.bowling_group
 // (added by the FC-1b pipeline re-run) — a data-driven schema probe, cached per session.
 import { getFieldingColumnPresent, ensureFieldingColumnProbed } from "./dataAvailability.js";
-import { eligibleMetrics, eligibleCrossMetrics, makeSlot } from "./state.js";
+import { eligibleMetrics, eligibleCrossMetrics, makeSlot, STAGE_NONE, STAGE_NONE_LABEL } from "./state.js";
 // D4: the composer's operator <select> reuses the SAME operator vocabulary as the
 // pop-up / advanced filter (advanced.js is import-cycle-free — pure data model).
 import { OPERATORS } from "./advanced.js";
@@ -2119,7 +2119,12 @@ export function createColumnsPicker({
         let handle;
         const summarize = (count) => {
           const vals = handle ? handle.getValues() : [];
-          if (vals.length === 1) return vals[0];
+          // A single pick reads out as its own name. For every search composer the value
+          // IS its display name (team / opponent / canonical-stage / event / venue name)
+          // EXCEPT the Stage composer's "No Stage" sentinel, whose value is the internal
+          // STAGE_NONE token — map it to STAGE_NONE_LABEL so the collapsed picker never
+          // surfaces the raw "(no stage)" string.
+          if (vals.length === 1) return vals[0] === STAGE_NONE ? STAGE_NONE_LABEL : vals[0];
           return `${count} ${count === 1 ? noun : noun + "s"}`;
         };
         handle = mountSearchMultiSelect(host, {

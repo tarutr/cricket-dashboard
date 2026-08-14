@@ -58,6 +58,10 @@ import {
   // Wave D — D2: Option-B column-model engine (preset-on-pick + manual add/remove).
   applyLeaderboardPresetPatch,
   reconcileManualColumnEdit,
+  // The Stage FILTER's "No Stage" sentinel value + its display label — reused (NOT
+  // re-derived) so the Stage COMPOSER offers the same event_stage-IS-NULL option.
+  STAGE_NONE,
+  STAGE_NONE_LABEL,
 } from "./state.js";
 
 const VIEW_FOR_DISCIPLINE = { batting: "batting", bowling: "bowling" };
@@ -1980,16 +1984,21 @@ export function mountTable(
     // event_stage spellings are folded to CLEAN canonical labels (owner ruling) +
     // deduped + sorted, EXACTLY like mountStage (drawerInnings.js), so the value the
     // composer stores is the canonical name metrics.js stageAliases expands back to
-    // its raw spelling set. The No-Stage (event_stage IS NULL) sentinel is NOT offered
-    // (it is not a canonical name and can't be expressed as IN(<raw spellings>)) — see
-    // report. Leaderboard-only, like loadTeamOptions; the pop-up passes neither.
+    // its raw spelling set. The No-Stage (event_stage IS NULL) sentinel is appended
+    // iff the scope actually holds unnamed-round matches (res.hasNoStage), MIRRORING
+    // the Stage FILTER's mountStage — its value/label are the filter's own STAGE_NONE /
+    // STAGE_NONE_LABEL (reused, not re-derived), and metrics.js buildComposedStageMetric
+    // recognises that sentinel and emits `mctx.event_stage IS NULL` instead of an
+    // IN(<raw spellings>) list. Leaderboard-only, like loadTeamOptions; the pop-up
+    // passes neither.
     loadStageOptions: () => {
       const s = store.get();
-      return searchStages(s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo).then((res) =>
-        [...new Set((res.stages || []).map((r) => canonicalStage(r)))]
+      return searchStages(s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo).then((res) => {
+        const named = [...new Set((res.stages || []).map((r) => canonicalStage(r)))]
           .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-          .map((name) => ({ value: name, label: name }))
-      );
+          .map((name) => ({ value: name, label: name }));
+        return res.hasNoStage ? [...named, { value: STAGE_NONE, label: STAGE_NONE_LABEL }] : named;
+      });
     },
     // Standalone EVENT composer (Step 4, 2026-08-14): its OWN value loader. searchEvents
     // ALREADY returns CANONICAL-folded {value,label} options (the SAME fold the Event

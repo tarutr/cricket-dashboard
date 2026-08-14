@@ -110,17 +110,25 @@
 //                    `sqlExpression` (and Best Bowling's `sortExpression`) is a
 //                    placeholder NEVER interpolated, like the composition metrics.
 
-// The ONLY import this module carries (standalone STAGE + EVENT composers,
-// 2026-08-14): the canonical→raw expansions the Stage / Event FILTERS use
-// (filters.js stagePredicateSql → stageAliases; eventPredicateSql → eventAliases).
-// The stage/event composers' CASE-WHENs must expand a canonical value to the SAME
-// raw spelling set the filter does, and that expansion is resolved lazily inside
-// getMetric (from the stage__/event__ <hex> key), so it must live here.
-// canonicalNames.js is a TRUE leaf (imports nothing), so this creates NO import
-// cycle — unlike importing escSql from state.js, which imports metrics.js (see
-// buildComposedStageMetric's inline single-quote escape below). Venue has NO fold
-// (raw match only — buildComposedVenueMetric reads mctx.venue directly).
+// Standalone STAGE + EVENT composers (2026-08-14): the canonical→raw expansions the
+// Stage / Event FILTERS use (filters.js stagePredicateSql → stageAliases;
+// eventPredicateSql → eventAliases). The stage/event composers' CASE-WHENs must expand
+// a canonical value to the SAME raw spelling set the filter does, and that expansion is
+// resolved lazily inside getMetric (from the stage__/event__ <hex> key), so it must live
+// here. canonicalNames.js is a TRUE leaf (imports nothing), so this creates NO import
+// cycle. Venue has NO fold (raw match only — buildComposedVenueMetric reads mctx.venue).
 import { stageAliases, eventAliases } from "./canonicalNames.js";
+
+// The Stage composer's "No Stage" (event_stage IS NULL) option reuses the Stage FILTER's
+// own sentinel value + label (state.js), NOT a re-derived string — buildComposedStageMetric
+// branches on STAGE_NONE to emit `mctx.event_stage IS NULL`. This is the ONE state.js
+// import metrics.js carries, and it forms a state.js↔metrics.js CYCLE — but a provably
+// BENIGN one: STAGE_NONE / STAGE_NONE_LABEL are read ONLY inside buildComposedStageMetric
+// (a runtime query-build call), and state.js reads metrics.js's exports ONLY inside its own
+// functions. Neither module touches the other's bindings during module-body evaluation, so
+// the live bindings are fully initialised by call time regardless of load order. (escSql is
+// still inlined below rather than imported, to keep that hot path free of the cycle.)
+import { STAGE_NONE, STAGE_NONE_LABEL } from "./state.js";
 
 // ── Batting ───────────────────────────────────────────────────────────────────
 const BATTING_METRICS = [
@@ -4194,18 +4202,33 @@ function buildComposedStageMetric(stageName, baseKey, discipline) {
   if (!spec || !composedStageComponentsPresent(discipline, spec)) return null;
   const base = getMetric(baseKey, discipline);
   if (!base) return null;
-  // Canonical→raw expansion, IDENTICAL to the Stage FILTER (filters.js
-  // stagePredicateSql → stageAliases). A canonical stage maps to ≥1 raw event_stage
-  // spelling; each raw becomes a SQL string literal with its single quotes doubled
-  // (the SAME inline escape buildComposedTeamMetric uses — metrics.js is not the
-  // owner of escSql, whose import would be circular). Defensive: an empty expansion
-  // yields no column (stageAliases always returns ≥1 in practice).
-  const raws = stageAliases(stageName);
-  if (!Array.isArray(raws) || raws.length === 0) return null;
-  const inList = raws.map((r) => `'${String(r).replace(/'/g, "''")}'`).join(", ");
-  const membership = `${COMPOSED_STAGE_COL} IN (${inList})`;
+  // The membership test the spec's `innings_number = {S}` is replaced with, plus the
+  // human label — two shapes:
+  //   • "No Stage" sentinel (STAGE_NONE, the Stage FILTER's own value): matches whose
+  //     event_stage IS NULL. The canonical→raw IN(...) mechanism can't express NULL, so
+  //     this branch substitutes `mctx.event_stage IS NULL` and labels with the filter's
+  //     STAGE_NONE_LABEL. (stageAliases is NOT consulted — "(no stage)" is a sentinel,
+  //     not a canonical stage name.)
+  //   • Any real canonical stage: the canonical→raw expansion IDENTICAL to the Stage
+  //     FILTER (filters.js stagePredicateSql → stageAliases). A canonical stage maps to
+  //     ≥1 raw event_stage spelling; each raw becomes a SQL string literal with its
+  //     single quotes doubled (the SAME inline escape buildComposedTeamMetric uses —
+  //     metrics.js is not the owner of escSql, whose import would sit on the hot path).
+  //     Defensive: an empty expansion yields no column (stageAliases always returns ≥1).
+  let membership;
+  let displayName;
+  if (stageName === STAGE_NONE) {
+    membership = `${COMPOSED_STAGE_COL} IS NULL`;
+    displayName = STAGE_NONE_LABEL;
+  } else {
+    const raws = stageAliases(stageName);
+    if (!Array.isArray(raws) || raws.length === 0) return null;
+    const inList = raws.map((r) => `'${String(r).replace(/'/g, "''")}'`).join(", ");
+    membership = `${COMPOSED_STAGE_COL} IN (${inList})`;
+    displayName = stageName;
+  }
   // The innings spec's conditional test is the literal substring `innings_number = {S}`
-  // in EVERY spec; replace the whole test with the IN-membership (a straight `{S}`
+  // in EVERY spec; replace the whole test with the membership (a straight `{S}`
   // swap would wrongly leave `mctx.event_stage = '<value>'`). No `{S}`/`innings_number`
   // survives (verified: the generated SQL contains neither).
   const sql = spec.sql.split("innings_number = {S}").join(membership);
@@ -4216,8 +4239,8 @@ function buildComposedStageMetric(stageName, baseKey, discipline) {
     stageName,
     isComposedStage: true,
     sqlExpression: sql,
-    label: `${base.label} (${stageName})`,
-    shortLabel: `${base.shortLabel} (${stageName})`,
+    label: `${base.label} (${displayName})`,
+    shortLabel: `${base.shortLabel} (${displayName})`,
   };
 }
 

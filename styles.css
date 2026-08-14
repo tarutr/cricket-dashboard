@@ -1981,6 +1981,9 @@ a { color: var(--color-accent); }
 .data-table thead th[data-key^="event__"],
 .data-table thead th[data-key^="venue__"] {
   text-transform: none;
+  /* These composer headers are NORMAL case, so the uppercase base rule's tracking
+     (letter-spacing: 0.03em) reads loose on them — reset it so the text sits tight. */
+  letter-spacing: normal;
 }
 
 /* The corner cells (pin + rank + Player headers) are sticky both ways — pin them
