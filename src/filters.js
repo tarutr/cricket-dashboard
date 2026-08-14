@@ -514,9 +514,19 @@ export function buildScopeClausesTagged(
  * column set can never drift between the two. match_id is projected as
  * `mctx_match_id` to avoid clashing with a base view's own `match_id`. */
 export function matchContextSubselectSql() {
+  // Step 4 (2026-08-14): event_name + venue are projected here too so the standalone
+  // EVENT / VENUE composers (metrics.js event__/venue__) can aggregate over
+  // `mctx.event_name` / `mctx.venue` off this SAME 1:1 LEFT JOIN — no redundant
+  // second per-player `matches` join. ADDITIVE projection: every existing consumer
+  // (the leaderboard's match-context clauses, the fielding-mode EXISTS) references
+  // specific columns, never `*`, so the two extra columns change nothing they read;
+  // and NO base view (batting / bowling / matchup_*) carries an `event_name` or
+  // `venue` column (verified via DESCRIBE), so the join stays unambiguous. The join
+  // is 1:1 on match_id, so no aggregate moves — anchors byte-identical.
   return (
     `(SELECT match_id AS mctx_match_id, match_winner, result_type, ` +
-    `is_super_over, toss_winner, toss_decision, team_batting_first, event_stage, method ` +
+    `is_super_over, toss_winner, toss_decision, team_batting_first, event_stage, method, ` +
+    `event_name, venue ` +
     `FROM matches) mctx`
   );
 }

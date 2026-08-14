@@ -58,6 +58,11 @@ import {
   // New standalone STAGE composer (2026-08-14): the stage__<hex>__<base> keys the user
   // has composed this session, folded into eligibleColumnKeys like Team/Opposition.
   eligibleComposedStageKeys,
+  // New standalone EVENT + VENUE composers (Step 4, 2026-08-14): the event__/venue__
+  // <hex>__<base> keys the user has composed this session, folded into
+  // eligibleColumnKeys like Team/Opposition/Stage.
+  eligibleComposedEventKeys,
+  eligibleComposedVenueKeys,
   INNINGS_NUMBER_SET_KEY,
   TEAM_SET_KEY,
   OPPOSITION_SET_KEY,
@@ -1264,6 +1269,16 @@ export function eligibleColumnKeys(discipline, formats) {
   // (stage__<hex>__<base>) — same data-driven-value-space fold as Team/Opposition
   // above. Byte-identical when none is present (empty until a Stage column is added).
   for (const key of eligibleComposedStageKeys(discipline)) {
+    keys.add(key);
+  }
+  // New standalone EVENT + VENUE composers (Step 4, 2026-08-14): the picked composed-
+  // event / composed-venue column keys (event__/venue__ <hex>__<base>) — same data-
+  // driven-value-space fold as Team/Opposition/Stage above. Byte-identical when none is
+  // present (each set is empty until an Event/Venue column is added).
+  for (const key of eligibleComposedEventKeys(discipline)) {
+    keys.add(key);
+  }
+  for (const key of eligibleComposedVenueKeys(discipline)) {
     keys.add(key);
   }
   return keys;

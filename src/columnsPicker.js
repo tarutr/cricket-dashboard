@@ -80,6 +80,11 @@ import {
   // same pool/key-scheme/registry shape — its picks are CANONICAL stage names, its
   // value source is the host's loadStageOptions (not the team loader).
   composedStagePool, makeComposedStageKey, parseComposedStageKey, registerComposedStageKeys,
+  // Standalone EVENT + VENUE composers (Step 4, 2026-08-14): the FOURTH + FIFTH SEARCH
+  // composers — same pool/key-scheme/registry shape. Event picks CANONICAL event names
+  // (loadEventOptions); Venue picks RAW venue names (loadVenueOptions, no fold).
+  composedEventPool, makeComposedEventKey, parseComposedEventKey, registerComposedEventKeys,
+  composedVenuePool, makeComposedVenueKey, parseComposedVenueKey, registerComposedVenueKeys,
 } from "./metrics.js";
 // Standalone TEAM/OPPOSITION composers: their value control is the SAME searchable
 // multi-select the Team/Opposition/Event/Venue FILTERS use (drawerInnings.js mounts
@@ -431,6 +436,13 @@ export function createColumnsPicker({
   // Leaderboard-only opt-in (the pop-up passes neither loader), scoped like the Team
   // loader with NO sibling cascade. Absent → the Stage composer is simply not offered.
   loadStageOptions,
+  // Standalone EVENT + VENUE composers (Step 4, 2026-08-14): their OWN async value
+  // loaders — `loadEventOptions() -> Promise<[{value,label}]>` of CLEAN canonical event
+  // names, and `loadVenueOptions() -> Promise<[{value,label}]>` of RAW venue names
+  // (venue has no fold). Same leaderboard-only, no-sibling-cascade contract as the Team/
+  // Stage loaders; absent → the Event/Venue composer is simply not offered (pop-up).
+  loadEventOptions,
+  loadVenueOptions,
 }) {
   // Render the per-column Sort-by + Highlight controls only when the full W2
   // contract is supplied (leaderboard). Absent → the pop-up's plain checkbox
@@ -1057,7 +1069,7 @@ export function createColumnsPicker({
   // path (buildPickerHTML / open) is untouched — flat checkbox list, byte-identical.
 
   // Fixed order + labels for the dimension / category composers (compose editors).
-  const DIM_COMPOSER_KINDS = ["phase", "ball", "innings", "battingposition", "team", "opposition", "stage", "runsource", "runsourceconc", "wickettype"];
+  const DIM_COMPOSER_KINDS = ["phase", "ball", "innings", "battingposition", "team", "opposition", "stage", "event", "venue", "runsource", "runsourceconc", "wickettype"];
   const COMPOSER_KIND_LABEL = {
     phase: "Phase Range", ball: "Ball Range", innings: "Innings Range",
     // Chunk 1B: the per-position breakdown composer (batting-only; self-gates via
@@ -1073,12 +1085,17 @@ export function createColumnsPicker({
     // Standalone STAGE composer (Step 3, 2026-08-14): a THIRD search-and-pick composer —
     // its picks are CANONICAL stage names; self-gates on loadStageOptions. Both disciplines.
     stage: "Stage",
+    // Standalone EVENT + VENUE composers (Step 4, 2026-08-14): the FOURTH + FIFTH search-
+    // and-pick composers — Event picks CANONICAL event names (loadEventOptions), Venue
+    // picks RAW venue names (loadVenueOptions). Both disciplines; self-gate on their loaders.
+    event: "Event",
+    venue: "Venue",
     runsource: "Runs by Source", runsourceconc: "Runs Conceded by Source", wickettype: "Wicket Type",
   };
   // The composers whose value control is a data-driven SEARCH picker rather than a
   // fixed tick-box list (their `ticks` ARE the composed column keys, like the fielding
   // range kinds). Team, its Opposition mirror, and Stage.
-  const SEARCH_COMPOSER_KINDS = new Set(["team", "opposition", "stage"]);
+  const SEARCH_COMPOSER_KINDS = new Set(["team", "opposition", "stage", "event", "venue"]);
   // Per-search-composer metadata: key codec + session registry + value loader +
   // display nouns/placeholders, keyed by kind — so the mount / stat-remap / confirm
   // blocks below stay kind-agnostic (add a fourth search composer by adding a row).
@@ -1102,6 +1119,16 @@ export function createColumnsPicker({
       parse: parseComposedStageKey, make: makeComposedStageKey, register: registerComposedStageKeys,
       nameOf: (p) => p.stageName, loader: loadStageOptions, noun: "stage",
       placeholder: "Choose stages…", filterPlaceholder: "Type to filter stages…", ariaLabel: "Stages",
+    },
+    event: {
+      parse: parseComposedEventKey, make: makeComposedEventKey, register: registerComposedEventKeys,
+      nameOf: (p) => p.eventName, loader: loadEventOptions, noun: "event",
+      placeholder: "Choose events…", filterPlaceholder: "Type to filter events…", ariaLabel: "Events",
+    },
+    venue: {
+      parse: parseComposedVenueKey, make: makeComposedVenueKey, register: registerComposedVenueKeys,
+      nameOf: (p) => p.venueName, loader: loadVenueOptions, noun: "venue",
+      placeholder: "Choose venues…", filterPlaceholder: "Type to filter venues…", ariaLabel: "Venues",
     },
   };
   // #35 (columns-popup rework Wave B): the count/% AXIS is NOT a selectable choice in
@@ -1224,6 +1251,26 @@ export function createColumnsPicker({
     }
     return next;
   }
+  /** Remap the Event composer's ticked keys to a new base stat — the canonical-event-
+   * name mirror of stageRemapTicks above (event name preserved). */
+  function eventRemapTicks(newBaseKey, ticks) {
+    const next = new Set();
+    for (const k of ticks) {
+      const p = parseComposedEventKey(k);
+      if (p) next.add(makeComposedEventKey(p.eventName, newBaseKey));
+    }
+    return next;
+  }
+  /** Remap the Venue composer's ticked keys to a new base stat — the raw-venue-name
+   * mirror of stageRemapTicks above (venue name preserved). */
+  function venueRemapTicks(newBaseKey, ticks) {
+    const next = new Set();
+    for (const k of ticks) {
+      const p = parseComposedVenueKey(k);
+      if (p) next.add(makeComposedVenueKey(p.venueName, newBaseKey));
+    }
+    return next;
+  }
 
   // A monotonic id for a PENDING (empty, no-column-yet) parametric composer row —
   // the owner's "starts empty" ruling: adding Innings Score Range / Wicket Haul
@@ -1288,6 +1335,8 @@ export function createColumnsPicker({
     if (kind === "team") return composedTeamPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "opposition") return composedOppositionPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "stage") return composedStagePool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
+    if (kind === "event") return composedEventPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
+    if (kind === "venue") return composedVenuePool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "runsource") return ns === "batting" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
     if (kind === "runsourceconc") return ns === "bowling" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
     if (kind === "wickettype") return (ns === "batting" || ns === "bowling") ? [{ value: "count", label: "Count" }, { value: "pct", label: "%" }] : [];
@@ -1987,6 +2036,10 @@ export function createColumnsPicker({
           ? oppRemapTicks(statEl.value, editor.ticks)
           : editor.kind === "stage"
           ? stageRemapTicks(statEl.value, editor.ticks)
+          : editor.kind === "event"
+          ? eventRemapTicks(statEl.value, editor.ticks)
+          : editor.kind === "venue"
+          ? venueRemapTicks(statEl.value, editor.ticks)
           : remapTicks(editor.kind, ns, formats, editor.sel, statEl.value, editor.ticks);
         editor.sel = statEl.value;
         rerenderInline();

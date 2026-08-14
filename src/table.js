@@ -31,10 +31,13 @@ import {
 import { activeGroups } from "./advanced.js";
 import { escHtml, escAttr } from "./html.js";
 import { createColumnsPicker } from "./columnsPicker.js";
-import { searchTeams, searchStages } from "./playerData.js";
+import { searchTeams, searchStages, searchEvents, searchVenues } from "./playerData.js";
 // Standalone STAGE composer (Step 3, 2026-08-14): the composer's value picker offers
 // CLEAN canonical stage names (owner ruling), so loadStageOptions folds searchStages'
 // raw event_stage spellings to canonical — the SAME fold drawerInnings.js mountStage does.
+// Step 4 (Event/Venue): searchEvents ALREADY returns canonical-folded event options
+// (same fold as the Event FILTER's mountEvent) so loadEventOptions needs no extra
+// canonical helper; searchVenues returns RAW venue names (venue has no fold anywhere).
 import { canonicalStage } from "./canonicalNames.js";
 import {
   eligibleColumnKeys,
@@ -1316,6 +1319,19 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   const stageComposerCols = visibleColumns
     .map((key) => getMetric(key, discipline))
     .filter((m) => m && m.isComposedStage);
+  // Standalone EVENT / VENUE composers (Step 4, 2026-08-14): event__/venue__ columns
+  // aggregate over `mctx.event_name` / `mctx.venue`, which live on the SHARED match-
+  // context LEFT JOIN (its sub-select now projects both — filters.js
+  // matchContextSubselectSql). Same join-presence-only gate as stageComposerCols:
+  // source "innings" (already projected via inningsMetrics), so these collections
+  // exist ONLY to light up the mctx join. With no such column present each is [] and
+  // the emitted SQL is byte-identical.
+  const eventComposerCols = visibleColumns
+    .map((key) => getMetric(key, discipline))
+    .filter((m) => m && m.isComposedEvent);
+  const venueComposerCols = visibleColumns
+    .map((key) => getMetric(key, discipline))
+    .filter((m) => m && m.isComposedVenue);
   // Wave D — TASK B: PotM (Y/N) leaderboard filter (state.potmYN, subset of
   // {"yes","no"}). A HAVING-style gate on the SAME per-player PotM award count the
   // PotM Count column/filter use (pom_cte.player_of_match = SUM of the 0/1 flag).
@@ -1574,7 +1590,18 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // WHERE clause and, being 1:1, changes no aggregate, so every existing column
   // (incl. "matches", which stays on its whole-scope player_matches source) is
   // byte-identical; only mctx.event_stage becomes referenceable for the new column.
-  if (wantsMatchContext || stageComposerCols.length > 0) fromSql += matchContextJoinSql(view);
+  // Step 4 (2026-08-14): event / venue composer COLUMNS light the SAME mctx join
+  // (their sqlExpression reads mctx.event_name / mctx.venue). JOIN-PRESENCE ONLY, like
+  // the stage-COLUMN case above: they narrow nothing (no WHERE, 1:1 join), so every
+  // existing aggregate is byte-identical; only the extra mctx columns become
+  // referenceable.
+  if (
+    wantsMatchContext ||
+    stageComposerCols.length > 0 ||
+    eventComposerCols.length > 0 ||
+    venueComposerCols.length > 0
+  )
+    fromSql += matchContextJoinSql(view);
   if (wantsFielding) fromSql += ` LEFT JOIN fielding_cte ON fielding_cte.fld_player_id = ${idCol}`;
   if (wantsPom) fromSql += ` LEFT JOIN pom_cte ON pom_cte.pom_player_id = ${idCol}`;
   // Result (Wave B): 1:1 LEFT JOIN by the unified player id — res_player_id is the
@@ -1962,6 +1989,30 @@ export function mountTable(
         [...new Set((res.stages || []).map((r) => canonicalStage(r)))]
           .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
           .map((name) => ({ value: name, label: name }))
+      );
+    },
+    // Standalone EVENT composer (Step 4, 2026-08-14): its OWN value loader. searchEvents
+    // ALREADY returns CANONICAL-folded {value,label} options (the SAME fold the Event
+    // FILTER's mountEvent uses), so the composer stores canonical event names that
+    // metrics.js eventAliases expands back to their raw event_name spelling set — no
+    // extra fold needed here. Scoped to gender/format/date/team-type; NO sibling cascade
+    // (no `sel` arg) — the composer is INDEPENDENT of the Event filter (owner ruling).
+    // Leaderboard-only, like loadTeamOptions/loadStageOptions; the pop-up passes none.
+    loadEventOptions: () => {
+      const s = store.get();
+      return searchEvents("", s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo).then((rows) =>
+        (rows || []).map((r) => ({ value: r.value, label: r.label }))
+      );
+    },
+    // Standalone VENUE composer (Step 4, 2026-08-14): its OWN value loader. Venue has NO
+    // canonical fold anywhere (the Venue FILTER matches RAW `venue IN (…)`), so
+    // searchVenues returns RAW venue names and the composer stores + matches them
+    // verbatim (metrics.js buildComposedVenueMetric → `mctx.venue = '<raw>'`). Same
+    // scope + no-cascade + leaderboard-only rules as the Event/Stage loaders above.
+    loadVenueOptions: () => {
+      const s = store.get();
+      return searchVenues("", s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo).then((rows) =>
+        (rows || []).map((r) => ({ value: r.value, label: r.label }))
       );
     },
     // E1a: the picker speaks KEYS (a string[] — same contract the player pop-up
