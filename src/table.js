@@ -31,6 +31,7 @@ import {
 import { activeGroups } from "./advanced.js";
 import { escHtml, escAttr } from "./html.js";
 import { createColumnsPicker } from "./columnsPicker.js";
+import { searchTeams } from "./playerData.js";
 import {
   eligibleColumnKeys,
   positionsFilterActive,
@@ -1913,6 +1914,15 @@ export function mountTable(
   const columnsPicker = createColumnsPicker({
     getDiscipline: () => effectiveDiscipline(store.get()),
     getFormats: () => store.get().formats,
+    // New Team composer (Step 1, 2026-08-14): the composer's searchable value picker
+    // sources its team list here — a leaderboard-only host callback the picker gates
+    // the Team composer on (the picker can't read the store). Scoped to gender/format/
+    // date/team-type; NO sibling cascade — the composer is INDEPENDENT of the Team
+    // filter (owner ruling), so it is NOT narrowed by an active team/opposition filter.
+    loadTeamOptions: () => {
+      const s = store.get();
+      return searchTeams("", s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo);
+    },
     // E1a: the picker speaks KEYS (a string[] — same contract the player pop-up
     // uses, so that surface is byte-identical). getColumns projects the store's
     // Slot[] to its key list; setColumns' key array is reconciled back into slots

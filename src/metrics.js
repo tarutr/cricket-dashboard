@@ -2728,6 +2728,10 @@ export function getMetric(key, discipline) {
       resolveInningsNumberSetMetric(key, discipline) ??
       resolveTeamSetMetric(key, discipline) ??
       resolveOppositionSetMetric(key, discipline) ??
+      // New standalone TEAM composer (2026-08-14): team__<hex>__<base> conditional
+      // aggregation over the player's own team column (both disciplines). null for any
+      // other prefix / non-plain discipline, so every other caller is unchanged.
+      resolveComposedTeamMetric(key, discipline) ??
       // Wave D — D1: player-profile attribute columns (attr_<field>), virtual text
       // metrics projected out of the profile_cte join (buildQuery). null for any
       // non-attr key / wrong discipline, so every other caller is unchanged.
@@ -3756,6 +3760,182 @@ export function resolveOppositionSetMetric(key, discipline) {
  * into eligibleColumnKeys so a chosen / auto-added column survives a re-render. */
 export function oppositionSetColumnKeys(discipline) {
   return SCOPE_OPP_COL[discipline] ? [OPPOSITION_SET_KEY] : [];
+}
+
+// ── Composed TEAM × metric columns (standalone composer, 2026-08-14) ───────────
+// A STANDALONE composer (owner ruling: composers are FULLY INDEPENDENT of the scope
+// filters — this reads/writes NOTHING on state.teams). Pick value(s) [team names] ×
+// a base stat → one column per picked team, e.g. "Bat Avg (India)". Modeled EXACTLY
+// on the Batting-Position composer (pos__) — conditional aggregation over a raw
+// per-row column — with ONE difference: the value is an arbitrary TEAM NAME string,
+// not a fixed p1..p12 token, and the raw column is the player's OWN side
+// (SCOPE_TEAM_COL: batting_team on the batting view, bowling_team on the bowling view;
+// both already projected — NO query change). Both disciplines.
+//
+// The base-metric POOL, the component SET and the per-metric SPECS are SHARED with the
+// Innings-Number composer (COMPOSED_INNINGS_*), reused verbatim so a base rate's
+// formula / NULLIF guard / component `needs` can NEVER drift between composers (Rule
+// 1). The spec SQL is the innings spec with the conditional column innings_number
+// swapped for the discipline's team column, and {S} swapped for the team name as a
+// SQL-ESCAPED string literal (a raw `'` in a team name is doubled — mirrors the inline
+// escape at metrics.js:4534; metrics.js is a leaf module with no imports, so it does
+// NOT import state.js's escSql, which would be a circular dependency).
+//
+// KEY = `team__<hexToken>__<baseKey>`  e.g. `team__496e646961__average` (India).
+// The value is encoded as HEX of the team name's UTF-8 bytes: identifier-safe
+// ([0-9a-f]*, so the KEY is a valid UNQUOTED SQL alias — table.js emits `… AS
+// ${m.key}`), separator-free (no `__`, so the first `__` after the prefix cleanly
+// splits token|baseKey; base keys carry only single underscores), and it ROUND-TRIPS
+// any string (spaces / punctuation / apostrophes / unicode) with no lookup table. No
+// catalogued key and no other composed prefix starts with `team__` (the which-values
+// `team_set` is a single underscore — "team_set".startsWith("team__") is false).
+const COMPOSED_TEAM_PREFIX = "team__";
+// Reuse the Innings composer's pool/specs/components verbatim (both disciplines) so
+// formulas can never drift. buildComposedTeamMetric swaps innings_number → the team
+// column at build time (the column is discipline-dependent, so it can't be pre-swapped
+// like the position composer does).
+const COMPOSED_TEAM_SPECS = COMPOSED_INNINGS_SPECS;
+const COMPOSED_TEAM_COMPONENTS = COMPOSED_INNINGS_COMPONENTS;
+const COMPOSED_TEAM_POOL_ORDER = COMPOSED_INNINGS_POOL_ORDER;
+
+/** Hex-encode a team NAME → an identifier-safe, separator-free token (UTF-8 bytes →
+ * [0-9a-f]*). Round-trips any string; keeps the composed KEY a valid unquoted SQL
+ * alias and unambiguously splittable on `__`. */
+function teamNameToToken(name) {
+  const bytes = new TextEncoder().encode(String(name));
+  let hex = "";
+  for (const b of bytes) hex += b.toString(16).padStart(2, "0");
+  return hex;
+}
+/** Decode a hex team token → the team NAME, or null if malformed (odd length / non-hex
+ * / undecodable UTF-8). */
+function teamTokenToName(token) {
+  if (typeof token !== "string" || token.length === 0 || token.length % 2 !== 0 || !/^[0-9a-f]+$/.test(token)) {
+    return null;
+  }
+  const bytes = new Uint8Array(token.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(token.slice(i * 2, i * 2 + 2), 16);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Build the composed-team column key for `baseKey` scoped to `teamName`. */
+export function makeComposedTeamKey(teamName, baseKey) {
+  return `${COMPOSED_TEAM_PREFIX}${teamNameToToken(teamName)}__${baseKey}`;
+}
+
+/** Parse a composed-team column key → { token, teamName, baseKey }, or null. */
+export function parseComposedTeamKey(key) {
+  if (typeof key !== "string" || !key.startsWith(COMPOSED_TEAM_PREFIX)) return null;
+  const rest = key.slice(COMPOSED_TEAM_PREFIX.length);
+  const sep = rest.indexOf("__");
+  if (sep <= 0) return null;
+  const token = rest.slice(0, sep);
+  const baseKey = rest.slice(sep + 2);
+  const teamName = teamTokenToName(token);
+  if (teamName == null || !baseKey) return null;
+  return { token, teamName, baseKey };
+}
+
+/** True iff every component the `baseKey` spec needs exists in `discipline`'s view. */
+function composedTeamComponentsPresent(discipline, spec) {
+  const have = COMPOSED_TEAM_COMPONENTS[discipline];
+  return !!have && spec.needs.every((c) => have.has(c));
+}
+
+/** Build the VIRTUAL metric for a composed-team column: the base metric's own format /
+ * higherIsBetter / zeroIsData / kind / source, re-badged with the composed key + a
+ * "(Team)" label, and a GENERATED conditional-aggregation sqlExpression (the team
+ * column substituted for innings_number, the SQL-escaped team name for {S}). Both
+ * plain disciplines; null outside batting/bowling, for a missing team name, or for an
+ * unknown base / missing component. */
+function buildComposedTeamMetric(teamName, baseKey, discipline) {
+  const col = SCOPE_TEAM_COL[discipline];
+  if (!col) return null; // plain batting/bowling only
+  if (teamName == null || teamName === "") return null;
+  const specMap = COMPOSED_TEAM_SPECS[discipline];
+  const spec = specMap && specMap[baseKey];
+  if (!spec || !composedTeamComponentsPresent(discipline, spec)) return null;
+  const base = getMetric(baseKey, discipline);
+  if (!base) return null;
+  // SQL string literal, single-quotes doubled (mirrors metrics.js:4534's inline escape).
+  const literal = `'${String(teamName).replace(/'/g, "''")}'`;
+  const sql = spec.sql.split("innings_number").join(col).split("{S}").join(literal);
+  return {
+    ...base,
+    key: makeComposedTeamKey(teamName, baseKey),
+    baseKey,
+    teamName,
+    isComposedTeam: true,
+    sqlExpression: sql,
+    label: `${base.label} (${teamName})`,
+    shortLabel: `${base.shortLabel} (${teamName})`,
+  };
+}
+
+/** Resolve a composed-team COLUMN key to its virtual metric, or null. Called by getMetric. */
+export function resolveComposedTeamMetric(key, discipline) {
+  const parsed = parseComposedTeamKey(key);
+  if (!parsed) return null;
+  return buildComposedTeamMetric(parsed.teamName, parsed.baseKey, discipline);
+}
+
+/** The ordered base metrics the `discipline` Team composer offers — the SAME pool as
+ * the Innings composer, filtered to those with a spec AND all components present. []
+ * outside plain batting/bowling. */
+export function composedTeamPool(discipline) {
+  if (!SCOPE_TEAM_COL[discipline]) return [];
+  const order = COMPOSED_TEAM_POOL_ORDER[discipline];
+  const specMap = COMPOSED_TEAM_SPECS[discipline];
+  if (!order || !specMap) return [];
+  const pool = [];
+  for (const baseKey of order) {
+    const spec = specMap[baseKey];
+    if (!spec || !composedTeamComponentsPresent(discipline, spec)) continue;
+    const base = getMetric(baseKey, discipline);
+    if (base) pool.push(base);
+  }
+  return pool;
+}
+
+// ── Composed-team eligibility (data-driven value space) ───────────────────────
+// The team value set is DATA-DRIVEN (the full list can't be enumerated into
+// eligibleColumnKeys' finite Set ahead of time), so — unlike the fixed-token
+// composers (pos__/in__), which enumerate pool × tokens — the eligible set is
+// whatever the user has actually COMPOSED. `_composedTeamKeys` records every minted
+// key (registerComposedTeamKeys, called by the columns picker on confirm), and
+// eligibleComposedTeamKeys returns those that still RESOLVE for the discipline. This
+// is folded into state.eligibleColumnKeys, which ALL three column-prune sites consult
+// (state.pruneIneligibleState, state.isLeaderboardColumnAddable, table.pruneInvalid
+// Columns) — so one fold keeps a picked Team column alive everywhere, with no query-
+// builder edit. Append-only + harmless: a registered key that is no longer a chosen
+// column simply never matches a slot at the prune sites. No persistence anywhere in
+// the app (state resets on reload), so the registry and the columns reset together.
+const _composedTeamKeys = new Set();
+
+/** Record composed-team column key(s) as the composer mints them, so
+ * eligibleColumnKeys can keep a chosen Team column alive across a re-render / Search-
+ * prune. Ignores anything that isn't a valid composed-team key. */
+export function registerComposedTeamKeys(keys) {
+  for (const k of Array.isArray(keys) ? keys : [keys]) {
+    if (typeof k === "string" && parseComposedTeamKey(k)) _composedTeamKeys.add(k);
+  }
+}
+
+/** Every registered composed-team column key that RESOLVES for `discipline` — folded
+ * into eligibleColumnKeys so a chosen Team column survives a re-render / prune, and
+ * drops the moment the discipline no longer offers that base metric (e.g. a batting-
+ * only base on a bowling table). [] outside plain batting/bowling. */
+export function eligibleComposedTeamKeys(discipline) {
+  if (!SCOPE_TEAM_COL[discipline]) return [];
+  const keys = [];
+  for (const k of _composedTeamKeys) {
+    if (resolveComposedTeamMetric(k, discipline)) keys.push(k);
+  }
+  return keys;
 }
 
 // ── Composed RUN-SOURCE × count/% columns (columns content rework D3, 2026-08-08)

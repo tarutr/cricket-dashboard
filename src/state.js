@@ -50,6 +50,7 @@ import {
   inningsNumberSetColumnKeys,
   teamSetColumnKeys,
   oppositionSetColumnKeys,
+  eligibleComposedTeamKeys,
   INNINGS_NUMBER_SET_KEY,
   TEAM_SET_KEY,
   OPPOSITION_SET_KEY,
@@ -1234,6 +1235,16 @@ export function eligibleColumnKeys(discipline, formats) {
     keys.add(key);
   }
   for (const key of oppositionSetColumnKeys(discipline)) {
+    keys.add(key);
+  }
+  // New standalone TEAM composer (2026-08-14): the picked composed-team column keys
+  // (team__<hex>__<base>). Data-driven value space → not enumerable up front, so these
+  // are the keys the user actually composed this session (metrics._composedTeamKeys),
+  // filtered to those that resolve for `discipline`. Folding them in HERE keeps a
+  // chosen Team column alive at ALL three prune sites (pruneIneligibleState,
+  // isLeaderboardColumnAddable, table.pruneInvalidColumns) with no query-builder edit.
+  // Byte-identical when none is present (the set is empty until a Team column is added).
+  for (const key of eligibleComposedTeamKeys(discipline)) {
     keys.add(key);
   }
   return keys;

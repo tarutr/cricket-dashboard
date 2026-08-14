@@ -70,7 +70,13 @@ import {
   makeComposedFieldingKey, parseComposedFieldingKey,
   // Wave D — D1: the player-profile attribute columns' offerable specs per discipline.
   profileColumnSpecs,
+  // Standalone TEAM composer (2026-08-14): pool + key scheme + the session registry
+  // that keeps a picked Team column alive across a Search-prune (metrics.js).
+  composedTeamPool, makeComposedTeamKey, parseComposedTeamKey, registerComposedTeamKeys,
 } from "./metrics.js";
+// Standalone TEAM composer: its value control is the SAME searchable multi-select the
+// Team/Opposition/Event/Venue FILTERS use (drawerInnings.js mounts it identically).
+import { mountSearchMultiSelect } from "./searchSelect.js";
 // FC-2: the Bowler Style composer is gated on the presence of fielding.bowling_group
 // (added by the FC-1b pipeline re-run) — a data-driven schema probe, cached per session.
 import { getFieldingColumnPresent, ensureFieldingColumnProbed } from "./dataAvailability.js";
@@ -398,6 +404,16 @@ export function createColumnsPicker({
   // section for ALL plain-ns callers (leaderboard included), gated only by data
   // availability — this flag governs WHICH dropdowns render, not the composers.
   getFieldingMode,
+  // Standalone TEAM composer (2026-08-14): OPT-IN async loader for the team list the
+  // composer's searchable value picker offers — `loadTeamOptions() -> Promise<[{value,
+  // label, games?}]>`. Supplied by the leaderboard host (it closes over the store to
+  // scope by gender/team-type/format/date, mirroring the Team FILTER's loader, but with
+  // NO sibling cascade — the composer is INDEPENDENT of the scope filters). The picker
+  // is store-decoupled by design, so the scope it can't read arrives through this
+  // callback. When absent (the player pop-up), the Team composer is simply not offered,
+  // so that surface stays byte-identical. Analogous to crossDiscipline / profileColumns
+  // / getFieldingMode — an opt-in the leaderboard passes and the pop-up doesn't.
+  loadTeamOptions,
 }) {
   // Render the per-column Sort-by + Highlight controls only when the full W2
   // contract is supplied (leaderboard). Absent → the pop-up's plain checkbox
@@ -1024,14 +1040,22 @@ export function createColumnsPicker({
   // path (buildPickerHTML / open) is untouched — flat checkbox list, byte-identical.
 
   // Fixed order + labels for the dimension / category composers (compose editors).
-  const DIM_COMPOSER_KINDS = ["phase", "ball", "innings", "battingposition", "runsource", "runsourceconc", "wickettype"];
+  const DIM_COMPOSER_KINDS = ["phase", "ball", "innings", "battingposition", "team", "runsource", "runsourceconc", "wickettype"];
   const COMPOSER_KIND_LABEL = {
     phase: "Phase Range", ball: "Ball Range", innings: "Innings Range",
     // Chunk 1B: the per-position breakdown composer (batting-only; self-gates via
     // composerAvailable → composedPositionPool is [] for bowling). Menu-label choice.
     battingposition: "Batting Position",
+    // Standalone TEAM composer (2026-08-14): data-driven value set → a SEARCH-and-pick
+    // value control (not a fixed tick-box list); self-gates via composerAvailable on
+    // loadTeamOptions + a non-empty pool. Both disciplines.
+    team: "Team",
     runsource: "Runs by Source", runsourceconc: "Runs Conceded by Source", wickettype: "Wicket Type",
   };
+  // The composers whose value control is a data-driven SEARCH picker rather than a
+  // fixed tick-box list (their `ticks` ARE the composed column keys, like the fielding
+  // range kinds). Today: just the Team composer.
+  const SEARCH_COMPOSER_KINDS = new Set(["team"]);
   // #35 (columns-popup rework Wave B): the count/% AXIS is NOT a selectable choice in
   // the compose editor — it is ONLY the post-add per-row toggle. Runs by Source and
   // Wicket Type are the two composers whose "stat" IS that count/% axis, so their
@@ -1121,6 +1145,17 @@ export function createColumnsPicker({
     }
     return next;
   }
+  /** Remap the Team composer's ticked keys to a new base stat (the stat <select>
+   * change) — the search picker holds TEAM NAMES, so swap the base key on each ticked
+   * key structurally (team name preserved), analogous to fcRemapRangeTicks. */
+  function teamRemapTicks(newBaseKey, ticks) {
+    const next = new Set();
+    for (const k of ticks) {
+      const p = parseComposedTeamKey(k);
+      if (p) next.add(makeComposedTeamKey(p.teamName, newBaseKey));
+    }
+    return next;
+  }
 
   // A monotonic id for a PENDING (empty, no-column-yet) parametric composer row —
   // the owner's "starts empty" ruling: adding Innings Score Range / Wicket Haul
@@ -1180,6 +1215,7 @@ export function createColumnsPicker({
     if (kind === "ball") return composedBallPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "innings") return composedInningsPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "battingposition") return composedPositionPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
+    if (kind === "team") return composedTeamPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "runsource") return ns === "batting" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
     if (kind === "runsourceconc") return ns === "bowling" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
     if (kind === "wickettype") return (ns === "batting" || ns === "bowling") ? [{ value: "count", label: "Count" }, { value: "pct", label: "%" }] : [];
@@ -1256,6 +1292,10 @@ export function createColumnsPicker({
       if (FC_RANGE_KINDS.has(kind)) return true;
       return composerValueRows(kind, ns, formats, FC_TALLY_OPTIONS[0].value).length > 0;
     }
+    // Team composer: a DATA-DRIVEN search picker (no fixed tick-box rows), so it is
+    // offerable iff the host supplied the team loader AND the discipline has ≥1 base
+    // stat in the pool. Only the leaderboard passes loadTeamOptions → pop-up unaffected.
+    if (kind === "team") return typeof loadTeamOptions === "function" && composerSelectOptions("team", ns, formats).length > 0;
     const opts = composerSelectOptions(kind, ns, formats);
     if (!opts.length) return false;
     return composerValueRows(kind, ns, formats, opts[0].value).length > 0;
@@ -1438,6 +1478,17 @@ export function createColumnsPicker({
       </div>`;
   }
 
+  /** The compose-editor body for the standalone TEAM composer: a HOST element into
+   * which wireComposeEditor mounts the SAME searchable multi-select the Team FILTER
+   * uses (mountSearchMultiSelect, fed by the host's loadTeamOptions loader). It is a
+   * live JS widget (async option load + client-side filtering), so it is MOUNTED after
+   * render rather than emitted as static HTML — the host is empty here. The widget's
+   * own toggle summarises the picked teams; each picked team becomes one column on Add.
+   * ADD-only (Team columns carry no edit pencil — see composerKindForKey). */
+  function teamComposeBodyHTML() {
+    return `<div class="cols-team-compose"><div class="cols-team-compose__host" data-role="team-picker-host"></div></div>`;
+  }
+
   /** The TRANSIENT compose editor (owner ruling R4-A, "compose then add"): a temporary
    * card holding the stat/axis <select> + dimension inputs + Add/Save + Cancel. It is NOT
    * a persistent column row — on confirm it spawns one standalone chosen-column row per
@@ -1461,6 +1512,10 @@ export function createColumnsPicker({
     let bodyHTML;
     if (FC_RANGE_KINDS.has(kind)) {
       bodyHTML = fcRangeBodyHTML(editor, FC_KIND_DIM[kind]);
+    } else if (kind === "team") {
+      // Standalone TEAM composer: a mounted search-and-pick widget (wired later), not
+      // a fixed tick-box grid.
+      bodyHTML = teamComposeBodyHTML();
     } else {
       const body = composeEditorBody(kind, ns, formats, sel, ticks, single);
       bodyHTML = body.empty
@@ -1799,6 +1854,17 @@ export function createColumnsPicker({
   function wireComposeEditor(rootEl) {
     const editor = inlineState && inlineState.editor;
 
+    // TEAM composer teardown: wireComposeEditor runs on EVERY (re)render, and the
+    // previous render's search widget (if any) has just had its DOM replaced — but its
+    // document-level listeners (outside-click, portal scroll/resize) linger until
+    // destroy() runs. Tear it down here first; it is re-mounted below iff a Team ADD
+    // editor is (still) open. onChange never re-renders, so the live widget survives
+    // ticking; only a stat change / confirm / cancel re-renders (and re-mounts/closes).
+    if (inlineState && inlineState.teamPickerHandle) {
+      inlineState.teamPickerHandle.destroy();
+      inlineState.teamPickerHandle = null;
+    }
+
     // Edit pencil on a composer-made standalone row → open an EDIT-mode compose editor
     // pre-filled with that column's stat/axis + its single dimension (radio, single-
     // select — a re-edit is ONE column, never adds/removes siblings). Wired regardless
@@ -1831,8 +1897,12 @@ export function createColumnsPicker({
         const formats = getFormats();
         // FC-2 range dims (over/pos): composerValueRows can't remap user-defined ranges,
         // so swap the base tally on each ticked key structurally (range preserved).
+        // Team: the search picker holds team NAMES → swap the base stat on each key
+        // structurally, same idea.
         editor.ticks = FC_RANGE_KINDS.has(editor.kind)
           ? fcRemapRangeTicks(statEl.value, editor.ticks)
+          : editor.kind === "team"
+          ? teamRemapTicks(statEl.value, editor.ticks)
           : remapTicks(editor.kind, ns, formats, editor.sel, statEl.value, editor.ticks);
         editor.sel = statEl.value;
         rerenderInline();
@@ -1887,6 +1957,59 @@ export function createColumnsPicker({
       }
     }
 
+    // Standalone TEAM composer: mount the SAME searchable multi-select the Team FILTER
+    // uses into the editor body, INDEPENDENT of any filter state (the picks live on the
+    // editor, not on state.teams). The widget holds team NAMES; its onChange re-derives
+    // the staged composed keys under the current base stat. Options load async via the
+    // host's loadTeamOptions (gender/format/date-scoped, no sibling cascade); the widget
+    // filters that list client-side. ADD-only. onChange does NOT re-render (so the open
+    // panel + search text survive ticking) — it just updates ticks + the Add button.
+    if (editor.kind === "team" && editor.mode === "add" && typeof loadTeamOptions === "function" && inlineState) {
+      const host = rootEl.querySelector('[data-role="team-picker-host"]');
+      if (host) {
+        // Seed the widget from the currently-staged keys (survives a stat-change
+        // re-mount): each staged key → its team name.
+        const seedNames = [...editor.ticks]
+          .map((k) => { const p = parseComposedTeamKey(k); return p ? p.teamName : null; })
+          .filter(Boolean);
+        let handle;
+        const summarize = (count) => {
+          const vals = handle ? handle.getValues() : [];
+          if (vals.length === 1) return vals[0];
+          return `${count} ${count === 1 ? "team" : "teams"}`;
+        };
+        handle = mountSearchMultiSelect(host, {
+          options: [],
+          values: seedNames,
+          portal: true,
+          placeholder: "Choose teams…",
+          filterPlaceholder: "Type to filter teams…",
+          ariaLabel: "Teams",
+          summarize,
+          // A pick outlives a narrowed list (the composer never rewrites a pick), same
+          // as the Team FILTER — keep it visible + pinned rather than silently dropped.
+          keepMissingSelected: true,
+          pinSelected: true,
+          renderRow: (o) =>
+            `<span class="search-select__check" aria-hidden="true"></span><span class="search-select__opt-label">${escHtml(o.label)}</span>`,
+          onChange: (values) => {
+            editor.ticks = new Set(values.map((v) => makeComposedTeamKey(v, editor.sel)));
+            const confirmBtn = rootEl.querySelector('[data-role="compose-confirm"]');
+            if (confirmBtn) confirmBtn.disabled = editor.ticks.size === 0;
+          },
+        });
+        inlineState.teamPickerHandle = handle;
+        // Async option load. Guard against a superseded editor: only apply if THIS
+        // handle is still the mounted one (a stat change / close swaps it out).
+        Promise.resolve()
+          .then(() => loadTeamOptions())
+          .then((rows) => {
+            if (inlineState && inlineState.teamPickerHandle === handle) handle.setOptions(rows || []);
+          })
+          .catch(() => {});
+      }
+    }
+
     // Dimension inputs. ADD (checkbox): toggle the key in the staged set + keep the Add
     // button enabled iff ≥1 ticked — no re-render (native check state + a cheap disabled
     // flip, so focus/scroll hold). EDIT (radio): the staged set becomes exactly that key.
@@ -1935,14 +2058,21 @@ export function createColumnsPicker({
             }
           }
         } else {
-          // FC-2 range dims: the staged ticks ARE the user-defined range keys (no fixed
-          // value list to filter against); every other composer filters composerValueRows.
-          const keys = FC_RANGE_KINDS.has(editor.kind)
+          // FC-2 range dims AND the Team composer: the staged ticks ARE the composed
+          // keys (no fixed value list to filter against — user-defined ranges / a
+          // data-driven team search); every other composer filters composerValueRows.
+          const keys = FC_RANGE_KINDS.has(editor.kind) || SEARCH_COMPOSER_KINDS.has(editor.kind)
             ? [...editor.ticks]
             : composerValueRows(editor.kind, ns, formats, editor.sel)
                 .map((r) => r.key)
                 .filter((k) => editor.ticks.has(k));
-          if (keys.length) applySlots([...(getSlots() || []), ...keys.map((k) => makeSlot(k))]);
+          if (keys.length) {
+            // TEAM composer: record the minted keys so a chosen Team column survives the
+            // Search-prune (its value space is data-driven, so it can't be enumerated
+            // into eligibleColumnKeys ahead of time — see metrics.registerComposedTeamKeys).
+            if (editor.kind === "team") registerComposedTeamKeys(keys);
+            applySlots([...(getSlots() || []), ...keys.map((k) => makeSlot(k))]);
+          }
         }
         inlineState.editor = null;
         rerenderInline();
