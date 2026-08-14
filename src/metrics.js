@@ -86,18 +86,10 @@
 //                    "peak" (best/extreme of a single innings — High Score, BBI).
 //                    Gates which chart types accept a metric (totals→donut,
 //                    rates/percents→slope, peaks excluded from most); pure
-//                    metadata, orthogonal to sqlExpression. A 5th value,
-//                    "position" (R3 Wave 5 polish), is used by exactly one
-//                    metric (batting's `r_pos`) — deliberately NOT one of the
-//                    four above so it's excluded from every existing kind-based
-//                    Graph Builder filter (`m.kind === "total"/"rate"/
-//                    "percent"`, `m.additive === true`, `timeseriesSupported`)
-//                    without needing to touch any of that code: a batting
-//                    position is a table-display label, not a summable/
-//                    trend-able/rankable stat.
+//                    metadata, orthogonal to sqlExpression.
 //   columnTitle    — optional hover title for the column header (`<th
-//                    title="...">`), beyond the plain shortLabel text. Only
-//                    `r_pos` uses this today.
+//                    title="...">`), beyond the plain shortLabel text. Used by
+//                    the cross-discipline and player-profile columns today.
 //   vsTableOnly    — decision 47(c): true iff a matchup metric belongs ONLY to
 //                    the leaderboard "Vs" TABLE (its restricted column picker),
 //                    never the player pop-up's matchup tables (a separate
@@ -116,7 +108,7 @@
 //                    numeric rank for str-format peaks (Best Bowling). Only
 //                    present on `kind:"peak"` matchup metrics; their
 //                    `sqlExpression` (and Best Bowling's `sortExpression`) is a
-//                    placeholder NEVER interpolated, like composition/r_pos.
+//                    placeholder NEVER interpolated, like the composition metrics.
 
 // ── Batting ───────────────────────────────────────────────────────────────────
 const BATTING_METRICS = [
@@ -737,34 +729,6 @@ const BATTING_METRICS = [
     higherIsBetter: null, format: "pct1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
-  },
-  // R. Pos. column (owner decision 46, R3 Wave 5 polish): the player's
-  // statistical MODE of batting_position — ties broken to the LOWEST position
-  // — over the CORE scope (gender/format/date/team_type) ONLY, matching the
-  // existing R. Pos. FILTER's own definition of "regular position" exactly
-  // (filters.js's regularPositionsFilterActive block, commit e71530d) so the
-  // column and the filter can never disagree about what a player's regular
-  // position is. `sqlExpression` here is a placeholder never sent to DuckDB —
-  // this ONE metric needs the live `state` (for the core-scope WHERE inside a
-  // correlated CTE), which the generic "interpolate sqlExpression verbatim"
-  // path can't express, so table.js's buildQuery special-cases this exact key
-  // (see its regularPositionCteSql/wantsRPos). `discipline: "batting"` alone
-  // is what keeps this batting-tables-only: bowling has no metric of this key,
-  // and the matchup namespaces (matchup_batting/matchup_bowling) are separate
-  // disciplines that never see it either — eligibleMetrics(ns, ...) filters by
-  // exact discipline match, so it can only ever appear in the plain batting
-  // column picker.
-  {
-    key: "r_pos",
-    label: "Regular Batting Position",
-    shortLabel: "R. Pos",
-    columnTitle: "Regular position — where this player most often bats",
-    discipline: "batting",
-    source: "innings",
-    sqlExpression: "__R_POS_PLACEHOLDER__", // never interpolated — see comment above
-    higherIsBetter: null, format: "int",
-    isPhaseMetric: null, zeroIsData: true,
-    kind: "position",
   },
 ];
 
@@ -2155,7 +2119,7 @@ const MATCHUP_BATTING_METRICS = [
   // UN-FILTERED by the selected Vs bucket (it describes the whole faced
   // composition, exactly like the coverage figure it replaces), so it must NOT
   // go through the per-bucket FILTER path the other matchup metrics take.
-  // `kind: "composition"` (a dedicated value, like r_pos's "position") marks
+  // `kind: "composition"` (a dedicated value) marks
   // these for special handling: `sqlExpression` is a placeholder NEVER
   // interpolated — table.js's buildMatchupQuery computes them from unfiltered
   // per-group ball partials windowed per player over the '(unmapped)'-aware
@@ -2877,7 +2841,7 @@ export function resolveColumnMetric(key, ns) {
 // bl__ / in__ / rs__ / rsc__ / wt__ / isr__ / wh__ / fc__), so getMetric's fallback
 // discriminates it unambiguously. The CTE aliases each field `pr_<field>` so an
 // unqualified scope-clause column can never bind to it (the same collision-safe
-// prefixing xdisc_cte's xd_ / r_pos_cte's pos_ use).
+// prefixing xdisc_cte's xd_ / fielding_cte's fld_ use).
 export const PROFILE_COLUMN_SPECS = [
   { key: "attr_role_group", field: "role_group", label: "Playing role", disciplines: ["batting", "bowling"] },
   { key: "attr_role_subgroup", field: "role_subgroup", label: "Detailed role", disciplines: ["batting", "bowling"] },

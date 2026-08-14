@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, regularPositionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
+import { positionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel, composedParamPrefixForBase, paramAppliedLabel } from "./metrics.js";
@@ -244,14 +244,6 @@ export function mountPills(
       const bowlingMatchup = s.discipline === "bowling" && matchupVsActive(s);
       const label = bowlingMatchup ? `To batters at ${sorted.join(", ")}` : `Batting at ${sorted.join(", ")}`;
       pills.push({ key: "positions", label, remove: () => store.set({ positions: [] }), restore: () => store.set({ positions: captured }) });
-    }
-
-    // R. Pos. (owner decision 46) — plain-mode filter on a player's most common
-    // batting position within scope.
-    if (regularPositionsFilterActive(s)) {
-      const sorted = [...s.regularPositions].sort((a, b) => a - b);
-      const captured = [...s.regularPositions];
-      pills.push({ key: "regularPositions", label: `R. Pos. ${sorted.join(", ")}`, remove: () => store.set({ regularPositions: [] }), restore: () => store.set({ regularPositions: captured }) });
     }
 
     if (oppositionFilterActive(s)) {

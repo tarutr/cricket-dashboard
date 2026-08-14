@@ -9,9 +9,9 @@
 //
 // Shape: a "+ Add condition" grouped dropdown (optgroups: Player · Team · Match
 // · Basic metrics · Advanced metrics) appends condition ROWS. Two kinds of row:
-//   • SINGLETON rows (Role/Hand/Bowling/R.Pos/Team/Opposition/Event/Venue) —
+//   • SINGLETON rows (Role/Hand/Bowling/Team/Opposition/Event/Venue) —
 //     at most one each; their value lives in its own state key (profile.* /
-//     regularPositions / teams / opposition / event / venue). Built once as a
+//     teams / opposition / event / venue). Built once as a
 //     stable skeleton and shown/hidden by "presence" (a value is set OR the row
 //     was added this popup session) so their mounted editors — option caches,
 //     portal wiring — survive every numeric rebuild. An empty, never-filled
@@ -23,11 +23,9 @@
 // calls store.set(...). Role/Hand/Bowling (+ Matchup Vs) are offered DATA-DRIVEN
 // (owner 2026-08-03): shown wherever their profile/matchup data exists — men today,
 // women when their profiles land — via filterAvailability, never a gender check.
-// (R. Pos. is innings-derived, so it stays live on both views regardless.)
 
 import { query } from "./db.js";
 import {
-  regularPositionsFilterActive,
   positionsFilterActive,
   oppositionFilterActive,
   eventFilterActive,
@@ -59,7 +57,6 @@ import {
   isBowlingFiguresCondition,
 } from "./advanced.js";
 import {
-  mountRegularPositions,
   mountBattingPosition,
   mountOpposition,
   mountTeam,
@@ -164,20 +161,17 @@ const SINGLETON_TYPES = [
   // (a whole-match award), every format — so no menOnly/ballOnly/matchup/discipline
   // gate. buildQuery turns exactly-one selection into a HAVING gate on pom_cte.
   { key: "potm_yn", label: "PotM (Y/N)", group: "Player" },
-  { key: "rpos", label: "R. Pos.", group: "Basic" },
   // Innings Number (filter-rejig Wave R2c): the REPLACEMENT for "Innings order" —
   // narrows to the innings the player batted/bowled in (1st/2nd white-ball, 1st–4th
   // red-ball; format-aware). A top-level scope filter (state.inningsNumber), both
   // disciplines + genders, every format — so no menOnly/ballOnly/matchup gate. Its
   // palette entry lives in Batting AND Bowling Basic Stats (see buildPaletteGroups).
   { key: "inn_num", label: "Innings Number", group: "Basic" },
-  // Striker "Batting position" (R5-A #8): the MATCHUP-ONLY ball-level filter on
-  // the batter-faced position (state.positions) — the one that powers the Bumrah-
-  // vs-openers anchor. Split OUT of the R. Pos. row so it never auto-appears when
-  // a Vs bucket is picked; its OWN addable "+ Add condition" entry, offered only
-  // in matchup mode (isPresent gates it on matchupVsActive). Men-only in practice
-  // (matchup coverage ~0% for women; matchupVsActive gates on data presence via
-  // state.dataAvail, not gender — Group 3 — which for today's data is men-only).
+  // "Batting position" (position rework 2026-08-14): the ball/innings-level filter
+  // on batting_position (state.positions) — the one that powers the Bumrah-vs-openers
+  // anchor. Its OWN addable "+ Add condition" entry, offered in PLAIN batting AND any
+  // matchup (isPresent gates it on discipline batting OR matchupVsActive); hidden in
+  // plain bowling, whose view has no batting_position column.
   { key: "strikerpos", label: "Batting position", group: "Basic" },
   // Opponent-player head-to-head (pop-up Tab-2 T-1, owner decision 70): "subject X
   // vs opponent Y" — restricts the counted balls to those against ONE opponent
@@ -289,8 +283,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     <div class="cond-builder">
       <div class="cond-builder__rows" data-role="singleton-rows">
         ${singletonRowsHTML}
-        <!-- R. Pos. and the matchup striker-position control share the R.Pos
-             editor host; each self-hides in the other mode (drawerInnings.js). -->
       </div>
       <div class="cond-builder__numeric" data-role="numeric-rows"></div>
     </div>`;
@@ -567,17 +559,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     renderProfileEditors();
   }
 
-  // ── Editors for R.Pos / striker position / Team / Opposition / Event / Venue ─
-  // R5-A #8: R. Pos. (plain modal-position filter, state.regularPositions) and the
-  // matchup striker "Batting position" (ball-level batter-faced filter,
-  // state.positions) now live in SEPARATE rows/editor hosts. Previously they
-  // shared one row and the striker control un-hid whenever a Vs bucket was picked,
-  // so choosing Vs=Spin sprouted a second dropdown inside the R. Pos. row. They no
-  // longer share a host: R. Pos. mounts in its own `rpos` row (batting contexts),
-  // the striker mounts in its own `strikerpos` row (matchup only, never auto-shown).
-  // Neither filter's QUERY changed — only where each control lives.
-  const regularPositionController = mountRegularPositions(editorHosts.rpos, store, onChange, { embedded: true });
-  const matchupPositionController = mountBattingPosition(editorHosts.strikerpos, store, onChange, { embedded: true });
+  // ── Editors for Batting position / Team / Opposition / Event / Venue ─────────
+  // "Batting position" (state.positions) mounts in its own `strikerpos` row and,
+  // per the position rework (2026-08-14), shows in PLAIN batting as well as any
+  // matchup (never in plain bowling — no batting_position column there).
+  const battingPositionController = mountBattingPosition(editorHosts.strikerpos, store, onChange, { embedded: true });
   // The five CASCADING pickers each know which of their picked values the rest of
   // the filters have made impossible, and tell us when their option list reloads
   // (onOptionsLoaded) so the empty-result notice below can be re-derived — a load
@@ -685,24 +671,20 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "role": return Boolean(s.profile.roleGroup);
       // Batting hand is a batting-only concept (decision 54): a player's
       // batting hand isn't their bowling arm, so the row (and the value) never
-      // shows while the bowling discipline is active. Mirrors rpos's own
-      // discipline gate just below. The store already clears profile.battingHand
-      // on every discipline change (state.js swapAdvancedForDiscipline), so this
-      // is belt-and-suspenders against a stale value ever resurfacing here.
+      // shows while the bowling discipline is active. The store already clears
+      // profile.battingHand on every discipline change (state.js
+      // swapAdvancedForDiscipline), so this is belt-and-suspenders against a
+      // stale value ever resurfacing here.
       case "hand": return s.discipline === "batting" && Boolean(s.profile.battingHand);
       case "bowling": return Boolean(s.profile.bowlingType);
       // Bowling hand (owner #8): mirrors "bowling" — no discipline gate (a
       // player's bowling arm is meaningful whichever discipline you're viewing).
       case "bowlingHand": return Boolean(s.profile.bowlingArm);
       case "vs": return matchupVsActive(s); // present iff a Vs bucket applies to the current discipline
-      // R5-A #8: R. Pos. (regularPositions) and the striker position (positions)
-      // are now separate rows. R. Pos. is a batting concept — present in batting
-      // contexts when it has a value; the striker is matchup-only — present when
-      // it has a value (isPresent additionally gates strikerpos on matchupVsActive
-      // so it never shows outside matchup, and never merely because a Vs bucket
-      // was picked with no position chosen).
-      case "rpos":
-        return s.discipline === "batting" && (s.regularPositions || []).length > 0;
+      // "Batting position" (state.positions): present when it has a value.
+      // isPresent additionally gates strikerpos on (plain batting OR matchup), so
+      // it never shows in plain bowling and never merely because a Vs bucket was
+      // picked with no position chosen.
       // Innings Number (Wave R2c): present when it has a value (both disciplines).
       case "inn_num":
         return (s.inningsNumber || []).length > 0;
@@ -746,8 +728,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "bowling": return availability.isAvailable("profileBowling", s);
       case "bowlingHand": return availability.isAvailable("profileBowlingArm", s);
       case "vs":
-      case "strikerpos":
         return availability.isAvailable(s.discipline === "batting" ? "vsBowlingStyle" : "vsBattingHand", s);
+      case "strikerpos":
+        // Batting position (position rework 2026-08-14): plain batting always carries
+        // batting_position (both genders) → available; in matchup it rides the matchup
+        // source like "vs". Data-driven, no gender hardcode.
+        return s.discipline === "batting" || availability.isAvailable("vsBattingHand", s);
       default: return true;
     }
   }
@@ -774,10 +760,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // piece or a session-add lingers (pruneDeliveryWindowForFormats already drops a
     // now-illegal piece from the store; this keeps the ROW honest to match).
     if ((t.key === "win_phase" || t.key === "win_balls") && !windowPhaseBallsAllowed(s)) return false;
-    // R5-A #8: the striker "Batting position" is matchup-only — it never shows
-    // (nor auto-appears) outside matchup mode, even if a stale position value or a
-    // session-add lingers. Inside matchup it follows the normal presence rule.
-    if (t.key === "strikerpos" && !matchupVsActive(s)) return false;
+    // "Batting position" (position rework 2026-08-14): shows in PLAIN batting and
+    // any matchup, but NEVER in plain bowling (that view has no batting_position
+    // column), even if a stale position value or a session-add lingers. Where it
+    // does apply it follows the normal presence rule.
+    if (t.key === "strikerpos" && !(matchupVsActive(s) || s.discipline === "batting")) return false;
     // Fielding SLICE conditions are PLAIN-mode only (fielding has no matchup
     // grain) — never show, nor auto-appear, while a Vs bucket is active.
     if (FIELDING_SLICE_KEYS.has(t.key) && matchupVsActive(s)) return false;
@@ -796,7 +783,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "bowling": setProfile({ bowlingType: null }); break;
       case "bowlingHand": setProfile({ bowlingArm: null }); break;
       case "vs": store.set({ matchupVs: null }); break;
-      case "rpos": store.set({ regularPositions: [] }); break;
       case "inn_num": store.set({ inningsNumber: [] }); break;
       case "strikerpos": store.set({ positions: [] }); break;
       case "team": store.set({ teams: [] }); break;
@@ -948,14 +934,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     for (const t of SINGLETON_TYPES) {
       rowEls[t.key].hidden = !isPresent(t, s);
     }
-    // R5-A #8: R. Pos. and the striker "Batting position" are separate rows now,
-    // each with its own static type label ("R. Pos." / "Batting position" from
-    // SINGLETON_TYPES) — no dynamic relabel or shared-row caption needed. R. Pos.
-    // is present only in batting contexts; the striker only in matchup.
+    // "Batting position" has its own static type label ("Batting position" from
+    // SINGLETON_TYPES) — no dynamic relabel needed. Present in plain batting and
+    // any matchup (position rework 2026-08-14).
 
     renderVsEditor();
-    regularPositionController.sync();
-    matchupPositionController.sync();
+    battingPositionController.sync();
     teamController.sync();
     oppositionController.sync();
     eventController.sync();
@@ -1294,7 +1278,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       if (p.bowlingArm) n++;
     }
     if (positionsFilterActive(s)) n++;
-    if (regularPositionsFilterActive(s)) n++;
     if (oppositionFilterActive(s)) n++;
     if (eventFilterActive(s)) n++;
     if (venueFilterActive(s)) n++;

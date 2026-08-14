@@ -21,7 +21,6 @@ import {
 import { query } from "./db.js";
 import {
   buildScopeClausesTagged,
-  buildCoreScopeClauses,
   bypassableClause,
   whereWithPinExemption,
   gateWithPinExemption,
@@ -124,7 +123,6 @@ function serializeQueryState(state) {
     minInnings: state.minInnings,
     profile: state.profile,
     positions: state.positions,
-    regularPositions: state.regularPositions,
     opposition: state.opposition,
     event: state.event,
     // eventSeasons narrows the event clause (Event → Season picker), so it belongs
@@ -339,8 +337,7 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // regular metrics take below. Split out here and computed via the SAME
   // unfiltered-partial → window-per-player → %-of-total staging the coverage
   // figures already use (see this function's doc comment). Their sqlExpression
-  // is a placeholder, never interpolated (kind === "composition", mirroring
-  // r_pos's placeholder handling in buildQuery).
+  // is a placeholder, never interpolated (kind === "composition").
   const metrics = allMetrics.filter((m) => m.kind !== "composition" && m.kind !== "peak");
   const compMetrics = allMetrics.filter((m) => m.kind === "composition");
   // Peak metrics (decision 47c): High Score (matchup_batting) / Best Bowling
@@ -650,21 +647,11 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
 function conditionToHaving(cond, discipline, exprFn) {
   const metric = getMetric(cond.metricKey, discipline);
   if (!metric) return null;
-  // R. Pos. (task 5) is NOT usable as a stat condition — its sqlExpression is
-  // a non-SQL placeholder (metrics.js), since its real value only exists via
-  // buildQuery's own special-cased CTE/JOIN (regularPositionCteSql), not a
-  // static per-condition expression. The drawer's stat-condition picker
-  // (advanced.js/drawer.js, outside this wave's scope) still lists it as a
-  // pickable metric, so this guard is what keeps a user's pick from ever
-  // reaching SQL — treated as "doesn't apply here", the same honest
-  // degradation an out-of-namespace condition already gets (returns null, so
-  // advancedToHaving simply drops it).
-  if (metric.kind === "position") return null;
   // Composition columns (Coverage-breakdown wave) are descriptive display-only
   // percentages with a placeholder sqlExpression (see metrics.js) — never a
   // usable stat condition. advanced.js already excludes them from the picker;
-  // this guard is the same belt-and-braces defence r_pos gets just above, so a
-  // stray composition-keyed condition can never reach SQL.
+  // this belt-and-braces guard keeps a stray composition-keyed condition from
+  // ever reaching SQL (returns null, so advancedToHaving simply drops it).
   if (metric.kind === "composition") return null;
   // Best Bowling TWO-box condition (Wave A2 item 2, conditionInput
   // "bowlingFigures"): "≥ W wickets for ≤ R runs" compiles to ONE numeric
@@ -920,7 +907,7 @@ export function buildFieldingExtraSliceClauses(state) {
 
 /**
  * Build the `fielding_cte` definition (the CTE body WITHOUT the leading
- * "WITH " — the caller prepends/comma-joins it, exactly like regularPositionCteSql).
+ * "WITH " — the caller prepends/comma-joins it, like the other per-player CTEs).
  * One row per fielder over the EVENT-GRAIN `fielding` view, honoring the FULL
  * leaderboard scope — core (gender/format/date/team-type) + team (fielding_team)
  * + OPPOSITION + event/venue + profile, pin-exempt — PLUS the fielding SLICE
@@ -1031,7 +1018,7 @@ export function buildPomCteSql(state) {
  * own WHERE (which players survive) is the only restriction needed; the 1:1 join
  * never multiplies innings rows, so every existing aggregate stays byte-identical.
  * Each field is aliased `pr_<field>` (the collision-safe prefix xdisc_cte's xd_ /
- * r_pos_cte's pos_ use) so an unqualified scope-clause column can never bind to it,
+ * fielding_cte's fld_ use) so an unqualified scope-clause column can never bind to it,
  * and the join key `player_id` is aliased `profile_player_id` (never batter_id/
  * bowler_id). Built + joined ONLY when ≥1 profile column is visible (buildQuery's
  * wantsProfile gate); with none, buildQuery emits byte-identical SQL. There is no
@@ -1058,12 +1045,12 @@ export function buildProfileCteSql() {
  * buildPomCteSql. A whole-MATCH fact, so it sits on `player_matches` (one row per
  * match the player played, carrying their own `team`) with the SAME scope options
  * pom_cte / the "matches" query use — core (gender/format/date/team-type) + team +
- * event/venue + profile + R. Pos., pin-exempt, plus the name search — so Result
+ * event/venue + profile, pin-exempt, plus the name search — so Result
  * columns partition Player Matches and never diverge from PoM/matches on scope.
  *
  * The outcome fields come from a 1:1 LEFT JOIN of the SHARED matchContextSubselectSql()
  * (aliased `mctx`, with match_id RENAMED → mctx_match_id — the same collision-safe
- * key r_pos_cte/fielding_cte/pom_cte use). NONE of mctx's projected columns
+ * key fielding_cte/pom_cte use). NONE of mctx's projected columns
  * (match_winner/result_type/toss_winner/…) shares a name with any player_matches
  * column, and match_id is renamed, so every unqualified scope-clause column
  * (player_id/team/gender/match_type/match_date/match_id) resolves unambiguously to
@@ -1201,39 +1188,6 @@ export function buildCrossDisciplineCteSql(state, discipline, crossCols) {
 }
 
 /**
- * R. Pos. column support (task 5): a `WITH r_pos_cte AS (...)` fragment (the
- * "WITH " keyword itself is NOT included — the caller prepends it, since this
- * text is also useful standalone in error messages/tests) computing each
- * batter's modal batting_position — ties broken to the LOWEST position — over
- * the CORE scope only (buildCoreScopeClauses: gender/format/date/team_type),
- * reusing the exact rank shape of the existing R. Pos. FILTER
- * (filters.js's regularPositionsFilterActive block: `ROW_NUMBER() OVER
- * (PARTITION BY batter_id ORDER BY COUNT(*) DESC, batting_position ASC)`,
- * grouped by (batter_id, batting_position) first so COUNT(*) is the innings
- * count AT that position) so the column can never disagree with what the
- * filter calls a player's "regular position". The join key is aliased
- * `pos_batter_id` (see buildQuery's fromSql comment for why it must not be
- * named `batter_id`). One CTE, one scan of `batting` regardless of how many
- * output rows the outer query has (a correlated per-row subquery would have
- * been O(players × rows) instead).
- */
-function regularPositionCteSql(state) {
-  const coreScope = buildCoreScopeClauses(state).join(" AND ");
-  return [
-    "r_pos_cte AS (",
-    "  SELECT pos_batter_id, pos FROM (",
-    "    SELECT batter_id AS pos_batter_id, batting_position AS pos,",
-    "           ROW_NUMBER() OVER (PARTITION BY batter_id ORDER BY COUNT(*) DESC, batting_position ASC) AS rn",
-    "    FROM batting",
-    `    WHERE ${coreScope} AND batting_position IS NOT NULL`,
-    "    GROUP BY batter_id, batting_position",
-    "  ) ranked",
-    "  WHERE rn = 1",
-    ")",
-  ].join("\n");
-}
-
-/**
  * Build the main grouped SQL query for the current state + visible columns.
  * Returns { sql, matchesSql } — matchesSql is null unless "matches"
  * is visible AND still answerable from player_matches (see below). While a
@@ -1300,34 +1254,10 @@ export function buildQuery(state, visibleColumns, opts = {}) {
         m.source !== "profiles"
     );
 
-  // R. Pos. column (task 5, B1 Wave 5 polish): batting-only, opts this ONE
-  // metric out of the generic "interpolate metric.sqlExpression verbatim"
-  // path below. Every other metric's sqlExpression is a static aggregate over
-  // THIS query's own already-filtered rows; R. Pos. instead must reproduce the
-  // existing R. Pos. FILTER's semantics exactly (filters.js's
-  // regularPositionsFilterActive block) — the player's modal batting_position
-  // over the CORE scope only (gender/format/date/team_type), regardless of
-  // whatever team/opposition/position filter is also narrowing this query —
-  // so a player's R. Pos. column value never disagrees with the R. Pos.
-  // filter's own definition of "their regular position". That can't be
-  // expressed as a fixed sqlExpression string (it needs live `state`), so it's
-  // special-cased here: regularPositionCteSql() builds a ONE-PASS CTE (a
-  // ROW_NUMBER-over-count rank, tie-broken to the lowest position — the same
-  // shape as the filter's own subquery) and wantsRPos wires it into the FROM
-  // clause below via a LEFT JOIN, only when the column is actually requested.
-  const wantsRPos = discipline === "batting" && inningsMetrics.some((m) => m.key === "r_pos");
-
   const selectParts = [`${idCol} AS id`, `${nameCol} AS name`];
   for (const m of inningsMetrics) {
-    if (m.key === "r_pos") {
-      // Constant per (idCol) group (regularPositionCteSql guarantees at most
-      // one row per pos_batter_id) — MAX() is just how a non-aggregate,
-      // functionally-dependent JOIN column is projected out of a GROUP BY.
-      selectParts.push(`MAX(r_pos_cte.pos) AS ${m.key}`);
-    } else {
-      selectParts.push(`${m.sqlExpression} AS ${m.key}`);
-      if (m.sortExpression) selectParts.push(`${m.sortExpression} AS ${m.key}__sort`);
-    }
+    selectParts.push(`${m.sqlExpression} AS ${m.key}`);
+    if (m.sortExpression) selectParts.push(`${m.sortExpression} AS ${m.key}__sort`);
   }
 
   // Fielding (source "fielding_events") + Impact (player_of_match, source
@@ -1602,18 +1532,13 @@ export function buildQuery(state, visibleColumns, opts = {}) {
 
   const groupBy = [idCol, nameCol];
 
-  // r_pos_cte's join column is deliberately NOT named "batter_id"/"bowler_id"
-  // (i.e. not idCol) — this view and the CTE would then both carry a column
-  // of that exact name post-JOIN, making every existing bare `${idCol}`
-  // reference elsewhere in this SELECT/GROUP BY (batter_id AS id, GROUP BY
-  // batter_id, ...) ambiguous. "pos_batter_id" can never collide.
-  // r_pos_cte / fielding_cte / pom_cte are each one row per player and LEFT
-  // JOINed on the id column, so none multiplies the innings rows the aggregates
-  // run over. Each uses a collision-safe join key (pos_batter_id / fld_player_id
-  // / pom_player_id) so no bare `${idCol}` reference in this SELECT/GROUP BY
-  // becomes ambiguous.
+  // fielding_cte / pom_cte are each one row per player and LEFT JOINed on the id
+  // column, so none multiplies the innings rows the aggregates run over. Each
+  // uses a collision-safe join key (fld_player_id / pom_player_id) — NOT
+  // "batter_id"/"bowler_id" (i.e. not idCol) — so no bare `${idCol}` reference
+  // elsewhere in this SELECT/GROUP BY (batter_id AS id, GROUP BY batter_id, ...)
+  // becomes ambiguous post-JOIN.
   const cteDefs = [];
-  if (wantsRPos) cteDefs.push(regularPositionCteSql(state));
   if (wantsFielding) cteDefs.push(fieldingCteSql);
   if (wantsPom) cteDefs.push(pomCteSql);
   if (wantsResult) cteDefs.push(resultCteSql);
@@ -1627,7 +1552,6 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // multiplies innings rows (one match per match_id), so every aggregate stays
   // byte-identical. Only present when a context filter is active.
   if (wantsMatchContext) fromSql += matchContextJoinSql(view);
-  if (wantsRPos) fromSql += ` LEFT JOIN r_pos_cte ON r_pos_cte.pos_batter_id = ${idCol}`;
   if (wantsFielding) fromSql += ` LEFT JOIN fielding_cte ON fielding_cte.fld_player_id = ${idCol}`;
   if (wantsPom) fromSql += ` LEFT JOIN pom_cte ON pom_cte.pom_player_id = ${idCol}`;
   // Result (Wave B): 1:1 LEFT JOIN by the unified player id — res_player_id is the
@@ -2597,8 +2521,8 @@ export function mountTable(
     // (rendered elsewhere in renderLoaded, never through this function) never
     // gets this class; the matchup composition columns DO (they're ordinary
     // metric columns, so they drag/sort like any other).
-    // `columnTitle` (task 5, R. Pos.): an optional metrics.js field for a
-    // header hover title beyond the plain label — most metrics omit it.
+    // `columnTitle`: an optional metrics.js field for a header hover title
+    // beyond the plain label (cross-discipline / profile columns) — most omit it.
     const titleAttr = metric.columnTitle ? ` title="${escAttr(metric.columnTitle)}"` : "";
     // W2: `is-highlighted` paints this column's header with the soft accent wash
     // when its 🖍️ toggle is on (display-only — highlightedColumns, not a query).

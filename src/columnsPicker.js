@@ -676,7 +676,7 @@ export function createColumnsPicker({
   const HIDDEN_COLUMN_KEYS = new Set(["player_of_match", "wickets_per_innings", "four_wicket_hauls"]);
 
   const BATTING_BASIC_ORDER = [
-    "innings", "r_pos", "runs", "balls_faced", "dismissals", "high_score", "fours", "sixes",
+    "innings", "runs", "balls_faced", "dismissals", "high_score", "fours", "sixes",
     "dot_balls", "fifties", "hundreds", "ducks", "not_outs",
   ];
   const BATTING_DETAILED_ORDER = [

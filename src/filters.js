@@ -18,7 +18,6 @@ import {
   profileSemiJoinSql,
   oppositionFilterActive,
   positionsFilterActive,
-  regularPositionsFilterActive,
   eventFilterActive,
   anyEventSeasonNarrowing,
   venueFilterActive,
@@ -105,7 +104,7 @@ function nextCalendarDay(yyyymmdd) {
 /** The four filters that make up EVERY query's inescapable "core scope" —
  * gender / format / date window / team type — factored out of
  * buildScopeClauses (owner decision 46, task 3) so callers that need "the scope
- * dims alone" (regularPositionCteSql's modal-position window) can compute it
+ * dims alone" (e.g. dimOptions / dataAvailability probes) can compute it
  * without duplicating this logic. buildScopeClauses below ALWAYS starts its
  * clause list with exactly this function's output (same options, same order).
  *
@@ -461,15 +460,15 @@ export function buildScopeClausesTagged(
     );
   }
 
-  // The MATCHUP striker/batter position filter (`state.positions`, matchup-only —
-  // positionsFilterActive gates on matchupVsActive) is ALWAYS-APPLIES, pins
-  // included (untagged = alwaysClause). It selects BALLS: in matchup_bowling the
-  // position of the striker faced, in matchup_batting the batter's own position on
-  // that ball. "Bumrah vs right-handers at positions 1–2" is a description of the
+  // The "Batting position" filter (`state.positions`) is ALWAYS-APPLIES, pins
+  // included (untagged = alwaysClause). It selects BALLS/innings by
+  // batting_position: in plain batting / matchup_batting the batter's own
+  // position, in matchup_bowling the position of the striker faced. Live in
+  // plain batting AND any matchup (position rework 2026-08-14 —
+  // positionsFilterActive), inert in plain bowling (no such column).
+  // "Bumrah vs right-handers at positions 1–2" is a description of the
   // deliveries being counted, so a pinned Bumrah must be counted over the same
   // deliveries as everyone else or his row means something different.
-  // NOT to be confused with R. Pos. (`state.regularPositions`) further down —
-  // that one IS a player attribute ("their usual slot") and stays bypassable.
   if (includePositions && positionsFilterActive(state)) {
     // Positions are user-picked ints; coerce + drop anything non-integral so
     // nothing unsanitized reaches the SQL.
@@ -484,34 +483,6 @@ export function buildScopeClausesTagged(
   if (idColumn) {
     const profileClause = profileSemiJoinSql(state, idColumn);
     if (profileClause) clauses.push(bypassableClause(profileClause));
-  }
-
-  // R. Pos. (owner decision 46): restrict to players whose MOST COMMON batting
-  // position within the current gender/format/date/team-type scope is in the
-  // selection (ties break to the LOWEST position number). This is an ADDITIVE
-  // per-player semi-join — parallel to the profile semi-join above — that never
-  // touches the metric aggregates, so with the filter unset the query is
-  // byte-identical to today. Modal position is ALWAYS derived from the batting
-  // innings view (a batting-order concept), gated to plain mode by
-  // regularPositionsFilterActive (matchup mode keeps its own striker-position
-  // filter on `positions`, untouched). The inner scope reuses THIS builder with
-  // includeTeams:false and NO idColumn, so it carries exactly the four scope
-  // dims (gender/format/date/team_type) — team, opposition, profile and
-  // regularPositions itself are all excluded — and it cannot recurse.
-  if (idColumn && regularPositionsFilterActive(state)) {
-    const nums = state.regularPositions.map(Number).filter(Number.isInteger);
-    if (nums.length > 0) {
-      const innerScope = buildScopeClauses(state, { includeTeams: false }).join(" AND ");
-      clauses.push(
-        bypassableClause(
-          `${idColumn} IN (SELECT player_id FROM (` +
-            `SELECT batter_id AS player_id, batting_position AS pos, ` +
-            `ROW_NUMBER() OVER (PARTITION BY batter_id ORDER BY COUNT(*) DESC, batting_position ASC) AS rn ` +
-            `FROM batting WHERE ${innerScope} AND batting_position IS NOT NULL ` +
-            `GROUP BY batter_id, batting_position) WHERE rn = 1 AND pos IN (${nums.join(", ")}))`
-        )
-      );
-    }
   }
 
   return clauses;
@@ -529,7 +500,7 @@ export function buildScopeClausesTagged(
 // is active, so with none active the query is byte-identical to before.
 //
 // The join is a SUB-SELECT aliased `mctx` that RENAMES match_id -> mctx_match_id
-// (the same collision-safe-join-key technique r_pos_cte / fielding_cte / pom_cte
+// (the same collision-safe-join-key technique fielding_cte / pom_cte
 // use), so every bare `match_id` reference already in the query — the event/venue
 // semi-join, COUNT(DISTINCT match_id), the matchup peak CTE's GROUP BY — stays
 // unambiguous after the join. None of the mctx columns (match_winner /

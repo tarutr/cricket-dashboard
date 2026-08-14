@@ -6,12 +6,10 @@
 // once and just shows/hides their row by presence, so they survive the numeric
 // builder's rebuilds (their option caches + portal wiring never get torn down).
 //
-//   mountBattingPosition  — MATCHUP-ONLY striker/own batting-position filter
-//                           (state.positions); self-hides outside matchup mode.
-//   mountRegularPositions — "R. Pos." (state.regularPositions, decision 46):
-//                           plain-mode filter on a player's most common batting
-//                           position within scope (modal semi-join lives in
-//                           filters.js). Both disciplines + both genders.
+//   mountBattingPosition  — "Batting position" filter (state.positions): the
+//                           striker/own batting-position slice. Shows in PLAIN
+//                           batting AND any matchup; self-hides in plain bowling
+//                           (no batting_position column). Position rework 2026-08-14.
 //   mountOpposition       — "Against opposition" (state.opposition); enabled for
 //                           every team type (decision 51, R5-F #14 — reverses the
 //                           old international-only gate, decision 20).
@@ -190,8 +188,9 @@ function positionsSummaryLabel(positions) {
 }
 
 /**
- * Mount the MATCHUP-ONLY Batting position multi-select. `embedded` suppresses
- * the outer filter-label (the condition row already names it). Returns `{ sync }`.
+ * Mount the "Batting position" multi-select (state.positions). `embedded`
+ * suppresses the outer filter-label (the condition row already names it).
+ * Shows in plain batting and any matchup; hidden in plain bowling. Returns `{ sync }`.
  */
 export function mountBattingPosition(container, store, onChange, { embedded = false } = {}) {
   container.innerHTML = `
@@ -240,15 +239,16 @@ export function mountBattingPosition(container, store, onChange, { embedded = fa
     });
   });
 
-  /** MATCHUP-ONLY (decision 46): live only while a matchup "Vs" selection is
-   * active — in matchup_batting it's the batter's own position, in
-   * matchup_bowling the position of the striker faced. Plain mode uses R. Pos.
-   * instead, so this hides entirely outside matchup mode. */
+  /** Position rework (2026-08-14): live in PLAIN batting (the batter's own
+   * position) AND any matchup (matchup_batting = batter's own; matchup_bowling =
+   * the striker faced). Hidden ONLY in plain bowling, whose view has no
+   * batting_position column, so a stale value there is inert. */
   function sync() {
     const state = store.get();
     const matchupOn = matchupVsActive(state);
-    els.group.hidden = !matchupOn;
-    if (!matchupOn) {
+    const show = matchupOn || state.discipline === "batting";
+    els.group.hidden = !show;
+    if (!show) {
       dropdown.close();
       return;
     }
@@ -261,72 +261,6 @@ export function mountBattingPosition(container, store, onChange, { embedded = fa
     // Bowling-matchup hint: this filter narrows the BATTERS faced, not the
     // bowler's own (nonexistent) position — say so plainly.
     els.hint.hidden = !(state.discipline === "bowling" && matchupOn);
-  }
-
-  sync();
-  return { sync };
-}
-
-const REGULAR_POSITIONS = Array.from({ length: 12 }, (_, i) => i + 1);
-
-/**
- * Mount the "R. Pos." (regular position) multi-select (decision 46). Binds to
- * `state.regularPositions` — a player matches when their MOST COMMON batting
- * position within scope is in the selection (the semi-join lives in filters.js).
- * BATTING contexts only (plain batting AND batting matchup, Wave 4b/decision 47a);
- * hides in every bowling context. Both genders. `embedded` suppresses the outer
- * filter-label. Returns `{ sync }`.
- */
-export function mountRegularPositions(container, store, onChange, { embedded = false } = {}) {
-  const DESC = "Regular position — where this player most often bats";
-  container.innerHTML = `
-    <div class="filter-group filter-group--rpos" data-role="rpos-group">
-      ${embedded ? "" : `<span class="filter-label" title="${escAttr(DESC)}">R. Pos.</span>`}
-      <div data-role="rpos-host"></div>
-    </div>
-  `;
-
-  const groupEl = container.querySelector('[data-role="rpos-group"]');
-  const hostEl = container.querySelector('[data-role="rpos-host"]');
-
-  // Wave F1: the R. Pos. checkbox panel is the unified PANEL component now
-  // (mountSearchMultiSelect, searchable:false → the P checkbox-panel look for the
-  // fixed 1–12 vocabulary), not the bespoke `.dropdown__*` markup. It still writes
-  // the SAME numeric state.regularPositions, so the query is byte-identical.
-  //
-  // The toggle summary is VALUE-based ("1, 2, 3" ≤3, "N selected" ≥4, else "Any
-  // position"), which the panel's count-only `summarize` can't build — so close
-  // over the handle and read getValues() (up to date when summarize runs during a
-  // toggle/setValues), the same pattern the scoped multi-selects use.
-  let handle;
-  handle = mountSearchMultiSelect(hostEl, {
-    options: REGULAR_POSITIONS.map((p) => ({ value: p, label: String(p) })),
-    values: store.get().regularPositions,
-    searchable: false,
-    portal: true,
-    ariaLabel: "Regular position",
-    placeholder: "Any position",
-    summarize: () => positionsSummaryLabel(handle ? handle.getValues() : []),
-    onChange: (values) => {
-      store.set({ regularPositions: values }); // SAME numeric state → query unchanged
-      onChange();
-    },
-  });
-
-  function sync() {
-    const state = store.get();
-    // R. Pos. is a BATTING concept (Wave 4b, decision 47a): the control shows in
-    // every batting context — plain batting AND batting matchup, where it sits
-    // alongside the striker-position control — and hides in every bowling context
-    // (plain or matchup), where the striker-position control is the only position
-    // filter. (Previously plain-mode-only, both disciplines.)
-    const show = state.discipline === "batting";
-    groupEl.hidden = !show;
-    if (!show) {
-      handle.close();
-      return;
-    }
-    handle.setValues(state.regularPositions);
   }
 
   sync();

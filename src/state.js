@@ -220,37 +220,25 @@ function profileScopeTokens(state) {
 // deleted in R3 and nothing ever set state.splitBy off its initial null, so
 // the whole path was dead.
 
-/** True if the MATCHUP-ONLY batting-position filter (`state.positions`) is
- * currently narrowing the set. Owner decision 46 split the old position filter
- * in two: `positions` is now consumed ONLY in matchup mode (both matchup views
- * carry a batting_position column — in matchup_batting the batter's OWN
- * position, in matchup_bowling the position of the STRIKER faced; anchor:
- * Bumrah vs RHB positions 1–2 = 27 inns/177 balls/9 wkts). Plain mode no longer
- * reads it — see regularPositionsFilterActive. Gating on matchupVsActive keeps
- * the query (buildScopeClauses), the matchup position dropdown, the pill, and
- * the honest scope sentence all agreeing automatically. */
+/** True if the "Batting position" filter (`state.positions`) is currently
+ * narrowing the set. Owner-authorised position rework (2026-08-14): this
+ * striker/own batting-position filter — previously matchup-only — now ALSO
+ * applies in PLAIN batting. It is a per-innings `batting_position IN (…)` slice
+ * on the batting / matchup views (in matchup_batting the batter's OWN position;
+ * in matchup_bowling the position of the STRIKER faced — anchor: Bumrah vs RHB
+ * positions 1–2 = 27 inns/177 balls/9 wkts). It is live whenever a value is set
+ * AND the current context carries a batting_position column — plain batting (the
+ * plain batting view has it) OR ANY matchup (both matchup views have it) — and
+ * stays INACTIVE in plain bowling, whose view has NO batting_position column (a
+ * stale value there is inert, the same keep-but-inert precedent as before). This
+ * predicate keeps the query (buildScopeClauses' ALWAYS-APPLIES clause, pins
+ * included), the pill, the drawer control and the honest scope sentence all
+ * agreeing on when it is live. */
 export function positionsFilterActive(state) {
-  return Array.isArray(state.positions) && state.positions.length > 0 && matchupVsActive(state);
-}
-
-/** True if the R. Pos. filter (`state.regularPositions`, owner decision 46) is
- * currently narrowing the set. R. Pos. is a BATTING concept — a player's own
- * most-common batting position within scope — so it is active in every batting
- * context (plain batting AND batting matchup, Wave 4b / decision 47a: "usual
- * top-order players, full record vs the bucket") and inactive in every bowling
- * context (plain bowling and bowling matchup, where the striker-position filter
- * uses `positions` instead). The query gate is an additive per-player semi-join
- * derived in buildScopeClauses (a player matches when their most-common batting
- * position within scope is in the selection); it applies identically in plain
- * and matchup mode because both go through buildScopeClauses with an idColumn.
- * This predicate keeps the pill, subtitle, badge count, and drawer control all
- * agreeing on when it is live. Gating on discipline (not matchupVsActive) is
- * what opens the Vs gate without touching the striker-position filter. */
-export function regularPositionsFilterActive(state) {
   return (
-    state.discipline === "batting" &&
-    Array.isArray(state.regularPositions) &&
-    state.regularPositions.length > 0
+    Array.isArray(state.positions) &&
+    state.positions.length > 0 &&
+    (state.discipline === "batting" || matchupVsActive(state))
   );
 }
 
@@ -792,13 +780,10 @@ export function createInitialState(maxMonth) {
     teamType: "international",
     minInnings: 10,
     profile: emptyProfile(),
-    positions: [], // MATCHUP-ONLY batting positions (ints); [] = no predicate. In matchup mode
-                   // this slices batting_position (batter's own position in matchup_batting; the
-                   // striker faced in matchup_bowling — decision 33/37). Plain mode NO LONGER reads
-                   // this (owner decision 46) — it uses regularPositions instead.
-    regularPositions: [], // R. Pos. (owner decision 46): plain-mode filter on a player's MOST COMMON
-                   // batting position within the current gender/format/date/team-type scope. [] = no
-                   // predicate. Applies in plain mode only (matchup mode keeps its own `positions`).
+    positions: [], // "Batting position" filter (ints); [] = no predicate. Slices batting_position:
+                   // the batter's OWN position in plain batting / matchup_batting; the STRIKER faced
+                   // in matchup_bowling (decision 33/37). Live in plain batting AND any matchup
+                   // (position rework 2026-08-14); inert in plain bowling (view has no such column).
     opposition: [], // opposition team names; [] = no predicate. Was international-only
                    // (decision 20); decision 51 (R5-F #14) enables it for club/domestic
                    // too, on the same raw team names.
@@ -1121,15 +1106,14 @@ export function eligibleMetrics(discipline, formats) {
  * a SMALL, interim set — the core innings-grain "Basic + Detailed" stats of the
  * other discipline: excludes phase metrics (W4's phase×metric composer owns those),
  * the batting Dismissals breakdown (a batting-specific fingerprint, not an
- * all-rounder column), the `matches`/PoM/fielding sources (source !== "innings" —
- * PoM/fielding already cross via their own CTEs), and `r_pos` (a placeholder
- * sqlExpression that only the batting main query can special-case). Returns [] for
+ * all-rounder column), and the `matches`/PoM/fielding sources (source !== "innings" —
+ * PoM/fielding already cross via their own CTEs). Returns [] for
  * matchup namespaces (cross columns are a plain-discipline concept). */
 export function eligibleCrossMetrics(discipline, formats) {
   const other = OTHER_DISCIPLINE[discipline];
   if (!other) return [];
   return eligibleMetrics(other, formats).filter(
-    (m) => m.source === "innings" && m.key !== "r_pos" && !m.isPhaseMetric && m.section !== "dismissal"
+    (m) => m.source === "innings" && !m.isPhaseMetric && m.section !== "dismissal"
   );
 }
 
@@ -1381,7 +1365,7 @@ function conditionColumnKey(cond, discipline) {
   const dt = dismissalTypeColumnKey(cond.metricKey, discipline);
   if (dt) return dt;
   const m = getMetric(cond.metricKey, discipline);
-  if (!m || m.kind === "position" || m.kind === "composition") return null;
+  if (!m || m.kind === "composition") return null;
   if (m.paramTemplate && m.param) {
     const opToken = COMPOSED_PARAM_OP_TOKEN[cond.operator];
     const desc = composedParamDescriptor(discipline);
@@ -1409,7 +1393,6 @@ export function activeLeaderboardFilterSources(state) {
   };
 
   // Singleton / categorical filters (mirror the pills' own "active" predicates).
-  if (regularPositionsFilterActive(state)) push("filter:regularPositions", ["r_pos"]);
   if (potmYNFilterActive(state)) push("filter:potm_yn", ["potm_count"]);
   if (resultFilterActive(state)) push("filter:mc_result", ["res_won", "res_lost", "res_tied", "res_no_result"]);
   if (tossResultFilterActive(state)) push("filter:mc_toss_result", ["res_toss_won"]);
@@ -1825,11 +1808,6 @@ export function createStore(initial) {
       // not the bowler's own (nonexistent) batting position — say so plainly.
       const bowlingMatchup = s.discipline === "bowling" && matchupVsActive(s);
       parts.push(bowlingMatchup ? `to batters at ${sorted.join(", ")}` : `batting at ${sorted.join(", ")}`);
-    }
-    // R. Pos. (owner decision 46) — plain-mode only; mirrors the pill's "R. Pos. …".
-    if (regularPositionsFilterActive(s)) {
-      const sorted = [...s.regularPositions].sort((a, b) => a - b);
-      parts.push(`regular position ${sorted.join(", ")}`);
     }
 
     // Matchup mode (R3, decision 33) — table only, right after the

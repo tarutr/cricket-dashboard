@@ -107,12 +107,11 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
 
   // Opposition + batting-position filters (D4 Piece 3) apply here too — the
   // card's scope line describes them, so the charted numbers must honor them.
-  // includePositions only for batting: the striker-position filter is
-  // matchup-only (positionsFilterActive), and this fetch always queries the
-  // PLAIN view — plain bowling_innings has no batting_position column, so
-  // emitting the clause there is a binder error (hit via the chooser in
-  // matchup-bowling mode with a position filter). Plain batting keeps it: the
-  // column exists and means the batter's own position.
+  // includePositions only for batting: positionsFilterActive is live in plain
+  // batting AND any matchup (position rework 2026-08-14), and this fetch always
+  // queries the PLAIN view — plain bowling_innings has no batting_position
+  // column, so emitting the clause there is a binder error. Plain batting keeps
+  // it: the column exists and means the batter's own position.
   //
   // Clauses arrive TAGGED for the pinned-player exemption (filters.js
   // buildScopeClausesTagged) and go through the SAME whereWithPinExemption helper

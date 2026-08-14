@@ -101,7 +101,7 @@ const stripOutPrefix = (label) => label.replace(/^Out\s+/, "");
 
 // T-F3: the "popup" surface's Player-Profile exclusions (see file header). Any
 // other surface (i.e. "leaderboard") excludes nothing — same 6 leaves as today.
-const POPUP_EXCLUDED_PLAYER_PROFILE_LEAVES = new Set(["role", "hand", "bowling", "bowlingHand", "rpos", "potm_count"]);
+const POPUP_EXCLUDED_PLAYER_PROFILE_LEAVES = new Set(["role", "hand", "bowling", "bowlingHand", "potm_count"]);
 
 // T-2c: the SCOPE SINGLETONS the player pop-up ("popup" surface) now OFFERS as
 // per-row filters (owner 2026-08-03). Each flows through the row's clean-state
@@ -111,7 +111,7 @@ const POPUP_EXCLUDED_PLAYER_PROFILE_LEAVES = new Set(["role", "hand", "bowling",
 // byte-identical. Their value editors are a store-adapter reuse of the drawer's own
 // singleton editors (src/playerFilterScope.js). Everything a "popup" surface still
 // WITHHOLDS is simply absent from this set: the Player-Profile leaves
-// (role/hand/bowling/rpos — also excluded above), the matchup "Vs" entries (vs
+// (role/hand/bowling — also excluded above), the matchup "Vs" entries (vs
 // bowling style / vs batting hand / batting position, which route through
 // buildMatchupQuery — a different path this tab never uses; a separate follow-up),
 // and fielding (its per-innings source lands in T-3). vs_opp + the four Ball-Ranges
@@ -202,10 +202,9 @@ export function createPaletteGroupsBuilder(deps) {
     const popupMatchupOffered = surface === "popup" && popupLock === null;     // offer matchup-Vs only on an EMPTY row
     const popupSliceOffered = surface === "popup" && popupLock !== "matchup";  // offer slices + ball predicates unless matchup-locked
 
-    // R. Pos. (kind:"position") is a mode value, never a numeric condition; drop
-    // it and the deleted keys before partitioning (same source as the old picker).
+    // Drop the deleted-filter keys before partitioning (same source as the old picker).
     const numericMetrics = eligibleMetrics(ns, s.formats)
-      .filter((m) => m.kind !== "position" && !isDeletedFilterMetric(m));
+      .filter((m) => !isDeletedFilterMetric(m));
     const parts = partitionFilterMetrics(numericMetrics);
     const eligibleByKey = new Map(numericMetrics.map((m) => [m.key, m]));
 
@@ -292,9 +291,8 @@ export function createPaletteGroupsBuilder(deps) {
       // ("Right"/"Left"). Mirrors Bowling style exactly — same group, same
       // single-select panel, same data-driven availability, same popup exclusion.
       isFilterAvailable("profileBowlingArm", s) && !excludeLeaf("bowlingHand") ? leafSingle("bowlingHand", "Bowling hand") : null,
-      disc === "batting" && !excludeLeaf("rpos") ? leafSingle("rpos", "Regular batting position") : null,
       // PotM Count (R2b): the filterable count of Player-of-the-Match awards
-      // (metrics.js `potm_count`), between Regular batting position and Team. The
+      // (metrics.js `potm_count`), in the Player Profile group. The
       // old `player_of_match` (Impact section) is no longer offered as a filter.
       !excludeLeaf("potm_count") ? leafMetric("potm_count", "PotM Count") : null,
       // PotM (Y/N) (Wave D — TASK B): the LEADERBOARD's Yes/No singleton filter
@@ -353,6 +351,15 @@ export function createPaletteGroupsBuilder(deps) {
         leafMetric("matches", "Matches"),
         leafMetric("innings", "Innings"),
         inningsNumberFamily(),
+        // Position rework (owner-authorised 2026-08-14): the honest "Batting position"
+        // filter (state.positions → `batting_position IN (…)` via buildScopeClauses)
+        // is now offered in PLAIN batting too, not just matchup. It reuses the SAME
+        // `strikerpos` singleton control + editor the matchup Vs group uses (below).
+        // Gated `!matchup` so it shows HERE in plain batting and in the Vs group under
+        // a matchup — never both. leafSingle self-withholds on the popup surface
+        // (strikerpos ∉ POPUP_SCOPE_SINGLETON_KEYS), so the pop-up keeps its own
+        // per-innings `batting_position` slice below — no collision.
+        !matchup ? leafSingle("strikerpos", "Batting position") : null,
         // T-2e (owner 2026-08-03): Batting position — a batting-only, per-innings LIST
         // slice on the plain `batting` view's `batting_position` (compiles to
         // `batting_position IN (…)` via inningsWhere). Popup-only + withheld on a

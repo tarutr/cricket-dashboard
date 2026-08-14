@@ -2865,7 +2865,6 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       // was silently discarded on "Apply to graph".
       fielding: buf.fielding,
       positions: buf.positions,
-      regularPositions: buf.regularPositions,
       profile: buf.profile,
       matchupVs: buf.matchupVs,
       advanced: buf.advanced,
@@ -2996,7 +2995,7 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
     return JSON.stringify([
       state.discipline, state.gender, state.formats, state.dateFrom, state.dateTo,
       state.teams, state.teamType, state.minInnings, state.advanced, state.sort,
-      state.search, state.positions, state.regularPositions, state.opposition,
+      state.search, state.positions, state.opposition,
       state.profile, state.matchupVs,
       state.event, state.eventSeasons, state.venue,
       state.result, state.resultCondition, state.tossResult, state.tossDecision,
