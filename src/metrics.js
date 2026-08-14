@@ -110,6 +110,16 @@
 //                    `sqlExpression` (and Best Bowling's `sortExpression`) is a
 //                    placeholder NEVER interpolated, like the composition metrics.
 
+// The ONE import this module carries (standalone STAGE composer, 2026-08-14): the
+// canonical→raw event_stage expansion the Stage FILTER uses (filters.js
+// stagePredicateSql → stageAliases). The stage composer's CASE-WHEN must expand a
+// canonical stage to the SAME raw spelling set the filter does, and that expansion
+// is resolved lazily inside getMetric (from the stage__<hex> key), so it must live
+// here. canonicalNames.js is a TRUE leaf (imports nothing), so this creates NO
+// import cycle — unlike importing escSql from state.js, which imports metrics.js
+// (see buildComposedStageMetric's inline single-quote escape below).
+import { stageAliases } from "./canonicalNames.js";
+
 // ── Batting ───────────────────────────────────────────────────────────────────
 const BATTING_METRICS = [
   {
@@ -2736,6 +2746,11 @@ export function getMetric(key, discipline) {
       // aggregation over the OPPONENT side (both disciplines). null for any other
       // prefix / non-plain discipline, so every other caller is unchanged.
       resolveComposedOppositionMetric(key, discipline) ??
+      // New standalone STAGE composer (2026-08-14): stage__<hex>__<base> conditional
+      // aggregation over the joined mctx.event_stage (canonical→raw via stageAliases;
+      // both disciplines). null for any other prefix / non-plain discipline, so every
+      // other caller is unchanged. Needs the mctx join present (table.js stage gate).
+      resolveComposedStageMetric(key, discipline) ??
       // Wave D — D1: player-profile attribute columns (attr_<field>), virtual text
       // metrics projected out of the profile_cte join (buildQuery). null for any
       // non-attr key / wrong discipline, so every other caller is unchanged.
@@ -4071,6 +4086,179 @@ export function eligibleComposedOppositionKeys(discipline) {
   const keys = [];
   for (const k of _composedOppositionKeys) {
     if (resolveComposedOppositionMetric(k, discipline)) keys.push(k);
+  }
+  return keys;
+}
+
+// ── Composed STAGE × metric columns (standalone composer, 2026-08-14) ──────────
+// A THIRD standalone composer, same shape as Team/Opposition (owner ruling —
+// FULLY INDEPENDENT of the scope filters; reads/writes NOTHING on state.stage).
+// Pick value(s) [canonical stage names] × a base stat → one column per picked
+// stage, e.g. "Bat Avg (Final)". Reuses the SAME base-metric pool / component set /
+// per-metric SPECS as the Innings/Team/Opposition composers (COMPOSED_INNINGS_*,
+// verbatim so a base rate's formula / NULLIF guard / component `needs` can NEVER
+// drift — Rule 1), and the SAME string↔hex key codec (teamNameToToken /
+// teamTokenToName — a generic codec with no team-specific logic).
+//
+// THREE things differ from Team/Opposition:
+//
+//  1. The value column is NOT on the base view. `event_stage` lives on `matches`
+//     and is surfaced to the leaderboard by the SHARED match-context sub-select
+//     (filters.js matchContextSubselectSql → matchContextJoinSql), a 1:1 LEFT JOIN
+//     aliased `mctx`. Every match-context clause reads it as `mctx.event_stage`
+//     (filters.js buildMatchContextClauses, A="mctx", matchCol(A,"event_stage")),
+//     so the OUTER-QUERY reference is exactly `mctx.event_stage`. table.js today
+//     adds that join only when a Stage/Result/Toss FILTER is active; it now ALSO
+//     adds it (join-presence only, WITHOUT flipping the match-context WHERE or the
+//     "matches" innings-level path) when a stage composer column is present — see
+//     table.js's stageComposerCols gate. The join is 1:1 on match_id (matches is
+//     one row per match_id) so it never multiplies innings rows: every existing
+//     aggregate stays byte-identical, only `mctx.event_stage` becomes referenceable.
+//
+//  2. CLEAN (canonical) stage names (owner ruling). The value picker offers
+//     CANONICAL labels (e.g. "Semi-Final"), same as the Stage FILTER. A canonical
+//     stage can map to MULTIPLE raw `event_stage` spellings, so the CASE-WHEN uses
+//     the SAME canonical→raw expansion the Stage FILTER uses — `stageAliases`
+//     (canonicalNames.js, imported at the top of this module), the exact helper
+//     filters.js stagePredicateSql calls — emitting
+//     `mctx.event_stage IN (<raw spellings>)`, NOT `= 'Semi-Final'`. So a column on
+//     "Semi-Final" correctly counts the raw "Semi Final" / "Semi-Final" /
+//     "Semi-final" spellings alike.
+//
+//  3. Its own loader (table.js loadStageOptions → searchStages), not the shared
+//     team loader — folded to canonical names, mirroring the Stage FILTER's
+//     mountStage. (columnsPicker wiring, not this module.)
+//
+// KEY = `stage__<hexToken>__<baseKey>` e.g. `stage__46696e616c__average` (Final).
+// Double underscore, so no single-underscore key ("stage_set" etc.) can ever
+// collide: "stage_set".startsWith("stage__") === false.
+const COMPOSED_STAGE_PREFIX = "stage__";
+const COMPOSED_STAGE_SPECS = COMPOSED_INNINGS_SPECS;
+const COMPOSED_STAGE_COMPONENTS = COMPOSED_INNINGS_COMPONENTS;
+const COMPOSED_STAGE_POOL_ORDER = COMPOSED_INNINGS_POOL_ORDER;
+// The outer-query reference for the joined event_stage (see note 1 above): the
+// leaderboard's mctx LEFT JOIN aliases the `matches` sub-select `mctx`, and every
+// reader qualifies the column `mctx.event_stage`.
+const COMPOSED_STAGE_COL = "mctx.event_stage";
+
+/** Build the composed-stage column key for `baseKey` scoped to canonical `stageName`. */
+export function makeComposedStageKey(stageName, baseKey) {
+  return `${COMPOSED_STAGE_PREFIX}${teamNameToToken(stageName)}__${baseKey}`;
+}
+
+/** Parse a composed-stage column key → { token, stageName, baseKey }, or null. */
+export function parseComposedStageKey(key) {
+  if (typeof key !== "string" || !key.startsWith(COMPOSED_STAGE_PREFIX)) return null;
+  const rest = key.slice(COMPOSED_STAGE_PREFIX.length);
+  const sep = rest.indexOf("__");
+  if (sep <= 0) return null;
+  const token = rest.slice(0, sep);
+  const baseKey = rest.slice(sep + 2);
+  const stageName = teamTokenToName(token);
+  if (stageName == null || !baseKey) return null;
+  return { token, stageName, baseKey };
+}
+
+/** True iff every component the `baseKey` spec needs exists in `discipline`'s view. */
+function composedStageComponentsPresent(discipline, spec) {
+  const have = COMPOSED_STAGE_COMPONENTS[discipline];
+  return !!have && spec.needs.every((c) => have.has(c));
+}
+
+/** Build the VIRTUAL metric for a composed-stage column: the base metric's own
+ * format / higherIsBetter / zeroIsData / kind / source ("innings"), re-badged with
+ * the composed key + a "(<stage>)" label, and a GENERATED conditional-aggregation
+ * sqlExpression. UNLIKE Team/Opposition (whose conditional is `<col> = '<value>'`),
+ * the stage conditional is `mctx.event_stage IN (<raw spellings>)` — the canonical
+ * stage expanded to its raw event_stage spelling set via stageAliases (the SAME
+ * expansion the Stage FILTER uses; never re-derived). Both plain disciplines; null
+ * outside batting/bowling, for a missing/empty stage name, an unknown base / missing
+ * component, or an empty raw-spelling expansion. */
+function buildComposedStageMetric(stageName, baseKey, discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return null;
+  if (stageName == null || stageName === "") return null;
+  const specMap = COMPOSED_STAGE_SPECS[discipline];
+  const spec = specMap && specMap[baseKey];
+  if (!spec || !composedStageComponentsPresent(discipline, spec)) return null;
+  const base = getMetric(baseKey, discipline);
+  if (!base) return null;
+  // Canonical→raw expansion, IDENTICAL to the Stage FILTER (filters.js
+  // stagePredicateSql → stageAliases). A canonical stage maps to ≥1 raw event_stage
+  // spelling; each raw becomes a SQL string literal with its single quotes doubled
+  // (the SAME inline escape buildComposedTeamMetric uses — metrics.js is not the
+  // owner of escSql, whose import would be circular). Defensive: an empty expansion
+  // yields no column (stageAliases always returns ≥1 in practice).
+  const raws = stageAliases(stageName);
+  if (!Array.isArray(raws) || raws.length === 0) return null;
+  const inList = raws.map((r) => `'${String(r).replace(/'/g, "''")}'`).join(", ");
+  const membership = `${COMPOSED_STAGE_COL} IN (${inList})`;
+  // The innings spec's conditional test is the literal substring `innings_number = {S}`
+  // in EVERY spec; replace the whole test with the IN-membership (a straight `{S}`
+  // swap would wrongly leave `mctx.event_stage = '<value>'`). No `{S}`/`innings_number`
+  // survives (verified: the generated SQL contains neither).
+  const sql = spec.sql.split("innings_number = {S}").join(membership);
+  return {
+    ...base,
+    key: makeComposedStageKey(stageName, baseKey),
+    baseKey,
+    stageName,
+    isComposedStage: true,
+    sqlExpression: sql,
+    label: `${base.label} (${stageName})`,
+    shortLabel: `${base.shortLabel} (${stageName})`,
+  };
+}
+
+/** Resolve a composed-stage COLUMN key to its virtual metric, or null. Called by getMetric. */
+export function resolveComposedStageMetric(key, discipline) {
+  const parsed = parseComposedStageKey(key);
+  if (!parsed) return null;
+  return buildComposedStageMetric(parsed.stageName, parsed.baseKey, discipline);
+}
+
+/** The ordered base metrics the `discipline` Stage composer offers — the SAME pool
+ * as the Team/Opposition/Innings composers, filtered to those with a spec AND all
+ * components present. [] outside plain batting/bowling. */
+export function composedStagePool(discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return [];
+  const order = COMPOSED_STAGE_POOL_ORDER[discipline];
+  const specMap = COMPOSED_STAGE_SPECS[discipline];
+  if (!order || !specMap) return [];
+  const pool = [];
+  for (const baseKey of order) {
+    const spec = specMap[baseKey];
+    if (!spec || !composedStageComponentsPresent(discipline, spec)) continue;
+    const base = getMetric(baseKey, discipline);
+    if (base) pool.push(base);
+  }
+  return pool;
+}
+
+// ── Composed-stage eligibility (data-driven value space) ───────────────────────
+// Mirrors the Team/Opposition composers' eligibility registries above — see the
+// Team comment for the full rationale (data-driven value space, append-only
+// registry, folded into state.eligibleColumnKeys so a picked Stage column survives
+// a re-render / prune at all three prune sites, no persistence across reload).
+const _composedStageKeys = new Set();
+
+/** Record composed-stage column key(s) as the composer mints them, so
+ * eligibleColumnKeys can keep a chosen Stage column alive across a re-render /
+ * Search-prune. Ignores anything that isn't a valid composed-stage key. */
+export function registerComposedStageKeys(keys) {
+  for (const k of Array.isArray(keys) ? keys : [keys]) {
+    if (typeof k === "string" && parseComposedStageKey(k)) _composedStageKeys.add(k);
+  }
+}
+
+/** Every registered composed-stage column key that RESOLVES for `discipline` —
+ * folded into eligibleColumnKeys so a chosen Stage column survives a re-render /
+ * prune, and drops the moment the discipline no longer offers that base metric. []
+ * outside plain batting/bowling. */
+export function eligibleComposedStageKeys(discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return [];
+  const keys = [];
+  for (const k of _composedStageKeys) {
+    if (resolveComposedStageMetric(k, discipline)) keys.push(k);
   }
   return keys;
 }

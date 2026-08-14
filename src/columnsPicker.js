@@ -76,6 +76,10 @@ import {
   // Standalone OPPOSITION composer (2026-08-14): the opponent-side MIRROR of the Team
   // composer above — same pool/key-scheme/registry shape, over the OTHER side.
   composedOppositionPool, makeComposedOppositionKey, parseComposedOppositionKey, registerComposedOppositionKeys,
+  // Standalone STAGE composer (Step 3, 2026-08-14): a THIRD data-driven SEARCH composer,
+  // same pool/key-scheme/registry shape — its picks are CANONICAL stage names, its
+  // value source is the host's loadStageOptions (not the team loader).
+  composedStagePool, makeComposedStageKey, parseComposedStageKey, registerComposedStageKeys,
 } from "./metrics.js";
 // Standalone TEAM/OPPOSITION composers: their value control is the SAME searchable
 // multi-select the Team/Opposition/Event/Venue FILTERS use (drawerInnings.js mounts
@@ -421,6 +425,12 @@ export function createColumnsPicker({
   // IS a team, so the leaderboard's Team/Opposition FILTERS already draw from the same
   // list; no second loader is needed or wired.
   loadTeamOptions,
+  // Standalone STAGE composer (Step 3, 2026-08-14): the OWN async loader for the Stage
+  // composer's value picker — `loadStageOptions() -> Promise<[{value,label}]>` of CLEAN
+  // canonical stage names (a stage isn't a team, so it can't reuse loadTeamOptions).
+  // Leaderboard-only opt-in (the pop-up passes neither loader), scoped like the Team
+  // loader with NO sibling cascade. Absent → the Stage composer is simply not offered.
+  loadStageOptions,
 }) {
   // Render the per-column Sort-by + Highlight controls only when the full W2
   // contract is supplied (leaderboard). Absent → the pop-up's plain checkbox
@@ -1047,7 +1057,7 @@ export function createColumnsPicker({
   // path (buildPickerHTML / open) is untouched — flat checkbox list, byte-identical.
 
   // Fixed order + labels for the dimension / category composers (compose editors).
-  const DIM_COMPOSER_KINDS = ["phase", "ball", "innings", "battingposition", "team", "opposition", "runsource", "runsourceconc", "wickettype"];
+  const DIM_COMPOSER_KINDS = ["phase", "ball", "innings", "battingposition", "team", "opposition", "stage", "runsource", "runsourceconc", "wickettype"];
   const COMPOSER_KIND_LABEL = {
     phase: "Phase Range", ball: "Ball Range", innings: "Innings Range",
     // Chunk 1B: the per-position breakdown composer (batting-only; self-gates via
@@ -1060,12 +1070,40 @@ export function createColumnsPicker({
     // Standalone OPPOSITION composer (2026-08-14): the opponent-side mirror of Team —
     // same search-and-pick control (reuses loadTeamOptions), same gating. Both disciplines.
     opposition: "Opposition",
+    // Standalone STAGE composer (Step 3, 2026-08-14): a THIRD search-and-pick composer —
+    // its picks are CANONICAL stage names; self-gates on loadStageOptions. Both disciplines.
+    stage: "Stage",
     runsource: "Runs by Source", runsourceconc: "Runs Conceded by Source", wickettype: "Wicket Type",
   };
   // The composers whose value control is a data-driven SEARCH picker rather than a
   // fixed tick-box list (their `ticks` ARE the composed column keys, like the fielding
-  // range kinds). Team + its Opposition mirror.
-  const SEARCH_COMPOSER_KINDS = new Set(["team", "opposition"]);
+  // range kinds). Team, its Opposition mirror, and Stage.
+  const SEARCH_COMPOSER_KINDS = new Set(["team", "opposition", "stage"]);
+  // Per-search-composer metadata: key codec + session registry + value loader +
+  // display nouns/placeholders, keyed by kind — so the mount / stat-remap / confirm
+  // blocks below stay kind-agnostic (add a fourth search composer by adding a row).
+  // Team & Opposition share loadTeamOptions (an opponent IS a team); Stage has its OWN
+  // loadStageOptions (a stage isn't a team) and its picks are CANONICAL stage names.
+  // The loaders are captured here from the destructured params (undefined on the pop-up,
+  // where the composer self-gates off via composerAvailable). This is the "generalise the
+  // loader BY KIND" the plan calls for.
+  const SEARCH_COMPOSER_META = {
+    team: {
+      parse: parseComposedTeamKey, make: makeComposedTeamKey, register: registerComposedTeamKeys,
+      nameOf: (p) => p.teamName, loader: loadTeamOptions, noun: "team",
+      placeholder: "Choose teams…", filterPlaceholder: "Type to filter teams…", ariaLabel: "Teams",
+    },
+    opposition: {
+      parse: parseComposedOppositionKey, make: makeComposedOppositionKey, register: registerComposedOppositionKeys,
+      nameOf: (p) => p.oppName, loader: loadTeamOptions, noun: "opponent",
+      placeholder: "Choose opponents…", filterPlaceholder: "Type to filter opponents…", ariaLabel: "Opponents",
+    },
+    stage: {
+      parse: parseComposedStageKey, make: makeComposedStageKey, register: registerComposedStageKeys,
+      nameOf: (p) => p.stageName, loader: loadStageOptions, noun: "stage",
+      placeholder: "Choose stages…", filterPlaceholder: "Type to filter stages…", ariaLabel: "Stages",
+    },
+  };
   // #35 (columns-popup rework Wave B): the count/% AXIS is NOT a selectable choice in
   // the compose editor — it is ONLY the post-add per-row toggle. Runs by Source and
   // Wicket Type are the two composers whose "stat" IS that count/% axis, so their
@@ -1176,6 +1214,16 @@ export function createColumnsPicker({
     }
     return next;
   }
+  /** Remap the Stage composer's ticked keys to a new base stat — the CANONICAL-stage-
+   * name mirror of teamRemapTicks/oppRemapTicks above (stage name preserved). */
+  function stageRemapTicks(newBaseKey, ticks) {
+    const next = new Set();
+    for (const k of ticks) {
+      const p = parseComposedStageKey(k);
+      if (p) next.add(makeComposedStageKey(p.stageName, newBaseKey));
+    }
+    return next;
+  }
 
   // A monotonic id for a PENDING (empty, no-column-yet) parametric composer row —
   // the owner's "starts empty" ruling: adding Innings Score Range / Wicket Haul
@@ -1239,6 +1287,7 @@ export function createColumnsPicker({
     if (kind === "battingposition") return composedPositionPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "team") return composedTeamPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "opposition") return composedOppositionPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
+    if (kind === "stage") return composedStagePool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "runsource") return ns === "batting" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
     if (kind === "runsourceconc") return ns === "bowling" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
     if (kind === "wickettype") return (ns === "batting" || ns === "bowling") ? [{ value: "count", label: "Count" }, { value: "pct", label: "%" }] : [];
@@ -1315,12 +1364,13 @@ export function createColumnsPicker({
       if (FC_RANGE_KINDS.has(kind)) return true;
       return composerValueRows(kind, ns, formats, FC_TALLY_OPTIONS[0].value).length > 0;
     }
-    // Team / Opposition composers: a DATA-DRIVEN search picker (no fixed tick-box
-    // rows), so each is offerable iff the host supplied the (shared) team loader AND
-    // the discipline has ≥1 base stat in its pool. Only the leaderboard passes
-    // loadTeamOptions → pop-up unaffected.
-    if (kind === "team" || kind === "opposition") {
-      return typeof loadTeamOptions === "function" && composerSelectOptions(kind, ns, formats).length > 0;
+    // Team / Opposition / Stage composers: a DATA-DRIVEN search picker (no fixed tick-
+    // box rows), so each is offerable iff the host supplied THAT kind's value loader
+    // (Team/Opposition → loadTeamOptions; Stage → loadStageOptions, picked by kind via
+    // SEARCH_COMPOSER_META) AND the discipline has ≥1 base stat in its pool. Only the
+    // leaderboard passes the loaders → pop-up unaffected.
+    if (SEARCH_COMPOSER_KINDS.has(kind)) {
+      return typeof SEARCH_COMPOSER_META[kind].loader === "function" && composerSelectOptions(kind, ns, formats).length > 0;
     }
     const opts = composerSelectOptions(kind, ns, formats);
     if (!opts.length) return false;
@@ -1927,14 +1977,16 @@ export function createColumnsPicker({
         const formats = getFormats();
         // FC-2 range dims (over/pos): composerValueRows can't remap user-defined ranges,
         // so swap the base tally on each ticked key structurally (range preserved).
-        // Team/Opposition: the search picker holds team NAMES → swap the base stat on
-        // each key structurally, same idea.
+        // Team/Opposition/Stage: the search picker holds team / opponent / canonical-
+        // stage NAMES → swap the base stat on each key structurally, same idea.
         editor.ticks = FC_RANGE_KINDS.has(editor.kind)
           ? fcRemapRangeTicks(statEl.value, editor.ticks)
           : editor.kind === "team"
           ? teamRemapTicks(statEl.value, editor.ticks)
           : editor.kind === "opposition"
           ? oppRemapTicks(statEl.value, editor.ticks)
+          : editor.kind === "stage"
+          ? stageRemapTicks(statEl.value, editor.ticks)
           : remapTicks(editor.kind, ns, formats, editor.sel, statEl.value, editor.ticks);
         editor.sel = statEl.value;
         rerenderInline();
@@ -1989,27 +2041,27 @@ export function createColumnsPicker({
       }
     }
 
-    // Standalone TEAM / OPPOSITION composers: mount the SAME searchable multi-select
-    // the Team FILTER uses into the editor body, INDEPENDENT of any filter state (the
-    // picks live on the editor, not on state.teams/state.opposition). The widget holds
-    // team NAMES (Opposition's value-pick IS the team list — an opponent is a team, so
-    // it reuses the SAME loadTeamOptions loader, no second loader); its onChange
-    // re-derives the staged composed keys under the current base stat via the kind's
-    // OWN make/parse pair. Options load async via the host's loadTeamOptions
-    // (gender/format/date-scoped, no sibling cascade); the widget filters that list
-    // client-side. ADD-only. onChange does NOT re-render (so the open panel + search
-    // text survive ticking) — it just updates ticks + the Add button.
-    if (SEARCH_COMPOSER_KINDS.has(editor.kind) && editor.mode === "add" && typeof loadTeamOptions === "function" && inlineState) {
-      const isOpp = editor.kind === "opposition";
-      const parseFn = isOpp ? parseComposedOppositionKey : parseComposedTeamKey;
-      const makeFn = isOpp ? makeComposedOppositionKey : makeComposedTeamKey;
-      const noun = isOpp ? "opponent" : "team";
+    // Standalone TEAM / OPPOSITION / STAGE composers: mount the SAME searchable multi-
+    // select the Team/Stage FILTERS use into the editor body, INDEPENDENT of any filter
+    // state (the picks live on the editor, not on state.teams/opposition/stage). The
+    // widget holds team / opponent / CANONICAL-stage NAMES; every per-kind bit — the
+    // value loader (loadTeamOptions for team/opposition, loadStageOptions for stage),
+    // the key make/parse pair, the display noun/placeholders — is read from
+    // SEARCH_COMPOSER_META, so this block is kind-agnostic (its onChange re-derives the
+    // staged composed keys under the current base stat via the kind's OWN make pair).
+    // Options load async via the kind's loader (gender/format/date-scoped, no sibling
+    // cascade); the widget filters that list client-side. ADD-only. onChange does NOT
+    // re-render (so the open panel + search text survive ticking) — it just updates
+    // ticks + the Add button.
+    const searchMeta = SEARCH_COMPOSER_META[editor.kind];
+    if (SEARCH_COMPOSER_KINDS.has(editor.kind) && editor.mode === "add" && searchMeta && typeof searchMeta.loader === "function" && inlineState) {
+      const { parse: parseFn, make: makeFn, nameOf, noun, placeholder, filterPlaceholder, ariaLabel, loader } = searchMeta;
       const host = rootEl.querySelector('[data-role="team-picker-host"]');
       if (host) {
         // Seed the widget from the currently-staged keys (survives a stat-change
-        // re-mount): each staged key → its team/opponent name.
+        // re-mount): each staged key → its team / opponent / stage name.
         const seedNames = [...editor.ticks]
-          .map((k) => { const p = parseFn(k); return p ? (isOpp ? p.oppName : p.teamName) : null; })
+          .map((k) => { const p = parseFn(k); return p ? nameOf(p) : null; })
           .filter(Boolean);
         let handle;
         const summarize = (count) => {
@@ -2021,9 +2073,9 @@ export function createColumnsPicker({
           options: [],
           values: seedNames,
           portal: true,
-          placeholder: isOpp ? "Choose opponents…" : "Choose teams…",
-          filterPlaceholder: isOpp ? "Type to filter opponents…" : "Type to filter teams…",
-          ariaLabel: isOpp ? "Opponents" : "Teams",
+          placeholder,
+          filterPlaceholder,
+          ariaLabel,
           summarize,
           // A pick outlives a narrowed list (the composer never rewrites a pick), same
           // as the Team FILTER — keep it visible + pinned rather than silently dropped.
@@ -2041,7 +2093,7 @@ export function createColumnsPicker({
         // Async option load. Guard against a superseded editor: only apply if THIS
         // handle is still the mounted one (a stat change / close swaps it out).
         Promise.resolve()
-          .then(() => loadTeamOptions())
+          .then(() => loader())
           .then((rows) => {
             if (inlineState && inlineState.searchPickerHandle === handle) handle.setOptions(rows || []);
           })
@@ -2097,9 +2149,9 @@ export function createColumnsPicker({
             }
           }
         } else {
-          // FC-2 range dims AND the Team/Opposition composers: the staged ticks ARE
-          // the composed keys (no fixed value list to filter against — user-defined
-          // ranges / a data-driven team search); every other composer filters
+          // FC-2 range dims AND the Team/Opposition/Stage composers: the staged ticks
+          // ARE the composed keys (no fixed value list to filter against — user-defined
+          // ranges / a data-driven team/stage search); every other composer filters
           // composerValueRows.
           const keys = FC_RANGE_KINDS.has(editor.kind) || SEARCH_COMPOSER_KINDS.has(editor.kind)
             ? [...editor.ticks]
@@ -2107,12 +2159,12 @@ export function createColumnsPicker({
                 .map((r) => r.key)
                 .filter((k) => editor.ticks.has(k));
           if (keys.length) {
-            // TEAM / OPPOSITION composers: record the minted keys so a chosen column
-            // survives the Search-prune (its value space is data-driven, so it can't be
-            // enumerated into eligibleColumnKeys ahead of time — see
-            // metrics.registerComposedTeamKeys / registerComposedOppositionKeys).
-            if (editor.kind === "team") registerComposedTeamKeys(keys);
-            else if (editor.kind === "opposition") registerComposedOppositionKeys(keys);
+            // TEAM / OPPOSITION / STAGE composers: record the minted keys so a chosen
+            // column survives the Search-prune (its value space is data-driven, so it
+            // can't be enumerated into eligibleColumnKeys ahead of time — see
+            // metrics.registerComposed*Keys). Registry picked BY KIND via
+            // SEARCH_COMPOSER_META.register (Team/Opposition/Stage each keep their own).
+            if (SEARCH_COMPOSER_META[editor.kind]) SEARCH_COMPOSER_META[editor.kind].register(keys);
             applySlots([...(getSlots() || []), ...keys.map((k) => makeSlot(k))]);
           }
         }

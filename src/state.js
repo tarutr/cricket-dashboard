@@ -55,6 +55,9 @@ import {
   // user has actually composed this session, folded into eligibleColumnKeys just like
   // its Team mirror above.
   eligibleComposedOppositionKeys,
+  // New standalone STAGE composer (2026-08-14): the stage__<hex>__<base> keys the user
+  // has composed this session, folded into eligibleColumnKeys like Team/Opposition.
+  eligibleComposedStageKeys,
   INNINGS_NUMBER_SET_KEY,
   TEAM_SET_KEY,
   OPPOSITION_SET_KEY,
@@ -1255,6 +1258,12 @@ export function eligibleColumnKeys(discipline, formats) {
   // column keys (opp__<hex>__<base>) — same data-driven-value-space fold as its Team
   // mirror immediately above. Byte-identical when none is present.
   for (const key of eligibleComposedOppositionKeys(discipline)) {
+    keys.add(key);
+  }
+  // New standalone STAGE composer (2026-08-14): the picked composed-stage column keys
+  // (stage__<hex>__<base>) — same data-driven-value-space fold as Team/Opposition
+  // above. Byte-identical when none is present (empty until a Stage column is added).
+  for (const key of eligibleComposedStageKeys(discipline)) {
     keys.add(key);
   }
   return keys;

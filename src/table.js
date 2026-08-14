@@ -31,7 +31,11 @@ import {
 import { activeGroups } from "./advanced.js";
 import { escHtml, escAttr } from "./html.js";
 import { createColumnsPicker } from "./columnsPicker.js";
-import { searchTeams } from "./playerData.js";
+import { searchTeams, searchStages } from "./playerData.js";
+// Standalone STAGE composer (Step 3, 2026-08-14): the composer's value picker offers
+// CLEAN canonical stage names (owner ruling), so loadStageOptions folds searchStages'
+// raw event_stage spellings to canonical — the SAME fold drawerInnings.js mountStage does.
+import { canonicalStage } from "./canonicalNames.js";
 import {
   eligibleColumnKeys,
   positionsFilterActive,
@@ -1301,6 +1305,17 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   for (const m of [...fieldingEventCols, ...pomCols, ...resultCols, ...profileCols]) {
     selectParts.push(`${m.sqlExpression} AS ${m.key}`);
   }
+  // Standalone STAGE composer (Step 3, 2026-08-14): stage__<hex>__<base> columns
+  // aggregate over `mctx.event_stage`, which lives on the SHARED match-context LEFT
+  // JOIN. Those columns are source "innings" (they inherit the base metric's source),
+  // so they are ALREADY projected via inningsMetrics above — this collection exists
+  // ONLY to light up the mctx join (see wantsMatchContext below). Column-presence
+  // gate, exactly like wantsProfile: with no stage column present this is [] and the
+  // emitted SQL is byte-identical. It does NOT go through the wantsMatchContext WHERE/
+  // inningsLevel paths (a stage COLUMN narrows nothing — see the join gate below).
+  const stageComposerCols = visibleColumns
+    .map((key) => getMetric(key, discipline))
+    .filter((m) => m && m.isComposedStage);
   // Wave D — TASK B: PotM (Y/N) leaderboard filter (state.potmYN, subset of
   // {"yes","no"}). A HAVING-style gate on the SAME per-player PotM award count the
   // PotM Count column/filter use (pom_cte.player_of_match = SUM of the 0/1 flag).
@@ -1551,8 +1566,15 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // Match-context (Wave 6): 1:1 LEFT JOIN by match_id (see matchContextJoinSql).
   // Added first so the mctx alias exists for the WHERE clauses; it never
   // multiplies innings rows (one match per match_id), so every aggregate stays
-  // byte-identical. Only present when a context filter is active.
-  if (wantsMatchContext) fromSql += matchContextJoinSql(view);
+  // byte-identical. Present when a match-context FILTER is active OR — Step 3
+  // (2026-08-14) — a stage composer COLUMN is shown (its sqlExpression reads
+  // mctx.event_stage). The stage-COLUMN case is JOIN-PRESENCE ONLY: it deliberately
+  // does NOT feed wantsMatchContext (the WHERE gate above) or inningsLevel (the
+  // "matches" gate above), because a stage COLUMN narrows NOTHING — the join adds no
+  // WHERE clause and, being 1:1, changes no aggregate, so every existing column
+  // (incl. "matches", which stays on its whole-scope player_matches source) is
+  // byte-identical; only mctx.event_stage becomes referenceable for the new column.
+  if (wantsMatchContext || stageComposerCols.length > 0) fromSql += matchContextJoinSql(view);
   if (wantsFielding) fromSql += ` LEFT JOIN fielding_cte ON fielding_cte.fld_player_id = ${idCol}`;
   if (wantsPom) fromSql += ` LEFT JOIN pom_cte ON pom_cte.pom_player_id = ${idCol}`;
   // Result (Wave B): 1:1 LEFT JOIN by the unified player id — res_player_id is the
@@ -1922,6 +1944,25 @@ export function mountTable(
     loadTeamOptions: () => {
       const s = store.get();
       return searchTeams("", s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo);
+    },
+    // Standalone STAGE composer (Step 3, 2026-08-14): the composer's value picker
+    // sources its stage list here — its OWN loader (Stage isn't a team, so it can't
+    // reuse loadTeamOptions). Scoped to gender/format/date/team-type via searchStages,
+    // the SAME scope the Stage FILTER's mountStage uses; NO sibling cascade (no `sel`
+    // arg) — the composer is INDEPENDENT of the Stage filter (owner ruling). The raw
+    // event_stage spellings are folded to CLEAN canonical labels (owner ruling) +
+    // deduped + sorted, EXACTLY like mountStage (drawerInnings.js), so the value the
+    // composer stores is the canonical name metrics.js stageAliases expands back to
+    // its raw spelling set. The No-Stage (event_stage IS NULL) sentinel is NOT offered
+    // (it is not a canonical name and can't be expressed as IN(<raw spellings>)) — see
+    // report. Leaderboard-only, like loadTeamOptions; the pop-up passes neither.
+    loadStageOptions: () => {
+      const s = store.get();
+      return searchStages(s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo).then((res) =>
+        [...new Set((res.stages || []).map((r) => canonicalStage(r)))]
+          .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+          .map((name) => ({ value: name, label: name }))
+      );
     },
     // E1a: the picker speaks KEYS (a string[] — same contract the player pop-up
     // uses, so that surface is byte-identical). getColumns projects the store's
