@@ -2716,6 +2716,12 @@ export function getMetric(key, discipline) {
       resolveComposedWicketTypeMetric(key, discipline) ??
       resolveComposedParamMetric(key, discipline) ??
       resolveComposedFieldingMetric(key, discipline) ??
+      // Filter/column rework Chunk 1B: per-position breakdown (pos__<pos>__<base>,
+      // batting-only conditional aggregation over batting_position) + the B. Pos.
+      // "which values" list column (bpos_set). Both null for any other prefix / wrong
+      // discipline, so every existing caller is unchanged (same ?? fall-through).
+      resolveComposedPositionMetric(key, discipline) ??
+      resolveBattingPositionSetMetric(key, discipline) ??
       // Wave D — D1: player-profile attribute columns (attr_<field>), virtual text
       // metrics projected out of the profile_cte join (buildQuery). null for any
       // non-attr key / wrong discipline, so every other caller is unchanged.
@@ -3451,6 +3457,185 @@ export function eligibleComposedInningsKeys(discipline, formats) {
     for (const tok of tokens) keys.push(makeComposedInningsKey(tok, base.key));
   }
   return keys;
+}
+
+// ── Composed BATTING-POSITION × metric columns (filter/column rework Chunk 1B) ──
+// The per-position breakdown composer: pick a base metric + tick batting positions →
+// one column per position, e.g. "Bat Avg @ 3", "Runs @ 3". Modeled EXACTLY on the
+// Innings-Number composer above (conditional aggregation over a raw per-innings
+// column): SUM(CASE WHEN batting_position = {S} THEN <component> ELSE 0 END), with the
+// same ratio reconstruction / NULLIF guards for rates. Batting-only (batting_position
+// is a batting-view column; the bowling view has none). The base-metric POOL, the
+// component SET and the per-metric SPECS are all DERIVED FROM the Innings composer's
+// batting definitions (COMPOSED_INNINGS_*) — the spec SQL is the innings spec with the
+// conditional column swapped innings_number → batting_position, so a base rate's
+// formula / NULLIF guard / component `needs` can NEVER drift between the two composers
+// (numbers sacred). {S} = the 1-based batting_position number itself (no 0-based
+// offset, unlike innings which stores tokenNumber-1).
+//
+// KEY = `pos__<pToken>__<baseKey>`  e.g. `pos__p3__average`. Tokens p1..p12 mirror the
+// Batting-position filter's own value set (drawerInnings POSITIONS = 1..12), format-
+// agnostic (every format has batting positions). Tokens carry no `__`; no catalogued
+// key starts with `pos__`. With NO composed position column present the query is byte-
+// identical (no CASE, no batting_position reference added).
+const COMPOSED_POSITION_PREFIX = "pos__";
+const COMPOSED_POSITION_TOKENS = Array.from({ length: 12 }, (_, i) => `p${i + 1}`);
+const _POSITION_TOKEN_SET = new Set(COMPOSED_POSITION_TOKENS);
+// Editor tick-box labels ("Position 1" … "Position 12"). The COLUMN header/label is
+// the base metric's own shortLabel/label with " @ N" appended (buildComposedPositionMetric).
+export const COMPOSED_POSITION_LABEL = Object.fromEntries(
+  COMPOSED_POSITION_TOKENS.map((t) => [t, `Position ${t.slice(1)}`])
+);
+/** Stored 1-based batting_position for a display token ("p3" → 3). */
+function positionTokenToStored(token) {
+  return Number(token.slice(1));
+}
+// Per-discipline COMPONENT SPEC — DERIVED from the Innings composer's batting specs by
+// swapping the conditional column innings_number → batting_position. Same formula, same
+// NULLIF guard, same component `needs`; only the CASE dimension differs. Batting-only.
+const COMPOSED_POSITION_SPECS = {
+  batting: Object.fromEntries(
+    Object.entries(COMPOSED_INNINGS_SPECS.batting).map(([k, spec]) => [
+      k,
+      { sql: spec.sql.split("innings_number").join("batting_position"), needs: spec.needs },
+    ])
+  ),
+};
+// Base-metric POOL ORDER + required COMPONENTS are SHARED with the Innings composer
+// (batting), per the task's "same set the Innings-Number composer offers".
+const COMPOSED_POSITION_COMPONENTS = { batting: COMPOSED_INNINGS_COMPONENTS.batting };
+const COMPOSED_POSITION_POOL_ORDER = { batting: COMPOSED_INNINGS_POOL_ORDER.batting };
+
+/** Build the composed-position column key for `baseKey` scoped to `posToken`. */
+export function makeComposedPositionKey(posToken, baseKey) {
+  return `${COMPOSED_POSITION_PREFIX}${posToken}__${baseKey}`;
+}
+
+/** Parse a composed-position column key → { posToken, baseKey }, or null. */
+export function parseComposedPositionKey(key) {
+  if (typeof key !== "string" || !key.startsWith(COMPOSED_POSITION_PREFIX)) return null;
+  const rest = key.slice(COMPOSED_POSITION_PREFIX.length);
+  const sep = rest.indexOf("__");
+  if (sep <= 0) return null;
+  const posToken = rest.slice(0, sep);
+  const baseKey = rest.slice(sep + 2);
+  if (!_POSITION_TOKEN_SET.has(posToken) || !baseKey) return null;
+  return { posToken, baseKey };
+}
+
+/** True iff every component the `baseKey` spec needs exists in `discipline`'s view. */
+function composedPositionComponentsPresent(discipline, spec) {
+  const have = COMPOSED_POSITION_COMPONENTS[discipline];
+  return !!have && spec.needs.every((c) => have.has(c));
+}
+
+/** Build the VIRTUAL metric for a composed-position column: the base metric's own
+ * format / higherIsBetter / zeroIsData / kind / source ("innings"), re-badged with the
+ * composed key + a "@ N" label, and a GENERATED conditional-aggregation sqlExpression
+ * (1-based batting_position substituted for {S}). Batting-only; null for any other
+ * discipline, unknown base/spec, or missing component. */
+function buildComposedPositionMetric(posToken, baseKey, discipline) {
+  if (discipline !== "batting") return null;
+  if (!_POSITION_TOKEN_SET.has(posToken)) return null;
+  const specMap = COMPOSED_POSITION_SPECS[discipline];
+  const spec = specMap && specMap[baseKey];
+  if (!spec || !composedPositionComponentsPresent(discipline, spec)) return null;
+  const base = getMetric(baseKey, discipline);
+  if (!base) return null;
+  const stored = positionTokenToStored(posToken);
+  return {
+    ...base,
+    key: makeComposedPositionKey(posToken, baseKey),
+    baseKey,
+    posToken,
+    isComposedPosition: true,
+    sqlExpression: spec.sql.split("{S}").join(String(stored)),
+    label: `${base.label} @ ${stored}`,
+    shortLabel: `${base.shortLabel} @ ${stored}`,
+  };
+}
+
+/** Resolve a composed-position COLUMN key to its virtual metric, or null. Called by getMetric. */
+export function resolveComposedPositionMetric(key, discipline) {
+  const parsed = parseComposedPositionKey(key);
+  if (!parsed) return null;
+  return buildComposedPositionMetric(parsed.posToken, parsed.baseKey, discipline);
+}
+
+/** The position tokens selectable (p1..p12) — the Batting-position filter's own set. */
+export function composedPositionTokens() {
+  return COMPOSED_POSITION_TOKENS.slice();
+}
+
+/** The ordered base metrics the `discipline` Batting-Position composer offers,
+ * filtered to those with a spec AND all components present (SHARED with the Innings
+ * composer's batting pool). [] for any non-batting discipline. */
+export function composedPositionPool(discipline) {
+  const order = COMPOSED_POSITION_POOL_ORDER[discipline];
+  const specMap = COMPOSED_POSITION_SPECS[discipline];
+  if (!order || !specMap) return [];
+  const pool = [];
+  for (const baseKey of order) {
+    const spec = specMap[baseKey];
+    if (!spec || !composedPositionComponentsPresent(discipline, spec)) continue;
+    const base = getMetric(baseKey, discipline);
+    if (base) pool.push(base);
+  }
+  return pool;
+}
+
+/** Every VALID composed-position column key for `discipline` — the pool × p1..p12.
+ * Folded into eligibleColumnKeys so a composed position column survives a re-render.
+ * [] for any non-batting discipline. */
+export function eligibleComposedPositionKeys(discipline) {
+  const keys = [];
+  for (const base of composedPositionPool(discipline)) {
+    for (const tok of COMPOSED_POSITION_TOKENS) keys.push(makeComposedPositionKey(tok, base.key));
+  }
+  return keys;
+}
+
+// ── B. Pos. "which values" column (filter/column rework Chunk 1B) ──────────────
+// A WHICH-VALUES column: per player, the DISTINCT SET of batting positions present in
+// the (scoped/filtered) rows — e.g. "3, 4, 5". Auto-appears with the Batting-position
+// filter (state.js activeLeaderboardFilterSources) and is manually addable from the
+// batting Columns picker. Batting-only (batting_position is a batting-view column;
+// offered for BOTH genders — data-driven, no hardcode). A LIST aggregate over the
+// grouped batting view — NO new CTE/join (the dim is already a view column, projected
+// in the normal SELECT loop like any metric). db.js normalizeValue flattens the DuckDB
+// LIST → a JS array; format "list" (table.js formatValue) comma-joins it "3, 4, 5",
+// and sortExpression MIN(batting_position) sorts by lowest position via the numeric
+// __sort shadow (format "list" is NOT the str compareRows path). Virtual metric (never
+// in the static catalogue → never in eligibleMetrics/graph), resolved by getMetric's
+// fallback like the profile columns. Key collides with no plain metric (none is
+// "bpos_set") nor any composed prefix.
+export const BATTING_POSITION_SET_KEY = "bpos_set";
+
+/** Resolve the B. Pos. key to its VIRTUAL list metric (batting-only), or null. Called
+ * by getMetric (so resolveColumnMetric picks it up too). */
+export function resolveBattingPositionSetMetric(key, discipline) {
+  if (key !== BATTING_POSITION_SET_KEY || discipline !== "batting") return null;
+  return {
+    key: BATTING_POSITION_SET_KEY,
+    label: "Batting positions",
+    shortLabel: "B. Pos.",
+    discipline,
+    source: "innings",
+    sqlExpression: "list(DISTINCT batting_position ORDER BY batting_position)",
+    sortExpression: "MIN(batting_position)",
+    higherIsBetter: false,
+    format: "list",
+    kind: "attribute",
+    zeroIsData: false,
+    isPhaseMetric: null,
+    columnTitle: "Batting positions present in the filtered rows",
+  };
+}
+
+/** The B. Pos. column key(s) offerable for `discipline` (batting-only) — folded into
+ * eligibleColumnKeys so a chosen / auto-added B. Pos. column survives a re-render. */
+export function battingPositionSetColumnKeys(discipline) {
+  return discipline === "batting" ? [BATTING_POSITION_SET_KEY] : [];
 }
 
 // ── Composed RUN-SOURCE × count/% columns (columns content rework D3, 2026-08-08)
@@ -4383,6 +4568,9 @@ export function eligibleComposedFieldingKeys(discipline) {
  */
 export function hasMetricData(metric, value) {
   if (value === null || value === undefined) return false;
+  // Chunk 1B: "list" columns (B. Pos.) carry a JS array (db.js normalizeValue flattened
+  // the DuckDB LIST) — data iff the array is non-empty.
+  if (metric.format === "list") return Array.isArray(value) && value.length > 0;
   if (metric.format === "str") return value !== "";
   const n = typeof value === "number" ? value : Number(value);
   if (Number.isNaN(n)) return false;

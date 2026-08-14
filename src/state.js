@@ -42,6 +42,10 @@ import {
   eligibleComposedRunSourceConcededKeys,
   eligibleComposedWicketTypeKeys,
   eligibleComposedFieldingKeys,
+  // Chunk 1B: per-position breakdown composed keys + the B. Pos. which-values key.
+  eligibleComposedPositionKeys,
+  battingPositionSetColumnKeys,
+  BATTING_POSITION_SET_KEY,
   isParamComposedColumnKey,
   isComposedFieldingColumnKey,
   makeComposedPhaseKey,
@@ -1188,6 +1192,17 @@ export function eligibleColumnKeys(discipline, formats) {
   for (const key of profileColumnKeys(discipline)) {
     keys.add(key);
   }
+  // Chunk 1B: composed batting-position column keys (pos__<pos>__<base>, batting-only,
+  // format-agnostic) + the B. Pos. which-values column key (bpos_set, batting-only) are
+  // valid leaderboard columns — fold them in so a chosen / auto-added position column
+  // survives a re-render / prune. [] for any non-batting discipline. Byte-identical when
+  // none is present (the extra keys just never match a chosen column).
+  for (const key of eligibleComposedPositionKeys(discipline)) {
+    keys.add(key);
+  }
+  for (const key of battingPositionSetColumnKeys(discipline)) {
+    keys.add(key);
+  }
   return keys;
 }
 
@@ -1393,6 +1408,11 @@ export function activeLeaderboardFilterSources(state) {
   };
 
   // Singleton / categorical filters (mirror the pills' own "active" predicates).
+  // Chunk 1B: the Batting-position scope filter auto-adds the B. Pos. which-values
+  // column (THE RULE — every scope categorical filter → its which-values column). Only
+  // reached in plain batting (matchup mode already returned [] above; positionsFilterActive
+  // is false in plain bowling), and push() re-checks addability (bpos_set is batting-only).
+  if (positionsFilterActive(state)) push("filter:positions", [BATTING_POSITION_SET_KEY]);
   if (potmYNFilterActive(state)) push("filter:potm_yn", ["potm_count"]);
   if (resultFilterActive(state)) push("filter:mc_result", ["res_won", "res_lost", "res_tied", "res_no_result"]);
   if (tossResultFilterActive(state)) push("filter:mc_toss_result", ["res_toss_won"]);

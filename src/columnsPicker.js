@@ -54,6 +54,9 @@ import {
   parseComposedBallKey,
   makeComposedInningsKey, composedInningsPool, composedInningsTokensForFormats, COMPOSED_INNINGS_LABEL,
   parseComposedInningsKey,
+  // Chunk 1B: the per-position breakdown composer (pos__) + the B. Pos. which-values column key.
+  makeComposedPositionKey, composedPositionPool, composedPositionTokens, COMPOSED_POSITION_LABEL,
+  parseComposedPositionKey, BATTING_POSITION_SET_KEY,
   // Columns content rework D3 (runs-by-source + wicket-type composers).
   composedRunSourceRows, makeComposedRunSourceKey, parseComposedRunSourceKey,
   makeComposedWicketTypeKey, parseComposedWicketTypeKey,
@@ -1019,9 +1022,12 @@ export function createColumnsPicker({
   // path (buildPickerHTML / open) is untouched — flat checkbox list, byte-identical.
 
   // Fixed order + labels for the dimension / category composers (compose editors).
-  const DIM_COMPOSER_KINDS = ["phase", "ball", "innings", "runsource", "runsourceconc", "wickettype"];
+  const DIM_COMPOSER_KINDS = ["phase", "ball", "innings", "battingposition", "runsource", "runsourceconc", "wickettype"];
   const COMPOSER_KIND_LABEL = {
     phase: "Phase Range", ball: "Ball Range", innings: "Innings Range",
+    // Chunk 1B: the per-position breakdown composer (batting-only; self-gates via
+    // composerAvailable → composedPositionPool is [] for bowling). Menu-label choice.
+    battingposition: "Batting Position",
     runsource: "Runs by Source", runsourceconc: "Runs Conceded by Source", wickettype: "Wicket Type",
   };
   // #35 (columns-popup rework Wave B): the count/% AXIS is NOT a selectable choice in
@@ -1132,6 +1138,7 @@ export function createColumnsPicker({
     if (parseComposedPhaseKey(key)) return "phase";
     if (parseComposedBallKey(key)) return "ball";
     if (parseComposedInningsKey(key)) return "innings";
+    if (parseComposedPositionKey(key)) return "battingposition";
     if (parseComposedRunSourceKey(key)) return "runsource";
     if (parseComposedRunSourceConcededKey(key)) return "runsourceconc";
     if (parseComposedWicketTypeKey(key)) return "wickettype";
@@ -1154,6 +1161,7 @@ export function createColumnsPicker({
     if (kind === "phase") { const p = parseComposedPhaseKey(key); return p ? p.baseKey : null; }
     if (kind === "ball") { const p = parseComposedBallKey(key); return p ? p.baseKey : null; }
     if (kind === "innings") { const p = parseComposedInningsKey(key); return p ? p.baseKey : null; }
+    if (kind === "battingposition") { const p = parseComposedPositionKey(key); return p ? p.baseKey : null; }
     if (kind === "runsource") { const p = parseComposedRunSourceKey(key); return p ? p.axis : null; }
     if (kind === "runsourceconc") { const p = parseComposedRunSourceConcededKey(key); return p ? p.axis : null; }
     if (kind === "wickettype") { const p = parseComposedWicketTypeKey(key); return p ? p.axis : null; }
@@ -1169,6 +1177,7 @@ export function createColumnsPicker({
     if (kind === "phase") return composedPhasePool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "ball") return composedBallPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "innings") return composedInningsPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
+    if (kind === "battingposition") return composedPositionPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "runsource") return ns === "batting" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
     if (kind === "runsourceconc") return ns === "bowling" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
     if (kind === "wickettype") return (ns === "batting" || ns === "bowling") ? [{ value: "count", label: "Count" }, { value: "pct", label: "%" }] : [];
@@ -1189,6 +1198,9 @@ export function createColumnsPicker({
     }
     if (kind === "innings") {
       return composedInningsTokensForFormats(formats).map((tok) => ({ label: COMPOSED_INNINGS_LABEL[tok], key: makeComposedInningsKey(tok, sel), rare: false }));
+    }
+    if (kind === "battingposition") {
+      return composedPositionTokens().map((tok) => ({ label: COMPOSED_POSITION_LABEL[tok], key: makeComposedPositionKey(tok, sel), rare: false }));
     }
     if (kind === "runsource") {
       if (ns !== "batting") return [];
@@ -1602,8 +1614,16 @@ export function createColumnsPicker({
       profileColumns && isPlainNs
         ? profileColumnSpecs(ns).map((p) => ({ type: "plain", key: p.key, label: p.label }))
         : [];
+    // Chunk 1B: the B. Pos. which-values column (batting-only, plain ns) is a virtual
+    // list column (not in eligibleMetrics), so it is listed EXPLICITLY here like the
+    // profile items — appended to Basic Stats. It also auto-appears with the Batting-
+    // position filter (state.js). PLACEMENT choice (see report — flagged for owner).
+    const bposItem =
+      isPlainNs && ns === "batting"
+        ? [{ type: "plain", key: BATTING_POSITION_SET_KEY, label: "Batting positions" }]
+        : [];
     const ownSections = [
-      ...section("Basic Stats", plainItems(ownBasic)),
+      ...section("Basic Stats", [...plainItems(ownBasic), ...bposItem]),
       ...section("Detailed Stats", plainItems(ownDetailed)),
       ...(isPlainNs ? [] : section("Dismissals", plainItems(dismissal))),
       ...section("Player Profile", profileItems),

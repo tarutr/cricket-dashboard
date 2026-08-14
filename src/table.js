@@ -1691,6 +1691,9 @@ function widestNameColWidthPx(names) {
 /** Shared display formatter for metric values ("—" for no-data per §8.1). Also used by the player page. */
 export function formatValue(metric, value) {
   if (!hasMetricData(metric, value)) return "—"; // em dash
+  // Chunk 1B: "list" columns (B. Pos.) render the flattened JS array (db.js
+  // normalizeValue) comma-joined, e.g. [3,4,5] → "3, 4, 5".
+  if (metric.format === "list") return Array.isArray(value) ? value.join(", ") : String(value);
   if (metric.format === "str") return String(value);
   const n = Number(value);
   switch (metric.format) {
@@ -1724,7 +1727,7 @@ function dataCellHTML(metric, row, isHighlighted = false, slotId = null) {
   // string, HTML-ESCAPED (arbitrary profile text must never inject markup). Numeric
   // formats produce digit/symbol strings with no HTML-special chars, so escaping
   // them is a harmless no-op — but scoping the escape to str keeps this byte-safe.
-  const text = metric.format === "str" ? escHtml(formatValue(metric, value)) : formatValue(metric, value);
+  const text = metric.format === "str" || metric.format === "list" ? escHtml(formatValue(metric, value)) : formatValue(metric, value);
   // data-key (task 9): lets the live drag-reorder preview find "the cell in
   // THIS row belonging to column X" without any index arithmetic — see
   // wireColumnDrag's onMove.
