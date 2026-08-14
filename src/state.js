@@ -51,6 +51,10 @@ import {
   teamSetColumnKeys,
   oppositionSetColumnKeys,
   eligibleComposedTeamKeys,
+  // New standalone OPPOSITION composer (2026-08-14): the opp__<hex>__<base> keys the
+  // user has actually composed this session, folded into eligibleColumnKeys just like
+  // its Team mirror above.
+  eligibleComposedOppositionKeys,
   INNINGS_NUMBER_SET_KEY,
   TEAM_SET_KEY,
   OPPOSITION_SET_KEY,
@@ -1245,6 +1249,12 @@ export function eligibleColumnKeys(discipline, formats) {
   // isLeaderboardColumnAddable, table.pruneInvalidColumns) with no query-builder edit.
   // Byte-identical when none is present (the set is empty until a Team column is added).
   for (const key of eligibleComposedTeamKeys(discipline)) {
+    keys.add(key);
+  }
+  // New standalone OPPOSITION composer (2026-08-14): the picked composed-opposition
+  // column keys (opp__<hex>__<base>) — same data-driven-value-space fold as its Team
+  // mirror immediately above. Byte-identical when none is present.
+  for (const key of eligibleComposedOppositionKeys(discipline)) {
     keys.add(key);
   }
   return keys;

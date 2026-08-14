@@ -2732,6 +2732,10 @@ export function getMetric(key, discipline) {
       // aggregation over the player's own team column (both disciplines). null for any
       // other prefix / non-plain discipline, so every other caller is unchanged.
       resolveComposedTeamMetric(key, discipline) ??
+      // New standalone OPPOSITION composer (2026-08-14): opp__<hex>__<base> conditional
+      // aggregation over the OPPONENT side (both disciplines). null for any other
+      // prefix / non-plain discipline, so every other caller is unchanged.
+      resolveComposedOppositionMetric(key, discipline) ??
       // Wave D — D1: player-profile attribute columns (attr_<field>), virtual text
       // metrics projected out of the profile_cte join (buildQuery). null for any
       // non-attr key / wrong discipline, so every other caller is unchanged.
@@ -3934,6 +3938,139 @@ export function eligibleComposedTeamKeys(discipline) {
   const keys = [];
   for (const k of _composedTeamKeys) {
     if (resolveComposedTeamMetric(k, discipline)) keys.push(k);
+  }
+  return keys;
+}
+
+// ── Composed OPPOSITION × metric columns (standalone composer, 2026-08-14) ─────
+// The OPPONENT-side MIRROR of the Team composer immediately above: same standalone,
+// filter-independent composer (reads/writes NOTHING on state.opposition, no sibling
+// cascade), same value-pick (a team name — the opponent IS a team), same base-metric
+// pool/specs/components (COMPOSED_INNINGS_SPECS, reused verbatim so a base rate's
+// formula/NULLIF guard/component `needs` can never drift between the Team and
+// Opposition composers — Rule 1). The ONLY difference: the conditional column is the
+// OTHER side (SCOPE_OPP_COL: bowling_team on the batting view, batting_team on the
+// bowling view — already defined above for the opp_set which-values column; already
+// projected, NO query change) and the label reads "vs <name>" rather than "(<name>)"
+// (owner ruling — the versus form). Reuses teamNameToToken/teamTokenToName verbatim
+// (a generic string<->hex codec with no team-specific logic) for the SAME
+// identifier-safe, separator-free, round-tripping key encoding as the Team composer.
+//
+// KEY = `opp__<hexToken>__<baseKey>` e.g. `opp__41757374 72616c6961__average`
+// (Australia). Double underscore, so the opp_set which-values key (single
+// underscore) never collides: "opp_set".startsWith("opp__") === false.
+const COMPOSED_OPP_PREFIX = "opp__";
+const COMPOSED_OPP_SPECS = COMPOSED_INNINGS_SPECS;
+const COMPOSED_OPP_COMPONENTS = COMPOSED_INNINGS_COMPONENTS;
+const COMPOSED_OPP_POOL_ORDER = COMPOSED_INNINGS_POOL_ORDER;
+
+/** Build the composed-opposition column key for `baseKey` scoped to `oppName`. */
+export function makeComposedOppositionKey(oppName, baseKey) {
+  return `${COMPOSED_OPP_PREFIX}${teamNameToToken(oppName)}__${baseKey}`;
+}
+
+/** Parse a composed-opposition column key → { token, oppName, baseKey }, or null. */
+export function parseComposedOppositionKey(key) {
+  if (typeof key !== "string" || !key.startsWith(COMPOSED_OPP_PREFIX)) return null;
+  const rest = key.slice(COMPOSED_OPP_PREFIX.length);
+  const sep = rest.indexOf("__");
+  if (sep <= 0) return null;
+  const token = rest.slice(0, sep);
+  const baseKey = rest.slice(sep + 2);
+  const oppName = teamTokenToName(token);
+  if (oppName == null || !baseKey) return null;
+  return { token, oppName, baseKey };
+}
+
+/** True iff every component the `baseKey` spec needs exists in `discipline`'s view. */
+function composedOppositionComponentsPresent(discipline, spec) {
+  const have = COMPOSED_OPP_COMPONENTS[discipline];
+  return !!have && spec.needs.every((c) => have.has(c));
+}
+
+/** Build the VIRTUAL metric for a composed-opposition column: the base metric's own
+ * format / higherIsBetter / zeroIsData / kind / source, re-badged with the composed
+ * key + a "vs <name>" label (owner ruling — the versus form), and a GENERATED
+ * conditional-aggregation sqlExpression (the OPPONENT-side column substituted for
+ * innings_number, the SQL-escaped opponent name for {S}). Both plain disciplines;
+ * null outside batting/bowling, for a missing opponent name, or for an unknown base /
+ * missing component. */
+function buildComposedOppositionMetric(oppName, baseKey, discipline) {
+  const col = SCOPE_OPP_COL[discipline];
+  if (!col) return null; // plain batting/bowling only
+  if (oppName == null || oppName === "") return null;
+  const specMap = COMPOSED_OPP_SPECS[discipline];
+  const spec = specMap && specMap[baseKey];
+  if (!spec || !composedOppositionComponentsPresent(discipline, spec)) return null;
+  const base = getMetric(baseKey, discipline);
+  if (!base) return null;
+  // SQL string literal, single-quotes doubled (mirrors metrics.js:4534's inline escape
+  // and buildComposedTeamMetric's identical guard just above).
+  const literal = `'${String(oppName).replace(/'/g, "''")}'`;
+  const sql = spec.sql.split("innings_number").join(col).split("{S}").join(literal);
+  return {
+    ...base,
+    key: makeComposedOppositionKey(oppName, baseKey),
+    baseKey,
+    oppName,
+    isComposedOpposition: true,
+    sqlExpression: sql,
+    label: `${base.label} vs ${oppName}`,
+    shortLabel: `${base.shortLabel} vs ${oppName}`,
+  };
+}
+
+/** Resolve a composed-opposition COLUMN key to its virtual metric, or null. Called by
+ * getMetric. */
+export function resolveComposedOppositionMetric(key, discipline) {
+  const parsed = parseComposedOppositionKey(key);
+  if (!parsed) return null;
+  return buildComposedOppositionMetric(parsed.oppName, parsed.baseKey, discipline);
+}
+
+/** The ordered base metrics the `discipline` Opposition composer offers — the SAME
+ * pool as the Team/Innings composers, filtered to those with a spec AND all
+ * components present. [] outside plain batting/bowling. */
+export function composedOppositionPool(discipline) {
+  if (!SCOPE_OPP_COL[discipline]) return [];
+  const order = COMPOSED_OPP_POOL_ORDER[discipline];
+  const specMap = COMPOSED_OPP_SPECS[discipline];
+  if (!order || !specMap) return [];
+  const pool = [];
+  for (const baseKey of order) {
+    const spec = specMap[baseKey];
+    if (!spec || !composedOppositionComponentsPresent(discipline, spec)) continue;
+    const base = getMetric(baseKey, discipline);
+    if (base) pool.push(base);
+  }
+  return pool;
+}
+
+// ── Composed-opposition eligibility (data-driven value space) ──────────────────
+// Mirrors the Team composer's eligibility registry immediately above — see its
+// comment for the full rationale (data-driven value space, append-only registry,
+// folded into state.eligibleColumnKeys so a picked Opposition column survives a
+// re-render / prune at all three prune sites, no persistence across reload).
+const _composedOppositionKeys = new Set();
+
+/** Record composed-opposition column key(s) as the composer mints them, so
+ * eligibleColumnKeys can keep a chosen Opposition column alive across a re-render /
+ * Search-prune. Ignores anything that isn't a valid composed-opposition key. */
+export function registerComposedOppositionKeys(keys) {
+  for (const k of Array.isArray(keys) ? keys : [keys]) {
+    if (typeof k === "string" && parseComposedOppositionKey(k)) _composedOppositionKeys.add(k);
+  }
+}
+
+/** Every registered composed-opposition column key that RESOLVES for `discipline` —
+ * folded into eligibleColumnKeys so a chosen Opposition column survives a re-render /
+ * prune, and drops the moment the discipline no longer offers that base metric. []
+ * outside plain batting/bowling. */
+export function eligibleComposedOppositionKeys(discipline) {
+  if (!SCOPE_OPP_COL[discipline]) return [];
+  const keys = [];
+  for (const k of _composedOppositionKeys) {
+    if (resolveComposedOppositionMetric(k, discipline)) keys.push(k);
   }
   return keys;
 }

@@ -1964,6 +1964,20 @@ a { color: var(--color-accent); }
   border-bottom: 1px solid var(--color-line-strong);
 }
 
+/* Composer headers that EMBED a data value (owner ruling, 2026-08-14) — the
+   standalone Team ("Bat Avg (India)") and Opposition ("Bat Avg vs Australia")
+   composer columns — render in NORMAL case, not the all-caps global header style
+   above. Every other header (plain metrics, which-values columns like Team/Opp.,
+   every other composer) is untouched: matched purely by the composed key's own
+   double-underscore prefix on the header's existing `data-key` attribute
+   (table.js already emits `<th data-key="${metric.key}">`), so no table.js change
+   is needed. `team_set`/`opp_set` (the which-values columns, single underscore)
+   do NOT match `^="team__"`/`^="opp__"` and stay uppercase, as intended. */
+.data-table thead th[data-key^="team__"],
+.data-table thead th[data-key^="opp__"] {
+  text-transform: none;
+}
+
 /* The corner cells (pin + rank + Player headers) are sticky both ways — pin them
    above the body's sticky first columns. */
 .data-table thead th.data-table__th--sticky,
