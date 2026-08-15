@@ -316,8 +316,8 @@ async function materialize(discipline, key, files, scopePredicate, windowPredica
  * narrower than the innings the outer query keeps. Clauses that decide WHICH
  * players/teams (team, opposition, position, event, venue, profile, match
  * context) are deliberately NOT lifted — the view must stay at core-scope grain
- * so an in-query sub-use like the R. Pos. CTE (modal position over the core scope)
- * still sees every core-scope innings.
+ * so an in-query per-player sub-use (e.g. profile_cte / fielding_cte, each
+ * computed over the core scope) still sees every core-scope innings.
  */
 export function scopeForQuery(sql) {
   // --- files (superset-safe) ---

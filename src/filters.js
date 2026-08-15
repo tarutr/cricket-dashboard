@@ -291,14 +291,13 @@ export function tossDecisionPredicateSql(tossDecision, alias = "") {
 //     which is not a comparison, it is a mislabelled number.
 //
 // Every clause the scope builder emits is a `{ sql, bypassable }` record, and
-// **the default is `bypassable: false`**. Exactly five things opt in, by being
+// **the default is `bypassable: false`**. Exactly four things opt in, by being
 // wrapped in bypassableClause() (or, for the last one, its own gate helper):
 //
 //     1. team              — "plays for India"        (player attribute)
 //     2. player profile    — role / hand / bowl style (player attribute)
-//     3. R. Pos.           — "their usual slot"       (player attribute)
-//     4. the name search   — a shortlisting device, not a measurement
-//     5. the numeric stat conditions — the separate post-aggregation gate,
+//     3. the name search   — a shortlisting device, not a measurement
+//     4. the numeric stat conditions — the separate post-aggregation gate,
 //        gateWithPinExemption (a threshold on the player's own numbers)
 //
 // Everything else ALWAYS applies to a pin: the core scope (gender / format /
@@ -378,8 +377,8 @@ export function buildScopeClausesTagged(
   state,
   { includeTeams = true, teamColumn, idColumn, oppositionColumn, includePositions = false, includeGender = true } = {}
 ) {
-  // Bare strings are always-applies (see asTaggedClauses) — only the three
-  // player-shortlisting filters below (team, profile, R. Pos.) wrap themselves in
+  // Bare strings are always-applies (see asTaggedClauses) — only the two
+  // player-shortlisting filters below (team, profile) wrap themselves in
   // bypassableClause(). The other two bypassables live outside this function: the
   // name search (tagged at each table.js call site) and the numeric stat
   // conditions (gateWithPinExemption, post-aggregation).
@@ -411,8 +410,7 @@ export function buildScopeClausesTagged(
   // and the graph fetch, all four of whose views carry innings_number). The pom_cte
   // (player_matches, teamColumn "team") and fielding_cte (fielding, "fielding_team")
   // have no innings_number column, so keying off the team column keeps the clause off
-  // those queries. The R. Pos. modal-position inner scope passes no teamColumn, so it
-  // is correctly excluded (modal position is derived over ALL innings). ALWAYS-APPLIES
+  // those queries. ALWAYS-APPLIES
   // (it selects WHICH innings are measured, like opposition), so a
   // pinned player obeys it. Empty selection ⇒ no clause ⇒ byte-identical.
   if (INNINGS_GRAIN_TEAM_COLS.has(teamColumn) && inningsNumberFilterActive(state)) {
@@ -648,8 +646,8 @@ export function buildMatchContextClauses(state, rowTeamCol) {
 
 // ── Pinned-player exemption (owner decision 46 task 3b; Wave 4b, decision 47a) ──
 // A pin changes WHO is listed, never WHAT their numbers mean. Pins are the players
-// ADDED to the result set regardless of the five PLAYER-SHORTLISTING filters —
-// team / player profile / R. Pos. / name search / numeric stat conditions — and
+// ADDED to the result set regardless of the four PLAYER-SHORTLISTING filters —
+// team / player profile / name search / numeric stat conditions — and
 // nothing else. Everything that decides WHICH MATCHES OR BALLS are being measured
 // still applies to them: the core scope (gender / format / date window / team
 // type), opposition, the matchup striker position, event (+ seasons), venue, and
@@ -759,7 +757,7 @@ function formatSummaryLabel(formats) {
 /**
  * Portal-aware dropdown wiring (F1b, team_dropdown.png fix). Shared by every
  * dropdown opened INSIDE the Filters popup body — Format + Team type here,
- * Current/Historic team (drawer.js), R. Pos. + Batting position + Against
+ * Current/Historic team (drawer.js), Batting position + Against
  * opposition (drawerInnings.js). The popup body scrolls (overflow:auto), which
  * CLIPS any absolutely-positioned panel opened within it; this helper moves the
  * panel to <body> with position:fixed while open so it escapes that clipping

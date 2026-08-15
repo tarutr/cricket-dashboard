@@ -1477,9 +1477,9 @@ const BOWLING_METRICS = [
 // JOINs a per-fielder pre-aggregated `fielding_cte` (ONE row per fielder over
 // the scoped fielding_events, substitutes excluded by default) onto the
 // batting/bowling GROUP BY; each value is constant across a player's group and
-// projected with MAX() — the same shape as the R. Pos. join. The CTE is one row
-// per player, so the join never multiplies innings rows → every existing
-// aggregate stays byte-identical.
+// projected with MAX() — the same functionally-dependent-join shape pom_cte /
+// profile_cte use. The CTE is one row per player, so the join never multiplies
+// innings rows → every existing aggregate stays byte-identical.
 //
 // Player-of-the-Match stays sourced from `player_matches` (source
 // "player_matches") — it is genuinely per-match, not a fielding event — and is
@@ -1517,7 +1517,7 @@ const FIELDING_METRIC_SPECS = [
   // per-player SUM of the 0/1 PotM flag (buildPomCteSql: `SUM(player_of_match)`), i.e.
   // the award COUNT. So the metric's job is only to PROJECT that constant out of the
   // batting/bowling GROUP BY — done with MAX() (the same functionally-dependent-join
-  // projection R. Pos. / fielding_cte / player_of_match all use). A literal outer
+  // projection fielding_cte / player_of_match all use). A literal outer
   // SUM(pom_cte.player_of_match) would MULTIPLY the count by the batter's innings-row
   // count (wrong), so the "SUM of the flag" the count needs is the one INSIDE the CTE,
   // not the outer projection. Value == player_of_match exactly (SA Yadav = 5 PotM,
@@ -2884,12 +2884,12 @@ export function resolveColumnMetric(key, ns) {
 // VIRTUAL metrics resolved on the fly by resolveProfileColumnMetric (folded into
 // getMetric's fallback chain below), projected in buildQuery via a `profile_cte`
 // LEFT JOIN (MAX(profile_cte.<field>) — the same functionally-dependent-join
-// projection R. Pos. / pom_cte use), and offered explicitly in the leaderboard
+// projection pom_cte uses), and offered explicitly in the leaderboard
 // Columns picker's "Player Profile" section. Availability MIRRORS the profile
 // filters' discipline gating (paletteGroups.js): Batting hand is batting-only; the
 // other four are offered in both disciplines. Men-only BY DATA today (profiles is
 // men-only) → they read blank ("—") for players without a profile; NOT
-// gender-hardcoded (owner "remove the hardcode everywhere"), exactly like R. Pos.
+// gender-hardcoded (owner "remove the hardcode everywhere").
 //
 // Key scheme: `attr_<field>` — identifier-safe (no quoting), collides with no plain
 // metric key (none starts with "attr_") nor any composed/cross prefix (x__ / ph__ /

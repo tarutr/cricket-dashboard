@@ -922,7 +922,7 @@ export function createInitialState(maxMonth) {
                    // which IS in that key. See the data-presence block near escSql above.
     pinnedPlayers: [], // [{id, name}] — owner decision 46 task 3b: players ADDED to the table's
                    // result set regardless of the PLAYER-SHORTLISTING filters (team/profile/
-                   // R. Pos./search/stat conditions). A pin changes WHO is listed, never WHAT
+                   // search/stat conditions). A pin changes WHO is listed, never WHAT
                    // their numbers mean, so their CORE scope (gender/format/date window/team
                    // type) still applies — and so does everything else that selects matches or
                    // balls: opposition, the matchup striker position, event, venue, match
@@ -1938,7 +1938,7 @@ export function createStore(initial) {
    * but ignores matchup ("Vs") mode for its queries, so it passes a matchupVs-
    * nulled view of the state here to keep its card footer honest — otherwise a
    * "Vs" bucket still set on the shared store would flip the positions token's
-   * phrasing (or hide the R. Pos. token) even though the graph query ran plain.
+   * phrasing even though the graph query ran plain.
    * Existing callers pass nothing and get the live store state exactly as before.
    */
   function describeScope(stateOverride) {

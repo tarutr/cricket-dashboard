@@ -487,7 +487,7 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // identical to the old standalone coverageSql's WHERE. The bucket predicate
   // now lives exclusively in the per-column FILTER clauses above.
   // Clauses are TAGGED for the pin exemption (filters.js): the builder tags its
-  // own three player-shortlisting filters (team/profile/R. Pos.), and the name
+  // own two player-shortlisting filters (team/profile), and the name
   // search is tagged here.
   const whereClauses = buildScopeClausesTagged(state, scopeOpts);
   if (searchClause) whereClauses.push(bypassableClause(searchClause));
@@ -508,7 +508,7 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // Pinned players (Wave 4b, decision 47a): additive — a pinned player is scanned
   // as long as they have a row that passes every ALWAYS-APPLIES clause above
   // (core scope + opposition + striker position + event/venue + match context),
-  // bypassing only the player-shortlisting ones (team/profile/R. Pos./search),
+  // bypassing only the player-shortlisting ones (team/profile/search),
   // exactly as buildQuery
   // does. The bucket predicate is NOT in this WHERE (it is a per-aggregate FILTER),
   // so pins keep it automatically. With no pins this is byte-identical to the
@@ -940,7 +940,7 @@ export function buildFieldingExtraSliceClauses(state) {
  * conditions (dismissed-batter position / dismissal kind / phase), substitutes
  * excluded. Pins are read from state (the same filter buildQuery applies) so a
  * pinned player keeps their fielding numbers under the player-shortlisting
- * filters (team / profile / R. Pos. / search) while still obeying opposition,
+ * filters (team / profile / search) while still obeying opposition,
  * event, venue and match context like every other row.
  *
  * Extracted verbatim from buildQuery (was inline) so the Graph Builder's
@@ -1083,7 +1083,7 @@ export function buildFldMatchesCteSql(state) {
  * Build the `pom_cte` definition (Player-of-the-Match, source player_matches) —
  * same "CTE body without leading WITH" convention as buildFieldingCteSql. A
  * whole-match award, so it stays on player_matches (which has no opposition/
- * position column): scope is core + team + event/venue + profile + R. Pos.,
+ * position column): scope is core + team + event/venue + profile,
  * pin-exempt — the SAME options the "matches" secondary query uses, so PoM and
  * matches never diverge on scope. Extracted verbatim from buildQuery; buildQuery
  * output stays byte-identical (verified).
@@ -1198,7 +1198,7 @@ export function buildResultCteSql(state) {
  * COUNT of matches (Player Matches), used ONLY as the DENOMINATOR of the per-match
  * fielding metrics (catches_per_match, …). Same "CTE body without leading WITH"
  * convention + SAME scope options as buildPomCteSql / the "matches" secondary query
- * (core gender/format/date/team-type + team + event/venue + profile + R. Pos.,
+ * (core gender/format/date/team-type + team + event/venue + profile,
  * pin-exempt, plus name search) — so a fielder's per-match value divides by the SAME
  * Player Matches count their Matches column shows (in the un-sliced leaderboard) and
  * never diverges from PoM/matches on scope. The single column `match_count` is
@@ -1234,7 +1234,7 @@ export function buildPmatchCteSql(state) {
  *
  * SCOPE: mirrors buildScopeClausesTagged retargeted to the OTHER discipline's
  * columns — the SAME core scope the fielding CTE honors (gender / format / date
- * window / team-type + team + OPPOSITION + event/venue + profile + R. Pos.,
+ * window / team-type + team + OPPOSITION + event/venue + profile,
  * pin-exempt) plus the name search, computed against the other discipline's
  * teamColumn / OPP_COL / idColumn / view. It does NOT honor the current
  * discipline's per-innings slices or stat-conditions (there is no cross condition
@@ -1537,7 +1537,7 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   //                  column — a whole-match award, so opposition is not applied).
   // Each sqlExpression is MAX(<cte>.<col>) — a constant across a player's group
   // (each CTE is one row per player), so MAX just projects that constant, exactly
-  // like the R. Pos. join's MAX. The joins never multiply innings rows, so every
+  // like the profile_cte join's MAX. The joins never multiply innings rows, so every
   // existing aggregate above stays byte-identical. `wants*` also lights up for a
   // matching STAT CONDITION with no visible column, so a HAVING referencing the
   // CTE always has its CTE joined.
@@ -1657,8 +1657,8 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   const wantsCross = crossCols.length > 0;
 
   // Clauses arrive TAGGED for the pin exemption (filters.js
-  // buildScopeClausesTagged): the builder marks its own three player-shortlisting
-  // filters (team / profile / R. Pos.) bypassable, everything else
+  // buildScopeClausesTagged): the builder marks its own two player-shortlisting
+  // filters (team / profile) bypassable, everything else
   // always-applies. The name search is a shortlisting device too, so it is tagged
   // here.
   const whereClauses = buildScopeClausesTagged(state, {
@@ -1689,7 +1689,7 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // Pinned players (task 3b, owner decision 46; Wave 4b routed onto the shared
   // helper): additive OR. The helper reads each clause's OWN bypass tag, so it
   // never has to know the clause order — a pinned player bypasses exactly
-  // team/profile/R. Pos./search, and still obeys the core scope (gender/format/
+  // team/profile/search, and still obeys the core scope (gender/format/
   // date window/team type) plus opposition, the matchup striker position, and
   // event/venue/match context.
   // buildMatchupQuery calls the SAME helper (Wave 4b, decision 47a), so plain and
@@ -1705,7 +1705,7 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // Fielding subquery (fielding rebuild): pre-aggregate the EVENT-GRAIN `fielding`
   // view to ONE row per fielder, honoring the FULL leaderboard scope — core
   // (gender/format/date/team-type) + team (fielding_team) + OPPOSITION + event/
-  // venue + profile + R. Pos., pin-exempt — PLUS the fielding SLICE conditions
+  // venue + profile, pin-exempt — PLUS the fielding SLICE conditions
   // (dismissed-batter position / dismissal kind / phase). Substitutes are
   // excluded by default; the slice clauses (metric-definition refinements, not
   // "who to include") always apply, even to pins. Only built when a fielding
@@ -1725,8 +1725,8 @@ export function buildQuery(state, visibleColumns, opts = {}) {
 
   // Impact subquery (player_of_match): a whole-match award, so it stays on
   // player_matches (which has no opposition/position column). Same scope options
-  // the "matches" secondary query uses below (core + team + event/venue + profile
-  // + R. Pos., pin-exempt), so PoM and matches never diverge on scope. Built by
+  // the "matches" secondary query uses below (core + team + event/venue + profile,
+  // pin-exempt), so PoM and matches never diverge on scope. Built by
   // the shared buildPomCteSql() helper (same output as the former inline block).
   let pomCteSql = null;
   if (wantsPom) pomCteSql = buildPomCteSql(state);

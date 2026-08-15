@@ -495,7 +495,7 @@ function onPinsChanged() {
  * buildQuery. Their core scope (gender/format/date window/team type) still
  * applies, and so does everything else that says WHICH matches or balls are
  * being measured (opposition, striker position, event, venue, match context) —
- * only the PLAYER-SHORTLISTING filters (team/profile/R. Pos./search/stat
+ * only the PLAYER-SHORTLISTING filters (team/profile/search/stat
  * conditions) are bypassed for their row alone: a pin changes who is listed,
  * never what their numbers mean. Wave 4b (decision 47a) extended the same bypass to matchup
  * ("Vs") mode via buildMatchupQuery, so the pin is live in both.

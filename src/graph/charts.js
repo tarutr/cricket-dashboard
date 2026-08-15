@@ -150,7 +150,7 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   // whereWithPinExemption over the SHARED tagged clause list — deliberately NOT a
   // second copy of the policy, so the two can never diverge again: a pinned id
   // bypasses exactly the player-shortlisting clauses (here that is `team`; the
-  // profile / R. Pos. semi-joins need an idColumn this caller does not pass) and
+  // profile semi-join needs an idColumn this caller does not pass) and
   // still obeys the core scope, opposition, striker position, event, venue and
   // match context. NOTE the graph's charted roster and state.pinnedPlayers are
   // different sets: an unpinned, merely-selected player keeps obeying every

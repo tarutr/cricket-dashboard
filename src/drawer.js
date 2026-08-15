@@ -3,7 +3,7 @@
 // The "Advanced Filters" condition builder — the ONE grouped condition builder
 // that is the entire second section of the Filters popup (owner task 1B-2). The
 // old separate "Player" section is gone; its filters (Role / Batting hand /
-// Bowling style / R. Pos.) fold in here as condition types, alongside Team
+// Bowling style) fold in here as condition types, alongside Team
 // (Played for / Against opposition), Match (Event / Venue), and the numeric
 // stat conditions (split into Basic / Advanced metric groups).
 //
@@ -116,8 +116,7 @@ function orderBy(present, order) {
 // "Opposition"); Bowling style IS a standalone dropdown entry (R6 cleanup:
 // removed the redundant nested bowling-style sub-picker that used to also live
 // inside Role → Bowler — Role stays purely role, profile.bowlingType is set only
-// here); and R. Pos. relocates into the Basic-metrics
-// group after "Innings". The PALETTE order/grouping is driven by the explicit
+// here). The PALETTE order/grouping is driven by the explicit
 // 7-group taxonomy in buildPaletteGroups below (not by this array's order or the
 // `group` field, which is now documentation only). This array's order drives the
 // applied-ROW render order in the singleton-rows container.
