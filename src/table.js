@@ -1333,6 +1333,63 @@ export function buildCrossDisciplineCteSql(state, discipline, crossCols) {
  * scope (fielding_cte is the base). Client-side sort (applySort) defaults to Matches-desc
  * (state.js defaultLeaderboardSort → the first column when there is no "innings" column).
  */
+
+/** Count-threshold gate for the fielding board — the fielding analogue of the
+ * batting/bowling HAVING path (advancedToHaving/conditionToHaving), reusing the
+ * SAME stat-condition machinery so operator / between / AND-OR semantics stay
+ * byte-identical across boards.
+ *
+ * KEY DIFFERENCE from batting/bowling: the fielding board is a BASE table (one row
+ * per fielder, tallies projected directly in buildFieldingLeaderboardQuery), NOT a
+ * GROUP BY over an innings view. So a "Catches ≥ N" gate is a plain predicate on the
+ * PROJECTED column — we map each supported condition metricKey → the fielding query's
+ * own output alias and feed that as the exprFn into conditionToHaving, NOT the
+ * catalogued metric's bolt-on `MAX(fielding_cte.…)` sqlExpression (which only exists
+ * for the batting/bowling JOIN-column form and would be wrong / unresolvable here).
+ * `matches` maps to the projected `matches` alias, i.e. whatever the shared
+ * fieldingMatchesNarrowed switch resolved it to (appearances vs matches-with-a-credit).
+ *
+ * Metrics resolve under namespace "batting" (metricNsFor(fielding) === "batting"), the
+ * same namespace the fielding board uses for columns/sort — so getMetric inside
+ * conditionToHaving finds them (they're registered under batting/bowling in metrics.js).
+ *
+ * DEFENSIVE: the membership check on FIELDING_CONDITION_COLUMNS happens FIRST, before
+ * conditionToHaving runs, so ANY non-fielding metricKey (a stray batting condition,
+ * including a parametric Innings-Score/Wicket-Haul one whose own branch bypasses exprFn)
+ * is dropped — a batting condition can never leak a predicate onto the fielding board. */
+const FIELDING_CONDITION_COLUMNS = {
+  catches: "catches",
+  stumpings: "stumpings",
+  run_outs: "run_outs",
+  dismissals_effected: "dismissals_effected",
+  matches: "matches",
+};
+function conditionToFieldingWhere(cond) {
+  const col = FIELDING_CONDITION_COLUMNS[cond && cond.metricKey];
+  if (!col) return null; // not a supported fielding tally → dropped (never leaks)
+  return conditionToHaving(cond, "batting", () => col);
+}
+/** Mirror of advancedToHaving's group/AND-OR assembly, but routing each condition
+ * through conditionToFieldingWhere (membership-gated, base-column expr). Returns the
+ * combined predicate string, or null when no supported fielding count condition is
+ * active (so the board query stays byte-identical). */
+function buildFieldingCountGate(advanced) {
+  if (!advanced) return null;
+  const groups = activeGroups(advanced);
+  if (groups.length === 0) return null;
+  const parts = groups
+    .map((g) => {
+      const condSql = g.conds.map(conditionToFieldingWhere).filter(Boolean);
+      if (condSql.length === 0) return null;
+      const joiner = g.op === "OR" ? " OR " : " AND ";
+      return condSql.length > 1 ? `(${condSql.join(joiner)})` : condSql[0];
+    })
+    .filter(Boolean);
+  if (parts.length === 0) return null;
+  const topJoiner = advanced.op === "OR" ? " OR " : " AND ";
+  return parts.length > 1 ? `(${parts.join(topJoiner)})` : parts[0];
+}
+
 export function buildFieldingLeaderboardQuery(state) {
   // SACRED CTE as a BASE table, with the fielder name projected (opts.includeName).
   // No fielding composers this step → 2nd arg [].
@@ -1357,11 +1414,19 @@ export function buildFieldingLeaderboardQuery(state) {
     "(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs) AS dismissals_effected",
   ];
   const fromSql = "FROM fielding_cte\n" + joinSql;
-  const sql = [
-    "WITH " + [cte, matchesCte].join(",\n"),
+  const baseSelect = [
     "SELECT " + selectCols.join(",\n       "),
     fromSql,
   ].join("\n");
+  // Count-threshold gate (reuses the batting/bowling condition machinery). Applied as
+  // an OUTER WHERE over the projected columns (the board is a base table with no GROUP
+  // BY, so the gate is a plain predicate on the aliases, not a HAVING). Absent ⇒ no
+  // wrap ⇒ byte-identical to the un-gated board.
+  const countGate = buildFieldingCountGate(state.advanced);
+  const body = countGate
+    ? `SELECT * FROM (\n${baseSelect}\n) AS fld_board\nWHERE ${countGate}`
+    : baseSelect;
+  const sql = ["WITH " + [cte, matchesCte].join(",\n"), body].join("\n");
   return { sql, matchesSql: null };
 }
 
