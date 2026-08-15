@@ -1072,3 +1072,56 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
     - **NEXT (unchanged order):** columns rejig → columns-in-popup + presets → AND/OR → sweep → review → cutover
       (LAST). SPEC/BACKLOG docs **UPDATED 2026-08-07** (owner lifted Option B, #70) — reworded "built on branch,
       not yet live" + committed; no longer held.
+
+## 2026-08-15 — Composers + Fielding-scope (rework Chunk 2-3)
+
+72. **STANDALONE COMPOSERS (Team/Opposition/Stage/Event/Venue) — BUILT + COMMITTED** on `ball-layer`, nothing
+    pushed (commits `2445f7a` `2da95c2` `9936a14` `dc08c24` `3c6d0a9` `2594682`). Build plan:
+    `.orchestrator/rework-composers-build-plan.md`. Anchors byte-identical throughout (2,813 / Karanbir 2,454 /
+    SA Yadav 60·1,544·29.13·150.34); every composer value independently DuckDB-verified.
+    - **Composers are STANDALONE and INDEPENDENT of the scope filters — CORRECTS the earlier rework spec.** The
+      "filter drives the composer" / "composers auto-generate one column per selected filter value" idea in
+      `.orchestrator/filter-column-rework-spec.md` §3/§5 is **REJECTED** (owner: "WHY HAVE YOU CONFLATED TWO
+      UNRELATED FILTERS"). A composer = pick value(s) × a stat, standalone, via its own picker; there is no
+      "default stat" and no "breakdown" concept (both were the executor's invented terms, also rejected).
+      Neither drives nor is driven by any same-named filter. Spec doc corrected in place 2026-08-15.
+    - **Value-picking:** short fixed sets (e.g. Batting Position) keep the checklist; the four long/data-driven
+      sets (Team/Opposition/Event/Venue) reuse the SAME searchable multi-select (`searchSelect.js`
+      `mountSearchMultiSelect`) the corresponding FILTERS already use — NOT the matchup "Vs" picker (a short
+      list). No column cap (table scrolls; extreme tick-counts self-limiting).
+    - **Clean/canonical names where a fold exists** (Event via `eventAliases`, Stage via `stageAliases`); raw
+      spelling where none exists (Venue).
+    - **"No Stage" left AS-IS.** The Stage composer offers a "No Stage" bucket (`event_stage IS NULL`, reusing
+      the Stage filter's own `STAGE_NONE` sentinel). Owner reviewed what this bucket means — stage not recorded
+      in the data (≈ tournament group/league stages Cricsheet leaves unlabelled, plus bilateral series) — and
+      chose to **leave it as-is** (no relabelling, no further splitting).
+
+73. **FIELDING AS A THIRD LEADERBOARD SCOPE — foundation + full filter set BUILT + COMMITTED; auto-columns
+    PENDING** (commits `9fe295f` `a3dbb8e` `bc18195` `3efdc01` `414508c`). Build plan:
+    `.orchestrator/rework-chunks-2-5-build-plan.md` Chunk 3. Anchors byte-identical throughout; batting/bowling
+    untouched.
+    - Fielding is a third "discipline" option that ranks FIELDERS, mirroring the player pop-up's existing
+      fielding MODE (namespace "batting" + a fielding flag — there is **no separate "fielding" metrics
+      namespace**).
+    - **Fielding is EVENT-GRAIN — no innings concept — so the denominator is Matches**, i.e. `player_matches`
+      appearances (NOT a bespoke new source — the executor's reinvention of a fresh tally was rejected in
+      favour of reuse). Default columns: Matches · Catches · Stumpings · Run-outs · Total dismissals; default
+      sort Matches-desc.
+    - **Fielding Matches REUSES the existing batting/bowling `inningsLevel` switch:** un-narrowed → appearances
+      (`pmatch`); narrowed (an opposition or a fielding slice active) → matches-with-a-credit (`fld_matches`).
+      **The player pop-up's fielding Matches was FIXED to use the same switch** — it previously always used
+      `fld_matches`, disagreeing with the leaderboard.
+    - Count-threshold filters (Catches/Stumpings/Run-outs/Total dismissals/Matches/Caught & bowled ≥ N) reuse
+      the existing `conditionToHaving` machinery — no new filter mechanism built.
+    - **Final fielding filter menu (6 groups):** Fielder Profile (Matches · Team) · Match · Ball Ranges ·
+      Wicket Types (Catches · Caught & bowled · Stumpings · Run-outs · Total dismissals) · Bowler Details ·
+      Dismissed Batter (position · dismissed batter hand · role · specific batter). The old fielding "Player
+      Profile" group and the redundant standalone "Wicket type" picker were REMOVED (folded into Wicket Types).
+    - **Batting-hand on the fielding menu is owner-approved** (extends decision 54 — the bowling board still
+      hides it). Data facts confirmed during the build: the only 4 fielder-credited dismissal types are caught /
+      caught & bowled / stumped / run out (all covered); Run-outs count fielder CREDITS (a two-fielder run-out
+      credits both fielders).
+    - **NOT built:** fielding's own "every-filter-gets-a-column" auto-columns (the Chunk 2 pattern not yet
+      extended to fielding's ~10 filters); Chunk 4 (cleanup sweep); Chunk 5 (the two-dropdown Player/Scope
+      reorg + Match-all/Match-any AND/OR) — including the fielding filters' own Player-vs-Scope split, which
+      the owner flagged as **UNDETERMINED**.

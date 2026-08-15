@@ -268,6 +268,10 @@ Player-of-Match metrics — surfaced as a "Fielding" sub-group in BOTH the batti
 views — via a per-fielder pre-aggregated subquery in `table.js`. Fielding rule: caught &
 bowled counts as a catch; a run-out credits ALL listed fielders; substitute-fielder catches
 are flagged (`substitute`) and excluded from a player's record.
+
+> **Also built on `ball-layer`, NOT yet live:** `fielding_events` now ALSO powers a full
+> third **Fielding leaderboard scope** — a per-fielder ranking board, in addition to the
+> batting/bowling bolt-on columns above. See §5.1a.
 - Keys + context: `match_id`, `innings_number`, `over_number`, `ball_index`, `wicket_index`,
   `fielder_index`, `fielder_id`, `fielder_name`, `match_type`, `gender`, `team_type`,
   `match_date`, `year`, `month`, `venue`, `city`, `event_name`, `fielding_team`, `opposition`
@@ -339,8 +343,10 @@ change (they are not held behind Search — but the *table* only re-queries on S
 
 1. **Gender** — Men / Women, single-select. **Men is the default.** Switching gender
    clears any profile-based filter (profiles are men-only).
-2. **Discipline** — Batting / Bowling. Lives in the scope strip (the header keeps only
-   the Stats / Graphs view switcher).
+2. **Discipline** — Batting / Bowling / **Fielding** (Fielding BUILT + VERIFIED on the
+   `ball-layer` branch, NOT yet live — see §5.1a; its availability is data-driven, so the
+   option is only offered where fielding data exists). Lives in the scope strip (the
+   header keeps only the Stats / Graphs view switcher).
 3. **Format** — a multi-select checkbox dropdown over **three buckets**: **Red Ball**
    (Test + MDM), **50 Over** (ODI + ODM), **T20** (T20 + IT20). Tick one, two, or all
    three; there is no "Both/All" toggle (tick the boxes).
@@ -350,6 +356,39 @@ change (they are not held behind Search — but the *table* only re-queries on S
 
 Standing anchors (Men / T20 / International, 2023-07-01 → 2026-07-02): **2,813 players**;
 Karanbir Singh **2,454** runs; SA Yadav **60 inns / 1,544 runs / 29.13 avg / 150.34 SR**.
+
+### 5.1a Fielding scope — third leaderboard discipline
+
+> **BUILT + VERIFIED on the `ball-layer` branch, NOT yet live.** Everything in this
+> subsection ships at the ball-layer cutover, alongside the rest of §4.2's 9-file schema.
+
+Selecting **Fielding** in the Discipline control ranks **fielders**, not batters/bowlers,
+off the same sacred per-fielder query (`buildFieldingCteSql`) that already powers the
+Fielding sub-group columns in the batting/bowling views (§4.2) — it is a different
+presentation of the same base query, not a new metrics namespace. Default columns are
+**Matches · Catches · Stumpings · Run-outs · Total dismissals**, default sort
+**Matches-desc** (there is no "innings" concept to prefer instead). Availability is
+data-driven per §5.1 above.
+
+Fielding is **event-grain**, not innings-grain — a fielder's dismissals happen in the
+*opponent's* innings, so there is no "innings" denominator. **Matches** therefore reuses
+the SAME appearances-vs-narrowed switch as the batting/bowling "Matches" column
+(`inningsLevel`): un-narrowed, it is the fielder's raw `player_matches` appearance count;
+once an opposition filter or any fielding condition is active, it narrows to
+`COUNT(DISTINCT match_id)` over matches where the fielder actually has a credit. Only
+four dismissal kinds credit a fielder — caught, caught and bowled, stumped, run out — and
+a run-out credit goes to EVERY listed fielder (a two-fielder run-out credits both).
+Count-threshold conditions on the tallies (e.g. "Catches ≥ 20") reuse the existing
+stat-condition (HAVING) machinery (`conditionToHaving`), gated to only the columns the
+fielding query actually understands.
+
+The Fielding filter menu is organised into **six groups** (owner-approved reorg,
+2026-08-15): **Fielder Profile** (Matches, Team), **Match** (Opposition/Event/Venue plus
+City/Season/Stage/Result/Toss reached via the match-context join), **Ball Ranges**
+(Phase/Over range/Innings number), **Wicket Types** (Catches, Caught & bowled, Stumpings,
+Run-outs, Total dismissals — Caught & bowled is its own distinct count filter, a subset of
+Catches), **Bowler Details** (bowler style, specific bowler), and **Dismissed Batter**
+(position, hand, role, specific batter).
 
 ### 5.2 Filters drawer, pills, and the "Search is the only trigger" rule
 
@@ -444,6 +483,31 @@ decision 57). Some matchup-only stats (Matches, High Score, Best Bowling) carry
 - Row-count indicator reflects the filtered set honestly; a subtle loading state during
   queries, never a frozen UI.
 
+### 5.5a Column composers
+
+> **BUILT + VERIFIED on the `ball-layer` branch, NOT yet live.**
+
+A **composer** produces one column per chosen value × a base stat (e.g. "Bat Avg @ 3",
+"Bat Avg vs Australia") from the Columns picker. Composer families: **Phase**,
+**Ball-range**, **Innings-number**, **Batting-position** (the original set), plus the
+newer standalone **Team**, **Opposition**, **Stage**, **Event**, and **Venue** composers.
+
+**Composers are STANDALONE and INDEPENDENT of the scope filters** (owner ruling): a
+composer is just "pick value(s) × a stat" — it neither reads nor drives any same-named
+scope filter (e.g. the Team composer and the Team filter do not interact). High-cardinality
+composers (Team, Opposition, Event, Venue) pick their value(s) via the same searchable
+multi-select the corresponding filter uses; low-cardinality ones (Phase, Ball-range, etc.)
+use a plain checklist. Where a name-fold exists the composer picks the clean/canonical name
+(Event, Stage); where none exists it picks the raw name (Venue; Team/Opposition are also
+currently raw — team-name normalisation is still pending, §12).
+
+Separately, several scope filters carry their own **"which-values" column** — an
+auto-appearing column listing, per player, the distinct raw values of that dimension
+present in their filtered rows (e.g. the Batting-position filter auto-adds a "B. Pos."
+which-values column). Built so far: Batting-position (batting-only), Innings-Number, Team,
+and Opposition. The general aim is that **every filter gets an auto-appearing column**
+where one is possible; see §12 for the pieces of this not yet built.
+
 ## 6. Frontend — Graphs (Graph Builder)
 
 Same page (a view/panel, never an iframe — v1's iframe caching bug is banned). Chart.js is
@@ -527,6 +591,12 @@ untouched. There is no Players tab.
   row, an honest scope line, and reset. Note that leaderboard-only filters do not apply
   inside the pop-up.
 - Blocks with no innings in scope show honest notes, never empty tables.
+- **Fielding "Matches" (BUILT on `ball-layer`, NOT yet live):** the pop-up's fielding
+  Matches figure now uses the SAME appearances-vs-narrowed switch as the leaderboard's
+  Fielding-scope Matches column (§5.1a) — un-narrowed = raw `player_matches` appearances,
+  narrowed (an opposition filter or any fielding condition active) = matches with an actual
+  fielding credit. Previously the pop-up always showed matches-with-a-credit, which
+  disagreed with the leaderboard's un-narrowed Matches; this is now fixed.
 
 **Profiles are men-only.** On the Women view, every profile-powered surface (the profile
 filter row, matchup sections, header profile fields) is greyed with an honest note —
@@ -625,6 +695,20 @@ log, the decision log wins — and the conflict should be reported, not silently
 
 ## 12. Open / pending items
 
+- **Fielding auto-columns** — the "every filter gets a column" rule (§5.5a) is not yet
+  extended to the new Fielding scope (§5.1a); its filters do not yet auto-add a
+  which-values column the way Batting-position/Innings-Number/Team/Opposition do.
+  Relatedly, Stage/Event/Venue which-values columns are not built for batting/bowling
+  either — flagged to the owner rather than built, because (unlike Batting-position/
+  Innings-Number/Team/Opposition) Event/Venue have no raw column reachable without a new
+  join, and Stage's match-context join is gated on its filters being active, not on column
+  presence.
+- **Two-dropdown Player Filters / Scope Filters reorg + Match-all/Match-any (AND/OR)
+  toggle** — a rework of the filters drawer into two dropdowns (Player-level vs
+  Scope-level filters) plus an AND/OR combination toggle; not yet built. Must also decide
+  where the Fielding filters (§5.1a) split across Player vs Scope — still undetermined.
+- **Cleanup sweep** — a general harmonisation/cleanup pass over the filter and column rework
+  is still pending (part of the wider harmonisation-rejig programme).
 - **Feedback form** (Supabase RLS) — not built (§9).
 - **Team & venue pop-ups** — not built (player pop-ups only, so far).
 - **Team + opposition name normalization** — the first post-round to-do (club/domestic
