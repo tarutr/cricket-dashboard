@@ -62,6 +62,8 @@ import {
   mountTeam,
   mountEvent,
   mountVenue,
+  mountCity,
+  mountSeason,
   mountFieldingPosition,
   mountResult,
   mountTossResult,
@@ -192,6 +194,14 @@ const SINGLETON_TYPES = [
   // the Stage row renders next to the Event row it belongs with.
   { key: "mc_stage", label: "Stage", group: "Match" },
   { key: "venue", label: "Venue", group: "Match" },
+  // City / Season (City & Season everywhere, 2026-08-16): standalone match-level
+  // singletons mirroring Event/Venue — state.city / state.season, both genders,
+  // both disciplines, every format. Their palette leaves live in the Match Details
+  // group (buildPaletteGroups). NOT added to FIELDING_BOARD_SINGLETONS — the
+  // fielding board offers City/Season as its OWN dims (fieldingDims.js), so these
+  // top-level singleton rows never surface there.
+  { key: "city", label: "City", group: "Match" },
+  { key: "season", label: "Season", group: "Match" },
   // Fielding SLICE conditions (fielding rebuild): the fielding metric's OWN dims
   // — narrow WHICH wicket-events the Catches/Stumpings/Run-outs/Dismissals-
   // Effected columns count. PLAIN mode only (fielding has no matchup grain);
@@ -577,6 +587,8 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const oppositionController = mountOpposition(editorHosts.opposition, store, onChange, { embedded: true, onOptionsLoaded: onCascadeOptionsLoaded });
   const eventController = mountEvent(editorHosts.event, store, onChange, { onOptionsLoaded: onCascadeOptionsLoaded });
   const venueController = mountVenue(editorHosts.venue, store, onChange, { onOptionsLoaded: onCascadeOptionsLoaded });
+  const cityController = mountCity(editorHosts.city, store, onChange, { onOptionsLoaded: onCascadeOptionsLoaded });
+  const seasonController = mountSeason(editorHosts.season, store, onChange, { onOptionsLoaded: onCascadeOptionsLoaded });
   const fieldingPositionController = mountFieldingPosition(editorHosts.fld_pos, store, onChange, { embedded: true });
   // Match-context editors (Wave 6): each writes only its own state key.
   const resultController = mountResult(editorHosts.mc_result, store, onChange, { embedded: true });
@@ -626,7 +638,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   // plainly, name the control, and leave Search fully enabled: it informs, it
   // never blocks. Only these five report; the fixed-vocabulary pickers (Result,
   // Toss…, Innings Number) have no cross-filtered list and can't go dead this way.
-  const cascadeControllers = [venueController, eventController, teamController, oppositionController, stageController];
+  const cascadeControllers = [venueController, cityController, seasonController, eventController, teamController, oppositionController, stageController];
   const noticeMainEl = noticeEl ? noticeEl.querySelector('[data-role="fpop-notice-main"]') : null;
   const noticeHintEl = noticeEl ? noticeEl.querySelector('[data-role="fpop-notice-hint"]') : null;
 
@@ -714,6 +726,8 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "opposition": return (s.opposition || []).length > 0;
       case "event": return (s.event || []).length > 0;
       case "venue": return (s.venue || []).length > 0;
+      case "city": return (s.city || []).length > 0;
+      case "season": return (s.season || []).length > 0;
       // Fielding SLICE conditions: present when their list has a value.
       case "fld_pos": return Boolean(s.fielding && (s.fielding.positions || []).length > 0);
       // Match-context singletons (Wave 6): present when their value is set. Result
@@ -827,6 +841,8 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "opposition": store.set({ opposition: [] }); break;
       case "event": store.set({ event: [], eventSeasons: {} }); break; // Wave 6 pt2: drop season narrowing too
       case "venue": store.set({ venue: [] }); break;
+      case "city": store.set({ city: [] }); break;
+      case "season": store.set({ season: [] }); break;
       case "fld_pos": store.set({ fielding: { ...(store.get().fielding || {}), positions: [] } }); break;
       // Removing Result also removes its nested Result Condition (FIX B).
       case "mc_result": store.set({ result: [], resultCondition: [] }); break;
@@ -988,6 +1004,8 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     oppositionController.sync();
     eventController.sync();
     venueController.sync();
+    cityController.sync();
+    seasonController.sync();
     fieldingPositionController.sync();
     resultController.sync();
     tossResultController.sync();

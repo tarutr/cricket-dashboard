@@ -59,6 +59,8 @@ import {
   parseComposedPositionKey, BATTING_POSITION_SET_KEY,
   // Wave 2A.3: the Innings-Number / Team / Opposition which-values column keys.
   INNINGS_NUMBER_SET_KEY, TEAM_SET_KEY, OPPOSITION_SET_KEY,
+  // City & Season everywhere (2026-08-16): the City / Season which-values column keys.
+  CITY_SET_KEY, SEASON_SET_KEY,
   // Columns content rework D3 (runs-by-source + wicket-type composers).
   composedRunSourceRows, makeComposedRunSourceKey, parseComposedRunSourceKey,
   makeComposedWicketTypeKey, parseComposedWicketTypeKey,
@@ -85,6 +87,10 @@ import {
   // (loadEventOptions); Venue picks RAW venue names (loadVenueOptions, no fold).
   composedEventPool, makeComposedEventKey, parseComposedEventKey, registerComposedEventKeys,
   composedVenuePool, makeComposedVenueKey, parseComposedVenueKey, registerComposedVenueKeys,
+  // Standalone CITY + SEASON composers (City & Season everywhere, 2026-08-16): the
+  // SIXTH + SEVENTH SEARCH composers — Venue-shape (RAW names, no fold).
+  composedCityPool, makeComposedCityKey, parseComposedCityKey, registerComposedCityKeys,
+  composedSeasonPool, makeComposedSeasonKey, parseComposedSeasonKey, registerComposedSeasonKeys,
 } from "./metrics.js";
 // Standalone TEAM/OPPOSITION composers: their value control is the SAME searchable
 // multi-select the Team/Opposition/Event/Venue FILTERS use (drawerInnings.js mounts
@@ -443,6 +449,11 @@ export function createColumnsPicker({
   // Stage loaders; absent → the Event/Venue composer is simply not offered (pop-up).
   loadEventOptions,
   loadVenueOptions,
+  // Standalone CITY + SEASON composers (City & Season everywhere, 2026-08-16): their
+  // OWN async value loaders — RAW city / season names (no fold), like loadVenueOptions.
+  // Leaderboard-only; absent → the composer is simply not offered (pop-up).
+  loadCityOptions,
+  loadSeasonOptions,
 }) {
   // Render the per-column Sort-by + Highlight controls only when the full W2
   // contract is supplied (leaderboard). Absent → the pop-up's plain checkbox
@@ -1069,7 +1080,7 @@ export function createColumnsPicker({
   // path (buildPickerHTML / open) is untouched — flat checkbox list, byte-identical.
 
   // Fixed order + labels for the dimension / category composers (compose editors).
-  const DIM_COMPOSER_KINDS = ["phase", "ball", "innings", "battingposition", "team", "opposition", "stage", "event", "venue", "runsource", "runsourceconc", "wickettype"];
+  const DIM_COMPOSER_KINDS = ["phase", "ball", "innings", "battingposition", "team", "opposition", "stage", "event", "venue", "city", "season", "runsource", "runsourceconc", "wickettype"];
   const COMPOSER_KIND_LABEL = {
     phase: "Phase Range", ball: "Ball Range", innings: "Innings Range",
     // Chunk 1B: the per-position breakdown composer (batting-only; self-gates via
@@ -1090,12 +1101,16 @@ export function createColumnsPicker({
     // picks RAW venue names (loadVenueOptions). Both disciplines; self-gate on their loaders.
     event: "Event",
     venue: "Venue",
+    // Standalone CITY + SEASON composers (City & Season everywhere, 2026-08-16): RAW
+    // city / season names (no fold), both disciplines; self-gate on their loaders.
+    city: "City",
+    season: "Season",
     runsource: "Runs by Source", runsourceconc: "Runs Conceded by Source", wickettype: "Wicket Type",
   };
   // The composers whose value control is a data-driven SEARCH picker rather than a
   // fixed tick-box list (their `ticks` ARE the composed column keys, like the fielding
   // range kinds). Team, its Opposition mirror, and Stage.
-  const SEARCH_COMPOSER_KINDS = new Set(["team", "opposition", "stage", "event", "venue"]);
+  const SEARCH_COMPOSER_KINDS = new Set(["team", "opposition", "stage", "event", "venue", "city", "season"]);
   // Per-search-composer metadata: key codec + session registry + value loader +
   // display nouns/placeholders, keyed by kind — so the mount / stat-remap / confirm
   // blocks below stay kind-agnostic (add a fourth search composer by adding a row).
@@ -1129,6 +1144,16 @@ export function createColumnsPicker({
       parse: parseComposedVenueKey, make: makeComposedVenueKey, register: registerComposedVenueKeys,
       nameOf: (p) => p.venueName, loader: loadVenueOptions, noun: "venue",
       placeholder: "Choose venues…", filterPlaceholder: "Type to filter venues…", ariaLabel: "Venues",
+    },
+    city: {
+      parse: parseComposedCityKey, make: makeComposedCityKey, register: registerComposedCityKeys,
+      nameOf: (p) => p.cityName, loader: loadCityOptions, noun: "city",
+      placeholder: "Choose cities…", filterPlaceholder: "Type to filter cities…", ariaLabel: "Cities",
+    },
+    season: {
+      parse: parseComposedSeasonKey, make: makeComposedSeasonKey, register: registerComposedSeasonKeys,
+      nameOf: (p) => p.seasonName, loader: loadSeasonOptions, noun: "season",
+      placeholder: "Choose seasons…", filterPlaceholder: "Type to filter seasons…", ariaLabel: "Seasons",
     },
   };
   // #35 (columns-popup rework Wave B): the count/% AXIS is NOT a selectable choice in
@@ -1271,6 +1296,24 @@ export function createColumnsPicker({
     }
     return next;
   }
+  /** Remap the City composer's ticked keys to a new base stat (raw city name kept). */
+  function cityRemapTicks(newBaseKey, ticks) {
+    const next = new Set();
+    for (const k of ticks) {
+      const p = parseComposedCityKey(k);
+      if (p) next.add(makeComposedCityKey(p.cityName, newBaseKey));
+    }
+    return next;
+  }
+  /** Remap the Season composer's ticked keys to a new base stat (raw season kept). */
+  function seasonRemapTicks(newBaseKey, ticks) {
+    const next = new Set();
+    for (const k of ticks) {
+      const p = parseComposedSeasonKey(k);
+      if (p) next.add(makeComposedSeasonKey(p.seasonName, newBaseKey));
+    }
+    return next;
+  }
 
   // A monotonic id for a PENDING (empty, no-column-yet) parametric composer row —
   // the owner's "starts empty" ruling: adding Innings Score Range / Wicket Haul
@@ -1337,6 +1380,8 @@ export function createColumnsPicker({
     if (kind === "stage") return composedStagePool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "event") return composedEventPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "venue") return composedVenuePool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
+    if (kind === "city") return composedCityPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
+    if (kind === "season") return composedSeasonPool(ns).map((b) => ({ value: b.key, label: metricDisplayLabel(b, formats) }));
     if (kind === "runsource") return ns === "batting" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
     if (kind === "runsourceconc") return ns === "bowling" ? [{ value: "runs", label: "Count" }, { value: "pct", label: "%" }] : [];
     if (kind === "wickettype") return (ns === "batting" || ns === "bowling") ? [{ value: "count", label: "Count" }, { value: "pct", label: "%" }] : [];
@@ -1817,6 +1862,9 @@ export function createColumnsPicker({
           { type: "plain", key: INNINGS_NUMBER_SET_KEY, label: "Innings Number" },
           { type: "plain", key: TEAM_SET_KEY, label: "Team" },
           { type: "plain", key: OPPOSITION_SET_KEY, label: "Opposition" },
+          // City & Season everywhere (2026-08-16): the City / Season which-values columns.
+          { type: "plain", key: CITY_SET_KEY, label: "City" },
+          { type: "plain", key: SEASON_SET_KEY, label: "Season" },
         ]
       : [];
     const basicItems = plainItems(ownBasic);
@@ -2040,6 +2088,10 @@ export function createColumnsPicker({
           ? eventRemapTicks(statEl.value, editor.ticks)
           : editor.kind === "venue"
           ? venueRemapTicks(statEl.value, editor.ticks)
+          : editor.kind === "city"
+          ? cityRemapTicks(statEl.value, editor.ticks)
+          : editor.kind === "season"
+          ? seasonRemapTicks(statEl.value, editor.ticks)
           : remapTicks(editor.kind, ns, formats, editor.sel, statEl.value, editor.ticks);
         editor.sel = statEl.value;
         rerenderInline();

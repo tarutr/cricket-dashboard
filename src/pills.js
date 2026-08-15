@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
+import { positionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, cityFilterActive, seasonFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel, composedParamPrefixForBase, paramAppliedLabel } from "./metrics.js";
@@ -296,6 +296,34 @@ export function mountPills(
           restore: () => {
             const cur = store.get().venue || [];
             if (!cur.includes(v)) store.set({ venue: [...cur, v] });
+          },
+        });
+      }
+    }
+    // City / Season (City & Season everywhere, 2026-08-16): one removable pill per
+    // selected value, mirroring Venue.
+    if (cityFilterActive(s)) {
+      for (const c of s.city) {
+        pills.push({
+          key: `city:${c}`,
+          label: `City: ${c}`,
+          remove: () => store.set({ city: store.get().city.filter((x) => x !== c) }),
+          restore: () => {
+            const cur = store.get().city || [];
+            if (!cur.includes(c)) store.set({ city: [...cur, c] });
+          },
+        });
+      }
+    }
+    if (seasonFilterActive(s)) {
+      for (const sn of s.season) {
+        pills.push({
+          key: `season:${sn}`,
+          label: `Season: ${sn}`,
+          remove: () => store.set({ season: store.get().season.filter((x) => x !== sn) }),
+          restore: () => {
+            const cur = store.get().season || [];
+            if (!cur.includes(sn)) store.set({ season: [...cur, sn] });
           },
         });
       }

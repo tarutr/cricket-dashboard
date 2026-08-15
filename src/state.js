@@ -63,9 +63,17 @@ import {
   // eligibleColumnKeys like Team/Opposition/Stage.
   eligibleComposedEventKeys,
   eligibleComposedVenueKeys,
+  // City & Season everywhere (2026-08-16): the city__/season__ composer keys + the
+  // City/Season which-values column keys, folded into eligibleColumnKeys like the rest.
+  eligibleComposedCityKeys,
+  eligibleComposedSeasonKeys,
+  citySetColumnKeys,
+  seasonSetColumnKeys,
   INNINGS_NUMBER_SET_KEY,
   TEAM_SET_KEY,
   OPPOSITION_SET_KEY,
+  CITY_SET_KEY,
+  SEASON_SET_KEY,
   isParamComposedColumnKey,
   isComposedFieldingColumnKey,
   makeComposedPhaseKey,
@@ -382,6 +390,24 @@ export function anyEventSeasonNarrowing(state) {
 /** True if the Venue filter (state.venue) is currently narrowing the match set. */
 export function venueFilterActive(state) {
   return Array.isArray(state.venue) && state.venue.length > 0;
+}
+
+// ── Match filters: City / Season (City & Season everywhere, 2026-08-16) ────────
+// Standalone top-level match-level filters mirroring Venue: raw `matches.city` /
+// `matches.season` values, no canonical fold. [] = no predicate. NOT gated on
+// teamType (city/season are meaningful for domestic competitions too). The
+// standalone Season filter is INDEPENDENT of the Event → per-event Season
+// narrowing (state.eventSeasons) — both may be set and are ANDed. See
+// filters.js cityPredicateSql / seasonPredicateSql + buildScopeClauses.
+
+/** True if the City filter (state.city) is currently narrowing the match set. */
+export function cityFilterActive(state) {
+  return Array.isArray(state.city) && state.city.length > 0;
+}
+
+/** True if the Season filter (state.season) is currently narrowing the match set. */
+export function seasonFilterActive(state) {
+  return Array.isArray(state.season) && state.season.length > 0;
 }
 
 // ── Fielding SLICE conditions (fielding rebuild) ────────────────────────────
@@ -846,6 +872,11 @@ export function createInitialState(maxMonth) {
                // buildScopeClauses' gender-scoped matches join.
     venue: [], // venue values (Batch 1B, task 1B-1); [] = no predicate. See venueFilterActive() and
                // filters.js buildScopeClauses' gender-scoped matches join.
+    city: [], // raw matches.city values (City & Season everywhere, 2026-08-16); [] = no predicate.
+               // Mirrors venue — see cityFilterActive() and filters.js buildScopeClauses.
+    season: [], // raw matches.season values ("YYYY"|"YYYY/YY"); [] = no predicate. STANDALONE top-level
+               // season filter, independent of the Event→Season narrowing (eventSeasons). See
+               // seasonFilterActive() and filters.js buildScopeClauses.
     eventSeasons: {}, // Event → Season narrowing (Wave 6 pt2): { [canonical event label]: string[] }
                // of the specific seasons kept per chosen event (keyed by the same canonical labels
                // state.event holds — name normalization, backlog #5). {} = every event on "All
@@ -1264,6 +1295,15 @@ export function eligibleColumnKeys(discipline, formats) {
   for (const key of oppositionSetColumnKeys(discipline)) {
     keys.add(key);
   }
+  // City & Season everywhere (2026-08-16): the City / Season which-values column keys
+  // (both disciplines) — fold in so a chosen / auto-added column survives a re-render
+  // / prune. Byte-identical when none is present.
+  for (const key of citySetColumnKeys(discipline)) {
+    keys.add(key);
+  }
+  for (const key of seasonSetColumnKeys(discipline)) {
+    keys.add(key);
+  }
   // New standalone TEAM composer (2026-08-14): the picked composed-team column keys
   // (team__<hex>__<base>). Data-driven value space → not enumerable up front, so these
   // are the keys the user actually composed this session (metrics._composedTeamKeys),
@@ -1294,6 +1334,15 @@ export function eligibleColumnKeys(discipline, formats) {
     keys.add(key);
   }
   for (const key of eligibleComposedVenueKeys(discipline)) {
+    keys.add(key);
+  }
+  // City & Season everywhere (2026-08-16): the picked composed-city / composed-season
+  // column keys (city__/season__ <hex>__<base>) — same data-driven-value-space fold as
+  // Team/Opposition/Stage/Event/Venue. Byte-identical when none is present.
+  for (const key of eligibleComposedCityKeys(discipline)) {
+    keys.add(key);
+  }
+  for (const key of eligibleComposedSeasonKeys(discipline)) {
     keys.add(key);
   }
   return keys;
@@ -1566,6 +1615,12 @@ export function activeLeaderboardFilterSources(state) {
   if (inningsNumberFilterActive(state)) push("filter:innings_number", [INNINGS_NUMBER_SET_KEY]);
   if (teamsFilterActive(state)) push("filter:teams", [TEAM_SET_KEY]);
   if (oppositionFilterActive(state)) push("filter:opposition", [OPPOSITION_SET_KEY]);
+  // City & Season everywhere (2026-08-16): each new match-level filter auto-adds its
+  // which-values column (THE RULE — every scope categorical filter → its which-values
+  // column), tidying away when the filter is removed. Both disciplines; push()
+  // re-validates addability. Reads mctx.city/mctx.season (table.js lights the join).
+  if (cityFilterActive(state)) push("filter:city", [CITY_SET_KEY]);
+  if (seasonFilterActive(state)) push("filter:season", [SEASON_SET_KEY]);
 
   // Player-attribute filters (men-only by DATA — profile is empty for women, so this
   // is data-driven, not gender-hardcoded). One column per active profile field.

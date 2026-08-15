@@ -17,6 +17,10 @@ import {
   isParamComposedColumnKey,
   isComposedFieldingColumnKey,
   OTHER_DISCIPLINE,
+  // City & Season everywhere (2026-08-16): the City / Season which-values column keys
+  // — read mctx.city / mctx.season, so their presence must light the mctx join too.
+  CITY_SET_KEY,
+  SEASON_SET_KEY,
 } from "./metrics.js";
 import { query } from "./db.js";
 import {
@@ -31,7 +35,7 @@ import {
 import { activeGroups } from "./advanced.js";
 import { escHtml, escAttr } from "./html.js";
 import { createColumnsPicker } from "./columnsPicker.js";
-import { searchTeams, searchStages, searchEvents, searchVenues } from "./playerData.js";
+import { searchTeams, searchStages, searchEvents, searchVenues, searchCities, searchSeasons } from "./playerData.js";
 // Standalone STAGE composer (Step 3, 2026-08-14): the composer's value picker offers
 // CLEAN canonical stage names (owner ruling), so loadStageOptions folds searchStages'
 // raw event_stage spellings to canonical — the SAME fold drawerInnings.js mountStage does.
@@ -1588,6 +1592,19 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   const venueComposerCols = visibleColumns
     .map((key) => getMetric(key, discipline))
     .filter((m) => m && m.isComposedVenue);
+  // City & Season everywhere (2026-08-16): the city__/season__ composer COLUMNS AND the
+  // City/Season WHICH-VALUES columns (city_set/season_set) all aggregate over mctx.city
+  // / mctx.season, which live on the SHARED match-context LEFT JOIN (filters.js
+  // matchContextSubselectSql now projects both). Same join-presence-only gate as the
+  // event/venue composers: source "innings", 1:1 join → every existing aggregate is
+  // byte-identical; the collections exist ONLY to light the mctx join. With none present
+  // each is [] and the emitted SQL is byte-identical.
+  const cityColsNeedingMctx = visibleColumns
+    .map((key) => getMetric(key, discipline))
+    .filter((m) => m && (m.isComposedCity || m.key === CITY_SET_KEY));
+  const seasonColsNeedingMctx = visibleColumns
+    .map((key) => getMetric(key, discipline))
+    .filter((m) => m && (m.isComposedSeason || m.key === SEASON_SET_KEY));
   // Wave D — TASK B: PotM (Y/N) leaderboard filter (state.potmYN, subset of
   // {"yes","no"}). A HAVING-style gate on the SAME per-player PotM award count the
   // PotM Count column/filter use (pom_cte.player_of_match = SUM of the 0/1 flag).
@@ -1855,7 +1872,11 @@ export function buildQuery(state, visibleColumns, opts = {}) {
     wantsMatchContext ||
     stageComposerCols.length > 0 ||
     eventComposerCols.length > 0 ||
-    venueComposerCols.length > 0
+    venueComposerCols.length > 0 ||
+    // City & Season everywhere (2026-08-16): city/season composer + which-values columns
+    // read mctx.city / mctx.season. JOIN-PRESENCE ONLY (1:1, no WHERE) — byte-identical.
+    cityColsNeedingMctx.length > 0 ||
+    seasonColsNeedingMctx.length > 0
   )
     fromSql += matchContextJoinSql(view);
   if (wantsFielding) fromSql += ` LEFT JOIN fielding_cte ON fielding_cte.fld_player_id = ${idCol}`;
@@ -2284,6 +2305,23 @@ export function mountTable(
     loadVenueOptions: () => {
       const s = store.get();
       return searchVenues("", s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo).then((rows) =>
+        (rows || []).map((r) => ({ value: r.value, label: r.label }))
+      );
+    },
+    // Standalone CITY + SEASON composers (City & Season everywhere, 2026-08-16): their
+    // OWN value loaders. Venue-shape — RAW city / season names (no fold), stored + matched
+    // verbatim (metrics.js buildComposedCityMetric/SeasonMetric → `mctx.city|season =
+    // '<raw>'`). searchSeasons returns seasons NEWEST-first (season-order ruling d1eba79).
+    // Same scope + no-cascade + leaderboard-only rules as the Event/Venue loaders above.
+    loadCityOptions: () => {
+      const s = store.get();
+      return searchCities("", s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo).then((rows) =>
+        (rows || []).map((r) => ({ value: r.value, label: r.label }))
+      );
+    },
+    loadSeasonOptions: () => {
+      const s = store.get();
+      return searchSeasons("", s.gender, s.teamType, s.formats, s.dateFrom, s.dateTo).then((rows) =>
         (rows || []).map((r) => ({ value: r.value, label: r.label }))
       );
     },

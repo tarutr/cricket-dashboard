@@ -21,6 +21,8 @@ import {
   eventFilterActive,
   anyEventSeasonNarrowing,
   venueFilterActive,
+  cityFilterActive,
+  seasonFilterActive,
   RESULT_ALL,
   RESULT_CONDITION_ALL,
   RESULT_CONDITION_NORMAL,
@@ -220,6 +222,24 @@ export function eventPredicateSql(state) {
 export function venuePredicateSql(state) {
   if (!venueFilterActive(state)) return null;
   return `venue IN (${state.venue.map((v) => `'${esc(v)}'`).join(", ")})`;
+}
+
+/** The City predicate (`city IN (…)`) — raw city strings, as stored. Venue-shape
+ * (no canonical fold anywhere; `matches.city` is a plain optional VARCHAR). Rows
+ * with a NULL city are excluded by the IN-list, exactly like Venue. */
+export function cityPredicateSql(state) {
+  if (!cityFilterActive(state)) return null;
+  return `city IN (${state.city.map((v) => `'${esc(v)}'`).join(", ")})`;
+}
+
+/** The Season predicate (`season IN (…)`) — raw season strings, as stored
+ * ("YYYY" | "YYYY/YY"). Venue-shape (no fold). This is a STANDALONE top-level
+ * season filter, independent of the Event → per-event Season narrowing
+ * (state.eventSeasons) — the two ARE ANDed if both are set, exactly like any two
+ * match-level filters. */
+export function seasonPredicateSql(state) {
+  if (!seasonFilterActive(state)) return null;
+  return `season IN (${state.season.map((v) => `'${esc(v)}'`).join(", ")})`;
 }
 
 /** The Stage predicate. `stages` is state.stage: CANONICAL labels expanded to
@@ -457,6 +477,21 @@ export function buildScopeClausesTagged(
       `match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND ${venuePredicateSql(state)})`
     );
   }
+  // City / Season (City & Season everywhere, 2026-08-16): additive match-level
+  // filters via the SAME `match_id IN (SELECT … FROM matches …)` semi-join Event /
+  // Venue use — city and season live on `matches`, gender-scoped standalone here.
+  // ALWAYS-APPLIES, pins included (untagged = alwaysClause): "which matches am I
+  // looking at" is the same question the core scope asks. Predicates come from the
+  // SHARED cityPredicateSql / seasonPredicateSql fragments (also used by the
+  // option-list loaders' cross-filter), so the offered vocabulary can never drift
+  // from what the query counts. Both OFF by default (state.city / state.season
+  // start as [] — see state.js), so this is a no-op until a picker sets either.
+  if (cityFilterActive(state)) {
+    clauses.push(`match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND ${cityPredicateSql(state)})`);
+  }
+  if (seasonFilterActive(state)) {
+    clauses.push(`match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND ${seasonPredicateSql(state)})`);
+  }
 
   // The "Batting position" filter (`state.positions`) is ALWAYS-APPLIES, pins
   // included (untagged = alwaysClause). It selects BALLS/innings by
@@ -521,10 +556,18 @@ export function matchContextSubselectSql() {
   // and NO base view (batting / bowling / matchup_*) carries an `event_name` or
   // `venue` column (verified via DESCRIBE), so the join stays unambiguous. The join
   // is 1:1 on match_id, so no aggregate moves — anchors byte-identical.
+  // City & Season everywhere (2026-08-16): city + season are projected here too so the
+  // standalone CITY / SEASON composers (metrics.js city__/season__) and the City/Season
+  // which-values columns can aggregate over `mctx.city` / `mctx.season` off this SAME
+  // 1:1 LEFT JOIN — no redundant second matches join, mirroring the Step-4
+  // event_name/venue projection. ADDITIVE (every consumer names specific columns; no
+  // base view carries city/season — verified in reference/db_reference.md), 1:1 on
+  // match_id → anchors byte-identical. (Season sorts chronologically off the raw string:
+  // every season starts with its 4-digit start year, so no season_year_start needed.)
   return (
     `(SELECT match_id AS mctx_match_id, match_winner, result_type, ` +
     `is_super_over, toss_winner, toss_decision, team_batting_first, event_stage, method, ` +
-    `event_name, venue ` +
+    `event_name, venue, city, season ` +
     `FROM matches) mctx`
   );
 }
@@ -1028,7 +1071,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
       // stage selection makes no sense in a scope where it may not occur. Only
       // `stage` among the match-context filters is scope-dependent; result/toss/
       // innings/method are not, so they are left untouched.
-      store.set({ formats: [...set], teams: [], event: [], venue: [], opposition: [], eventSeasons: {}, stage: [] });
+      store.set({ formats: [...set], teams: [], event: [], venue: [], city: [], season: [], opposition: [], eventSeasons: {}, stage: [] });
       syncFormatDropdown();
       if (onFormatsChanged) onFormatsChanged();
       onChange();
@@ -1069,7 +1112,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
       // buildScopeClauses' opposition gate), so clear those selections — a
       // selected IPL event must not silently survive a switch to International.
       // Profile filters are team-type-independent, so they're intentionally kept.
-      store.set({ teamType, teams: [], event: [], venue: [], opposition: [], eventSeasons: {}, stage: [] });
+      store.set({ teamType, teams: [], event: [], venue: [], city: [], season: [], opposition: [], eventSeasons: {}, stage: [] });
       syncTeamTypeDropdown();
       onChange();
     });
@@ -1156,7 +1199,7 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
     if (from > to) from = to;
     // A preset changes the date window → same scope-change vocab clear as a
     // manual date edit (see the From/To handlers, owner decision 2026-07-18).
-    store.set({ dateFrom: from, dateTo: to, teams: [], event: [], venue: [], opposition: [], eventSeasons: {}, stage: [] });
+    store.set({ dateFrom: from, dateTo: to, teams: [], event: [], venue: [], city: [], season: [], opposition: [], eventSeasons: {}, stage: [] });
     syncDateInputs();
     validateDate();
     onChange();
@@ -1191,6 +1234,8 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
       matchupVs: null,
       event: [],
       venue: [],
+      city: [], // City & Season everywhere: scope-dependent match filters → drop stale picks on any scope change
+      season: [],
       opposition: [],
       eventSeasons: {}, // Wave 6 pt2: drop any season narrowing with the cleared event picks
       stage: [], // Stage options are scope-dependent (all 4 dims, FIX C) → drop stale picks on any scope change (gender/format/team-type/date all clear stage)
@@ -1216,13 +1261,13 @@ export function mountFilters(container, store, onChange, onFormatsChanged, onDis
     // Team/Event/Venue/opposition vocab picks on a window change, exactly as
     // gender/team-type/format do, so the full-scope (A9) option lists and any
     // selection stay consistent. Profile filters are date-independent, kept.
-    store.set({ dateFrom: els.dateFrom.value || null, teams: [], event: [], venue: [], opposition: [], eventSeasons: {}, stage: [] });
+    store.set({ dateFrom: els.dateFrom.value || null, teams: [], event: [], venue: [], city: [], season: [], opposition: [], eventSeasons: {}, stage: [] });
     els.datePresets.value = ""; // a manual edit no longer matches any preset — reset the label
     validateDate();
     onChange();
   });
   els.dateTo.addEventListener("change", () => {
-    store.set({ dateTo: els.dateTo.value || null, teams: [], event: [], venue: [], opposition: [], eventSeasons: {}, stage: [] }); // scope-change vocab clear (see dateFrom)
+    store.set({ dateTo: els.dateTo.value || null, teams: [], event: [], venue: [], city: [], season: [], opposition: [], eventSeasons: {}, stage: [] }); // scope-change vocab clear (see dateFrom)
     els.datePresets.value = ""; // a manual edit no longer matches any preset — reset the label
     validateDate();
     onChange();

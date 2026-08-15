@@ -64,7 +64,7 @@ import {
   inningsNumberOptions,
   inningsNumberLabel,
 } from "./state.js";
-import { searchTeams, searchEvents, searchVenues, searchEventSeasons, searchStages } from "./playerData.js";
+import { searchTeams, searchEvents, searchVenues, searchCities, searchSeasons, searchEventSeasons, searchStages } from "./playerData.js";
 import { withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { canonicalStage } from "./canonicalNames.js";
 import { query } from "./db.js";
@@ -2059,6 +2059,54 @@ export function mountVenue(container, store, onChange, { onOptionsLoaded = null 
     plural: "venues",
     ariaLabel: "Venue",
     searchPlaceholder: "Search venues…",
+    showGames: true,
+  });
+}
+
+/** "City" — gender + team-type-scoped city picker (state.city). Cascading like
+ * Venue; never narrowed by state.city itself (self-exclusion). City & Season
+ * everywhere (2026-08-16). */
+export function mountCity(container, store, onChange, { onOptionsLoaded = null } = {}) {
+  return mountScopedMultiSelect(container, store, onChange, {
+    get: (s) => s.city || [],
+    set: (st, arr) => st.set({ city: arr }),
+    siblingExclude: ["city"],
+    deadLabel: "City",
+    onOptionsLoaded,
+    loader: (gender, teamType) => {
+      const s = store.get(); // scope the City list to the full Search Conditions
+      return searchCities("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s });
+    },
+    emptyLabel: "Any city",
+    singular: "city",
+    plural: "cities",
+    ariaLabel: "City",
+    searchPlaceholder: "Search cities…",
+    showGames: true,
+  });
+}
+
+/** "Season" — gender + team-type-scoped season picker (state.season). Options are
+ * ordered newest-first (season_year_start DESC — searchSeasons; the season-order
+ * ruling d1eba79). Cascading like Venue; never narrowed by state.season itself.
+ * STANDALONE filter, independent of the Event → Season narrowing. City & Season
+ * everywhere (2026-08-16). */
+export function mountSeason(container, store, onChange, { onOptionsLoaded = null } = {}) {
+  return mountScopedMultiSelect(container, store, onChange, {
+    get: (s) => s.season || [],
+    set: (st, arr) => st.set({ season: arr }),
+    siblingExclude: ["season"],
+    deadLabel: "Season",
+    onOptionsLoaded,
+    loader: (gender, teamType) => {
+      const s = store.get(); // scope the Season list to the full Search Conditions
+      return searchSeasons("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s });
+    },
+    emptyLabel: "Any season",
+    singular: "season",
+    plural: "seasons",
+    ariaLabel: "Season",
+    searchPlaceholder: "Search seasons…",
     showGames: true,
   });
 }

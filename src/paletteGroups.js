@@ -122,7 +122,7 @@ const POPUP_EXCLUDED_PLAYER_PROFILE_LEAVES = new Set(["role", "hand", "bowling",
 // surface — leafSingle / singleFamily / matchResultFamily are byte-untouched on the
 // leaderboard.
 const POPUP_SCOPE_SINGLETON_KEYS = new Set([
-  "team", "opposition", "event", "venue", "mc_stage",
+  "team", "opposition", "event", "venue", "city", "season", "mc_stage",
   "mc_result", "mc_toss_result", "mc_toss_decision", "inn_num",
   "vs_opp", "win_phase", "win_overs", "win_balls", "win_player",
 ]);
@@ -422,6 +422,10 @@ export function createPaletteGroupsBuilder(deps) {
       leafSingle("opposition", "Opposition"),
       leafSingle("event", "Event"),
       leafSingle("venue", "Venue"),
+      // City / Season (City & Season everywhere, 2026-08-16): standalone match-level
+      // filters mirroring Event/Venue, offered in Match Details on batting + bowling.
+      leafSingle("city", "City"),
+      leafSingle("season", "Season"),
       leafSingle("mc_stage", "Stage"),
       // "Innings order" (batted / bowled first) was replaced by Innings Number ▸
       // (Wave R2c), now live in Batting & Bowling Basic Stats. Its old plumbing

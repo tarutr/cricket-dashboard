@@ -41,6 +41,8 @@ import {
   mountOpposition,
   mountEvent,
   mountVenue,
+  mountCity,
+  mountSeason,
   mountStage,
   mountResult,
   mountTossResult,
@@ -57,6 +59,8 @@ import {
   oppositionFilterActive,
   eventFilterActive,
   venueFilterActive,
+  cityFilterActive,
+  seasonFilterActive,
   stageFilterActive,
   resultFilterActive,
   resultConditionFilterActive,
@@ -82,7 +86,7 @@ import { escHtml, escAttr } from "./html.js";
 // which live on the row as ball predicates). getScopeSingletons() returns exactly
 // these, so buildRowState can overlay them onto the row's clean state.
 const SCOPE_STATE_FIELDS = [
-  "teams", "opposition", "event", "eventSeasons", "venue",
+  "teams", "opposition", "event", "eventSeasons", "venue", "city", "season",
   "stage", "result", "resultCondition", "tossResult", "tossDecision", "inningsNumber",
 ];
 
@@ -116,6 +120,18 @@ const SINGLETON_DEFS = [
     mount: (h, st, oc) => mountVenue(h, st, oc, {}),
     active: (s) => (s.venue || []).length > 0,
     clear: (st) => st.set({ venue: [] }),
+  },
+  {
+    key: "city", label: "City",
+    mount: (h, st, oc) => mountCity(h, st, oc, {}),
+    active: (s) => (s.city || []).length > 0,
+    clear: (st) => st.set({ city: [] }),
+  },
+  {
+    key: "season", label: "Season",
+    mount: (h, st, oc) => mountSeason(h, st, oc, {}),
+    active: (s) => (s.season || []).length > 0,
+    clear: (st) => st.set({ season: [] }),
   },
   {
     key: "mc_stage", label: "Stage",
@@ -220,6 +236,8 @@ export function describeRowSingletons(singletons, deliveryWindow, opponentPlayer
   if (oppositionFilterActive(s)) out.push(s.opposition.length <= 3 ? `vs ${s.opposition.join(", ")}` : `vs ${s.opposition.length} opponents`);
   if (eventFilterActive(s)) out.push(s.event.length <= 2 ? `Event: ${s.event.join(", ")}` : `Event: ${s.event.length} events`);
   if (venueFilterActive(s)) out.push(s.venue.length <= 2 ? `Venue: ${s.venue.join(", ")}` : `Venue: ${s.venue.length} venues`);
+  if (cityFilterActive(s)) out.push(s.city.length <= 2 ? `City: ${s.city.join(", ")}` : `City: ${s.city.length} cities`);
+  if (seasonFilterActive(s)) out.push(s.season.length <= 2 ? `Season: ${s.season.join(", ")}` : `Season: ${s.season.length} seasons`);
   if (stageFilterActive(s)) {
     const picks = (s.stage || []).filter((v) => v !== STAGE_ALL).map((v) => (v === STAGE_NONE ? STAGE_NONE_LABEL : v));
     out.push(picks.length <= 3 ? `Stage: ${picks.join(", ")}` : `Stage: ${picks.length} stages`);

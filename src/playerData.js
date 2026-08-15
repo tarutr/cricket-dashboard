@@ -15,6 +15,8 @@ import {
   buildCoreScopeClauses,
   eventPredicateSql,
   venuePredicateSql,
+  cityPredicateSql,
+  seasonPredicateSql,
   stagePredicateSql,
   resultConditionPredicateSql,
   tossDecisionPredicateSql,
@@ -312,6 +314,17 @@ function siblingOptionClauses(sel, exclude = []) {
     const p = venuePredicateSql(sel);
     if (p) clauses.push(p);
   }
+  // City / Season (City & Season everywhere, 2026-08-16): raw match-level senders,
+  // exactly like Venue — a picked City/Season narrows every OTHER list, and each
+  // list self-excludes its own key (mountCity/mountSeason pass siblingExclude).
+  if (!skip.has("city")) {
+    const p = cityPredicateSql(sel);
+    if (p) clauses.push(p);
+  }
+  if (!skip.has("season")) {
+    const p = seasonPredicateSql(sel);
+    if (p) clauses.push(p);
+  }
   if (!skip.has("stage")) {
     const p = stagePredicateSql(sel.stage, "");
     if (p) clauses.push(p);
@@ -550,6 +563,62 @@ export async function searchVenues(
   ].join("\n");
   const { rows } = await query(sql);
   return rows;
+}
+
+/** Distinct city values in `matches` for the current scope (City & Season
+ * everywhere, 2026-08-16). games = match count. Venue-shape: raw strings, no fold.
+ * `matches.city` is nullable (excluded). `opts.sel` cascades — every OTHER picked
+ * match filter narrows the list, never `city` itself (self-exclusion). */
+export async function searchCities(
+  term,
+  gender,
+  teamType = "both",
+  formats = null,
+  dateFrom = null,
+  dateTo = null,
+  { sel = null } = {}
+) {
+  const orderBy = relevanceOrderBy("city", term, "games DESC, city ASC");
+  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo, sel, ["city"]);
+  const sql = [
+    `SELECT city AS value, city AS label, COUNT(*) AS games`,
+    `FROM matches`,
+    `WHERE ${scope} AND city IS NOT NULL`,
+    `GROUP BY city`,
+    orderBy,
+  ].join("\n");
+  const { rows } = await query(sql);
+  return rows;
+}
+
+/** Distinct season values in `matches` for the current scope (City & Season
+ * everywhere, 2026-08-16). games = match count. Raw season strings ("YYYY" |
+ * "YYYY/YY"), no fold. Ordered NEWEST-first (season_year_start DESC, then season
+ * DESC) — the season-order ruling d1eba79 (leaderboard Season lists read
+ * newest-first). STANDALONE — independent of the Event → Season narrowing.
+ * `opts.sel` cascades; self-excludes `season`. */
+export async function searchSeasons(
+  term,
+  gender,
+  teamType = "both",
+  formats = null,
+  dateFrom = null,
+  dateTo = null,
+  { sel = null } = {}
+) {
+  const scope = matchOptionScope(gender, teamType, formats, dateFrom, dateTo, sel, ["season"]);
+  const sql = [
+    `SELECT season AS value, season AS label, COUNT(*) AS games,`,
+    `       ANY_VALUE(season_year_start) AS syr`,
+    `FROM matches`,
+    `WHERE ${scope} AND season IS NOT NULL`,
+    `GROUP BY season`,
+    `ORDER BY syr DESC, season DESC`,
+  ].join("\n");
+  const { rows } = await query(sql);
+  // Drop the ordering-only `syr` from the returned option rows (parity with the
+  // {value,label,games} shape the other loaders return).
+  return rows.map((r) => ({ value: r.value, label: r.label, games: r.games }));
 }
 
 /**

@@ -2771,6 +2771,14 @@ export function getMetric(key, discipline) {
       // both disciplines). null for any other prefix / non-plain discipline. Needs
       // the mctx join present (table.js venue gate).
       resolveComposedVenueMetric(key, discipline) ??
+      // City & Season everywhere (2026-08-16): city__/season__ composers (RAW equality
+      // over mctx.city / mctx.season, both disciplines) + the City/Season "which values"
+      // list columns (city_set / season_set). null for any other key. All need the mctx
+      // join present (table.js city/season gate).
+      resolveComposedCityMetric(key, discipline) ??
+      resolveComposedSeasonMetric(key, discipline) ??
+      resolveCitySetMetric(key, discipline) ??
+      resolveSeasonSetMetric(key, discipline) ??
       // Wave D — D1: player-profile attribute columns (attr_<field>), virtual text
       // metrics projected out of the profile_cte join (buildQuery). null for any
       // non-attr key / wrong discipline, so every other caller is unchanged.
@@ -3801,6 +3809,72 @@ export function oppositionSetColumnKeys(discipline) {
   return SCOPE_OPP_COL[discipline] ? [OPPOSITION_SET_KEY] : [];
 }
 
+// ── City / Season "which values" columns (City & Season everywhere, 2026-08-16) ──
+// TWO more which-values columns, generalising the Team/Opposition pattern to the two
+// new match-level filters. UNLIKE Team/Opposition/Innings (which read a raw column on
+// the batting/bowling view), city & season live on `matches` — reachable ONLY via the
+// SHARED mctx LEFT JOIN (filters.js matchContextSubselectSql now projects city/season;
+// table.js lights the join when a city_set/season_set column is present, exactly like
+// the city/season composer columns). The join is 1:1 on match_id, so it moves no
+// aggregate — anchors byte-identical. This is the reason the Wave-2A worker deferred
+// Stage/Event/Venue which-values (metrics.js note above): they needed this NEW join,
+// which the composer work later made available. Season orders by the raw string, which
+// is chronological because every season starts with its 4-digit start year ("2024" |
+// "2024/25"). Both disciplines (city/season are match-level, not discipline-specific).
+export const CITY_SET_KEY = "city_set";
+export const SEASON_SET_KEY = "season_set";
+
+/** Resolve the City which-values key to its VIRTUAL list metric (both disciplines),
+ * or null. Reads mctx.city — needs the mctx join present (table.js city gate). */
+export function resolveCitySetMetric(key, discipline) {
+  if (key !== CITY_SET_KEY || (discipline !== "batting" && discipline !== "bowling")) return null;
+  return {
+    key: CITY_SET_KEY,
+    label: "City",
+    shortLabel: "City",
+    discipline,
+    source: "innings",
+    sqlExpression: "list(DISTINCT mctx.city ORDER BY mctx.city)",
+    sortExpression: "MIN(mctx.city)",
+    higherIsBetter: false,
+    format: "list",
+    kind: "attribute",
+    zeroIsData: false,
+    isPhaseMetric: null,
+    columnTitle: "Cities played in across the filtered rows",
+  };
+}
+/** The City which-values key offerable for `discipline` (both). */
+export function citySetColumnKeys(discipline) {
+  return discipline === "batting" || discipline === "bowling" ? [CITY_SET_KEY] : [];
+}
+
+/** Resolve the Season which-values key to its VIRTUAL list metric (both disciplines),
+ * or null. Reads mctx.season — needs the mctx join present (table.js season gate). The
+ * ORDER BY is chronological (season strings start with their 4-digit start year). */
+export function resolveSeasonSetMetric(key, discipline) {
+  if (key !== SEASON_SET_KEY || (discipline !== "batting" && discipline !== "bowling")) return null;
+  return {
+    key: SEASON_SET_KEY,
+    label: "Season",
+    shortLabel: "Season",
+    discipline,
+    source: "innings",
+    sqlExpression: "list(DISTINCT mctx.season ORDER BY mctx.season)",
+    sortExpression: "MIN(mctx.season)",
+    higherIsBetter: false,
+    format: "list",
+    kind: "attribute",
+    zeroIsData: false,
+    isPhaseMetric: null,
+    columnTitle: "Seasons present in the filtered rows",
+  };
+}
+/** The Season which-values key offerable for `discipline` (both). */
+export function seasonSetColumnKeys(discipline) {
+  return discipline === "batting" || discipline === "bowling" ? [SEASON_SET_KEY] : [];
+}
+
 // ── Composed TEAM × metric columns (standalone composer, 2026-08-14) ───────────
 // A STANDALONE composer (owner ruling: composers are FULLY INDEPENDENT of the scope
 // filters — this reads/writes NOTHING on state.teams). Pick value(s) [team names] ×
@@ -4583,6 +4657,218 @@ export function eligibleComposedVenueKeys(discipline) {
   const keys = [];
   for (const k of _composedVenueKeys) {
     if (resolveComposedVenueMetric(k, discipline)) keys.push(k);
+  }
+  return keys;
+}
+
+// ── Composed CITY × metric columns (standalone composer, City & Season everywhere,
+//    2026-08-16) ──────────────────────────────────────────────────────────────────
+// The CITY twin of the Venue composer above — IDENTICAL Venue-shape in every respect
+// (standalone, filter-independent: reads/writes NOTHING on state.city). Pick value(s)
+// [raw city names] × a base stat → one column per picked city, e.g. "Bat Avg (Mumbai)".
+// City has NO canonical fold anywhere (the City FILTER's cityPredicateSql matches the
+// RAW `city IN (…)` strings), so the CASE-WHEN is a SINGLE RAW equality
+// `mctx.city = '<name>'` — the Team/Venue dual-split shape. `matches.city` lives on the
+// SHARED mctx LEFT JOIN (its sub-select now projects city — filters.js
+// matchContextSubselectSql). KEY = `city__<hexToken>__<baseKey>` (double underscore).
+const COMPOSED_CITY_PREFIX = "city__";
+const COMPOSED_CITY_SPECS = COMPOSED_INNINGS_SPECS;
+const COMPOSED_CITY_COMPONENTS = COMPOSED_INNINGS_COMPONENTS;
+const COMPOSED_CITY_POOL_ORDER = COMPOSED_INNINGS_POOL_ORDER;
+const COMPOSED_CITY_COL = "mctx.city";
+
+/** Build the composed-city column key for `baseKey` scoped to raw `cityName`. */
+export function makeComposedCityKey(cityName, baseKey) {
+  return `${COMPOSED_CITY_PREFIX}${teamNameToToken(cityName)}__${baseKey}`;
+}
+
+/** Parse a composed-city column key → { token, cityName, baseKey }, or null. */
+export function parseComposedCityKey(key) {
+  if (typeof key !== "string" || !key.startsWith(COMPOSED_CITY_PREFIX)) return null;
+  const rest = key.slice(COMPOSED_CITY_PREFIX.length);
+  const sep = rest.indexOf("__");
+  if (sep <= 0) return null;
+  const token = rest.slice(0, sep);
+  const baseKey = rest.slice(sep + 2);
+  const cityName = teamTokenToName(token);
+  if (cityName == null || !baseKey) return null;
+  return { token, cityName, baseKey };
+}
+
+/** True iff every component the `baseKey` spec needs exists in `discipline`'s view. */
+function composedCityComponentsPresent(discipline, spec) {
+  const have = COMPOSED_CITY_COMPONENTS[discipline];
+  return !!have && spec.needs.every((c) => have.has(c));
+}
+
+/** Build the VIRTUAL metric for a composed-city column — SINGLE RAW equality
+ * `mctx.city = '<name>'` (Venue-shape). Both plain disciplines; null outside
+ * batting/bowling, for a missing city name, or an unknown base / missing component. */
+function buildComposedCityMetric(cityName, baseKey, discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return null;
+  if (cityName == null || cityName === "") return null;
+  const specMap = COMPOSED_CITY_SPECS[discipline];
+  const spec = specMap && specMap[baseKey];
+  if (!spec || !composedCityComponentsPresent(discipline, spec)) return null;
+  const base = getMetric(baseKey, discipline);
+  if (!base) return null;
+  const literal = `'${String(cityName).replace(/'/g, "''")}'`;
+  const sql = spec.sql.split("innings_number").join(COMPOSED_CITY_COL).split("{S}").join(literal);
+  return {
+    ...base,
+    key: makeComposedCityKey(cityName, baseKey),
+    baseKey,
+    cityName,
+    isComposedCity: true,
+    sqlExpression: sql,
+    label: `${base.label} (${cityName})`,
+    shortLabel: `${base.shortLabel} (${cityName})`,
+  };
+}
+
+/** Resolve a composed-city COLUMN key to its virtual metric, or null. Called by getMetric. */
+export function resolveComposedCityMetric(key, discipline) {
+  const parsed = parseComposedCityKey(key);
+  if (!parsed) return null;
+  return buildComposedCityMetric(parsed.cityName, parsed.baseKey, discipline);
+}
+
+/** The ordered base metrics the `discipline` City composer offers — the SAME pool as
+ * the Team/Venue/Innings composers. [] outside plain batting/bowling. */
+export function composedCityPool(discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return [];
+  const order = COMPOSED_CITY_POOL_ORDER[discipline];
+  const specMap = COMPOSED_CITY_SPECS[discipline];
+  if (!order || !specMap) return [];
+  const pool = [];
+  for (const baseKey of order) {
+    const spec = specMap[baseKey];
+    if (!spec || !composedCityComponentsPresent(discipline, spec)) continue;
+    const base = getMetric(baseKey, discipline);
+    if (base) pool.push(base);
+  }
+  return pool;
+}
+
+const _composedCityKeys = new Set();
+
+/** Record composed-city column key(s) as the composer mints them. */
+export function registerComposedCityKeys(keys) {
+  for (const k of Array.isArray(keys) ? keys : [keys]) {
+    if (typeof k === "string" && parseComposedCityKey(k)) _composedCityKeys.add(k);
+  }
+}
+
+/** Every registered composed-city column key that RESOLVES for `discipline`. */
+export function eligibleComposedCityKeys(discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return [];
+  const keys = [];
+  for (const k of _composedCityKeys) {
+    if (resolveComposedCityMetric(k, discipline)) keys.push(k);
+  }
+  return keys;
+}
+
+// ── Composed SEASON × metric columns (standalone composer, City & Season everywhere,
+//    2026-08-16) ──────────────────────────────────────────────────────────────────
+// The SEASON twin of the Venue composer — IDENTICAL Venue-shape (standalone; reads/
+// writes NOTHING on state.season, and is INDEPENDENT of the Event → Season narrowing).
+// Pick value(s) [raw season strings, "YYYY"|"YYYY/YY"] × a base stat → one column per
+// picked season, e.g. "Bat SR (2024)". No fold → SINGLE RAW equality
+// `mctx.season = '<name>'`. `matches.season` lives on the SHARED mctx LEFT JOIN
+// (filters.js matchContextSubselectSql projects it). KEY = `season__<hexToken>__<base>`.
+const COMPOSED_SEASON_PREFIX = "season__";
+const COMPOSED_SEASON_SPECS = COMPOSED_INNINGS_SPECS;
+const COMPOSED_SEASON_COMPONENTS = COMPOSED_INNINGS_COMPONENTS;
+const COMPOSED_SEASON_POOL_ORDER = COMPOSED_INNINGS_POOL_ORDER;
+const COMPOSED_SEASON_COL = "mctx.season";
+
+/** Build the composed-season column key for `baseKey` scoped to raw `seasonName`. */
+export function makeComposedSeasonKey(seasonName, baseKey) {
+  return `${COMPOSED_SEASON_PREFIX}${teamNameToToken(seasonName)}__${baseKey}`;
+}
+
+/** Parse a composed-season column key → { token, seasonName, baseKey }, or null. */
+export function parseComposedSeasonKey(key) {
+  if (typeof key !== "string" || !key.startsWith(COMPOSED_SEASON_PREFIX)) return null;
+  const rest = key.slice(COMPOSED_SEASON_PREFIX.length);
+  const sep = rest.indexOf("__");
+  if (sep <= 0) return null;
+  const token = rest.slice(0, sep);
+  const baseKey = rest.slice(sep + 2);
+  const seasonName = teamTokenToName(token);
+  if (seasonName == null || !baseKey) return null;
+  return { token, seasonName, baseKey };
+}
+
+/** True iff every component the `baseKey` spec needs exists in `discipline`'s view. */
+function composedSeasonComponentsPresent(discipline, spec) {
+  const have = COMPOSED_SEASON_COMPONENTS[discipline];
+  return !!have && spec.needs.every((c) => have.has(c));
+}
+
+/** Build the VIRTUAL metric for a composed-season column — SINGLE RAW equality
+ * `mctx.season = '<name>'` (Venue-shape). Both plain disciplines. */
+function buildComposedSeasonMetric(seasonName, baseKey, discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return null;
+  if (seasonName == null || seasonName === "") return null;
+  const specMap = COMPOSED_SEASON_SPECS[discipline];
+  const spec = specMap && specMap[baseKey];
+  if (!spec || !composedSeasonComponentsPresent(discipline, spec)) return null;
+  const base = getMetric(baseKey, discipline);
+  if (!base) return null;
+  const literal = `'${String(seasonName).replace(/'/g, "''")}'`;
+  const sql = spec.sql.split("innings_number").join(COMPOSED_SEASON_COL).split("{S}").join(literal);
+  return {
+    ...base,
+    key: makeComposedSeasonKey(seasonName, baseKey),
+    baseKey,
+    seasonName,
+    isComposedSeason: true,
+    sqlExpression: sql,
+    label: `${base.label} (${seasonName})`,
+    shortLabel: `${base.shortLabel} (${seasonName})`,
+  };
+}
+
+/** Resolve a composed-season COLUMN key to its virtual metric, or null. Called by getMetric. */
+export function resolveComposedSeasonMetric(key, discipline) {
+  const parsed = parseComposedSeasonKey(key);
+  if (!parsed) return null;
+  return buildComposedSeasonMetric(parsed.seasonName, parsed.baseKey, discipline);
+}
+
+/** The ordered base metrics the `discipline` Season composer offers. */
+export function composedSeasonPool(discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return [];
+  const order = COMPOSED_SEASON_POOL_ORDER[discipline];
+  const specMap = COMPOSED_SEASON_SPECS[discipline];
+  if (!order || !specMap) return [];
+  const pool = [];
+  for (const baseKey of order) {
+    const spec = specMap[baseKey];
+    if (!spec || !composedSeasonComponentsPresent(discipline, spec)) continue;
+    const base = getMetric(baseKey, discipline);
+    if (base) pool.push(base);
+  }
+  return pool;
+}
+
+const _composedSeasonKeys = new Set();
+
+/** Record composed-season column key(s) as the composer mints them. */
+export function registerComposedSeasonKeys(keys) {
+  for (const k of Array.isArray(keys) ? keys : [keys]) {
+    if (typeof k === "string" && parseComposedSeasonKey(k)) _composedSeasonKeys.add(k);
+  }
+}
+
+/** Every registered composed-season column key that RESOLVES for `discipline`. */
+export function eligibleComposedSeasonKeys(discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return [];
+  const keys = [];
+  for (const k of _composedSeasonKeys) {
+    if (resolveComposedSeasonMetric(k, discipline)) keys.push(k);
   }
   return keys;
 }

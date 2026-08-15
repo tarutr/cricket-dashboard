@@ -1961,7 +1961,9 @@ a { color: var(--color-accent); }
 .data-table thead th[data-key^="opp__"],
 .data-table thead th[data-key^="stage__"],
 .data-table thead th[data-key^="event__"],
-.data-table thead th[data-key^="venue__"] {
+.data-table thead th[data-key^="venue__"],
+.data-table thead th[data-key^="city__"],
+.data-table thead th[data-key^="season__"] {
   text-transform: none;
   /* These composer headers are NORMAL case, so the uppercase base rule's tracking
      (letter-spacing: 0.03em) reads loose on them — reset it so the text sits tight. */
