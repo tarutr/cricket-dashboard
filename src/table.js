@@ -1359,6 +1359,10 @@ export function buildCrossDisciplineCteSql(state, discipline, crossCols) {
  * is dropped — a batting condition can never leak a predicate onto the fielding board. */
 const FIELDING_CONDITION_COLUMNS = {
   catches: "catches",
+  // Caught & bowled (3.2c): its OWN count filter, a distinct subset of Catches
+  // (which still includes c&b — unchanged). Maps to the additively-projected
+  // `caught_and_bowled` alias above, so "Caught & bowled ≥ N" predicates on it.
+  caught_and_bowled: "caught_and_bowled",
   stumpings: "stumpings",
   run_outs: "run_outs",
   dismissals_effected: "dismissals_effected",
@@ -1409,6 +1413,12 @@ export function buildFieldingLeaderboardQuery(state) {
     "fielding_cte.fielder_name AS name",
     matchesExpr,
     "fielding_cte.catches AS catches",
+    // Caught & bowled (3.2c): projected additively so the Wicket Types "Caught &
+    // bowled ≥ N" count gate can predicate on it. The board's DISPLAY columns are
+    // fixed (state.js DEFAULT_COLUMNS.fielding — Matches/Catches/Stumpings/Run-outs/
+    // Total dismissals), so this extra alias renders nothing and — with no c&b filter
+    // active — the board is byte-identical (Catches still folds c&b in, unchanged).
+    "fielding_cte.caught_and_bowled AS caught_and_bowled",
     "fielding_cte.stumpings AS stumpings",
     "fielding_cte.run_outs AS run_outs",
     "(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs) AS dismissals_effected",

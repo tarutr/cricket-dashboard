@@ -54,7 +54,7 @@ export const DIMS = [
   { key: "kind",         field: "kinds",         group: "Dismissal", label: "Wicket type",       control: "checklist", options: () => WICKET_TYPE_OPTIONS },
   { key: "position",     field: "positions",     group: "Dismissal", label: "Dismissed batter's position",  control: "checklist", numeric: true,
     options: () => FIELDING_POSITIONS.map((n) => ({ value: n, label: `Position ${n}` })) },
-  { key: "hand",         field: "hands",         group: "Dismissal", label: "Batting hand",      control: "checklist", source: "fielding", column: "out_hand" },
+  { key: "hand",         field: "hands",         group: "Dismissal", label: "Dismissed batter hand", control: "checklist", source: "fielding", column: "out_hand" },
   { key: "role",         field: "roles",         group: "Dismissal", label: "Batter role",       control: "checklist", source: "fielding", column: "out_role" },
   { key: "batter",       field: "outBatters",    group: "Dismissal", label: "Specific batter",   control: "player", nameField: "outBatterName", pickLabel: "Dismissed batter" },
   { key: "bowlerStyle",  field: "bowlerStyles",  group: "Bowler",    label: "Bowler style",      control: "checklist", source: "fielding", column: "bowler_style" },

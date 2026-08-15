@@ -294,10 +294,19 @@ export function createPaletteGroupsBuilder(deps) {
     // BOWLING else-branch and offered top-level Stage/Result/Toss (silently ignored by
     // the fielding query) + null metric leaves (the fielding namespace has no metrics).
     if (disc === "fielding") {
+      // 3.2c menu reorg (owner-approved, 2026-08-15): SIX groups in a fixed order —
+      // Fielder Profile · Match · Ball Ranges · Wicket Types · Bowler Details ·
+      // Dismissed Batter. Display-only reshuffle of the SAME honest offer set (only
+      // filters the fielding query actually narrows by), plus ONE new count filter
+      // (Caught & bowled — see Wicket Types below). Retired here: the old "Player
+      // Profile" fielding group (Playing role / Batting hand / Bowling style / Bowling
+      // hand) and the "Wicket type" checklist picker (dimLeaf("kind")) — both dropped
+      // as redundant (owner ruling); Team survives, moved into Fielder Profile.
+
       // Count-threshold tallies resolve under the "batting" catalogue — the fielding
       // board has no "fielding" metrics namespace; buildFieldingCountGate /
-      // conditionToFieldingWhere resolve the SAME five keys under "batting"
-      // (metricNsFor(fielding)="batting"). Offer EXACTLY the five the count gate honors
+      // conditionToFieldingWhere resolve the SAME keys under "batting"
+      // (metricNsFor(fielding)="batting"). Offer EXACTLY the keys the count gate honors
       // (FIELDING_CONDITION_COLUMNS) — anything else the gate silently drops (dishonest).
       const battingByKey = new Map(eligibleMetrics("batting", s.formats).map((m) => [m.key, m]));
       const tallyLeaf = (key, label) => {
@@ -314,37 +323,18 @@ export function createPaletteGroupsBuilder(deps) {
         return { kind: "leaf", label: dim.label, disabled: fieldingDimPresent(dimKey, s), run: () => pickFieldingDim(dimKey) };
       };
 
-      pushGroup("Fielding Tallies", [
-        tallyLeaf("catches", "Catches"),
-        tallyLeaf("stumpings", "Stumpings"),
-        tallyLeaf("run_outs", "Run-outs"),
-        tallyLeaf("dismissals_effected", "Total dismissals"),
+      // 1 ── Fielder Profile ─────────────────────────────────────────────────────
+      // The FIELDER-level scope: Matches count (moved from the old Fielding Tallies)
+      // + Team singleton (moved from the retired Player Profile group).
+      pushGroup("Fielder Profile", [
         tallyLeaf("matches", "Matches"),
-      ]);
-      // Player Profile (narrows the FIELDER set via the fielder_id profile semi-join —
-      // owner: include all four). Data-driven availability (men today; women when their
-      // profiles land) — same isFilterAvailable gate the batting/bowling groups use.
-      pushGroup("Player Profile", [
-        isFilterAvailable("profileRole", s) ? leafSingle("role", "Playing role") : null,
-        isFilterAvailable("profileHand", s) ? leafSingle("hand", "Batting hand") : null,
-        isFilterAvailable("profileBowling", s) ? leafSingle("bowling", "Bowling style") : null,
-        isFilterAvailable("profileBowlingArm", s) ? leafSingle("bowlingHand", "Bowling hand") : null,
         leafSingle("team", "Team"),
       ]);
-      // Dismissed batter — the fielding dims about WHO was out. Position stays on the
-      // existing fld_pos singleton (byte-identical everywhere; no duplicate dim row).
-      pushGroup("Dismissed batter", [
-        dimLeaf("kind"),
-        leafSingle("fld_pos", "Dismissed batter's position"),
-        dimLeaf("hand"),
-        dimLeaf("role"),
-        dimLeaf("batter"),
-      ]);
-      pushGroup("Bowler", [dimLeaf("bowlerStyle"), dimLeaf("bowler")]);
-      pushGroup("Delivery", [dimLeaf("phase"), dimLeaf("overs"), dimLeaf("innings")]);
-      // Match — scope singletons (honoured top-level) + the match-context fielding dims
+      // 2 ── Match ───────────────────────────────────────────────────────────────
+      // Scope singletons (honoured top-level) + the match-context fielding dims
       // (City/Season/Stage/Result/Toss reach `matches` via the fielding query's EXISTS,
-      // NOT the top-level state.stage/result/… the fielding query ignores).
+      // NOT the top-level state.stage/result/… the fielding query ignores). Team is
+      // now in Fielder Profile (above).
       pushGroup("Match", [
         leafSingle("opposition", "Opposition"),
         leafSingle("event", "Event"),
@@ -355,6 +345,34 @@ export function createPaletteGroupsBuilder(deps) {
         dimLeaf("result"),
         dimLeaf("tossResult"),
         dimLeaf("tossDecision"),
+      ]);
+      // 3 ── Ball Ranges (was "Delivery") ────────────────────────────────────────
+      pushGroup("Ball Ranges", [dimLeaf("phase"), dimLeaf("overs"), dimLeaf("innings")]);
+      // 4 ── Wicket Types (was "Fielding Tallies") ───────────────────────────────
+      // Catches · Caught & bowled · Stumpings · Run-outs · Total dismissals. Matches
+      // moved to Fielder Profile. "Caught & bowled" (NEW, 3.2c) is its OWN count filter
+      // — a distinct subset of Catches; Catches still folds c&b in (unchanged). It maps
+      // to the additively-projected `caught_and_bowled` alias + FIELDING_CONDITION_COLUMNS
+      // gate (table.js); the metric resolves under the "batting" catalogue like its siblings.
+      pushGroup("Wicket Types", [
+        tallyLeaf("catches", "Catches"),
+        tallyLeaf("caught_and_bowled", "Caught & bowled"),
+        tallyLeaf("stumpings", "Stumpings"),
+        tallyLeaf("run_outs", "Run-outs"),
+        tallyLeaf("dismissals_effected", "Total dismissals"),
+      ]);
+      // 5 ── Bowler Details (was "Bowler") ───────────────────────────────────────
+      pushGroup("Bowler Details", [dimLeaf("bowlerStyle"), dimLeaf("bowler")]);
+      // 6 ── Dismissed Batter (was "Dismissed batter") ───────────────────────────
+      // The dims about WHO was out — the "Wicket type" checklist picker (dimLeaf("kind"))
+      // is retired (redundant with Wicket Types' count filters). Position stays on the
+      // existing fld_pos singleton (byte-identical everywhere; no duplicate dim row). The
+      // "hand" dim now reads "Dismissed batter hand" (fieldingDims.js).
+      pushGroup("Dismissed Batter", [
+        leafSingle("fld_pos", "Dismissed batter's position"),
+        dimLeaf("hand"),
+        dimLeaf("role"),
+        dimLeaf("batter"),
       ]);
       return groups;
     }
