@@ -1884,7 +1884,21 @@ function swapAdvancedForDiscipline(prev, next) {
   // while the bowling discipline is active, so it can't leak into a bowling query.
   const profile =
     next.profile && next.profile.battingHand ? { ...next.profile, battingHand: null } : next.profile;
-  return { ...next, advanced: restored, advancedByDiscipline: archive, profile };
+  // Fielding-board dims (3.2b2): state.fielding.* holds the Fielding board's own filter
+  // rows (Wicket type / Batting hand / Bowler style / Phase / …). On any discipline
+  // change INTO or OUT of fielding, reset them — the leaderboard analogue of the player
+  // pop-up's "switching discipline clears your filter rows" — so a fielding filter can
+  // never silently leak onto a batting/bowling board's fielding column (or vice-versa).
+  // EXCEPT `positions`: the batting/bowling "+ Add condition" list ALSO offers "Dismissed
+  // batter's position" (the fld_pos singleton, byte-identical), so that one slot stays
+  // global exactly as before — clearing it would change batting/bowling behaviour.
+  let fielding = next.fielding;
+  if ((prev.discipline === "fielding" || next.discipline === "fielding") && next.fielding) {
+    const keptPositions = next.fielding.positions;
+    fielding =
+      Array.isArray(keptPositions) && keptPositions.length ? { positions: [...keptPositions] } : {};
+  }
+  return { ...next, advanced: restored, advancedByDiscipline: archive, profile, fielding };
 }
 
 export function createStore(initial) {

@@ -65,6 +65,7 @@
 // Only the "popup" branch changes; the leaderboard taxonomy is byte-untouched.
 
 import { effectiveNamespace, matchupVsActive, eligibleMetrics, FIELDING_POSITIONS, inningsNumberOptions } from "./state.js";
+import { DIM_BY_KEY as FIELDING_DIM_BY_KEY } from "./fieldingDims.js";
 import { ballEngineEnabled } from "./config.js";
 import { matchupBucketLabel, metricDisplayLabel } from "./metrics.js";
 import { partitionFilterMetrics } from "./advanced.js";
@@ -153,6 +154,14 @@ export function createPaletteGroupsBuilder(deps) {
     // engine's single source of truth. Absent on the leaderboard surface (drawer.js
     // passes none), so the full leaderboard taxonomy is byte-untouched.
     metricSliceable,
+    // Fielding board (3.2b2): the leaderboard drawer supplies these so the
+    // `disc === "fielding"` branch can offer the fielding dim rows
+    // (src/fieldingDimsDrawer.js). No other surface hits that branch (the pop-up's
+    // fielding mode uses playerFieldingEditor.js and reports getDiscipline()="batting"),
+    // so the defaults keep every other caller byte-identical.
+    pickFieldingDim = () => {},
+    fieldingDimOfferable = () => false,
+    fieldingDimPresent = () => false,
   } = deps;
 
   /**
@@ -276,6 +285,79 @@ export function createPaletteGroupsBuilder(deps) {
     };
 
     const groups = [];
+
+    // 0 ── FIELDING BOARD (3rd leaderboard scope) ─────────────────────────────────
+    // A completely separate, HONEST offer set — only filters the fielding leaderboard
+    // query (buildFieldingLeaderboardQuery) actually narrows by. Returns EARLY, so the
+    // batting/bowling/matchup taxonomy below is byte-untouched (it is never reached for
+    // fielding). Fixes the pre-existing bug where disc==="fielding" fell into the
+    // BOWLING else-branch and offered top-level Stage/Result/Toss (silently ignored by
+    // the fielding query) + null metric leaves (the fielding namespace has no metrics).
+    if (disc === "fielding") {
+      // Count-threshold tallies resolve under the "batting" catalogue — the fielding
+      // board has no "fielding" metrics namespace; buildFieldingCountGate /
+      // conditionToFieldingWhere resolve the SAME five keys under "batting"
+      // (metricNsFor(fielding)="batting"). Offer EXACTLY the five the count gate honors
+      // (FIELDING_CONDITION_COLUMNS) — anything else the gate silently drops (dishonest).
+      const battingByKey = new Map(eligibleMetrics("batting", s.formats).map((m) => [m.key, m]));
+      const tallyLeaf = (key, label) => {
+        const m = battingByKey.get(key);
+        if (!m) return null;
+        return { kind: "leaf", label, metricKey: key, run: () => pickMetric(gi, key) };
+      };
+      // A fielding DIM leaf (→ state.fielding.<field>), offered only when its (possibly
+      // data-driven) option list is non-empty; disabled once its row is present. Its
+      // run() reveals the drawer's inline dim row (fieldingDimsDrawer.js).
+      const dimLeaf = (dimKey) => {
+        const dim = FIELDING_DIM_BY_KEY.get(dimKey);
+        if (!dim || !fieldingDimOfferable(dimKey, s)) return null;
+        return { kind: "leaf", label: dim.label, disabled: fieldingDimPresent(dimKey, s), run: () => pickFieldingDim(dimKey) };
+      };
+
+      pushGroup("Fielding Tallies", [
+        tallyLeaf("catches", "Catches"),
+        tallyLeaf("stumpings", "Stumpings"),
+        tallyLeaf("run_outs", "Run-outs"),
+        tallyLeaf("dismissals_effected", "Total dismissals"),
+        tallyLeaf("matches", "Matches"),
+      ]);
+      // Player Profile (narrows the FIELDER set via the fielder_id profile semi-join —
+      // owner: include all four). Data-driven availability (men today; women when their
+      // profiles land) — same isFilterAvailable gate the batting/bowling groups use.
+      pushGroup("Player Profile", [
+        isFilterAvailable("profileRole", s) ? leafSingle("role", "Playing role") : null,
+        isFilterAvailable("profileHand", s) ? leafSingle("hand", "Batting hand") : null,
+        isFilterAvailable("profileBowling", s) ? leafSingle("bowling", "Bowling style") : null,
+        isFilterAvailable("profileBowlingArm", s) ? leafSingle("bowlingHand", "Bowling hand") : null,
+        leafSingle("team", "Team"),
+      ]);
+      // Dismissed batter — the fielding dims about WHO was out. Position stays on the
+      // existing fld_pos singleton (byte-identical everywhere; no duplicate dim row).
+      pushGroup("Dismissed batter", [
+        dimLeaf("kind"),
+        leafSingle("fld_pos", "Dismissed batter's position"),
+        dimLeaf("hand"),
+        dimLeaf("role"),
+        dimLeaf("batter"),
+      ]);
+      pushGroup("Bowler", [dimLeaf("bowlerStyle"), dimLeaf("bowler")]);
+      pushGroup("Delivery", [dimLeaf("phase"), dimLeaf("overs"), dimLeaf("innings")]);
+      // Match — scope singletons (honoured top-level) + the match-context fielding dims
+      // (City/Season/Stage/Result/Toss reach `matches` via the fielding query's EXISTS,
+      // NOT the top-level state.stage/result/… the fielding query ignores).
+      pushGroup("Match", [
+        leafSingle("opposition", "Opposition"),
+        leafSingle("event", "Event"),
+        leafSingle("venue", "Venue"),
+        dimLeaf("city"),
+        dimLeaf("season"),
+        dimLeaf("stage"),
+        dimLeaf("result"),
+        dimLeaf("tossResult"),
+        dimLeaf("tossDecision"),
+      ]);
+      return groups;
+    }
 
     // 1 ── Player Profile ────────────────────────────────────────────────────────
     // T-F3: each of the 4 fixed profile leaves + PotM Count is withheld on the

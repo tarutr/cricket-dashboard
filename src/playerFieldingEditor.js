@@ -45,18 +45,11 @@ import { createAddPalette, paletteSkeletonHTML } from "./addPalette.js";
 import { mountOpponentPlayer } from "./drawerInnings.js";
 import { loadDimOptions } from "./dimOptions.js";
 import { canonicalStage } from "./canonicalNames.js";
-import {
-  FORMAT_BUCKETS,
-  FIELDING_PHASE_OPTIONS,
-  FIELDING_POSITIONS,
-  RESULT_OPTIONS,
-  RESULT_ALL,
-  TOSS_RESULT_OPTIONS,
-  TOSS_DECISION_OPTIONS,
-  inningsNumberOptions,
-  inningsNumberLabel,
-} from "./state.js";
-import { INNINGS_NUMBER_FILTER } from "./metrics.js";
+import { FORMAT_BUCKETS } from "./state.js";
+// The fielding dim catalogue + vocab now live in src/fieldingDims.js (ONE source of
+// truth, shared with the leaderboard's Fielding board menu). This editor's behaviour
+// is byte-unchanged — it just consumes the catalogue instead of defining it inline.
+import { DIMS, DIM_BY_KEY, FIELDING_SINGLETONS, CHECKLIST_FILTER_THRESHOLD } from "./fieldingDims.js";
 import { escHtml, escAttr } from "./html.js";
 
 const GI = 0; // one palette control per fielding editor (single "+ Add fielding filter")
@@ -67,66 +60,10 @@ const TEAM_TYPES = [
   { value: "both", label: "Both" },
 ];
 
-// Wicket-type (kind) vocabulary — the EXACT literals fielding_events.kind stores
-// (buildFieldingSliceClauses emits `kind IN (…)`); the sacred buildFieldingCteSql
-// uses the same four literals for its tallies. Display-only labels here.
-const WICKET_TYPE_OPTIONS = [
-  { value: "caught", label: "Caught" },
-  { value: "caught and bowled", label: "Caught & bowled" },
-  { value: "stumped", label: "Stumped" },
-  { value: "run out", label: "Run out" },
-];
-
-// Match-outcome tokens the fielding mctx honors (buildMatchContextClauses) — the
-// RESULT_OPTIONS minus the "All" no-narrowing sentinel (fielding needs no sentinel:
-// an empty selection is already "no narrowing").
-const RESULT_OUTCOME_OPTIONS = RESULT_OPTIONS.filter((o) => o.value !== RESULT_ALL);
-
-// ── The fielding dim catalogue ───────────────────────────────────────────────
-// Each entry: a palette label + group + the state.fielding field it writes + how
-// its control renders. `source`/`column` mark a DATA-DRIVEN dim (options from
-// loadDimOptions → data-driven availability). `numeric` marks integer-valued
-// checklists (positions / innings) whose values coerce to ints. `stored` on innings
-// means the checklist VALUE is the 0-based stored innings_number (display via label).
-const DIMS = [
-  { key: "kind",         field: "kinds",         group: "Dismissal", label: "Wicket type",       control: "checklist", options: () => WICKET_TYPE_OPTIONS },
-  { key: "position",     field: "positions",     group: "Dismissal", label: "Dismissed batter's position",  control: "checklist", numeric: true,
-    options: () => FIELDING_POSITIONS.map((n) => ({ value: n, label: `Position ${n}` })) },
-  { key: "hand",         field: "hands",         group: "Dismissal", label: "Batting hand",      control: "checklist", source: "fielding", column: "out_hand" },
-  { key: "role",         field: "roles",         group: "Dismissal", label: "Batter role",       control: "checklist", source: "fielding", column: "out_role" },
-  { key: "batter",       field: "outBatters",    group: "Dismissal", label: "Specific batter",   control: "player", nameField: "outBatterName", pickLabel: "Dismissed batter" },
-  { key: "bowlerStyle",  field: "bowlerStyles",  group: "Bowler",    label: "Bowler style",      control: "checklist", source: "fielding", column: "bowler_style" },
-  { key: "bowler",       field: "bowlers",       group: "Bowler",    label: "Specific bowler",   control: "player", nameField: "bowlerName", pickLabel: "Bowler" },
-  { key: "phase",        field: "phases",        group: "Delivery",  label: "Phase",             control: "checklist", options: () => FIELDING_PHASE_OPTIONS },
-  { key: "overs",        field: null,            group: "Delivery",  label: "Over range",        control: "overrange" },
-  { key: "innings",      field: "inningsNumbers", group: "Delivery", label: "Innings number",    control: "checklist", numeric: true, stored: true,
-    options: (ctx) => inningsNumberOptions(ctx.formats).map((o) => ({ value: INNINGS_NUMBER_FILTER.toStored(o.value), label: o.label })) },
-  { key: "city",         field: "cities",        group: "Match",     label: "City",              control: "checklist", source: "fielding", column: "city" },
-  // reverse: true — loadDimOptions returns ascending (ORDER BY 1); Season reads
-  // newest-first (owner #13-adjacent), matching the Event ▸ Season sub-picker.
-  { key: "season",       field: "seasons",       group: "Match",     label: "Season",            control: "checklist", source: "matches", column: "season", reverse: true },
-  { key: "stage",        field: "stage",         group: "Match",     label: "Stage",             control: "checklist", source: "matches", column: "event_stage", canonical: true },
-  { key: "result",       field: "result",        group: "Match",     label: "Match result",      control: "checklist", options: () => RESULT_OUTCOME_OPTIONS },
-  { key: "tossResult",   field: "tossResult",    group: "Match",     label: "Toss result",       control: "checklist", options: () => TOSS_RESULT_OPTIONS },
-  { key: "tossDecision", field: "tossDecision",  group: "Match",     label: "Toss decision",     control: "checklist", options: () => TOSS_DECISION_OPTIONS },
-];
-const DIM_BY_KEY = new Map(DIMS.map((d) => [d.key, d]));
-
-// The scope singletons offered on the FIELDING editor: the ONLY four the sacred
-// buildFieldingCteSql honors at the top level (via buildScopeClausesTagged). Their
-// value editors are the reused store-adapter drawer editors (playerFilterScope.js);
-// their picks land on row.singletons. (Stage / Result / Toss / Innings are fielding.*
-// dims here, NOT scope singletons — see the header.)
-const FIELDING_SINGLETONS = [
-  { key: "team", label: "Team" },
-  { key: "opposition", label: "Opposition" },
-  { key: "event", label: "Event" },
-  { key: "venue", label: "Venue" },
-];
-const SINGLETON_LABEL = new Map(FIELDING_SINGLETONS.map((s) => [s.key, s.label]));
-
-// A checklist longer than this gets an inline filter box (City / Season can be long).
-const CHECKLIST_FILTER_THRESHOLD = 12;
+// (The fielding dim CATALOGUE — DIMS / DIM_BY_KEY / FIELDING_SINGLETONS / the wicket-type
+// + result-outcome vocab + CHECKLIST_FILTER_THRESHOLD — moved verbatim to
+// src/fieldingDims.js, the single source of truth this editor and the leaderboard's
+// Fielding board menu both consume. Imported above; behaviour byte-unchanged.)
 
 /**
  * Open the fielding editor modal.

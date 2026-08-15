@@ -79,6 +79,7 @@ import {
 import { mountSearchSelect } from "./searchSelect.js";
 import { createAddPalette, paletteSkeletonHTML } from "./addPalette.js";
 import { createPaletteGroupsBuilder } from "./paletteGroups.js";
+import { createFieldingDimsController } from "./fieldingDimsDrawer.js";
 import { createFilterAvailability, AVAIL_KEYS } from "./filterAvailability.js";
 import { escHtml, escAttr } from "./html.js";
 
@@ -284,6 +285,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       <div class="cond-builder__rows" data-role="singleton-rows">
         ${singletonRowsHTML}
       </div>
+      <!-- Fielding board dim rows (3.2b2): one inline condition row per fielding dim
+           (Wicket type / Batting hand / Bowler style / Phase / …), shown only while the
+           Fielding discipline is active. Owned by the fielding-dim controller below. -->
+      <div class="cond-builder__rows" data-role="fielding-dim-rows"></div>
       <div class="cond-builder__numeric" data-role="numeric-rows"></div>
     </div>`;
 
@@ -599,6 +604,21 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   // that into the base-CTE ball predicate on Search.
   const opponentController = mountOpponentPlayer(editorHosts.vs_opp, store, onChange, { embedded: true });
 
+  // ── Fielding board dim rows (3.2b2) ──────────────────────────────────────────
+  // The full fielding dim set (every catalogue dim EXCEPT position — that stays on
+  // fld_pos, byte-identical everywhere) as inline condition rows writing state.fielding.*.
+  // Shown only on the Fielding board; its palette leaves live in the paletteGroups
+  // `disc === "fielding"` branch (wired via the deps below). requestRerender re-renders
+  // the singleton rows + numeric-group palettes (no query) after a reveal/remove or a
+  // data-driven option list resolving, so the offered/disabled set settles.
+  const fieldingDimHost = advancedHost.querySelector('[data-role="fielding-dim-rows"]');
+  const fieldingDims = createFieldingDimsController({
+    host: fieldingDimHost,
+    store,
+    onChange,
+    requestRerender: () => { syncSingletonRows(); renderNumeric(store.get(), true); },
+  });
+
   // ── "This will come back empty" notice (owner ruling) ──────────────────────
   // Since a dead-end pick is now KEPT and greyed rather than reset, a search can
   // legitimately return no rows. When one filter's ENTIRE selection is currently
@@ -669,13 +689,14 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       // always null and the row is ballOnly-hidden anyway).
       case "vs_opp": return ballEngineEnabled() && Boolean(s.opponentPlayer && s.opponentPlayer.id);
       case "role": return Boolean(s.profile.roleGroup);
-      // Batting hand is a batting-only concept (decision 54): a player's
-      // batting hand isn't their bowling arm, so the row (and the value) never
-      // shows while the bowling discipline is active. The store already clears
-      // profile.battingHand on every discipline change (state.js
-      // swapAdvancedForDiscipline), so this is belt-and-suspenders against a
-      // stale value ever resurfacing here.
-      case "hand": return s.discipline === "batting" && Boolean(s.profile.battingHand);
+      // Batting hand is a batting-only concept in the batting↔bowling sense (decision
+      // 54): a player's batting hand isn't their bowling arm, so the row never shows
+      // while BOWLING is active, and the store clears profile.battingHand on every
+      // discipline change. The FIELDING board (3.2b2) also offers it as a PROFILE filter
+      // (the FIELDER's batting style narrows the fielder set via the fielder_id semi-join
+      // — owner: include it), so presence is allowed on fielding too. Bowling stays
+      // gated and the clear-on-change is untouched, so batting/bowling are byte-identical.
+      case "hand": return (s.discipline === "batting" || s.discipline === "fielding") && Boolean(s.profile.battingHand);
       case "bowling": return Boolean(s.profile.bowlingType);
       // Bowling hand (owner #8): mirrors "bowling" — no discipline gate (a
       // player's bowling arm is meaningful whichever discipline you're viewing).
@@ -715,6 +736,19 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
 
   const FIELDING_SLICE_KEYS = new Set(["fld_pos"]);
 
+  // Fielding board (3.2b2): the ONLY singleton rows the fielding leaderboard query
+  // actually honours — scope (Team/Opposition/Event/Venue), the four profile filters
+  // (Role/Batting hand/Bowling style/Bowling hand, via the fielder_id semi-join), and
+  // Dismissed batter's position (fld_pos). Every OTHER singleton is a batting/bowling/
+  // matchup filter the fielding query IGNORES (top-level match-context / positions /
+  // innings number / PotM / delivery window / opponent player / matchup Vs), so it is
+  // hidden on the Fielding board — never a dishonest, silently-ignored row. The honest
+  // fielding dims (Wicket type / Bowler style / Phase / …) are separate rows owned by
+  // the fielding-dim controller, not the singleton machinery.
+  const FIELDING_BOARD_SINGLETONS = new Set([
+    "team", "opposition", "event", "venue", "role", "hand", "bowling", "bowlingHand", "fld_pos",
+  ]);
+
   // Profile/matchup-backed singleton rows are offered only where their DATA exists
   // in the current scope (data-driven — owner "remove the hardcode everywhere",
   // 2026-08-03; replaces the old `menOnly && gender === "female"` gate). Others
@@ -747,6 +781,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   }
 
   function isPresent(t, s) {
+    // Fielding board (3.2b2): only the honoured singletons may surface there (see
+    // FIELDING_BOARD_SINGLETONS) — everything else is a batting/bowling/matchup filter
+    // the fielding query ignores, so its row never shows on the Fielding board. Skipped
+    // entirely off the Fielding board, so batting/bowling presence is byte-identical.
+    if (s.discipline === "fielding" && !FIELDING_BOARD_SINGLETONS.has(t.key)) return false;
     // Data-driven availability gate (see singletonDataAvailable) — replaces the old
     // men-only gender hardcode. For men everything is available (unchanged); women's
     // profile/matchup rows stay hidden because their data is absent (and their state
@@ -909,6 +948,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // profile leaves + Matchup Vs family are offered iff their data exists.
     isFilterAvailable: (key, s) => availability.isAvailable(key, s),
     ensureFilterAvailabilityLoaded: (s) => availability.ensureLoaded(s, availabilityOnReady),
+    // Fielding board (3.2b2): the `disc === "fielding"` branch offers the fielding dim
+    // rows through these — reveal a dim row, and gate its leaf on the (data-driven)
+    // option list + present state. Inert on batting/bowling (that branch never runs).
+    pickFieldingDim: (dimKey) => fieldingDims.reveal(dimKey),
+    fieldingDimOfferable: (dimKey, s) => fieldingDims.offerable(dimKey, s),
+    fieldingDimPresent: (dimKey, s) => fieldingDims.isPresent(dimKey, s),
   });
 
   // ── Palette component (portal + search + ▸ drill-down) — src/addPalette.js ────
@@ -956,6 +1001,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     winBallsController.sync();
     winPlayerController.sync();
     opponentController.sync();
+    fieldingDims.sync();
     renderProfileEditors();
   }
 
@@ -1223,6 +1269,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // Never-filled singleton rows from a previous session shouldn't linger:
     // reset the session flags so presence re-derives purely from state values.
     for (const k of Object.keys(sessionAdded)) sessionAdded[k] = false;
+    fieldingDims.resetSession(); // same for the fielding board's dim rows
     advancedSnapshotAtOpen = JSON.stringify(store.get().advanced);
     showErrors = false;
     sync();
@@ -1257,6 +1304,32 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
    * any other caller. */
   function activeCount(stateOverride) {
     const s = stateOverride || store.get();
+    // Fielding board (3.2b2): count ONLY the filters the fielding leaderboard query
+    // actually narrows by — scope (Team/Opposition/Event/Venue), profile (role/hand/
+    // bowling/bowlingArm via the fielder_id semi-join), the fielding dims (controller
+    // rows + fld_pos position) and the count-threshold conditions (state.advanced). The
+    // batting/bowling-only filters (top-level match-context / positions / innings / PotM /
+    // delivery window / opponent player) are IGNORED by the fielding query, so a value
+    // lingering from a prior batting/bowling scope must not inflate the fielding badge
+    // (honest count, SPEC §8.4). Kept in its own early return so the batting/bowling
+    // count below is byte-identical.
+    if (s.discipline === "fielding") {
+      let n = 0;
+      if ((s.teams || []).length > 0) n++;
+      const p = s.profile;
+      if (p.roleGroup) n++;
+      if (p.roleSub) n++;
+      if (p.battingHand) n++;
+      if (p.bowlingType) n++;
+      if (p.bowlingArm) n++;
+      if (oppositionFilterActive(s)) n++;
+      if (eventFilterActive(s)) n++;
+      if (venueFilterActive(s)) n++;
+      if (fieldingPositionActive(s)) n++; // fld_pos position
+      n += fieldingDims.activeCount(s); // the other fielding dims (Wicket type / Phase / …)
+      n += activeConditionCount(s.advanced); // count-threshold tallies
+      return n;
+    }
     let n = 0;
     // Delivery window (Wave 3, decision 67; UI-A REWORK): one per ACTIVE window
     // piece (Phase / Over range / Ball range / Player balls), matching the four
