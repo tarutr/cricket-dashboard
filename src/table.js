@@ -21,6 +21,11 @@ import {
   // — read mctx.city / mctx.season, so their presence must light the mctx join too.
   CITY_SET_KEY,
   SEASON_SET_KEY,
+  // Event & Venue which-values column keys (completing City & Season everywhere,
+  // 2026-08-16) — read mctx.event_name / mctx.venue, so their presence must light the
+  // mctx join too (same gate the event__/venue__ composer columns already use).
+  EVENT_SET_KEY,
+  VENUE_SET_KEY,
 } from "./metrics.js";
 import { query } from "./db.js";
 import {
@@ -1586,12 +1591,16 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // source "innings" (already projected via inningsMetrics), so these collections
   // exist ONLY to light up the mctx join. With no such column present each is [] and
   // the emitted SQL is byte-identical.
+  // Event & Venue which-values columns (completing City & Season everywhere,
+  // 2026-08-16): event_set/venue_set also aggregate over mctx.event_name/mctx.venue,
+  // so they fold into these SAME collections (mirroring how cityColsNeedingMctx below
+  // folds the city composer + city_set together).
   const eventComposerCols = visibleColumns
     .map((key) => getMetric(key, discipline))
-    .filter((m) => m && m.isComposedEvent);
+    .filter((m) => m && (m.isComposedEvent || m.key === EVENT_SET_KEY));
   const venueComposerCols = visibleColumns
     .map((key) => getMetric(key, discipline))
-    .filter((m) => m && m.isComposedVenue);
+    .filter((m) => m && (m.isComposedVenue || m.key === VENUE_SET_KEY));
   // City & Season everywhere (2026-08-16): the city__/season__ composer COLUMNS AND the
   // City/Season WHICH-VALUES columns (city_set/season_set) all aggregate over mctx.city
   // / mctx.season, which live on the SHARED match-context LEFT JOIN (filters.js
@@ -1867,7 +1876,9 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // (their sqlExpression reads mctx.event_name / mctx.venue). JOIN-PRESENCE ONLY, like
   // the stage-COLUMN case above: they narrow nothing (no WHERE, 1:1 join), so every
   // existing aggregate is byte-identical; only the extra mctx columns become
-  // referenceable.
+  // referenceable. Event & Venue which-values columns (completing City & Season
+  // everywhere, 2026-08-16) read the SAME mctx.event_name / mctx.venue, so they fold
+  // into eventComposerCols/venueComposerCols above and light this same gate.
   if (
     wantsMatchContext ||
     stageComposerCols.length > 0 ||

@@ -69,11 +69,17 @@ import {
   eligibleComposedSeasonKeys,
   citySetColumnKeys,
   seasonSetColumnKeys,
+  // Event & Venue which-values columns (completing City & Season everywhere,
+  // 2026-08-16): same fold + auto-add shape as City/Season.
+  eventSetColumnKeys,
+  venueSetColumnKeys,
   INNINGS_NUMBER_SET_KEY,
   TEAM_SET_KEY,
   OPPOSITION_SET_KEY,
   CITY_SET_KEY,
   SEASON_SET_KEY,
+  EVENT_SET_KEY,
+  VENUE_SET_KEY,
   isParamComposedColumnKey,
   isComposedFieldingColumnKey,
   makeComposedPhaseKey,
@@ -1304,6 +1310,15 @@ export function eligibleColumnKeys(discipline, formats) {
   for (const key of seasonSetColumnKeys(discipline)) {
     keys.add(key);
   }
+  // Event & Venue which-values columns (completing City & Season everywhere,
+  // 2026-08-16): fold in so a chosen / auto-added column survives a re-render /
+  // prune. Byte-identical when none is present.
+  for (const key of eventSetColumnKeys(discipline)) {
+    keys.add(key);
+  }
+  for (const key of venueSetColumnKeys(discipline)) {
+    keys.add(key);
+  }
   // New standalone TEAM composer (2026-08-14): the picked composed-team column keys
   // (team__<hex>__<base>). Data-driven value space → not enumerable up front, so these
   // are the keys the user actually composed this session (metrics._composedTeamKeys),
@@ -1621,6 +1636,12 @@ export function activeLeaderboardFilterSources(state) {
   // re-validates addability. Reads mctx.city/mctx.season (table.js lights the join).
   if (cityFilterActive(state)) push("filter:city", [CITY_SET_KEY]);
   if (seasonFilterActive(state)) push("filter:season", [SEASON_SET_KEY]);
+  // Event & Venue which-values columns (completing City & Season everywhere,
+  // 2026-08-16): same auto-add-with-filter rule as City/Season above. Reads
+  // mctx.event_name/mctx.venue (table.js lights the join — same gate the Event/Venue
+  // composer columns already use).
+  if (eventFilterActive(state)) push("filter:event", [EVENT_SET_KEY]);
+  if (venueFilterActive(state)) push("filter:venue", [VENUE_SET_KEY]);
 
   // Player-attribute filters (men-only by DATA — profile is empty for women, so this
   // is data-driven, not gender-hardcoded). One column per active profile field.

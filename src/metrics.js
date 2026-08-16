@@ -2779,6 +2779,12 @@ export function getMetric(key, discipline) {
       resolveComposedSeasonMetric(key, discipline) ??
       resolveCitySetMetric(key, discipline) ??
       resolveSeasonSetMetric(key, discipline) ??
+      // Event & Venue which-values columns (completing City & Season everywhere,
+      // 2026-08-16): event_set / venue_set. null for any other key. Both need the mctx
+      // join present (table.js event/venue gate) — same join the Event/Venue composers
+      // already light.
+      resolveEventSetMetric(key, discipline) ??
+      resolveVenueSetMetric(key, discipline) ??
       // Wave D — D1: player-profile attribute columns (attr_<field>), virtual text
       // metrics projected out of the profile_cte join (buildQuery). null for any
       // non-attr key / wrong discipline, so every other caller is unchanged.
@@ -3873,6 +3879,68 @@ export function resolveSeasonSetMetric(key, discipline) {
 /** The Season which-values key offerable for `discipline` (both). */
 export function seasonSetColumnKeys(discipline) {
   return discipline === "batting" || discipline === "bowling" ? [SEASON_SET_KEY] : [];
+}
+
+// ── Event / Venue "which values" columns (completing City & Season everywhere,
+//    2026-08-16) ─────────────────────────────────────────────────────────────────
+// The City/Season which-values pair above deferred Event & Venue (metrics.js note at
+// the Innings-Number/Team/Opposition block above) because they needed the mctx join,
+// which the Step-4 Event/Venue composer work made available (filters.js
+// matchContextSubselectSql already projects event_name/venue; table.js already lights
+// the mctx join for the event__/venue__ composer columns — that SAME gate is extended
+// here). Owner approved completing them 2026-08-16 so all four match-context
+// dimensions are consistent. Both disciplines (event/venue are match-level).
+export const EVENT_SET_KEY = "event_set";
+export const VENUE_SET_KEY = "venue_set";
+
+/** Resolve the Event which-values key to its VIRTUAL list metric (both disciplines),
+ * or null. Reads mctx.event_name — needs the mctx join present (table.js event gate). */
+export function resolveEventSetMetric(key, discipline) {
+  if (key !== EVENT_SET_KEY || (discipline !== "batting" && discipline !== "bowling")) return null;
+  return {
+    key: EVENT_SET_KEY,
+    label: "Event",
+    shortLabel: "Event",
+    discipline,
+    source: "innings",
+    sqlExpression: "list(DISTINCT mctx.event_name ORDER BY mctx.event_name)",
+    sortExpression: "MIN(mctx.event_name)",
+    higherIsBetter: false,
+    format: "list",
+    kind: "attribute",
+    zeroIsData: false,
+    isPhaseMetric: null,
+    columnTitle: "Events played in across the filtered rows",
+  };
+}
+/** The Event which-values key offerable for `discipline` (both). */
+export function eventSetColumnKeys(discipline) {
+  return discipline === "batting" || discipline === "bowling" ? [EVENT_SET_KEY] : [];
+}
+
+/** Resolve the Venue which-values key to its VIRTUAL list metric (both disciplines),
+ * or null. Reads mctx.venue — needs the mctx join present (table.js venue gate). */
+export function resolveVenueSetMetric(key, discipline) {
+  if (key !== VENUE_SET_KEY || (discipline !== "batting" && discipline !== "bowling")) return null;
+  return {
+    key: VENUE_SET_KEY,
+    label: "Venue",
+    shortLabel: "Venue",
+    discipline,
+    source: "innings",
+    sqlExpression: "list(DISTINCT mctx.venue ORDER BY mctx.venue)",
+    sortExpression: "MIN(mctx.venue)",
+    higherIsBetter: false,
+    format: "list",
+    kind: "attribute",
+    zeroIsData: false,
+    isPhaseMetric: null,
+    columnTitle: "Venues played at across the filtered rows",
+  };
+}
+/** The Venue which-values key offerable for `discipline` (both). */
+export function venueSetColumnKeys(discipline) {
+  return discipline === "batting" || discipline === "bowling" ? [VENUE_SET_KEY] : [];
 }
 
 // ── Composed TEAM × metric columns (standalone composer, 2026-08-14) ───────────

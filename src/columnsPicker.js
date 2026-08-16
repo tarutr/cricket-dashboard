@@ -61,6 +61,9 @@ import {
   INNINGS_NUMBER_SET_KEY, TEAM_SET_KEY, OPPOSITION_SET_KEY,
   // City & Season everywhere (2026-08-16): the City / Season which-values column keys.
   CITY_SET_KEY, SEASON_SET_KEY,
+  // Event & Venue which-values column keys (completing City & Season everywhere,
+  // 2026-08-16).
+  EVENT_SET_KEY, VENUE_SET_KEY,
   // Columns content rework D3 (runs-by-source + wicket-type composers).
   composedRunSourceRows, makeComposedRunSourceKey, parseComposedRunSourceKey,
   makeComposedWicketTypeKey, parseComposedWicketTypeKey,
@@ -1865,6 +1868,10 @@ export function createColumnsPicker({
           // City & Season everywhere (2026-08-16): the City / Season which-values columns.
           { type: "plain", key: CITY_SET_KEY, label: "City" },
           { type: "plain", key: SEASON_SET_KEY, label: "Season" },
+          // Event & Venue which-values columns (completing City & Season everywhere,
+          // 2026-08-16).
+          { type: "plain", key: EVENT_SET_KEY, label: "Event" },
+          { type: "plain", key: VENUE_SET_KEY, label: "Venue" },
         ]
       : [];
     const basicItems = plainItems(ownBasic);
