@@ -1903,14 +1903,42 @@ export function createColumnsPicker({
         if (composerAvailable(kind, ns, formats)) fieldingComposerItems.push({ type: "composer", kind, label: FC_COMPOSER_LABEL[kind] });
       }
     }
+    const fieldingMode = getFieldingMode ? getFieldingMode() : false;
+    // Fielding board LIST columns (Wave 2b) — leaderboard fielding board ONLY
+    // (fieldingMode AND NOT the pop-up's own-discipline picker; ownDisciplineOnly is
+    // the pop-up). Virtual list columns (not in eligibleMetrics), so listed EXPLICITLY
+    // like the batting scopeSetItems. Placement per the task: the MATCH-context lists
+    // (Team / Opposition / Event / Venue / City / Season) under the Match dropdown; the
+    // DISMISSAL lists (Bowler style / Dismissed batter's position / hand) under the
+    // Fielding dropdown. (Match result / Toss result / Toss decision / Stage build no
+    // list column this wave — see metrics.js FIELDING_SET_SPECS.)
+    const fieldingSetLeaderboard = fieldingMode && !ownDisciplineOnly;
+    const fieldingMatchSetItems = fieldingSetLeaderboard
+      ? [
+          { type: "plain", key: "fld_team_set", label: "Team" },
+          { type: "plain", key: "fld_opposition_set", label: "Opposition" },
+          { type: "plain", key: "fld_event_set", label: "Event" },
+          { type: "plain", key: "fld_venue_set", label: "Venue" },
+          { type: "plain", key: "fld_city_set", label: "City" },
+          { type: "plain", key: "fld_season_set", label: "Season" },
+        ]
+      : [];
+    const fieldingDismissalSetItems = fieldingSetLeaderboard
+      ? [
+          { type: "plain", key: "fld_bowler_style_set", label: "Bowler style" },
+          { type: "plain", key: "fld_out_position_set", label: "Dismissed batter's position" },
+          { type: "plain", key: "fld_out_hand_set", label: "Dismissed batter hand" },
+        ]
+      : [];
     const fieldingSections = [
-      ...section("Fielding Stats", plainItems(fielding)),
+      ...section("Fielding Stats", [...plainItems(fielding), ...fieldingDismissalSetItems]),
       ...(fieldingComposerItems.length ? [{ name: "Composers", items: fieldingComposerItems }] : []),
     ];
 
     // FC-2: in the pop-up's FIELDING mode the Match dropdown offers only "matches"
     // (its query builds fld_matches_cte); Impact/PoM is dropped (no pom_cte there, so
-    // it would not compute). The leaderboard keeps Impact (fieldingMode false).
+    // it would not compute). The leaderboard keeps Impact (fieldingMode false) + gains
+    // the match-context list columns (fieldingMatchSetItems, leaderboard fielding only).
     //
     // Columns-popup rework Wave A (#26, owner 2026-08-12): the Match dropdown's
     // "Basic Stats" / "Impact" sub-headings were never owner-approved — flattened
@@ -1919,9 +1947,8 @@ export function createColumnsPicker({
     // (unchanged behaviour), and the empty group-header this produces collapses via
     // styles.css `.palette__group-header:empty` — display/layout only, no metric
     // added/removed/reordered.
-    const fieldingMode = getFieldingMode ? getFieldingMode() : false;
     const matchItems = fieldingMode
-      ? plainItems(matchesMetric ? [matchesMetric] : [])
+      ? [...plainItems(matchesMetric ? [matchesMetric] : []), ...fieldingMatchSetItems]
       : plainItems([...(matchesMetric ? [matchesMetric] : []), ...impact]);
     const matchSections = section("", matchItems);
 

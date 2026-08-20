@@ -1015,10 +1015,29 @@ export function buildFieldingCteSql(state, composedFieldingCols = [], opts = {})
   if (opts && opts.includeName) {
     selectCols.push("         MAX(fielder_name) AS fielder_name");
   }
+  // Fielding cols Wave 2b (Group B): a list column over a MATCH-LEVEL value absent from
+  // the fielding view (Season = matches.season) needs the match row. Bring it in with a
+  // 1:1 LEFT JOIN on match_id — unique in `matches`, so NO row fan-out: `GROUP BY
+  // fielder_id` still aggregates the EXACT same fielding rows and every SUM(CASE) tally
+  // (+ MAX(fielder_name)) is BYTE-IDENTICAL. The sub-select renames match_id →
+  // mctx_match_id (so the CTE's bare `match_id` refs — e.g. the Season SLICE semi-join —
+  // stay unambiguous) and projects ONLY season, which is NOT a fielding-view column and
+  // never a bare ref in this CTE body → zero ambiguity, even alongside the Group-A list
+  // columns (which read other bare fielding columns). Added ONLY when a Group-B list
+  // column is requested, so the default board / fc__-only / Group-A-only CTE is
+  // byte-identical, as are the ≤2-arg callers (graph, pop-up: no needsFieldingMctx col).
+  const needMctxJoin = (composedFieldingCols || []).some((m) => m && m.needsFieldingMctx);
+  const fromLines = ["  FROM fielding"];
+  if (needMctxJoin) {
+    fromLines.push(
+      "  LEFT JOIN (SELECT match_id AS mctx_match_id, season FROM matches) fld_mctx" +
+        " ON fld_mctx.mctx_match_id = fielding.match_id"
+    );
+  }
   return [
     "fielding_cte AS (",
     "  SELECT fielder_id AS fld_player_id,\n" + selectCols.join(",\n"),
-    "  FROM fielding",
+    ...fromLines,
     `  WHERE ${[fldScopeSql, ...fldTail].join(" AND ")}`,
     "  GROUP BY fielder_id",
     ")",
@@ -1425,6 +1444,13 @@ const _FLD_PER_MATCH_SUFFIX = "_per_match";
  * ensure pmatch_cte is joined whenever a per-match column is present. */
 function fieldingBoardColExpr(m) {
   if (!m) return null;
+  // Fielding list column (Wave 2b): the injected fielding_cte alias IS the list — read
+  // it straight off the base table (no per-match / rate variant). Group-A lists are an
+  // aggregate over the fielding view; the Group-B (Season) list rides fielding_cte's
+  // conditional fld_mctx join — either way the alias is on fielding_cte.
+  if (m.isFieldingSet && m.fieldingCteAlias) {
+    return `fielding_cte.${m.fieldingCteAlias}`;
+  }
   // Composed fc__ column: the injected fielding_cte alias is the count; the per-match
   // variant divides that count by the appearance count.
   if (m.isComposedFielding && m.fieldingCteAlias) {
@@ -1466,12 +1492,19 @@ export function buildFieldingLeaderboardQuery(state, visibleColumns = []) {
     seenExtra.add(key);
     extras.push({ key, expr, metric: m });
   }
-  const composedFieldingCols = extras.filter((e) => e.metric.isComposedFielding).map((e) => e.metric);
+  // Columns injected into the fielding CTE: the fc__ composer columns AND the Wave-2b
+  // list columns (fld_*_set) — both carry fieldingCteAlias + fieldingCteCaseSql, so
+  // buildFieldingCteSql's generic injection loop emits `<expr> AS <alias>` for each over
+  // the SAME `GROUP BY fielder_id` (tallies byte-identical). A Group-B list column
+  // (needsFieldingMctx) additionally lights the CTE's 1:1 matches join.
+  const cteInjectCols = extras
+    .filter((e) => e.metric.isComposedFielding || e.metric.isFieldingSet)
+    .map((e) => e.metric);
   const needPmatch = extras.some((e) => e.metric.perMatch);
 
   // SACRED CTE as a BASE table, with the fielder name projected (opts.includeName) plus
-  // any requested fc__ composer columns injected (byte-identical CTE when none requested).
-  const cte = buildFieldingCteSql(state, composedFieldingCols, { includeName: true });
+  // any requested fc__ composer / list columns injected (byte-identical CTE when none).
+  const cte = buildFieldingCteSql(state, cteInjectCols, { includeName: true });
   // Matches denominator via the SHARED switch (reused by the pop-up so they can't drift):
   // un-narrowed = appearances (pmatch_cte); narrowed = matches-with-a-credit (fld_matches_cte).
   const narrowed = fieldingMatchesNarrowed(state);

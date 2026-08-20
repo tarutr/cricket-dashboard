@@ -42,6 +42,8 @@ import {
   eligibleComposedRunSourceConcededKeys,
   eligibleComposedWicketTypeKeys,
   eligibleComposedFieldingKeys,
+  // Fielding cols Wave 2b: the fielding board's list-column keys (fld_*_set).
+  fieldingSetColumnKeys,
   // Chunk 1B: per-position breakdown composed keys + the B. Pos. which-values key.
   eligibleComposedPositionKeys,
   battingPositionSetColumnKeys,
@@ -1234,6 +1236,11 @@ export function eligibleColumnKeys(discipline, formats) {
       if (m.section === "fielding") keys.add(m.key);
     }
     for (const key of eligibleComposedFieldingKeys("batting")) keys.add(key);
+    // Fielding cols Wave 2b: the fielding list columns (fld_*_set) — Team/Opposition/
+    // Event/Venue/City/Bowler-style/Dismissed-position/Dismissed-hand + Season. Folded
+    // in so a chosen / auto-added list column survives a re-render / prune (the prune
+    // sites' structural check only keeps fc__ keys; these need the eligible set).
+    for (const key of fieldingSetColumnKeys()) keys.add(key);
     return keys;
   }
   const keys = new Set(eligibleMetrics(discipline, formats).map((m) => m.key));
@@ -1633,6 +1640,32 @@ export function activeLeaderboardFilterSources(state) {
     const valid = cols.filter((c) => isLeaderboardColumnAddable(c, disc, state.formats));
     if (valid.length) out.push({ tag, cols: valid });
   };
+
+  // Fielding board (3rd scope): its filters live on state.fielding.* (the fielding dims)
+  // PLUS the four top-level scope singletons (teams / opposition / event / venue — the
+  // ONLY four buildFieldingCteSql honours at top level). Each maps to its fld_*_set list
+  // column, mirroring the batting/bowling which-values auto-add (THE RULE — every scope
+  // categorical filter → its list column, tidying away when the filter is removed).
+  // push() re-validates addability against eligibleColumnKeys("fielding"). Early-return
+  // so the batting/bowling pushes below never run for fielding. (Stage/Result/Toss are
+  // NOT mapped — no list column built for them this wave; see metrics.js.)
+  if (disc === "fielding") {
+    const f = state.fielding || {};
+    const has = (a) => Array.isArray(a) && a.length > 0;
+    // Tags MUST start with "filter:" — reconcileLeaderboardColumns' remove-on-remove
+    // step (Q1a) only drops an origin whose src `startsWith("filter:")` and is no longer
+    // active, so a "fld:*" tag would auto-ADD its column but never TIDY away.
+    if (teamsFilterActive(state)) push("filter:fld:teams", ["fld_team_set"]);
+    if (oppositionFilterActive(state)) push("filter:fld:opposition", ["fld_opposition_set"]);
+    if (eventFilterActive(state)) push("filter:fld:event", ["fld_event_set"]);
+    if (venueFilterActive(state)) push("filter:fld:venue", ["fld_venue_set"]);
+    if (has(f.cities)) push("filter:fld:city", ["fld_city_set"]);
+    if (has(f.bowlerStyles)) push("filter:fld:bowler_style", ["fld_bowler_style_set"]);
+    if (has(f.positions)) push("filter:fld:position", ["fld_out_position_set"]);
+    if (has(f.hands)) push("filter:fld:hand", ["fld_out_hand_set"]);
+    if (has(f.seasons)) push("filter:fld:season", ["fld_season_set"]);
+    return out;
+  }
 
   // Singleton / categorical filters (mirror the pills' own "active" predicates).
   // Chunk 1B: the Batting-position scope filter auto-adds the B. Pos. which-values

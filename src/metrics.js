@@ -2736,6 +2736,12 @@ export function getMetric(key, discipline) {
       resolveComposedWicketTypeMetric(key, discipline) ??
       resolveComposedParamMetric(key, discipline) ??
       resolveComposedFieldingMetric(key, discipline) ??
+      // Fielding board "list columns" (fielding cols Wave 2b, 2026-08-20): fld_*_set —
+      // one list(DISTINCT <col>) column per fielding categorical filter (the fielding
+      // analogue of the batting/bowling team_set/opp_set/city_set/… which-values
+      // columns). Resolves under the "batting" ns (the fielding board's metricNsFor).
+      // null for any other key, so every other caller is unchanged.
+      resolveFieldingSetMetric(key, discipline) ??
       // Filter/column rework Chunk 1B: per-position breakdown (pos__<pos>__<base>,
       // batting-only conditional aggregation over batting_position) + the B. Pos.
       // "which values" list column (bpos_set). Both null for any other prefix / wrong
@@ -5861,6 +5867,95 @@ export function eligibleComposedFieldingKeys(discipline) {
     }
   }
   return keys;
+}
+
+// ── Fielding board "list columns" (fielding cols Wave 2b, 2026-08-20) ───────────
+// One list(DISTINCT <col> ORDER BY <col>) column per fielding categorical FILTER — the
+// fielding analogue of the batting/bowling which-values columns (team_set / opp_set /
+// city_set / season_set / …). Each auto-appears with its filter (state.js
+// activeLeaderboardFilterSources fielding branch) and is manually addable from the
+// fielding Columns picker.
+//
+// TWO families by data source:
+//   • Group A — 8 dims that are RAW columns of the `fielding` view. Injected additively
+//     into buildFieldingCteSql's SELECT via the SAME generic loop the fc__ composers use
+//     (an extra aggregate over the SAME `GROUP BY fielder_id`, so the tallies stay
+//     byte-identical, exactly like the existing `MAX(fielder_name)`). NO join.
+//   • Group B — Season (matches.season): NOT on the fielding view. `needsFieldingMctx`
+//     marks it so table.js lights a 1:1 `LEFT JOIN … fld_mctx` on match_id (unique in
+//     matches → no row fan-out → tallies byte-identical) ONLY when a Group-B column is
+//     present. Its list expression reads `fld_mctx.season` (the join alias).
+//
+// Keys are `fld_*_set` — DISTINCT from the batting `_set` keys: the fielding board
+// resolves metrics under the "batting" namespace (metricNsFor(fielding) === "batting"),
+// so reusing e.g. "opp_set" would collide with the batting Opposition column (which
+// reads a different view). Marked `isFieldingSet` so table.js's fieldingBoardColExpr
+// projects `fielding_cte.<alias>`; `section: "fielding"` so eligibleColumnKeys("fielding")
+// harvests them and the fielding picker offers them.
+//
+// NOT built this wave (no batting/bowling list-column precedent → display vocabulary is
+// an un-ruled product decision, flagged for the owner, NOT a tally-safety skip):
+//   • Stage — batting/bowling have no stage_set (the Wave-2A worker deferred/flagged it);
+//     the filter uses CANONICAL labels vs raw `event_stage`.
+//   • Match result / Toss result — player-relative DERIVATIONS (no single source column);
+//     batting maps these filters to COUNT columns (res_won…), not list columns.
+//   • Toss decision — batting has no toss_decision auto-column; raw `bat`/`field` vs the
+//     filter's "Chose to bat/field" labels.
+// The matches JOIN is proven safe by Season, so adding any of these later is small.
+const FIELDING_SET_SPECS = [
+  // Group A — raw columns on the fielding view (no join).
+  { key: "fld_team_set",         label: "Team",                        col: "fielding_team",        title: "Teams the fielder represented in the filtered rows" },
+  { key: "fld_opposition_set",   label: "Opposition",                  col: "opposition",           title: "Opponents faced in the filtered rows" },
+  { key: "fld_event_set",        label: "Event",                       col: "event_name",           title: "Events played in across the filtered rows" },
+  { key: "fld_venue_set",        label: "Venue",                       col: "venue",                title: "Venues played at across the filtered rows" },
+  { key: "fld_city_set",         label: "City",                        col: "city",                 title: "Cities played in across the filtered rows" },
+  { key: "fld_bowler_style_set", label: "Bowler style",                col: "bowler_style",         title: "Bowler styles behind the fielder's dismissals in the filtered rows" },
+  { key: "fld_out_position_set", label: "Dismissed batter's position", col: "out_batting_position", title: "Dismissed batters' positions in the filtered rows" },
+  { key: "fld_out_hand_set",     label: "Dismissed batter hand",       col: "out_hand",             title: "Dismissed batters' handedness in the filtered rows" },
+  // Group B — match-level (needs the fld_mctx 1:1 join on match_id).
+  { key: "fld_season_set",       label: "Season",                      col: "fld_mctx.season",      title: "Seasons present in the filtered rows", mctx: true },
+];
+export const FIELDING_SET_KEYS = FIELDING_SET_SPECS.map((s) => s.key);
+const _FIELDING_SET_BY_KEY = new Map(FIELDING_SET_SPECS.map((s) => [s.key, s]));
+
+/** Resolve a fielding list-column key (`fld_*_set`) to its VIRTUAL list metric, or
+ * null. Resolves under the fielding board's ns (batting/bowling — metricNsFor maps
+ * fielding → "batting"). `fieldingCteCaseSql` is the list expression table.js injects
+ * into fielding_cte as `<expr> AS <alias>`; `needsFieldingMctx` lights the 1:1 matches
+ * join for Group-B columns. Chained into getMetric. */
+export function resolveFieldingSetMetric(key, discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return null;
+  const spec = _FIELDING_SET_BY_KEY.get(key);
+  if (!spec) return null;
+  return {
+    key: spec.key,
+    label: spec.label,
+    shortLabel: spec.label,
+    discipline,
+    source: "fielding_events",
+    section: "fielding",
+    isFieldingSet: true,
+    needsFieldingMctx: !!spec.mctx,
+    fieldingCteAlias: spec.key,
+    fieldingCteCaseSql: `list(DISTINCT ${spec.col} ORDER BY ${spec.col})`,
+    // Outer join-form projection (never used for the board — buildFieldingLeaderboardQuery
+    // reads the base-table alias via fieldingBoardColExpr — but present for any generic
+    // getMetric consumer, mirroring the fc__ metrics' countProjection).
+    sqlExpression: `MAX(fielding_cte.${spec.key})`,
+    higherIsBetter: false,
+    format: "list",
+    kind: "attribute",
+    zeroIsData: false,
+    isPhaseMetric: null,
+    columnTitle: spec.title,
+  };
+}
+
+/** Every fielding list-column key — folded into eligibleColumnKeys("fielding") (so a
+ * chosen / auto-added column survives a re-render / prune) and offered in the fielding
+ * Columns picker. Fielding board only. */
+export function fieldingSetColumnKeys() {
+  return FIELDING_SET_KEYS.slice();
 }
 
 /**
