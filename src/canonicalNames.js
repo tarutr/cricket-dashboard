@@ -287,3 +287,9 @@ export function canonicalStage(raw) {
 export function stageAliases(canonical) {
   return aliasesFor(canonical, STAGE_MERGES);
 }
+
+/** The canonical stage labels that MERGE ≥1 raw spelling (the keys of STAGE_MERGES) —
+ * the enumerable set a raw→canonical SQL fold iterates (fielding "Stage" list column,
+ * metrics.js). Drift-proof: derived from STAGE_MERGES, so a new merge is picked up
+ * automatically. Unlisted stages are NOT here (they fold to themselves via identity). */
+export const STAGE_CANONICALS = Object.keys(STAGE_MERGES);

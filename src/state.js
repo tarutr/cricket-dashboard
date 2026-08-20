@@ -1664,6 +1664,10 @@ export function activeLeaderboardFilterSources(state) {
     if (has(f.positions)) push("filter:fld:position", ["fld_out_position_set"]);
     if (has(f.hands)) push("filter:fld:hand", ["fld_out_hand_set"]);
     if (has(f.seasons)) push("filter:fld:season", ["fld_season_set"]);
+    if (has(f.stage)) push("filter:fld:stage", ["fld_stage_set"]);
+    if (has(f.result)) push("filter:fld:result", ["fld_result_set"]);
+    if (has(f.tossResult)) push("filter:fld:toss_result", ["fld_toss_result_set"]);
+    if (has(f.tossDecision)) push("filter:fld:toss_decision", ["fld_toss_decision_set"]);
     return out;
   }
 

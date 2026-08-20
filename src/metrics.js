@@ -117,7 +117,7 @@
 // resolved lazily inside getMetric (from the stage__/event__ <hex> key), so it must live
 // here. canonicalNames.js is a TRUE leaf (imports nothing), so this creates NO import
 // cycle. Venue has NO fold (raw match only — buildComposedVenueMetric reads mctx.venue).
-import { stageAliases, eventAliases } from "./canonicalNames.js";
+import { stageAliases, eventAliases, STAGE_CANONICALS } from "./canonicalNames.js";
 
 // The Stage composer's "No Stage" (event_stage IS NULL) option reuses the Stage FILTER's
 // own sentinel value + label (state.js), NOT a re-derived string — buildComposedStageMetric
@@ -128,7 +128,7 @@ import { stageAliases, eventAliases } from "./canonicalNames.js";
 // functions. Neither module touches the other's bindings during module-body evaluation, so
 // the live bindings are fully initialised by call time regardless of load order. (escSql is
 // still inlined below rather than imported, to keep that hot path free of the cycle.)
-import { STAGE_NONE, STAGE_NONE_LABEL } from "./state.js";
+import { STAGE_NONE, STAGE_NONE_LABEL, RESULT_OPTIONS, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
 
 // ── Batting ───────────────────────────────────────────────────────────────────
 const BATTING_METRICS = [
@@ -5897,11 +5897,9 @@ export function eligibleComposedFieldingKeys(discipline) {
 // an un-ruled product decision, flagged for the owner, NOT a tally-safety skip):
 //   • Stage — batting/bowling have no stage_set (the Wave-2A worker deferred/flagged it);
 //     the filter uses CANONICAL labels vs raw `event_stage`.
-//   • Match result / Toss result — player-relative DERIVATIONS (no single source column);
-//     batting maps these filters to COUNT columns (res_won…), not list columns.
-//   • Toss decision — batting has no toss_decision auto-column; raw `bat`/`field` vs the
-//     filter's "Chose to bat/field" labels.
-// The matches JOIN is proven safe by Season, so adding any of these later is small.
+//   (Match result / Toss result / Toss decision / Stage were initially held back for an
+//   owner ruling; owner ruled 2026-08-20 to BUILD all four — see the `derived` specs +
+//   fieldingDerivedSetExpr below, which REUSE the existing classification/fold logic.)
 const FIELDING_SET_SPECS = [
   // Group A — raw columns on the fielding view (no join).
   { key: "fld_team_set",         label: "Team",                        col: "fielding_team",        title: "Teams the fielder represented in the filtered rows" },
@@ -5912,11 +5910,75 @@ const FIELDING_SET_SPECS = [
   { key: "fld_bowler_style_set", label: "Bowler style",                col: "bowler_style",         title: "Bowler styles behind the fielder's dismissals in the filtered rows" },
   { key: "fld_out_position_set", label: "Dismissed batter's position", col: "out_batting_position", title: "Dismissed batters' positions in the filtered rows" },
   { key: "fld_out_hand_set",     label: "Dismissed batter hand",       col: "out_hand",             title: "Dismissed batters' handedness in the filtered rows" },
-  // Group B — match-level (needs the fld_mctx 1:1 join on match_id).
-  { key: "fld_season_set",       label: "Season",                      col: "fld_mctx.season",      title: "Seasons present in the filtered rows", mctx: true },
+  // Group B — match-level (needs the fld_mctx 1:1 join on match_id). Season reads the raw
+  // column; Stage folds to canonical + Match/Toss result are player-relative + Toss
+  // decision maps to the filter's labels → each carries a `derived` builder (below).
+  { key: "fld_season_set",         label: "Season",        col: "fld_mctx.season",     title: "Seasons present in the filtered rows", mctx: true },
+  { key: "fld_stage_set",          label: "Stage",         derived: "stage",           title: "Stages present in the filtered rows", mctx: true },
+  { key: "fld_result_set",         label: "Match result",  derived: "result",          title: "Match results (from the fielder's team's perspective) in the filtered rows", mctx: true },
+  { key: "fld_toss_result_set",    label: "Toss result",   derived: "tossResult",      title: "Toss results (from the fielder's team's perspective) in the filtered rows", mctx: true },
+  { key: "fld_toss_decision_set",  label: "Toss decision", derived: "tossDecision",    title: "Toss decisions in the filtered rows", mctx: true },
 ];
 export const FIELDING_SET_KEYS = FIELDING_SET_SPECS.map((s) => s.key);
 const _FIELDING_SET_BY_KEY = new Map(FIELDING_SET_SPECS.map((s) => [s.key, s]));
+
+// Derived list-column INNER expressions (Group B, owner ruling 2026-08-20). Built
+// LAZILY + memoised — NOT at module-eval — because they read state.js's option
+// constants (RESULT_OPTIONS / TOSS_RESULT_OPTIONS / TOSS_DECISION_OPTIONS) across the
+// benign state.js↔metrics.js cycle documented at the top import; those live bindings are
+// only guaranteed initialised at CALL time (like buildComposedStageMetric's STAGE_NONE).
+// Each REUSES the existing logic — no re-invented mapping:
+//   • stage        — folds raw event_stage → CANONICAL via the SAME stageAliases the
+//                    Stage FILTER/composer use (over STAGE_CANONICALS); unlisted stages
+//                    fall through to the raw value (canonicalStage's identity fallback).
+//   • result       — the EXACT player-relative Won/Lost/Tied/No-result/Drawn rule from
+//                    filters.js buildMatchContextClauses (match_winner resolves super
+//                    overs → a super-over win is Won, loss is Lost; else result_type),
+//                    comparing the fielder's `fielding_team`. Labels from RESULT_OPTIONS.
+//   • tossResult   — buildMatchContextClauses' toss rule (team =/<> toss_winner; a NULL
+//                    toss_winner → NULL, excluded — matches the filter). Labels from
+//                    TOSS_RESULT_OPTIONS.
+//   • tossDecision — matches.toss_decision mapped to TOSS_DECISION_OPTIONS' own labels.
+const _fldDerivedExprCache = {};
+function fieldingDerivedSetExpr(kind) {
+  if (_fldDerivedExprCache[kind]) return _fldDerivedExprCache[kind];
+  const sq = (s) => String(s).replace(/'/g, "''");
+  let expr = null;
+  if (kind === "stage") {
+    const whens = STAGE_CANONICALS.map(
+      (canon) =>
+        `WHEN fld_mctx.event_stage IN (${stageAliases(canon).map((r) => `'${sq(r)}'`).join(", ")}) THEN '${sq(canon)}'`
+    ).join(" ");
+    // NULL event_stage = a league fixture with no round — the Stage FILTER's own "No
+    // Stage" category (STAGE_NONE_LABEL). Map it explicitly so the list shows that clean
+    // label instead of a bare null (DuckDB list() keeps nulls) — faithful to the filter.
+    expr = `CASE WHEN fld_mctx.event_stage IS NULL THEN '${sq(STAGE_NONE_LABEL)}' ${whens} ELSE fld_mctx.event_stage END`;
+  } else if (kind === "result") {
+    const rl = Object.fromEntries(RESULT_OPTIONS.map((o) => [o.value, o.label]));
+    expr =
+      `CASE ` +
+      `WHEN fielding_team = fld_mctx.match_winner THEN '${sq(rl.won)}' ` +
+      `WHEN fld_mctx.match_winner IS NOT NULL THEN '${sq(rl.lost)}' ` +
+      `WHEN fld_mctx.result_type = 'tie' THEN '${sq(rl.tied)}' ` +
+      `WHEN fld_mctx.result_type = 'no result' THEN '${sq(rl.no_result)}' ` +
+      `WHEN fld_mctx.result_type = 'draw' THEN '${sq(rl.drawn)}' ` +
+      `ELSE NULL END`;
+  } else if (kind === "tossResult") {
+    const trl = Object.fromEntries(TOSS_RESULT_OPTIONS.map((o) => [o.value, o.label]));
+    expr =
+      `CASE ` +
+      `WHEN fielding_team = fld_mctx.toss_winner THEN '${sq(trl.won)}' ` +
+      `WHEN fld_mctx.toss_winner IS NOT NULL THEN '${sq(trl.lost)}' ` +
+      `ELSE NULL END`;
+  } else if (kind === "tossDecision") {
+    expr =
+      `CASE ` +
+      TOSS_DECISION_OPTIONS.map((o) => `WHEN fld_mctx.toss_decision = '${sq(o.value)}' THEN '${sq(o.label)}'`).join(" ") +
+      ` ELSE fld_mctx.toss_decision END`;
+  }
+  _fldDerivedExprCache[kind] = expr;
+  return expr;
+}
 
 /** Resolve a fielding list-column key (`fld_*_set`) to its VIRTUAL list metric, or
  * null. Resolves under the fielding board's ns (batting/bowling — metricNsFor maps
@@ -5927,6 +5989,10 @@ export function resolveFieldingSetMetric(key, discipline) {
   if (discipline !== "batting" && discipline !== "bowling") return null;
   const spec = _FIELDING_SET_BY_KEY.get(key);
   if (!spec) return null;
+  // The list's INNER value expression: a derived CASE (Group-B stage/result/toss) or a
+  // plain column (Group A + Season). ORDER BY repeats it so the list is deterministic
+  // (alphabetical), matching every other list column.
+  const inner = spec.derived ? fieldingDerivedSetExpr(spec.derived) : spec.col;
   return {
     key: spec.key,
     label: spec.label,
@@ -5937,7 +6003,7 @@ export function resolveFieldingSetMetric(key, discipline) {
     isFieldingSet: true,
     needsFieldingMctx: !!spec.mctx,
     fieldingCteAlias: spec.key,
-    fieldingCteCaseSql: `list(DISTINCT ${spec.col} ORDER BY ${spec.col})`,
+    fieldingCteCaseSql: `list(DISTINCT ${inner} ORDER BY ${inner})`,
     // Outer join-form projection (never used for the board — buildFieldingLeaderboardQuery
     // reads the base-table alias via fieldingBoardColExpr — but present for any generic
     // getMetric consumer, mirroring the fc__ metrics' countProjection).

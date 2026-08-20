@@ -1016,21 +1016,25 @@ export function buildFieldingCteSql(state, composedFieldingCols = [], opts = {})
     selectCols.push("         MAX(fielder_name) AS fielder_name");
   }
   // Fielding cols Wave 2b (Group B): a list column over a MATCH-LEVEL value absent from
-  // the fielding view (Season = matches.season) needs the match row. Bring it in with a
-  // 1:1 LEFT JOIN on match_id — unique in `matches`, so NO row fan-out: `GROUP BY
-  // fielder_id` still aggregates the EXACT same fielding rows and every SUM(CASE) tally
-  // (+ MAX(fielder_name)) is BYTE-IDENTICAL. The sub-select renames match_id →
-  // mctx_match_id (so the CTE's bare `match_id` refs — e.g. the Season SLICE semi-join —
-  // stay unambiguous) and projects ONLY season, which is NOT a fielding-view column and
-  // never a bare ref in this CTE body → zero ambiguity, even alongside the Group-A list
-  // columns (which read other bare fielding columns). Added ONLY when a Group-B list
-  // column is requested, so the default board / fc__-only / Group-A-only CTE is
-  // byte-identical, as are the ≤2-arg callers (graph, pop-up: no needsFieldingMctx col).
+  // the fielding view (Season, Stage, Match/Toss result, Toss decision) needs the match
+  // row. Bring it in with a 1:1 LEFT JOIN on match_id — unique in `matches`, so NO row
+  // fan-out: `GROUP BY fielder_id` still aggregates the EXACT same fielding rows and
+  // every SUM(CASE) tally (+ MAX(fielder_name)) is BYTE-IDENTICAL. The sub-select renames
+  // match_id → mctx_match_id (so the CTE's bare `match_id` refs — e.g. the Season SLICE
+  // semi-join — stay unambiguous) and projects ONLY match-level columns (season /
+  // event_stage / toss_decision / match_winner / result_type / toss_winner), NONE of
+  // which is a fielding-view column or a bare ref in this CTE body → zero ambiguity, even
+  // alongside the Group-A list columns (which read other bare fielding columns) and the
+  // player-relative result/toss list columns (which compare the bare `fielding_team`).
+  // Added ONLY when a Group-B list column is requested, so the default board / fc__-only /
+  // Group-A-only CTE is byte-identical, as are the ≤2-arg callers (graph, pop-up: no
+  // needsFieldingMctx col).
   const needMctxJoin = (composedFieldingCols || []).some((m) => m && m.needsFieldingMctx);
   const fromLines = ["  FROM fielding"];
   if (needMctxJoin) {
     fromLines.push(
-      "  LEFT JOIN (SELECT match_id AS mctx_match_id, season FROM matches) fld_mctx" +
+      "  LEFT JOIN (SELECT match_id AS mctx_match_id, season, event_stage, toss_decision," +
+        " match_winner, result_type, toss_winner FROM matches) fld_mctx" +
         " ON fld_mctx.mctx_match_id = fielding.match_id"
     );
   }

@@ -1921,6 +1921,10 @@ export function createColumnsPicker({
           { type: "plain", key: "fld_venue_set", label: "Venue" },
           { type: "plain", key: "fld_city_set", label: "City" },
           { type: "plain", key: "fld_season_set", label: "Season" },
+          { type: "plain", key: "fld_stage_set", label: "Stage" },
+          { type: "plain", key: "fld_result_set", label: "Match result" },
+          { type: "plain", key: "fld_toss_result_set", label: "Toss result" },
+          { type: "plain", key: "fld_toss_decision_set", label: "Toss decision" },
         ]
       : [];
     const fieldingDismissalSetItems = fieldingSetLeaderboard
