@@ -542,9 +542,19 @@ export function buildScopeClausesTagged(
   // when an idColumn is supplied by the caller (the player_matches/innings views
   // and matchup views all have a join key; some scoped lookups don't) and a
   // profile filter is active. profileSemiJoinSql itself no-ops for women.
+  // Chunk 5 Phase 2 Wave B: tag it lane "player" — it is the ONLY player-lane
+  // member that lives in the WHERE (the PotM / numeric conditions are HAVING). The
+  // tag is SQL-invisible (buildScopeClauses joins only `.sql`, whereWithPinExemption
+  // reads only `.sql`/`.bypassable`), so the emitted SQL stays byte-identical — it
+  // only lets whereWithLanes DROP the profile clause from the WHERE when the player
+  // lane is "Match any" (the table.js caller then re-emits it as a HAVING disjunct;
+  // profile membership depends only on the GROUP-BY key so it is a legal
+  // post-aggregation predicate, and it is all-or-nothing per player so lowering it
+  // changes no surviving player's aggregates). It stays bypassable (pins bypass the
+  // profile filter exactly as before).
   if (idColumn) {
     const profileClause = profileSemiJoinSql(state, idColumn);
-    if (profileClause) clauses.push(bypassableClause(profileClause));
+    if (profileClause) clauses.push(bypassableClause(profileClause, "player"));
   }
 
   return clauses;
@@ -796,12 +806,31 @@ export function whereWithPinExemption(clauses, idColumn, pins) {
 //     whereWithPinExemption gives it (always-applies AND'd, bypassable in the pin-OR
 //     wrap), so pins behave identically for the non-scope clauses.
 //
-// This wave threads scopeOp through the MAIN WHERE of buildQuery / buildMatchupQuery
-// only. Player-lane OR (WHERE→HAVING lowering) is Wave B; fielding OR is Wave C.
-export function whereWithLanes(clauses, { idColumn, pins, scopeOp } = {}) {
-  if (scopeOp !== "OR") return whereWithPinExemption(clauses, idColumn, pins);
+// Wave A threaded scopeOp through the MAIN WHERE of buildQuery / buildMatchupQuery.
+// Chunk 5 Phase 2 Wave B adds `playerOp`: the ONLY player-lane member in the WHERE is
+// the profile semi-join (tagged category "player" in buildScopeClausesTagged). Under
+// player-OR it is LOWERED to a HAVING/step-3 disjunct by the table.js caller (a legal
+// post-aggregation predicate on the GROUP-BY key, all-or-nothing per player), so this
+// compiler DROPS it from the WHERE. Everything else about the WHERE is driven by
+// scopeOp, so player-OR + scope-AND reduces to "whereWithPinExemption over the
+// profile-suppressed list" (byte-identical to today minus the lowered profile clause).
+// Fielding OR is Wave C.
+export function whereWithLanes(clauses, { idColumn, pins, scopeOp, playerOp } = {}) {
+  // Fully "Match all" (both lanes AND) → delegate VERBATIM. table.js's guard already
+  // gates on this, so this branch is a belt-and-braces no-op wrapper.
+  if (scopeOp !== "OR" && playerOp !== "OR") return whereWithPinExemption(clauses, idColumn, pins);
 
-  const tagged = asTaggedClauses(clauses);
+  // Player-OR: drop the "player"-category clause (the profile semi-join) from the
+  // WHERE — the caller re-emits it as a HAVING disjunct (WHERE→HAVING lowering).
+  const tagged =
+    playerOp === "OR" ? asTaggedClauses(clauses).filter((c) => c.category !== "player") : asTaggedClauses(clauses);
+
+  // Scope lane still "Match all": every surviving clause is AND-ed exactly as
+  // whereWithPinExemption does — so the only change from today is the dropped profile
+  // clause. No scope disjunction is built.
+  if (scopeOp !== "OR") return whereWithPinExemption(tagged, idColumn, pins);
+
+  // Scope lane "Match any" (Wave A): core AND (scope OR …) AND [pin-wrapped remainder].
   const core = tagged.filter((c) => c.category === "core").map((c) => c.sql);
   const scope = tagged.filter((c) => c.category === "scope").map((c) => c.sql);
   const others = tagged.filter((c) => c.category !== "core" && c.category !== "scope");

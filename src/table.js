@@ -60,6 +60,10 @@ import {
   activePresetKey,
   matchupVsActive,
   effectiveNamespace,
+  // Chunk 5 Phase 2 Wave B: the profile semi-join, reused VERBATIM as a HAVING/step-3
+  // disjunct under player-lane "Match any" (WHERE→HAVING lowering) so the OR form can
+  // never drift from the AND (WHERE) form.
+  profileSemiJoinSql,
   escSql as esc,
   // E1a column slots: keys ⇄ slots helpers (the store holds Slot[]; the SACRED
   // builders + dirty key see keys; load() dedups to DISTINCT keys).
@@ -167,6 +171,13 @@ function serializeQueryState(state) {
     // Search button unlit and the render cache stale (defect found in this pass).
     eventSeasons: state.eventSeasons,
     venue: state.venue,
+    // City / Season (City & Season everywhere, 2026-08-16): additive match-level scope
+    // filters that change the emitted WHERE, so toggling either alone must re-light
+    // Search + bust the render cache, exactly like venue above. Omitted originally (the
+    // City/Season wave forgot them here); fixed in Chunk 5 Phase 2 Wave B. Both default
+    // to [] so this serialises identically for every existing state.
+    city: state.city,
+    season: state.season,
     // Match-context filters (Wave 6): part of the query result + honest-scope
     // key, so a change re-lights Search and busts the render cache.
     result: state.result,
@@ -534,17 +545,22 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // so pins keep it automatically. With no pins this is byte-identical to the
   // former `whereClauses.join(" AND ")`.
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
-  // Chunk 5 Phase 2 Wave A — byte-identity guard. When BOTH lanes are "Match all"
-  // (the default, and the only reachable state until the Wave D toggle), run today's
-  // EXACT whereWithPinExemption line → byte-identical by construction. Only a
-  // scope-lane "Match any" takes the new whereWithLanes branch. Player-lane "OR" is
-  // Wave B (WHERE→HAVING), so it is NOT honoured here — with player still "AND" this
-  // guard behaves identically whether player is checked or not.
+  // Chunk 5 Phase 2 Wave A/B — byte-identity guard. When BOTH lanes are "Match all"
+  // (the default), run today's EXACT whereWithPinExemption line → byte-identical by
+  // construction. A scope-lane "Match any" (Wave A) or a player-lane "Match any"
+  // (Wave B) takes the whereWithLanes branch: scope-OR builds the scope disjunction;
+  // player-OR DROPS the profile semi-join from the WHERE (it is re-emitted as a step-3
+  // disjunct below — WHERE→HAVING lowering). With both AND the branch is unreachable.
   const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
   const whereSql =
     filterMatch.scope === "AND" && filterMatch.player === "AND"
       ? whereWithPinExemption(whereClauses, idCol, pins)
-      : whereWithLanes(whereClauses, { idColumn: idCol, pins, scopeOp: filterMatch.scope });
+      : whereWithLanes(whereClauses, {
+          idColumn: idCol,
+          pins,
+          scopeOp: filterMatch.scope,
+          playerOp: filterMatch.player,
+        });
 
   const aggSql = [
     `SELECT ${aggSelectParts.join(", ")}`,
@@ -613,7 +629,27 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     }
     return condAliasMap.get(cond);
   });
-  if (advWhere) finalWhereParts.push(advWhere);
+  // Chunk 5 Phase 2 Wave B — player-lane "Match any". Matchup's two player-lane
+  // members are the profile semi-join (lowered from the step-1 WHERE above; suppressed
+  // there by whereWithLanes' playerOp) and the numeric stat block (`advWhere`); there
+  // is no PotM(Y/N) term in matchup mode. Under player-OR they OR together. The
+  // semi-join runs over `windowed`, where the id column is projected as `id`, so it
+  // references `id` (a legal post-aggregation membership test, all-or-nothing per
+  // player). Each block is a disjunct ONLY when active, so a single active block reads
+  // exactly like the AND path; the bucket-existence gate (`>= 1`) still ALWAYS applies
+  // (it is query-grain, not a player-lane filter). player-AND keeps today's EXACT line
+  // → byte-identical.
+  if (filterMatch.player === "OR") {
+    const disjuncts = [profileSemiJoinSql(state, "id"), advWhere].filter(Boolean).map((s) => `(${s})`);
+    // Wrap the WHOLE disjunction in an outer paren before it is AND-ed with the
+    // bucket-existence gate (`inningsGateAlias >= 1`): SQL binds AND tighter than
+    // OR, so without this the gate would attach to only the FIRST disjunct
+    // (`(gate AND profile) OR numeric`) — wrong. With the paren it reads
+    // `gate AND (profile OR numeric)`, matching the player-lane "Match any" intent.
+    if (disjuncts.length) finalWhereParts.push(`(${disjuncts.join(" OR ")})`);
+  } else if (advWhere) {
+    finalWhereParts.push(advWhere);
+  }
   // Pinned players (Wave 4b, decision 47a): exempt from the step-3 gate too, so a
   // pinned player still shows even with 0 innings vs the bucket (the existence
   // gate fails) or failing a stat condition — their row simply reads 0/blank vs
@@ -1863,17 +1899,22 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // buildMatchupQuery calls the SAME helper (Wave 4b, decision 47a), so plain and
   // Vs pin-handling can never diverge.
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
-  // Chunk 5 Phase 2 Wave A — byte-identity guard. When BOTH lanes are "Match all"
-  // (the default, and the only reachable state until the Wave D toggle), run today's
-  // EXACT whereWithPinExemption line → byte-identical by construction. Only a
-  // scope-lane "Match any" takes the new whereWithLanes branch. Player-lane "OR" is
-  // Wave B (WHERE→HAVING), so it is NOT honoured here — the WHERE stays correct-AND
-  // even if player were "OR" (whereWithLanes delegates verbatim when scope is "AND").
+  // Chunk 5 Phase 2 Wave A/B — byte-identity guard. When BOTH lanes are "Match all"
+  // (the default), run today's EXACT whereWithPinExemption line → byte-identical by
+  // construction. A scope-lane "Match any" (Wave A) or a player-lane "Match any"
+  // (Wave B) takes the whereWithLanes branch: scope-OR builds the scope disjunction;
+  // player-OR DROPS the profile semi-join from the WHERE (it is re-emitted as a HAVING
+  // disjunct below — WHERE→HAVING lowering). With both AND the branch is unreachable.
   const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
   const whereSql =
     filterMatch.scope === "AND" && filterMatch.player === "AND"
       ? whereWithPinExemption(whereClauses, idCol, pins)
-      : whereWithLanes(whereClauses, { idColumn: idCol, pins, scopeOp: filterMatch.scope });
+      : whereWithLanes(whereClauses, {
+          idColumn: idCol,
+          pins,
+          scopeOp: filterMatch.scope,
+          playerOp: filterMatch.player,
+        });
   // T-2b-i: AND the per-innings slice predicate in. It defines WHAT is counted
   // (like a phase/fielding slice), NOT which players are shortlisted, so it
   // ALWAYS-APPLIES — sits OUTSIDE the pin exemption (a pinned player is still
@@ -1945,20 +1986,38 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // compatibility until the drawer UI removal lands; the query builder now
   // ignores it entirely. An "Innings ≥ N" requirement remains fully expressible
   // via the advanced stat-conditions path (the "innings" metric → advancedToHaving).
-  const havingParts = [];
   const advHaving = advancedToHaving(state.advanced, discipline);
-  if (advHaving) havingParts.push(advHaving);
-  // Wave D — TASK B: the PotM (Y/N) gate is a HAVING predicate over pom_cte (built
-  // above via wantsPom). null when the filter is inactive (both/neither chosen), so
-  // no HAVING is contributed and the query stays byte-identical. Pinned players are
-  // exempt from it like every other HAVING predicate (gateWithPinExemption below).
-  if (potmYNHaving) havingParts.push(potmYNHaving);
   // Pinned players are exempt from every HAVING/stat-condition predicate too
   // (task 3b: "HAVING/stat-condition post-filters must not drop pinned
   // rows") — idCol is the raw GROUP BY column (not the `id` alias), always
   // valid to reference directly in HAVING.
-  const havingSql =
-    havingParts.length === 0 ? null : gateWithPinExemption(havingParts.join(" AND "), idCol, pins);
+  let havingSql;
+  if (filterMatch.player === "OR") {
+    // Chunk 5 Phase 2 Wave B — player-lane "Match any". The three player-lane BLOCKS
+    // OR together: the profile semi-join (LOWERED from the WHERE — suppressed there by
+    // whereWithLanes' playerOp, re-emitted here referencing idCol, a GROUP-BY key so
+    // legal in HAVING, reused VERBATIM so it can't drift from its WHERE form), the
+    // PotM(Y/N) gate, and the numeric stat block (`advHaving`, used AS-IS — it keeps
+    // its own internal +Add-group / per-group AND-OR structure, owner ruling Q1). Each
+    // block is a disjunct ONLY when active (null blocks dropped), so a single active
+    // block reads exactly like the AND path. Pin-exempt exactly like the AND HAVING.
+    const disjuncts = [profileSemiJoinSql(state, idCol), potmYNHaving, advHaving]
+      .filter(Boolean)
+      .map((s) => `(${s})`);
+    havingSql = disjuncts.length === 0 ? null : gateWithPinExemption(disjuncts.join(" OR "), idCol, pins);
+  } else {
+    // Player-lane "Match all" (default) — today's EXACT HAVING: numeric block AND
+    // PotM(Y/N), pin-exempt. Byte-identical by construction. (Under player-AND the
+    // profile filter stays a WHERE semi-join — it is NOT part of the HAVING here.)
+    const havingParts = [];
+    if (advHaving) havingParts.push(advHaving);
+    // Wave D — TASK B: the PotM (Y/N) gate is a HAVING predicate over pom_cte (built
+    // above via wantsPom). null when the filter is inactive (both/neither chosen), so
+    // no HAVING is contributed and the query stays byte-identical.
+    if (potmYNHaving) havingParts.push(potmYNHaving);
+    havingSql =
+      havingParts.length === 0 ? null : gateWithPinExemption(havingParts.join(" AND "), idCol, pins);
+  }
 
   const wantsMatches = visibleColumns.includes("matches");
   // "Matches" honesty (D4 Piece 3, extended for Wave 6): when an innings-level OR
