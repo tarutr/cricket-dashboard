@@ -541,9 +541,11 @@ export function createPaletteGroupsBuilder(deps) {
         // a matchup — never both. leafSingle self-withholds on the popup surface
         // (strikerpos ∉ POPUP_SCOPE_SINGLETON_KEYS), so the pop-up keeps its own
         // per-innings `batting_position` slice below — no collision.
-        // Chunk 5: Batting position's final home is SCOPE (owner ruling) — re-homed
-        // into "Match Details" (Scope dropdown) when laned. Inert on the un-laned path.
-        !matchup ? withLane(leafSingle("strikerpos", "Batting position"), "scope", "Match Details") : null,
+        // Chunk 5: Batting position's final home is the SCOPE dropdown's "Matchup (Vs)"
+        // section (owner ruling / waveE-design.md — it sits beside vs bowling style / vs
+        // batting hand / vs opponent, matching where the matchup-mode copy renders below).
+        // Inert (byte-identical) on the un-laned pop-up path.
+        !matchup ? withLane(leafSingle("strikerpos", "Batting position"), "scope", "Matchup (Vs)") : null,
         // T-2e (owner 2026-08-03): Batting position — a batting-only, per-innings LIST
         // slice on the plain `batting` view's `batting_position` (compiles to
         // `batting_position IN (…)` via inningsWhere). Popup-only + withheld on a
