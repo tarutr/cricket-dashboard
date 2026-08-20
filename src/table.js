@@ -31,7 +31,9 @@ import { query } from "./db.js";
 import {
   buildScopeClausesTagged,
   bypassableClause,
+  alwaysClause,
   whereWithPinExemption,
+  whereWithLanes,
   gateWithPinExemption,
   buildMatchContextClauses,
   matchContextJoinSql,
@@ -178,6 +180,11 @@ function serializeQueryState(state) {
     stage: state.stage,
     resultCondition: state.resultCondition,
     matchupVs: state.matchupVs,
+    // Lane match-mode (Chunk 5 Phase 2 Wave A): filterMatch.scope changes the emitted
+    // WHERE (Match all vs Match any across scope filters), so toggling it must re-light
+    // Search + bust the render cache, exactly like the scope filters themselves. Default
+    // {player:"AND",scope:"AND"} serialises identically for every existing state.
+    filterMatch: state.filterMatch,
     // Delivery window (Wave 3): a numbers-defining filter (the ball-engine window) —
     // a change must re-light Search + bust the render cache, exactly like matchupVs.
     // This is change-detection only; buildQuery/buildScopeClauses are untouched.
@@ -509,7 +516,11 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // as every other row. No context filter => byte-identical.
   const wantsMatchContext = matchContextActive(state);
   if (wantsMatchContext) {
-    for (const c of buildMatchContextClauses(state, teamCol)) whereClauses.push(c);
+    // Chunk 5 Phase 2 Wave A: match-context clauses are lane "scope" (they select
+    // WHICH matches are measured, like opposition/event/venue), so they join the
+    // scope-OR disjunction under "Match any". Tagging is SQL-invisible (alwaysClause
+    // sets bypassable:false, exactly as pushing the bare string did) → byte-identical.
+    for (const c of buildMatchContextClauses(state, teamCol)) whereClauses.push(alwaysClause(c, "scope"));
   }
   // The FROM used by both `agg` and the peak CTE: base view + optional mctx join.
   const matchupFrom = wantsMatchContext ? view + matchContextJoinSql(view) : view;
@@ -523,7 +534,17 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // so pins keep it automatically. With no pins this is byte-identical to the
   // former `whereClauses.join(" AND ")`.
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
-  const whereSql = whereWithPinExemption(whereClauses, idCol, pins);
+  // Chunk 5 Phase 2 Wave A — byte-identity guard. When BOTH lanes are "Match all"
+  // (the default, and the only reachable state until the Wave D toggle), run today's
+  // EXACT whereWithPinExemption line → byte-identical by construction. Only a
+  // scope-lane "Match any" takes the new whereWithLanes branch. Player-lane "OR" is
+  // Wave B (WHERE→HAVING), so it is NOT honoured here — with player still "AND" this
+  // guard behaves identically whether player is checked or not.
+  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
+  const whereSql =
+    filterMatch.scope === "AND" && filterMatch.player === "AND"
+      ? whereWithPinExemption(whereClauses, idCol, pins)
+      : whereWithLanes(whereClauses, { idColumn: idCol, pins, scopeOp: filterMatch.scope });
 
   const aggSql = [
     `SELECT ${aggSelectParts.join(", ")}`,
@@ -1826,7 +1847,11 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // pushes nothing and the emitted SQL is byte-identical to before.
   const wantsMatchContext = matchContextActive(state);
   if (wantsMatchContext) {
-    for (const c of buildMatchContextClauses(state, teamCol)) whereClauses.push(c);
+    // Chunk 5 Phase 2 Wave A: match-context clauses are lane "scope" (they select
+    // WHICH matches are measured), so they join the scope-OR disjunction under
+    // "Match any". Tagging is SQL-invisible (alwaysClause sets bypassable:false,
+    // exactly as pushing the bare string did) → byte-identical on the AND path.
+    for (const c of buildMatchContextClauses(state, teamCol)) whereClauses.push(alwaysClause(c, "scope"));
   }
 
   // Pinned players (task 3b, owner decision 46; Wave 4b routed onto the shared
@@ -1838,7 +1863,17 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // buildMatchupQuery calls the SAME helper (Wave 4b, decision 47a), so plain and
   // Vs pin-handling can never diverge.
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
-  const whereSql = whereWithPinExemption(whereClauses, idCol, pins);
+  // Chunk 5 Phase 2 Wave A — byte-identity guard. When BOTH lanes are "Match all"
+  // (the default, and the only reachable state until the Wave D toggle), run today's
+  // EXACT whereWithPinExemption line → byte-identical by construction. Only a
+  // scope-lane "Match any" takes the new whereWithLanes branch. Player-lane "OR" is
+  // Wave B (WHERE→HAVING), so it is NOT honoured here — the WHERE stays correct-AND
+  // even if player were "OR" (whereWithLanes delegates verbatim when scope is "AND").
+  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
+  const whereSql =
+    filterMatch.scope === "AND" && filterMatch.player === "AND"
+      ? whereWithPinExemption(whereClauses, idCol, pins)
+      : whereWithLanes(whereClauses, { idColumn: idCol, pins, scopeOp: filterMatch.scope });
   // T-2b-i: AND the per-innings slice predicate in. It defines WHAT is counted
   // (like a phase/fielding slice), NOT which players are shortlisted, so it
   // ALWAYS-APPLIES — sits OUTSIDE the pin exemption (a pinned player is still

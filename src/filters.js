@@ -345,13 +345,20 @@ export function tossDecisionPredicateSql(tossDecision, alias = "") {
 // applies to pins too. Making a filter pin-bypassable now takes a deliberate
 // bypassableClause() call, so it can never happen by accident again.
 
-/** A clause a pinned player must still obey (the default for a bare string). */
-export function alwaysClause(sql) {
-  return { sql, bypassable: false };
+/** A clause a pinned player must still obey (the default for a bare string).
+ * `category` (Chunk 5 Phase 2 Wave A) is an OPTIONAL additive lane tag —
+ * "core" | "scope" — read ONLY by the new whereWithLanes compiler. It is
+ * invisible to every existing consumer (buildScopeClauses joins only `.sql`,
+ * whereWithPinExemption reads only `.sql`/`.bypassable`), so tagging a clause
+ * changes NO emitted SQL — same idiom as the existing `bypassable` tag. Omitted
+ * ⇒ no `category` key at all, so untagged records stay byte-identical objects. */
+export function alwaysClause(sql, category) {
+  return category ? { sql, bypassable: false, category } : { sql, bypassable: false };
 }
-/** A leaderboard-only clause a pinned player is exempt from. Deliberate opt-in. */
-export function bypassableClause(sql) {
-  return { sql, bypassable: true };
+/** A leaderboard-only clause a pinned player is exempt from. Deliberate opt-in.
+ * `category` is the same optional additive lane tag as alwaysClause (SQL-unchanged). */
+export function bypassableClause(sql, category) {
+  return category ? { sql, bypassable: true, category } : { sql, bypassable: true };
 }
 /** Normalise a mixed list of bare strings / tagged records. A bare string is
  * ALWAYS-APPLIES — the safe default, so an untagged clause can never leak into
@@ -402,10 +409,17 @@ export function buildScopeClausesTagged(
   // bypassableClause(). The other two bypassables live outside this function: the
   // name search (tagged at each table.js call site) and the numeric stat
   // conditions (gateWithPinExemption, post-aggregation).
-  const clauses = buildCoreScopeClauses(state, { includeGender }).map(alwaysClause);
+  // Chunk 5 Phase 2 Wave A: each clause carries a lane `category` — "core" for the
+  // always-inescapable gender/format/date/team-type scope, "scope" for the
+  // optional narrowing filters (team/opposition/innings-number/positions/event/
+  // venue/city/season). The profile semi-join stays UNTAGGED (it is player-lane,
+  // Wave B). The tag is invisible to buildScopeClauses/whereWithPinExemption
+  // (they read only sql/bypassable), so the emitted SQL is byte-identical — it
+  // only lets whereWithLanes split the tree when the scope lane is "Match any".
+  const clauses = buildCoreScopeClauses(state, { includeGender }).map((s) => alwaysClause(s, "core"));
 
   if (includeTeams && state.teams && state.teams.length > 0 && teamColumn) {
-    clauses.push(bypassableClause(`${teamColumn} IN (${state.teams.map((t) => `'${esc(t)}'`).join(", ")})`));
+    clauses.push(bypassableClause(`${teamColumn} IN (${state.teams.map((t) => `'${esc(t)}'`).join(", ")})`, "scope"));
   }
 
   // Opposition is ALWAYS-APPLIES, pins included (untagged = alwaysClause).
@@ -416,7 +430,7 @@ export function buildScopeClausesTagged(
   // SA Yadav under Opposition = Australia read 60 inns / 1,544 runs — his career
   // total — instead of the 10 / 259 he actually made against them.)
   if (oppositionColumn && oppositionFilterActive(state)) {
-    clauses.push(`${oppositionColumn} IN (${state.opposition.map((t) => `'${esc(t)}'`).join(", ")})`);
+    clauses.push(alwaysClause(`${oppositionColumn} IN (${state.opposition.map((t) => `'${esc(t)}'`).join(", ")})`, "scope"));
   }
 
   // Innings Number (filter-rejig Wave R2c): narrow to the innings the player
@@ -438,7 +452,7 @@ export function buildScopeClausesTagged(
       (n) => Number.isInteger(n) && n >= 0
     );
     if (stored.length > 0) {
-      clauses.push(`${INNINGS_NUMBER_FILTER.column} IN (${stored.join(", ")})`);
+      clauses.push(alwaysClause(`${INNINGS_NUMBER_FILTER.column} IN (${stored.join(", ")})`, "scope"));
     }
   }
 
@@ -470,11 +484,16 @@ export function buildScopeClausesTagged(
   // split swept up whatever was appended after the core scope.
   if (eventFilterActive(state)) {
     const g = esc(state.gender);
-    clauses.push(`match_id IN (SELECT match_id FROM matches WHERE gender = '${g}' AND ${eventPredicateSql(state)})`);
+    clauses.push(
+      alwaysClause(`match_id IN (SELECT match_id FROM matches WHERE gender = '${g}' AND ${eventPredicateSql(state)})`, "scope")
+    );
   }
   if (venueFilterActive(state)) {
     clauses.push(
-      `match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND ${venuePredicateSql(state)})`
+      alwaysClause(
+        `match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND ${venuePredicateSql(state)})`,
+        "scope"
+      )
     );
   }
   // City / Season (City & Season everywhere, 2026-08-16): additive match-level
@@ -487,10 +506,20 @@ export function buildScopeClausesTagged(
   // from what the query counts. Both OFF by default (state.city / state.season
   // start as [] — see state.js), so this is a no-op until a picker sets either.
   if (cityFilterActive(state)) {
-    clauses.push(`match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND ${cityPredicateSql(state)})`);
+    clauses.push(
+      alwaysClause(
+        `match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND ${cityPredicateSql(state)})`,
+        "scope"
+      )
+    );
   }
   if (seasonFilterActive(state)) {
-    clauses.push(`match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND ${seasonPredicateSql(state)})`);
+    clauses.push(
+      alwaysClause(
+        `match_id IN (SELECT match_id FROM matches WHERE gender = '${esc(state.gender)}' AND ${seasonPredicateSql(state)})`,
+        "scope"
+      )
+    );
   }
 
   // The "Batting position" filter (`state.positions`) is ALWAYS-APPLIES, pins
@@ -506,7 +535,7 @@ export function buildScopeClausesTagged(
     // Positions are user-picked ints; coerce + drop anything non-integral so
     // nothing unsanitized reaches the SQL.
     const nums = state.positions.map(Number).filter(Number.isInteger);
-    if (nums.length > 0) clauses.push(`batting_position IN (${nums.join(", ")})`);
+    if (nums.length > 0) clauses.push(alwaysClause(`batting_position IN (${nums.join(", ")})`, "scope"));
   }
 
   // Profile-powered filters (D4.2): semi-join to matched player_ids. Only added
@@ -738,6 +767,63 @@ export function whereWithPinExemption(clauses, idColumn, pins) {
   // `always` is never empty in practice (the core scope always contributes at
   // least gender + match_type), but guard so we can't emit a leading " AND ".
   return always.length ? `${always.join(" AND ")} AND ${pinPart}` : pinPart;
+}
+
+// ── Lane-aware WHERE compiler (Chunk 5 Phase 2 Wave A — the scope-lane OR engine) ──
+// The Scope Filters dropdown gains a "Match any" mode: OR across DIFFERENT scope
+// filter types (e.g. "Opposition = Australia OR Venue = Lord's"). This compiler is
+// the ENGINE a later wave's toggle drives; nothing sets scopeOp = "OR" yet.
+//
+// It takes the SAME mixed clause list whereWithPinExemption does — the clauses now
+// carry a lane `category` ("core" | "scope" | untagged) added at build time in
+// buildScopeClausesTagged (and, for the match-context clauses, at the table.js push
+// site). Crucially it re-uses the EXACT predicate strings the AND path builds; an OR
+// predicate is only the same fragment re-joined with OR, so it can never drift from
+// its AND form.
+//
+//   • scopeOp !== "OR"  → delegate to whereWithPinExemption VERBATIM. byte-identical.
+//     (table.js's byte-identity guard already gates on this, so this branch is
+//     belt-and-braces — calling whereWithLanes with scopeOp "AND" is a no-op wrapper.)
+//   • scopeOp === "OR"  → emit
+//        core-clauses (AND)
+//        AND ( scope-clauses OR-joined )
+//        AND player/pin-wrap over every remaining (untagged) clause
+//     The scope-OR disjunction ALWAYS applies, pins included — it defines WHICH
+//     matches/balls are measured, so "a pin is measured over the union it defines"
+//     (owner-adopted default: Team folds into this disjunction too; name search stays
+//     always-AND / bypassable and is NOT an OR participant → it lands in the untagged
+//     remainder). The remainder keeps the identical pin-exemption shape
+//     whereWithPinExemption gives it (always-applies AND'd, bypassable in the pin-OR
+//     wrap), so pins behave identically for the non-scope clauses.
+//
+// This wave threads scopeOp through the MAIN WHERE of buildQuery / buildMatchupQuery
+// only. Player-lane OR (WHERE→HAVING lowering) is Wave B; fielding OR is Wave C.
+export function whereWithLanes(clauses, { idColumn, pins, scopeOp } = {}) {
+  if (scopeOp !== "OR") return whereWithPinExemption(clauses, idColumn, pins);
+
+  const tagged = asTaggedClauses(clauses);
+  const core = tagged.filter((c) => c.category === "core").map((c) => c.sql);
+  const scope = tagged.filter((c) => c.category === "scope").map((c) => c.sql);
+  const others = tagged.filter((c) => c.category !== "core" && c.category !== "scope");
+
+  const parts = [...core];
+  const scopeDisjunction = orJoin(scope); // 1 clause → bare; ≥2 → parenthesised OR
+  if (scopeDisjunction) parts.push(scopeDisjunction);
+
+  // The non-scope remainder (profile semi-join / name search — both player-lane,
+  // always-AND) keeps the EXACT pin-exemption split whereWithPinExemption applies,
+  // re-used here rather than re-derived so it cannot diverge from the AND path.
+  const idSet = pinnedIdSetSql(pins);
+  if (!idSet) {
+    parts.push(...others.map((c) => c.sql));
+  } else {
+    const always = others.filter((c) => !c.bypassable).map((c) => c.sql);
+    const bypassable = others.filter((c) => c.bypassable).map((c) => c.sql);
+    parts.push(...always);
+    const bypassPart = bypassable.length ? `(${bypassable.join(" AND ")})` : "TRUE";
+    parts.push(`(${bypassPart} OR ${idColumn} IN (${idSet}))`);
+  }
+  return parts.join(" AND ");
 }
 
 /** Wrap a post-aggregation gate (buildQuery's HAVING, or buildMatchupQuery's

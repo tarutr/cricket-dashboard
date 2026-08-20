@@ -970,6 +970,17 @@ export function createInitialState(maxMonth) {
                    // mode, through ONE shared exemption helper (filters.js whereWithPinExemption /
                    // gateWithPinExemption) so the two builders can never diverge; the pill is live
                    // (not greyed) in Vs mode too.
+    // Lane match-mode (Chunk 5 Phase 2 — the OR engine). Per FILTER LANE, "AND" =
+    // "Match all" (every active filter must hold), "OR" = "Match any" (spec §1/§2:
+    // OR WITHIN a dropdown lane, AND ACROSS lanes; default "Match all"). Wave A
+    // wires the SCOPE lane only — filterMatch.scope drives whereWithLanes in
+    // buildQuery/buildMatchupQuery; filterMatch.player is reserved for Wave B's
+    // WHERE→HAVING lowering. DEFAULT = both "AND": the byte-identity guard in
+    // table.js runs today's exact whereWithPinExemption path when BOTH are "AND",
+    // so every anchor is byte-identical by construction. No UI sets this yet (the
+    // always-visible toggle is Wave D); it is a query-shaping field, so it IS part
+    // of serializeQueryState (a change re-lights Search + busts the render cache).
+    filterMatch: { player: "AND", scope: "AND" },
     search: "",
     // E1a: `sort` keeps {key, dir} (key = metric key — read by the SACRED
     // buildMatchupQuery and the graph, so it MUST stay a metric key), and gains
