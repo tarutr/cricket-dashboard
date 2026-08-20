@@ -53,6 +53,7 @@ import {
   addGroup,
   removeGroup,
   setGroupOp,
+  setLaneOp,
   removeConditionAt,
   isBowlingFiguresCondition,
 } from "./advanced.js";
@@ -227,6 +228,20 @@ const SINGLETON_TYPES = [
 // optgroups and were retired with it in Wave R2: the search palette's order now
 // lives in buildPaletteGroups' explicit 7-group taxonomy.)
 
+// Chunk 5 · Phase 2 · Wave D — which LANE each singleton row belongs to, so the
+// applied rows can render as one list PER lane (Player Filters / Scope Filters),
+// each under its own always-visible Match-all/any toggle. This mirrors the
+// owner-ruled Phase-1 taxonomy split (paletteGroups.js GROUP_DEFAULT_LANE): the
+// Player Profile singletons are the only player-lane ones; everything else (Team,
+// Opposition, Event/Stage/Venue/City/Season, Match/Toss Result, Innings Number,
+// Batting position, Ball Ranges, Matchup Vs, Dismissed-batter position) is Scope.
+// Numeric metric conditions are always player-lane (all metric groups are tagged
+// "player"). Display-only — a row's lane never changes WHAT its editor writes or
+// what the query returns; the OR toggle it lands under drives state.filterMatch,
+// which the engine (Waves A–E) already reads.
+const PLAYER_LANE_SINGLETONS = new Set(["role", "hand", "bowling", "bowlingHand", "potm_yn"]);
+const singletonLane = (key) => (PLAYER_LANE_SINGLETONS.has(key) ? "player" : "scope");
+
 // (The "metrics DELETED from the + Add condition picker" list — decision 68 —
 // moved into src/paletteGroups.js with the taxonomy builder itself: T-F3,
 // popup-tab2-build-plan.md. See that file for the full note.)
@@ -271,8 +286,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   }
 
   // ── Stable skeleton (built once) ───────────────────────────────────────────
-  const singletonRowsHTML = SINGLETON_TYPES.map(
-    (t) => `
+  // The singleton condition rows are built once (their editors / option caches /
+  // portal wiring must survive every numeric rebuild) but now render split BY LANE
+  // (singletonLane) so each lane reads as one applied-filter list.
+  const singletonRowHTML = (t) => `
       <div class="cond-row" data-cond="${t.key}" hidden>
         <div class="cond-row__line">
           <div class="cond-row__main">
@@ -281,24 +298,53 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
           </div>
           <button type="button" class="icon-btn cond-row__remove" data-remove="${t.key}" title="Remove condition">&times;</button>
         </div>
-      </div>`
-  ).join("");
+      </div>`;
+  const laneSingletonsHTML = (lane) =>
+    SINGLETON_TYPES.filter((t) => singletonLane(t.key) === lane).map(singletonRowHTML).join("");
 
-  // ROUND 3 (task 7): the top-level single "+ Add condition" dropdown is gone;
-  // each numeric GROUP card now carries its OWN "+ Add condition" dropdown (with
-  // the full taxonomy, so singletons can still be added from it) plus a Match
-  // All|Any toggle, and a "+ Add group" button appends further AND groups. The
-  // singleton rows stay OUTSIDE the groups.
+  // Chunk 5 · Phase 2 · Wave D — the builder is now TWO lane blocks: "Player
+  // Filters" and "Scope Filters", each headed by an ALWAYS-VISIBLE "Match all /
+  // Match any" toggle (data-role="lane-op") wired to state.filterMatch.<lane> and
+  // each holding ONE merged applied-filter list. The Player list holds the player
+  // singletons + the numeric metric GROUPS (which KEEP their own "+ Add group" and
+  // per-group Match-all/any toggle — owner ruling Q1, nested sub-groups stay). The
+  // Scope list holds the scope singletons + (on the Fielding board) the fielding
+  // dim rows. The "+ Add condition" dropdowns still live inside each numeric group
+  // card (owner Q1's group-targeted add model, unchanged) — adding a scope filter
+  // from there routes its row into the Scope list here.
+  const laneHead = (lane, label) => `
+      <div class="cond-lane__head">
+        <span class="cond-lane__title">${label}</span>
+        <div class="cond-lane__match">
+          <span class="cond-lane__match-label">Match</span>
+          <div class="segmented segmented--small" data-role="lane-op" data-lane="${lane}">
+            <button type="button" class="segmented__btn" data-value="AND">All</button>
+            <button type="button" class="segmented__btn" data-value="OR">Any</button>
+          </div>
+        </div>
+      </div>`;
   advancedHost.innerHTML = `
     <div class="cond-builder">
-      <div class="cond-builder__rows" data-role="singleton-rows">
-        ${singletonRowsHTML}
-      </div>
-      <!-- Fielding board dim rows (3.2b2): one inline condition row per fielding dim
-           (Wicket type / Batting hand / Bowler style / Phase / …), shown only while the
-           Fielding discipline is active. Owned by the fielding-dim controller below. -->
-      <div class="cond-builder__rows" data-role="fielding-dim-rows"></div>
-      <div class="cond-builder__numeric" data-role="numeric-rows"></div>
+      <section class="cond-lane" data-lane="player">
+        ${laneHead("player", "Player Filters")}
+        <div class="cond-lane__list" data-role="player-rows">
+          ${laneSingletonsHTML("player")}
+          <div class="cond-builder__numeric" data-role="numeric-rows"></div>
+        </div>
+      </section>
+      <section class="cond-lane" data-lane="scope">
+        ${laneHead("scope", "Scope Filters")}
+        <div class="cond-lane__add" data-role="scope-add"></div>
+        <div class="cond-lane__list" data-role="scope-rows">
+          ${laneSingletonsHTML("scope")}
+          <!-- Fielding board dim rows (3.2b2): one inline condition row per fielding dim
+               (Wicket type / Bowler style / Phase / …), shown only while the Fielding
+               discipline is active. Owned by the fielding-dim controller below. Kept in
+               the Scope list (they narrow WHICH wicket-events count); not lane-split in
+               this wave — that lives in fieldingDimsDrawer.js. -->
+          <div class="cond-builder__rows" data-role="fielding-dim-rows"></div>
+        </div>
+      </section>
     </div>`;
 
   const rowEls = {};
@@ -310,6 +356,38 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     editorHosts[t.key] = advancedHost.querySelector(`[data-role="editor-${t.key}"]`);
   }
   const numericEl = advancedHost.querySelector('[data-role="numeric-rows"]');
+
+  // ── Lane Match-all / Match-any toggles (Chunk 5 · Phase 2 · Wave D) ──────────
+  // One per lane, ALWAYS visible (the spec bans the old hidden-until-2-conditions
+  // pattern). Each writes state.filterMatch.<lane> via setLaneOp and re-runs the
+  // search (onChange). At the default "AND"/"AND" the OR engine takes its
+  // byte-identical branch, so the anchors are untouched. syncLaneToggles reflects
+  // the current filterMatch back onto the segmented buttons (built once here — the
+  // toggles live in the stable skeleton, never rebuilt by renderNumeric).
+  const laneOpEls = {};
+  advancedHost.querySelectorAll('[data-role="lane-op"]').forEach((seg) => {
+    const lane = seg.dataset.lane;
+    laneOpEls[lane] = seg;
+    seg.querySelectorAll(".segmented__btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (btn.classList.contains("is-active")) return; // no-op re-click (keeps Search dirty-key honest)
+        setLaneOp(store, lane, btn.dataset.value);
+        syncLaneToggles();
+        onChange();
+      });
+    });
+  });
+  function syncLaneToggles() {
+    const fm = store.get().filterMatch || { player: "AND", scope: "AND" };
+    for (const lane of ["player", "scope"]) {
+      const seg = laneOpEls[lane];
+      if (!seg) continue;
+      const op = fm[lane] === "OR" ? "OR" : "AND";
+      seg.querySelectorAll(".segmented__btn").forEach((btn) => {
+        btn.classList.toggle("is-active", btn.dataset.value === op);
+      });
+    }
+  }
 
   // ── Data-driven filter availability (owner "remove the hardcode everywhere") ──
   // One instance per drawer: an async per-gender probe of matchup + profile DATA
@@ -791,6 +869,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   function availabilityOnReady() {
     syncSingletonRows();
     renderNumeric(store.get(), true);
+    renderScopeAdd();
   }
 
   function isPresent(t, s) {
@@ -1159,35 +1238,55 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       : "";
     const head = showOp || removeBtn ? `<div class="cond-group__head">${opControl}${removeBtn}</div>` : "";
     const rows = g.conds.map((c, ci) => conditionRowHTML(c, gi, ci, ns, s.formats)).join("");
-    // Chunk 5 · Phase 1: the group's add area is a two-dropdown bar — "Player
-    // Filters" | "Scope Filters" — reusing the columns section's trigger look
-    // (.cols-dd-*). Each trigger's data-gi ENCODES groupIndex*2 + laneParity so the
-    // one shared palette (see above) resolves both axes. A lane with no offered
-    // filters (never, in practice — Player always has stat metrics, Scope always has
-    // Match Details) renders its trigger disabled, matching the columns bar. The bar
-    // sits ABOVE the group's condition rows, mirroring columns (add controls above
-    // the list they add to).
-    const laneBar = LANE_BY_PARITY.map((lane, li) => {
-      const encodedGi = gi * 2 + li;
-      const label = lane === "player" ? "Player Filters" : "Scope Filters";
-      const empty = buildPaletteGroups(s, gi, { surface: "leaderboard", lane }).length === 0;
-      return paletteSkeletonHTML(encodedGi, {
-        ctlClass: "addctl cols-dd-ctl",
-        toggleClass: "cols-dd-trigger",
-        toggleAttrs: empty ? " disabled" : "",
-        toggleAriaLabel: `Add a ${label} condition`,
-        toggleInner: `<span class="cols-dd-name">${escHtml(label)}</span><span class="cols-dd-caret" aria-hidden="true">▾</span>`,
-        searchPlaceholder: "Search filters&hellip;",
-        searchAriaLabel: "Search filters",
-        emptyText: "No matching filter.",
-      });
-    }).join("");
+    // Chunk 5 · Phase 2 · Wave D: the numeric group card carries ONLY the "Player
+    // Filters" add dropdown now (metrics + player singletons, targeted at THIS
+    // group). The "Scope Filters" dropdown moved OUT to the Scope lane's own header
+    // (renderScopeAdd) — scope filters are singletons (no group target), so putting
+    // their add control in the Scope lane, above the Scope list, reads far cleaner
+    // than the Phase-1 two-dropdown-per-group bar. Same shared palette + trigger
+    // look; the bar still sits ABOVE the group's rows, mirroring columns.
+    const laneBar = laneTriggerHTML("player", gi * 2, s);
     return `
       <div class="cond-group${multi ? " is-multi" : ""}" data-gi="${gi}">
         ${head}
         <div class="cond-group__add"><div class="cond-lane-bar">${laneBar}</div></div>
         <div class="cond-group__rows">${rows}</div>
       </div>`;
+  }
+
+  // Chunk 5 · Phase 2 · Wave D: build ONE lane add-dropdown trigger (the columns-
+  // section trigger look). `encodedGi` = groupIndex*2 + laneParity (0 = player,
+  // 1 = scope) — the same encoding the shared palette's buildGroups decodes. Used by
+  // the per-group Player trigger (groupCardHTML) and the Scope lane's header trigger
+  // (renderScopeAdd). A lane with no offered filters renders disabled (never, in
+  // practice — Player always has stat metrics, Scope always has Match Details).
+  function laneTriggerHTML(lane, encodedGi, s) {
+    const gi = encodedGi >> 1;
+    const label = lane === "player" ? "Player Filters" : "Scope Filters";
+    const empty = buildPaletteGroups(s, gi, { surface: "leaderboard", lane }).length === 0;
+    return paletteSkeletonHTML(encodedGi, {
+      ctlClass: "addctl cols-dd-ctl",
+      toggleClass: "cols-dd-trigger",
+      toggleAttrs: empty ? " disabled" : "",
+      toggleAriaLabel: `Add a ${label} condition`,
+      toggleInner: `<span class="cols-dd-name">${escHtml(label)}</span><span class="cols-dd-caret" aria-hidden="true">▾</span>`,
+      searchPlaceholder: "Search filters&hellip;",
+      searchAriaLabel: "Search filters",
+      emptyText: "No matching filter.",
+    });
+  }
+
+  // Render + mount the Scope lane's header add-dropdown (mounted ONCE — it lives in
+  // the stable skeleton, outside numericEl, so renderNumeric never wipes it; the
+  // shared palette re-reads state on every open, so its offered/disabled leaves stay
+  // fresh without a rebuild). laneParity 1 = scope; groupIndex is irrelevant for
+  // scope (all scope filters are singletons, added via gi-agnostic pickSingleton).
+  function renderScopeAdd() {
+    const host = advancedHost.querySelector('[data-role="scope-add"]');
+    if (!host) return;
+    palette.closeCurrent();
+    host.innerHTML = `<div class="cond-lane-bar">${laneTriggerHTML("scope", 1, store.get())}</div>`;
+    host.querySelectorAll('[data-role="add-palette"]').forEach((el) => palette.mountAddPalette(el));
   }
 
   function renderNumeric(s, force = false) {
@@ -1342,8 +1441,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // re-probes only when gender changes), so the offered filter set is settled by
     // the time the user opens the "+ Add condition" palette.
     availability.ensureLoaded(s, availabilityOnReady);
+    syncLaneToggles();
     syncSingletonRows();
     renderNumeric(s);
+    renderScopeAdd();
     syncKeepColumns();
     syncEmptyNotice();
   }

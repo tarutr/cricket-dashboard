@@ -809,6 +809,44 @@ a { color: var(--color-accent); }
 .cond-builder__rows,
 .cond-builder__numeric { display: flex; flex-direction: column; gap: var(--space-3); }
 
+/* ── Chunk 5 · Phase 2 · Wave D: Player / Scope lane blocks ──────────────────
+   The condition builder is two lane sections — "Player Filters" and "Scope
+   Filters" — each headed by an ALWAYS-VISIBLE Match all|any toggle and holding one
+   merged applied-filter list. Presentation only; the toggle drives
+   state.filterMatch.<lane>, which the OR engine reads. */
+.cond-lane { display: flex; flex-direction: column; gap: var(--space-3); }
+/* A hairline separates the second lane from the first (the two lanes AND together;
+   the rule reinforces "these are two independent groups"). */
+.cond-lane + .cond-lane {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-line);
+}
+.cond-lane__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+}
+.cond-lane__title {
+  font-size: var(--text-sm2);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-fg);
+}
+/* Match all|any control sits at the right end of the lane header. */
+.cond-lane__match {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+.cond-lane__match-label { font-size: var(--text-sm2); color: var(--color-muted); }
+.cond-lane__list { display: flex; flex-direction: column; gap: var(--space-3); }
+@media (max-width: 640px) {
+  /* On mobile let the toggle wrap to its own line rather than crushing the title. */
+  .cond-lane__match { margin-left: 0; }
+}
+
 /* R5 Wave 1a (item 8): applied-condition rows are sized to their CONTENT, not
    stretched to the popup width. align-items:flex-start stops the column from
    stretching the line; __main / __value hug their editors (flex:0 1 auto) so a

@@ -162,6 +162,18 @@ export function setGroupOp(store, gi, op) {
   store.set({ advanced: { ...advanced, groups } });
 }
 
+/** Chunk 5 · Phase 2 · Wave D — set a filter LANE's match mode (the always-visible
+ * "Match all / Match any" toggle each of the Player / Scope dropdowns now carries).
+ * `lane` = "player" | "scope"; `op` = "AND" (Match all — the default) | "OR"
+ * (Match any) — UPPERCASE, the exact tokens the OR engine (table.js whereWithLanes /
+ * the buildQuery HAVING assembly) already tests with `=== "OR"`. This writes the SAME
+ * state.filterMatch field Waves A–E wired up; nothing here touches a query builder, and
+ * at the default "AND"/"AND" the engine takes its byte-identical branch (numbers sacred). */
+export function setLaneOp(store, lane, op) {
+  const filterMatch = store.get().filterMatch || { player: "AND", scope: "AND" };
+  store.set({ filterMatch: { ...filterMatch, [lane]: op } });
+}
+
 // ── Metric grouping for the "+ Add condition" dropdown (task 1B-2 / ROUND 3) ──
 // UI-ONLY categorisation of the numeric metrics into the "+ Add condition"
 // optgroups. This references metric KEYS/flags purely to bucket the dropdown; it
