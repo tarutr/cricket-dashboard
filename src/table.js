@@ -1027,12 +1027,48 @@ export function buildFieldingCteSql(state, composedFieldingCols = [], opts = {})
   if (state.search && state.search.trim()) {
     fldClauses.push(bypassableClause(`fielder_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
   }
-  const fldScopeSql = whereWithPinExemption(fldClauses, "fielder_id", pins);
-  // substitute exclusion + slice conditions are AND'd OUTSIDE the pin
-  // exemption: they define WHAT is counted (like a phase column), so they apply
-  // to every fielder including pins — pins only bypass the "who/which match"
-  // scope above.
-  const fldTail = ["substitute IS NOT TRUE", ...fieldingSliceClauses];
+  // Chunk 5 Phase 2 Wave C — Part 2 (fielding SCOPE-lane OR). The fielding scope has
+  // three sources: the tagged core/scope clauses from buildScopeClausesTagged
+  // (opposition/event/venue/team + core gender/format/date/team-type), the fielding
+  // SLICE dims (buildFieldingSliceClauses — dismissal kind/phase/position + the T-3a-ext
+  // dims incl. the correlated match-context EXISTS), and the always-applies "substitute
+  // IS NOT TRUE" eligibility guard. Under scope-"Match all" (default) they AND exactly as
+  // before — BYTE-IDENTICAL. Under scope-"Match any" the fielding dims join the SAME
+  // scope-OR disjunction the batting/bowling boards use (Wave A whereWithLanes): every
+  // scope filter ORs, the union is measured over pins too, and "substitute IS NOT TRUE"
+  // stays a "core" always-AND guard (never an OR participant — it defines eligibility,
+  // not scope). The profile semi-join (category "player") is NOT lowered here: the
+  // fielding player lane is the OUTER count gate (Part 1), so profile stays a
+  // player-shortlisting AND (playerOp pinned "AND") in the pin-exempt remainder, exactly
+  // as today. The OR path reuses the EXACT predicate strings the AND path builds, so an
+  // OR clause can never drift from its AND form.
+  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
+  let whereSql;
+  if (filterMatch.scope !== "OR") {
+    // Scope "Match all": today's EXACT assembly. substitute + slice conditions are AND'd
+    // OUTSIDE the pin exemption — they define WHAT is counted (like a phase column), so
+    // they apply to every fielder including pins; pins only bypass the who/which-match
+    // scope above.
+    const fldScopeSql = whereWithPinExemption(fldClauses, "fielder_id", pins);
+    const fldTail = ["substitute IS NOT TRUE", ...fieldingSliceClauses];
+    whereSql = [fldScopeSql, ...fldTail].join(" AND ");
+  } else {
+    // Scope "Match any": tag the fielding dims "scope" so whereWithLanes ORs them with the
+    // opposition/event/venue/team scope clauses; keep "substitute IS NOT TRUE" a "core"
+    // always-AND. playerOp forced "AND" so the profile clause is never dropped here (the
+    // fielding board has no HAVING to re-emit a lowered profile into).
+    const combined = [
+      ...fldClauses,
+      ...fieldingSliceClauses.map((c) => alwaysClause(c, "scope")),
+      alwaysClause("substitute IS NOT TRUE", "core"),
+    ];
+    whereSql = whereWithLanes(combined, {
+      idColumn: "fielder_id",
+      pins,
+      scopeOp: "OR",
+      playerOp: "AND",
+    });
+  }
   // Base per-fielder tally columns (SACRED — byte-identical output). The four
   // lines carry NO trailing comma; the array is comma-joined below so appending
   // composed columns needs no edit to these lines.
@@ -1099,7 +1135,7 @@ export function buildFieldingCteSql(state, composedFieldingCols = [], opts = {})
     "fielding_cte AS (",
     "  SELECT fielder_id AS fld_player_id,\n" + selectCols.join(",\n"),
     ...fromLines,
-    `  WHERE ${[fldScopeSql, ...fldTail].join(" AND ")}`,
+    `  WHERE ${whereSql}`,
     "  GROUP BY fielder_id",
     ")",
   ].join("\n");
@@ -1465,21 +1501,45 @@ function conditionToFieldingWhere(cond) {
 /** Mirror of advancedToHaving's group/AND-OR assembly, but routing each condition
  * through conditionToFieldingWhere (membership-gated, base-column expr). Returns the
  * combined predicate string, or null when no supported fielding count condition is
- * active (so the board query stays byte-identical). */
-function buildFieldingCountGate(advanced) {
+ * active (so the board query stays byte-identical).
+ *
+ * Chunk 5 Phase 2 Wave C — Part 1 (fielding PLAYER-lane OR). Unlike the batting/
+ * bowling board — whose player lane has THREE blocks (profile / PotM / numeric),
+ * OR'd at the block boundary in buildQuery while each block keeps its internal
+ * structure — the fielding board's player lane is DEGENERATE: this count gate is
+ * its ONLY player-lane member (there is no profile/PotM disjunct on the fielding
+ * board). So the player-lane "Match any" toggle drives THIS gate directly: under
+ * playerOp === "OR" every count predicate OR-joins (both the within-group joiner
+ * and the across-group joiner flip to OR), so "Catches ≥ 20 OR Stumpings ≥ 5"
+ * counts a fielder passing EITHER threshold — the plain-English meaning of
+ * "Match any" for the fielding count filters. This is the count-gate-only clean
+ * case the Wave C plan calls out: it is a single OUTER WHERE over the base-table
+ * aliases (no WHERE/HAVING lowering), all count predicates, so nothing else moves.
+ * playerOp === "AND" (the default) keeps the authored g.op / advanced.op joiners
+ * verbatim → BYTE-IDENTICAL to the pre-Wave-C board.
+ *
+ * NOTE (flagged for Wave E / owner): the fielding CTE's profile semi-join
+ * (buildScopeClausesTagged "player" tag) stays AND-scoped in the CTE WHERE even
+ * under player-OR — it is a player-SHORTLISTING predicate, not one of these count
+ * filters, so it is NOT lowered/OR'd the way batting/bowling lower profile into
+ * their HAVING disjunction. If the owner ever wants profile to OR with the fielding
+ * counts, that is a follow-up (there is no HAVING on this base-table board to
+ * re-emit it into). */
+function buildFieldingCountGate(advanced, playerOp = "AND") {
   if (!advanced) return null;
   const groups = activeGroups(advanced);
   if (groups.length === 0) return null;
+  const orAll = playerOp === "OR";
   const parts = groups
     .map((g) => {
       const condSql = g.conds.map(conditionToFieldingWhere).filter(Boolean);
       if (condSql.length === 0) return null;
-      const joiner = g.op === "OR" ? " OR " : " AND ";
+      const joiner = orAll || g.op === "OR" ? " OR " : " AND ";
       return condSql.length > 1 ? `(${condSql.join(joiner)})` : condSql[0];
     })
     .filter(Boolean);
   if (parts.length === 0) return null;
-  const topJoiner = advanced.op === "OR" ? " OR " : " AND ";
+  const topJoiner = orAll || advanced.op === "OR" ? " OR " : " AND ";
   return parts.length > 1 ? `(${parts.join(topJoiner)})` : parts[0];
 }
 
@@ -1532,6 +1592,11 @@ function fieldingBoardColExpr(m) {
 }
 
 export function buildFieldingLeaderboardQuery(state, visibleColumns = []) {
+  // Lane match-mode (Chunk 5 Phase 2). Wave C drives the fielding board's OR from
+  // the SAME state.filterMatch the batting/bowling boards read: filterMatch.player
+  // → the count-gate joiner (Part 1); filterMatch.scope → the fielding CTE scope
+  // disjunction (Part 2). Both default to "AND", so an all-AND state is byte-identical.
+  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
   // The board ALWAYS projects the fixed base — id / name / matches + the five tallies
   // (+ caught_and_bowled, kept for the count gate). "extras" are the columns the user
   // added BEYOND that base: the per-match rate variants and the composed fc__ columns.
@@ -1615,7 +1680,7 @@ export function buildFieldingLeaderboardQuery(state, visibleColumns = []) {
   // an OUTER WHERE over the projected columns (the board is a base table with no GROUP
   // BY, so the gate is a plain predicate on the aliases, not a HAVING). Absent ⇒ no
   // wrap ⇒ byte-identical to the un-gated board.
-  const countGate = buildFieldingCountGate(state.advanced);
+  const countGate = buildFieldingCountGate(state.advanced, filterMatch.player);
   const body = countGate
     ? `SELECT * FROM (\n${baseSelect}\n) AS fld_board\nWHERE ${countGate}`
     : baseSelect;
