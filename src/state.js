@@ -1216,6 +1216,26 @@ export function eligibleCrossMetrics(discipline, formats) {
  * "invalid". Advanced-CONDITION pruning keeps its own (plain) allow-set — cross
  * conditions are not creatable. */
 export function eligibleColumnKeys(discipline, formats) {
+  // Fielding board (3rd leaderboard scope): its columns are NOT the batting/bowling
+  // metric catalogue — a fielding column is ONLY the Matches count, one of the five
+  // fielding tallies (catches / caught & bowled / stumpings / run-outs / total
+  // dismissals) or their per-match rate variants, or a composed fc__ breakdown. Those
+  // all resolve under the "batting" catalogue (there is no "fielding" metrics namespace
+  // — see table.js metricNsFor), so we harvest them from "batting" by section, plus the
+  // enumerable fc__ keys. The value-dynamic fc__ over/pos RANGE keys are kept alive
+  // structurally at the prune sites via isComposedFieldingColumnKey(key, "batting").
+  // Returning THIS narrow set (not the full batting catalogue) is what lets the prune
+  // sites drop a stray batting/bowling column from the fielding board while keeping
+  // every valid fielding column — and lets isLeaderboardColumnAddable reject the
+  // batting/bowling which-values columns a scope filter would otherwise auto-add.
+  if (discipline === "fielding") {
+    const keys = new Set(["matches"]);
+    for (const m of eligibleMetrics("batting", formats)) {
+      if (m.section === "fielding") keys.add(m.key);
+    }
+    for (const key of eligibleComposedFieldingKeys("batting")) keys.add(key);
+    return keys;
+  }
   const keys = new Set(eligibleMetrics(discipline, formats).map((m) => m.key));
   for (const m of eligibleCrossMetrics(discipline, formats)) {
     keys.add(makeCrossKey(OTHER_DISCIPLINE[discipline], m.key));
@@ -1738,7 +1758,15 @@ function gcOrigins(origins, slots) {
  */
 export function reconcileLeaderboardColumns(state, { firstSearch = false } = {}) {
   const disc = state.discipline;
-  if (disc !== "batting" && disc !== "bowling") return null;
+  // Fielding board (3rd scope): the Option-B engine runs here too (it seeds the fixed
+  // five, keeps hand-added columns across Searches, and resets the sort when a column
+  // is dropped). Its filter→column mapping (activeLeaderboardFilterSources) yields
+  // NOTHING for fielding this wave — every batting/bowling which-values column it maps
+  // is filtered out by isLeaderboardColumnAddable against the fielding eligible set —
+  // so no wrong column is ever auto-added; only the seed + keep + sort behaviour apply.
+  // Additive to batting/bowling (they still take the exact same path). (The autoManage
+  // caller in main.js has its own batting/bowling gate — un-gated in step with this.)
+  if (disc !== "batting" && disc !== "bowling" && disc !== "fielding") return null;
   if (effectiveNamespace(state) !== disc) return null; // matchup mode: no auto-manage
   if (state.keepColumns) return null; // Keep ON freezes ALL automatic management (Q4a)
 
@@ -1853,7 +1881,13 @@ export function applyLeaderboardPresetPatch(state, presetKeys) {
  * (plain columns write only). Returns a store patch.
  */
 export function reconcileManualColumnEdit(state, disc, newSlots) {
-  if (disc !== "batting" && disc !== "bowling") {
+  // Fielding board (3rd scope): run the SAME origin/prune/sort bookkeeping as
+  // batting/bowling so a hand-added fielding column is stamped "manual" (and thus
+  // SURVIVES the first-Search seed, which otherwise drops any slot with no managed
+  // origin) and a ✕ removal both prunes the key and resets a now-orphaned sort. The
+  // matchup namespaces (and any other) keep the columns-only path below. Additive to
+  // batting/bowling — they take the exact same body they always did.
+  if (disc !== "batting" && disc !== "bowling" && disc !== "fielding") {
     return { columns: { ...state.columns, [disc]: newSlots } };
   }
   const oldSlots = state.columns[disc] || [];

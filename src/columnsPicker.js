@@ -2512,7 +2512,12 @@ export function createColumnsPicker({
     // reset on a discipline / format vocabulary change (refresh). `sig` caches the last
     // render's structural signature for the sync fast-path. `paletteApi` holds the
     // mounted discipline-palette component so a full re-render can close an open menu.
-    inlineState = { el: container, ns, formats: formats.slice(), editor: null, pendingParams: [], sig: null, paletteApi: null };
+    // `fieldingMode` is tracked alongside ns/formats because the leaderboard's fielding
+    // board and its batting board BOTH resolve to ns "batting" (metricNsFor maps fielding
+    // → "batting"), so an ns comparison alone can't tell a batting↔fielding switch apart.
+    // getFieldingMode() flips on that switch and governs WHICH dropdowns render (Match +
+    // Fielding only) — so refresh() must rebuild when it changes, even though ns did not.
+    inlineState = { el: container, ns, formats: formats.slice(), fieldingMode: getFieldingMode ? getFieldingMode() : false, editor: null, pendingParams: [], sig: null, paletteApi: null };
     renderInline(container, ns, formats);
     // FC-2: kick the Bowler Style data probe (idempotent, cached per session). It is
     // ABSENT on R2 today → stays hidden with no re-render; once the FC-1b pipeline
@@ -2542,12 +2547,18 @@ export function createColumnsPicker({
     if (inlineState) {
       const ns = getDiscipline();
       const formats = getFormats();
-      if (ns !== inlineState.ns || !sameFormats(formats, inlineState.formats)) {
-        // ANY vocabulary change (discipline OR format) drops the open compose editor —
-        // its stat/dimension options belong to the old vocabulary. A discipline switch
-        // also drops pending-empty param rows (param descriptor is per-discipline; a
-        // composed column with real slots re-derives from the new ns's slots). No dropdown
-        // opens by default (R0 Step 2); the full renderInline closes any open menu first.
+      // Fielding board vs batting board both resolve to ns "batting" (metricNsFor), so a
+      // batting↔fielding switch is invisible to the ns check — track getFieldingMode()
+      // too and rebuild when it flips (it governs which dropdowns render). Constant false
+      // for batting/bowling/matchup, so those keep the exact ns/format-only rebuild path.
+      const fieldingMode = getFieldingMode ? getFieldingMode() : false;
+      if (ns !== inlineState.ns || !sameFormats(formats, inlineState.formats) || fieldingMode !== inlineState.fieldingMode) {
+        // ANY vocabulary change (discipline OR format OR fielding-mode) drops the open
+        // compose editor — its stat/dimension options belong to the old vocabulary. A
+        // discipline switch also drops pending-empty param rows (param descriptor is
+        // per-discipline; a composed column with real slots re-derives from the new ns's
+        // slots). No dropdown opens by default (R0 Step 2); the full renderInline closes
+        // any open menu first.
         inlineState.editor = null;
         if (ns !== inlineState.ns) {
           inlineState.pendingParams = [];
@@ -2555,6 +2566,7 @@ export function createColumnsPicker({
         renderInline(inlineState.el, ns, formats);
         inlineState.ns = ns;
         inlineState.formats = formats.slice();
+        inlineState.fieldingMode = fieldingMode;
       } else {
         syncInline(inlineState.el);
       }

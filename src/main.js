@@ -561,9 +561,13 @@ function togglePin(id, name) {
 function autoManageColumns() {
   const state = store.get();
   const ns = effectiveNamespace(state);
-  // Option B applies to the PLAIN batting/bowling leaderboard only — the matchup
-  // namespaces keep their fixed defaults + restricted picker.
-  if (ns !== "batting" && ns !== "bowling") return;
+  // Option B applies to the PLAIN batting/bowling leaderboard AND the fielding board
+  // (3rd scope) — the matchup namespaces keep their fixed defaults + restricted picker.
+  // reconcileLeaderboardColumns has the matching fielding gate; for fielding it only
+  // seeds the fixed five, keeps hand-added columns, and manages the sort (its
+  // filter→column mapping is empty for fielding this wave). effectiveNamespace(fielding)
+  // === "fielding" (fielding is never a matchup), so this reaches the reconciler.
+  if (ns !== "batting" && ns !== "bowling" && ns !== "fielding") return;
   const seeding = !((state.columnsSeeded || {})[state.discipline]);
   // reconcileLeaderboardColumns owns the whole Option-B pass: first-Search Core seed,
   // filter→column add/remove per the mapping + origins, prune-stick, and the sort

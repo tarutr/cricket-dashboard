@@ -367,11 +367,12 @@ export function createPaletteGroupsBuilder(deps) {
       // The dims about WHO was out — the "Wicket type" checklist picker (dimLeaf("kind"))
       // is retired (redundant with Wicket Types' count filters). Position stays on the
       // existing fld_pos singleton (byte-identical everywhere; no duplicate dim row). The
-      // "hand" dim now reads "Dismissed batter hand" (fieldingDims.js).
+      // "hand" dim now reads "Dismissed batter hand" (fieldingDims.js). "Batter role"
+      // (dimLeaf("role")) is retired here (owner ruling 2026-08-16: "doesn't work here")
+      // — the dim definition stays in fieldingDims.js; only the offer is removed.
       pushGroup("Dismissed Batter", [
         leafSingle("fld_pos", "Dismissed batter's position"),
         dimLeaf("hand"),
-        dimLeaf("role"),
         dimLeaf("batter"),
       ]);
       return groups;

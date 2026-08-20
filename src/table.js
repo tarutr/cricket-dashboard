@@ -1403,10 +1403,75 @@ function buildFieldingCountGate(advanced) {
   return parts.length > 1 ? `(${parts.join(topJoiner)})` : parts[0];
 }
 
-export function buildFieldingLeaderboardQuery(state) {
-  // SACRED CTE as a BASE table, with the fielder name projected (opts.includeName).
-  // No fielding composers this step → 2nd arg [].
-  const cte = buildFieldingCteSql(state, [], { includeName: true });
+/** Base-table SELECT expression for each fielding COUNT column, keyed by metric key —
+ * the fielding_cte column reference, NOT the catalogued metric's `MAX(fielding_cte.…)`
+ * sqlExpression. That sqlExpression is the batting/bowling GROUP-BY join form; the
+ * fielding board is a BASE table (one row per fielder), so a MAX() here would collapse
+ * the whole board to a single row. These are the EXACT strings the fixed selectCols
+ * below have always emitted, so the default board stays byte-identical. */
+const FIELDING_BASE_CTE_EXPR = {
+  catches: "fielding_cte.catches",
+  caught_and_bowled: "fielding_cte.caught_and_bowled",
+  stumpings: "fielding_cte.stumpings",
+  run_outs: "fielding_cte.run_outs",
+  dismissals_effected: "(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs)",
+};
+const _FLD_PER_MATCH_SUFFIX = "_per_match";
+/** The base-table SELECT expression (no outer MAX — the board is one row per fielder)
+ * for a resolved fielding column metric, or null when it isn't a projectable fielding
+ * column. Covers the five counts, their per-match rate variants, and the composed fc__
+ * columns (count + per-match). Per-match denominators divide by the player's appearance
+ * count (pmatch_cte.match_count) — the metric's own definition — so the caller must
+ * ensure pmatch_cte is joined whenever a per-match column is present. */
+function fieldingBoardColExpr(m) {
+  if (!m) return null;
+  // Composed fc__ column: the injected fielding_cte alias is the count; the per-match
+  // variant divides that count by the appearance count.
+  if (m.isComposedFielding && m.fieldingCteAlias) {
+    const count = `fielding_cte.${m.fieldingCteAlias}`;
+    return m.perMatch ? `(${count}) * 1.0 / NULLIF(pmatch_cte.match_count, 0)` : count;
+  }
+  // Enumerated count column.
+  if (Object.prototype.hasOwnProperty.call(FIELDING_BASE_CTE_EXPR, m.key)) {
+    return FIELDING_BASE_CTE_EXPR[m.key];
+  }
+  // Enumerated per-match rate column (`<count>_per_match`): its count sibling's base
+  // expression ÷ the appearance count.
+  if (m.perMatch && typeof m.key === "string" && m.key.endsWith(_FLD_PER_MATCH_SUFFIX)) {
+    const countExpr = FIELDING_BASE_CTE_EXPR[m.key.slice(0, -_FLD_PER_MATCH_SUFFIX.length)];
+    if (countExpr) return `(${countExpr}) * 1.0 / NULLIF(pmatch_cte.match_count, 0)`;
+  }
+  return null;
+}
+
+export function buildFieldingLeaderboardQuery(state, visibleColumns = []) {
+  // The board ALWAYS projects the fixed base — id / name / matches + the five tallies
+  // (+ caught_and_bowled, kept for the count gate). "extras" are the columns the user
+  // added BEYOND that base: the per-match rate variants and the composed fc__ columns.
+  // Resolve each under "batting" (the fielding metrics catalogue — metricNsFor(fielding)
+  // === "batting") and keep only real fielding columns, so a stray key can never emit an
+  // unprojectable batting-view expression. With visibleColumns == the default five,
+  // extras is empty and the emitted SQL is BYTE-IDENTICAL to the fixed board.
+  const BASE_KEYS = new Set([
+    "matches", "catches", "caught_and_bowled", "stumpings", "run_outs", "dismissals_effected",
+  ]);
+  const extras = [];
+  const seenExtra = new Set();
+  for (const key of visibleColumns || []) {
+    if (BASE_KEYS.has(key) || seenExtra.has(key)) continue;
+    const m = getMetric(key, "batting");
+    if (!m || !(m.isComposedFielding || m.section === "fielding")) continue;
+    const expr = fieldingBoardColExpr(m);
+    if (!expr) continue;
+    seenExtra.add(key);
+    extras.push({ key, expr, metric: m });
+  }
+  const composedFieldingCols = extras.filter((e) => e.metric.isComposedFielding).map((e) => e.metric);
+  const needPmatch = extras.some((e) => e.metric.perMatch);
+
+  // SACRED CTE as a BASE table, with the fielder name projected (opts.includeName) plus
+  // any requested fc__ composer columns injected (byte-identical CTE when none requested).
+  const cte = buildFieldingCteSql(state, composedFieldingCols, { includeName: true });
   // Matches denominator via the SHARED switch (reused by the pop-up so they can't drift):
   // un-narrowed = appearances (pmatch_cte); narrowed = matches-with-a-credit (fld_matches_cte).
   const narrowed = fieldingMatchesNarrowed(state);
@@ -1423,16 +1488,31 @@ export function buildFieldingLeaderboardQuery(state) {
     matchesExpr,
     "fielding_cte.catches AS catches",
     // Caught & bowled (3.2c): projected additively so the Wicket Types "Caught &
-    // bowled ≥ N" count gate can predicate on it. The board's DISPLAY columns are
-    // fixed (state.js DEFAULT_COLUMNS.fielding — Matches/Catches/Stumpings/Run-outs/
-    // Total dismissals), so this extra alias renders nothing and — with no c&b filter
-    // active — the board is byte-identical (Catches still folds c&b in, unchanged).
+    // bowled ≥ N" count gate can predicate on it. It renders only when the user has
+    // added it as a column; with no c&b column/filter the board is byte-identical
+    // (Catches still folds c&b in, unchanged).
     "fielding_cte.caught_and_bowled AS caught_and_bowled",
     "fielding_cte.stumpings AS stumpings",
     "fielding_cte.run_outs AS run_outs",
     "(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs) AS dismissals_effected",
   ];
-  const fromSql = "FROM fielding_cte\n" + joinSql;
+  // Extra visible columns (per-match rates + composed fc__): one independent SELECT
+  // expression each, AFTER the fixed base. Display ORDER follows the picker's column
+  // list (renderTable iterates visibleColumns), not this projection order, so a fixed-
+  // base-first projection is display-agnostic. With no extras this loop adds nothing.
+  for (const e of extras) {
+    selectCols.push(`${e.expr} AS ${e.key}`);
+  }
+  // Per-match denominators read pmatch_cte.match_count. When the board is NOT narrowed
+  // that CTE IS the Matches source (already in the WITH + joined); when narrowed the
+  // Matches source is fld_matches_cte, so add pmatch_cte just for the rate denominators.
+  const extraCtes = [];
+  const extraJoins = [];
+  if (needPmatch && narrowed) {
+    extraCtes.push(buildPmatchCteSql(state));
+    extraJoins.push("LEFT JOIN pmatch_cte ON pmatch_cte.pm_player_id = fielding_cte.fld_player_id");
+  }
+  const fromSql = "FROM fielding_cte\n" + [joinSql, ...extraJoins].join("\n");
   const baseSelect = [
     "SELECT " + selectCols.join(",\n       "),
     fromSql,
@@ -1445,7 +1525,7 @@ export function buildFieldingLeaderboardQuery(state) {
   const body = countGate
     ? `SELECT * FROM (\n${baseSelect}\n) AS fld_board\nWHERE ${countGate}`
     : baseSelect;
-  const sql = ["WITH " + [cte, matchesCte].join(",\n"), body].join("\n");
+  const sql = ["WITH " + [cte, matchesCte, ...extraCtes].join(",\n"), body].join("\n");
   return { sql, matchesSql: null };
 }
 
@@ -1499,10 +1579,10 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // table (see buildFieldingLeaderboardQuery) — none of the batting/bowling innings-view
   // logic below applies (fielding has no innings grain). matchupVsActive is already false
   // for fielding (its dim gates require batting/bowling), so this branch is the only
-  // fielding path. visibleColumns is ignored: the fielding board's column set is the fixed
-  // five (Matches · Catches · Stumpings · Run-outs · Total dismissals) this step.
+  // fielding path. visibleColumns now drives the board's projection (the fixed five stay
+  // byte-identical; per-match rate + composed fc__ columns are projected additively).
   if (discipline === "fielding") {
-    return buildFieldingLeaderboardQuery(state);
+    return buildFieldingLeaderboardQuery(state, visibleColumns);
   }
 
   if (matchupVsActive(state)) {
@@ -2255,13 +2335,15 @@ export function mountTable(
     // would break the inline picker). The column STATE the picker reads/writes stays
     // effectiveDiscipline-keyed (getColumns/getSlots/setColumns below → state.columns.
     // fielding), exactly the pop-up's fielding-mode split. Byte-identical for batting/
-    // bowling/matchup (metricNsFor === effectiveDiscipline there). NOTE: this step ships
-    // NO fielding picker — the add-menu shows the batting vocabulary on the fielding
-    // board (the toolbar Columns button is hidden; the fielding picker/composers are the
-    // NEXT step). Staging a column here can never move a number: the fielding query is
-    // fixed (buildFieldingLeaderboardQuery ignores visibleColumns).
+    // bowling/matchup (metricNsFor === effectiveDiscipline there).
     getDiscipline: () => metricNsFor(store.get()),
     getFormats: () => store.get().formats,
+    // Fielding board (3rd scope): getFieldingMode carries the fielding-only UI intent
+    // the "batting" metrics ns can't express — it restricts the Add-columns bar to the
+    // Match + Fielding dropdowns and drops Impact/PoM from Match (the fielding query
+    // builds no pom_cte, only pmatch/fld_matches). Mirrors the pop-up's fielding mode.
+    // Returns false for batting/bowling, so their four-dropdown bar is byte-identical.
+    getFieldingMode: () => store.get().discipline === "fielding",
     // New Team composer (Step 1, 2026-08-14): the composer's searchable value picker
     // sources its team list here — a leaderboard-only host callback the picker gates
     // the Team composer on (the picker can't read the store). Scoped to gender/format/
@@ -2526,12 +2608,15 @@ export function mountTable(
    * change to something that doesn't permit it, in matchup mode same as plain. */
   function pruneInvalidColumns() {
     const state = store.get();
-    // Fielding (3rd scope): a FIXED tally set — no phase/format eligibility to prune,
-    // and no "fielding" metrics namespace to validate against (eligibleColumnKeys would
-    // come back empty and wrongly drop every column). Leave the set untouched. (One of
-    // the {batting,bowling}-only gates made fielding-graceful.)
-    if (state.discipline === "fielding") return;
+    // Fielding (3rd scope): now a real column board — eligibleColumnKeys("fielding")
+    // returns the fielding column set (Matches + the five tallies + per-match rates +
+    // enumerable fc__ keys), so this prune drops a stray non-fielding column while
+    // keeping every valid one. The value-dynamic fc__ over/pos RANGE keys resolve only
+    // under "batting"/"bowling" (resolveComposedFieldingMetric rejects "fielding"), so
+    // the structural check below uses metricNsFor (fielding→"batting") — byte-identical
+    // for batting/bowling, where metricNsFor === ns.
     const ns = effectiveDiscipline(state);
+    const mns = metricNsFor(state); // fielding→"batting"; else === ns
     const formats = state.formats;
     const cols = state.columns[ns];
     // W3: allow cross-discipline column keys too (eligibleColumnKeys = plain ∪
@@ -2543,12 +2628,12 @@ export function mountTable(
     // into `allowedKeys` — so keep them via a structural check. E1a: `cols` is Slot[]
     // — filter by each slot's key (survivors keep their id → highlight/sort follow).
     // FC-1: value-dynamic fielding composers (fc__…__over/pos__<range>) are an
-    // infinite value space too — keep them via the same structural check.
+    // infinite value space too — keep them via the same structural check (mns).
     const pruned = cols.filter(
       (sl) =>
         allowedKeys.has(sl.key) ||
         isParamComposedColumnKey(sl.key, ns) ||
-        isComposedFieldingColumnKey(sl.key, ns)
+        isComposedFieldingColumnKey(sl.key, mns)
     );
     if (pruned.length !== cols.length) {
       store.set({ columns: { ...state.columns, [ns]: pruned } });
@@ -3670,11 +3755,11 @@ export function mountTable(
     // Columns button (owner, W1 fix 2): always enabled — it's a shortcut into
     // the popup's Columns section, configurable before the first search runs.
     // Every OTHER toolbar control's enabled/disabled logic is untouched.
-    // Fielding (3rd scope): the column set is FIXED this step (no picker / composers —
-    // the fielding picker is the NEXT step), so hide the Columns button rather than open
-    // a picker whose "fielding" namespace has no metrics to add. Shown for batting/bowling.
+    // Fielding (3rd scope) now has a real column board (Matches + the five tallies +
+    // per-match rates + fc__ composers), so the Columns button shows there too — the
+    // picker restricts its Add-columns bar to Match + Fielding via getFieldingMode.
     if (columnsBtnEl) {
-      columnsBtnEl.hidden = discipline === "fielding";
+      columnsBtnEl.hidden = false;
       columnsBtnEl.disabled = false;
     }
 
