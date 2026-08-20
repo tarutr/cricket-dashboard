@@ -1192,8 +1192,31 @@ export function buildFldMatchesCteSql(state) {
   if (state.search && state.search.trim()) {
     fldClauses.push(bypassableClause(`fielder_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
   }
-  const fldScopeSql = whereWithPinExemption(fldClauses, "fielder_id", pins);
-  const matchesWhere = [fldScopeSql, "substitute IS NOT TRUE", ...buildFieldingSliceClauses(state)].join(" AND ");
+  // Chunk 5 Phase 2 Wave E — mirror buildFieldingCteSql's scope-lane assembly EXACTLY so
+  // this denominator can never drift from the fielding_cte tallies it sits beside. The
+  // "substitute IS NOT TRUE" guard + the fielding SLICE clauses are appended OUTSIDE the
+  // pin wrap (they define WHAT is counted, like a phase column), so this is NOT a blind
+  // whereWithLanes swap:
+  //   • scope "Match all" (default) → today's EXACT two lines → BYTE-IDENTICAL.
+  //   • scope "Match any" → the slice dims join the SAME scope-OR disjunction (tagged
+  //     "scope") the fielding board uses, "substitute IS NOT TRUE" stays a "core"
+  //     always-AND eligibility guard, and playerOp is forced "AND" (the fielding board
+  //     handles player-OR via the outer count gate, never by lowering profile — there is
+  //     no HAVING here to re-emit a lowered profile into, mirroring buildFieldingCteSql).
+  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
+  const sliceClauses = buildFieldingSliceClauses(state);
+  let matchesWhere;
+  if (filterMatch.scope !== "OR") {
+    const fldScopeSql = whereWithPinExemption(fldClauses, "fielder_id", pins);
+    matchesWhere = [fldScopeSql, "substitute IS NOT TRUE", ...sliceClauses].join(" AND ");
+  } else {
+    const combined = [
+      ...fldClauses,
+      ...sliceClauses.map((c) => alwaysClause(c, "scope")),
+      alwaysClause("substitute IS NOT TRUE", "core"),
+    ];
+    matchesWhere = whereWithLanes(combined, { idColumn: "fielder_id", pins, scopeOp: "OR", playerOp: "AND" });
+  }
   return [
     "fld_matches_cte AS (",
     "  SELECT fielder_id AS fld_player_id, COUNT(DISTINCT match_id) AS matches",
@@ -1219,7 +1242,19 @@ export function buildPomCteSql(state) {
   if (state.search && state.search.trim()) {
     pomClauses.push(bypassableClause(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
   }
-  const pomWhereSql = whereWithPinExemption(pomClauses, "player_id", pins);
+  // Chunk 5 Phase 2 Wave E — route through the lane compiler so this column's scope tracks
+  // the MAIN query's union. All-AND (default) → whereWithLanes delegates VERBATIM to
+  // whereWithPinExemption → byte-identical. Under scope-OR the tagged scope clauses OR;
+  // under player-OR the profile ("player") clause is dropped from the WHERE (buildQuery
+  // lowers profile into its HAVING disjunction, so this PotM count is supplied over the
+  // union of surviving players — consistent with the main stats).
+  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
+  const pomWhereSql = whereWithLanes(pomClauses, {
+    idColumn: "player_id",
+    pins,
+    scopeOp: filterMatch.scope,
+    playerOp: filterMatch.player,
+  });
   return [
     "pom_cte AS (",
     "  SELECT player_id AS pom_player_id, SUM(player_of_match) AS player_of_match",
@@ -1293,7 +1328,17 @@ export function buildResultCteSql(state) {
   if (state.search && state.search.trim()) {
     resClauses.push(bypassableClause(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
   }
-  const resWhereSql = whereWithPinExemption(resClauses, "player_id", pins);
+  // Chunk 5 Phase 2 Wave E — lane-consistent scope (same rationale as buildPomCteSql):
+  // all-AND delegates verbatim → byte-identical; scope-OR ORs the tagged scope clauses;
+  // player-OR drops the profile clause (buildQuery re-emits it as a HAVING disjunct), so
+  // these Match-Result counts track the same union of surviving players as the main stats.
+  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
+  const resWhereSql = whereWithLanes(resClauses, {
+    idColumn: "player_id",
+    pins,
+    scopeOp: filterMatch.scope,
+    playerOp: filterMatch.player,
+  });
   return [
     "result_cte AS (",
     "  SELECT player_id AS res_player_id,",
@@ -1332,13 +1377,27 @@ export function buildResultCteSql(state) {
  * ONLY when a per-match fielding column/condition is present (wantsPmatch); with
  * none, buildQuery emits byte-identical SQL.
  */
-export function buildPmatchCteSql(state) {
+export function buildPmatchCteSql(state, { playerOp } = {}) {
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
   const pmClauses = buildScopeClausesTagged(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
   if (state.search && state.search.trim()) {
     pmClauses.push(bypassableClause(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
   }
-  const pmWhereSql = whereWithPinExemption(pmClauses, "player_id", pins);
+  // Chunk 5 Phase 2 Wave E — lane-consistent scope. scopeOp always tracks filterMatch.scope.
+  // playerOp DEFAULTS to filterMatch.player: the batting/bowling board (buildQuery) lowers
+  // profile into its HAVING under player-OR, so dropping profile here keeps this per-match
+  // denominator over the same union as the main stats. The FIELDING board callers pass
+  // playerOp:"AND" — that board keeps profile an always-AND shortlister in fielding_cte
+  // (Wave C; its player-OR is the outer count gate, not a profile disjunct), so its Matches
+  // denominator must keep profile AND to match the tallies it divides. All-AND → whereWithLanes
+  // delegates VERBATIM to whereWithPinExemption → byte-identical for every caller.
+  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
+  const pmWhereSql = whereWithLanes(pmClauses, {
+    idColumn: "player_id",
+    pins,
+    scopeOp: filterMatch.scope,
+    playerOp: playerOp || filterMatch.player,
+  });
   return [
     "pmatch_cte AS (",
     "  SELECT player_id AS pm_player_id, COUNT(DISTINCT match_id) AS match_count",
@@ -1396,7 +1455,18 @@ export function buildCrossDisciplineCteSql(state, discipline, crossCols) {
   if (state.search && state.search.trim()) {
     clauses.push(bypassableClause(`${otherNameCol} ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
   }
-  const scopeSql = whereWithPinExemption(clauses, otherIdCol, pins);
+  // Chunk 5 Phase 2 Wave E — lane-consistent scope (same rationale as buildPomCteSql), keyed
+  // to the OTHER discipline's id column. All-AND delegates verbatim → byte-identical; scope-OR
+  // ORs the tagged scope clauses (team/opposition/innings-number/event/venue/city/season for
+  // the other discipline); player-OR drops the profile clause (buildQuery re-emits it as a
+  // HAVING disjunct), so a cross-discipline column tracks the same union of surviving players.
+  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
+  const scopeSql = whereWithLanes(clauses, {
+    idColumn: otherIdCol,
+    pins,
+    scopeOp: filterMatch.scope,
+    playerOp: filterMatch.player,
+  });
   const selectCols = [`${otherIdCol} AS xd_player_id`];
   for (const m of crossCols) {
     selectCols.push(`${m.sqlExpression} AS xd_${m.baseKey}`);
@@ -1634,7 +1704,9 @@ export function buildFieldingLeaderboardQuery(state, visibleColumns = []) {
   // Matches denominator via the SHARED switch (reused by the pop-up so they can't drift):
   // un-narrowed = appearances (pmatch_cte); narrowed = matches-with-a-credit (fld_matches_cte).
   const narrowed = fieldingMatchesNarrowed(state);
-  const matchesCte = narrowed ? buildFldMatchesCteSql(state) : buildPmatchCteSql(state);
+  // Wave E: the fielding board keeps profile an always-AND shortlister (Wave C), so its
+  // Matches denominator forces playerOp:"AND" (never drops profile under player-OR).
+  const matchesCte = narrowed ? buildFldMatchesCteSql(state) : buildPmatchCteSql(state, { playerOp: "AND" });
   const matchesExpr = narrowed
     ? "COALESCE(fld_matches_cte.matches, 0) AS matches"
     : "COALESCE(pmatch_cte.match_count, 0) AS matches";
@@ -1668,7 +1740,8 @@ export function buildFieldingLeaderboardQuery(state, visibleColumns = []) {
   const extraCtes = [];
   const extraJoins = [];
   if (needPmatch && narrowed) {
-    extraCtes.push(buildPmatchCteSql(state));
+    // Wave E: fielding board → force playerOp:"AND" (see the matchesCte call above).
+    extraCtes.push(buildPmatchCteSql(state, { playerOp: "AND" }));
     extraJoins.push("LEFT JOIN pmatch_cte ON pmatch_cte.pm_player_id = fielding_cte.fld_player_id");
   }
   const fromSql = "FROM fielding_cte\n" + [joinSql, ...extraJoins].join("\n");
@@ -2201,7 +2274,16 @@ export function buildQuery(state, visibleColumns, opts = {}) {
     if (state.search && state.search.trim()) {
       pmClauses.push(bypassableClause(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
     }
-    const pmWhereSql = whereWithPinExemption(pmClauses, "player_id", pins);
+    // Chunk 5 Phase 2 Wave E — the secondary "matches" query must share the main query's
+    // lane-OR union (same rationale as buildPomCteSql). buildQuery's own filterMatch is in
+    // scope here. All-AND delegates VERBATIM → byte-identical; scope-OR ORs the tagged scope
+    // clauses; player-OR drops the profile clause (lowered into the HAVING disjunct above).
+    const pmWhereSql = whereWithLanes(pmClauses, {
+      idColumn: "player_id",
+      pins,
+      scopeOp: filterMatch.scope,
+      playerOp: filterMatch.player,
+    });
     matchesSql = [
       `SELECT player_id AS id, COUNT(DISTINCT match_id) AS matches`,
       `FROM player_matches`,
