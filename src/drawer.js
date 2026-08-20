@@ -975,17 +975,31 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   // The generic search-palette machinery (leak-free portal, list build,
   // search/highlight, ▸ drill-down, open/close, "only one open at a time") was
   // extracted to src/addPalette.js in Wave R3 so the player pop-up drawer can
-  // mount the SAME component. This surface supplies its own 7-group taxonomy via
-  // buildPaletteGroups (now src/paletteGroups.js), pinned to `surface:"leaderboard"`
-  // — the leaderboard's full taxonomy, unchanged. Each leaf's run() closure still
-  // fires pickSingleton / pickMetric here, so the palette — and every number it
-  // produces — is byte-identical to the pre-extraction inline version (numbers
-  // sacred; no query path lives in addPalette.js or paletteGroups.js).
-  // `palette.mountAddPalette(el)` builds + wires one palette per numeric group
-  // card; `palette.closeCurrent()` closes whichever is open before a rebuild (a
-  // portaled-open panel would otherwise orphan on <body>).
+  // mount the SAME component. Each leaf's run() closure still fires pickSingleton /
+  // pickMetric here, so the palette — and every number it produces — is byte-
+  // identical to the pre-extraction inline version (numbers sacred; no query path
+  // lives in addPalette.js or paletteGroups.js).
+  //
+  // Chunk 5 · Phase 1 (two Player/Scope dropdowns, LAYOUT ONLY): the single
+  // "+ Add condition" trigger per numeric group card is split into TWO lane
+  // dropdowns — "Player Filters" and "Scope Filters" — mirroring the columns
+  // section's dropdowns-in-a-row (columnsPicker.js). ONE createAddPalette instance
+  // still backs BOTH (as columns' one instance backs its four discipline triggers),
+  // so "only one open at a time" holds across both dropdowns and every group card.
+  // `gi` is overloaded here — columns uses it as the "which dropdown" axis, but the
+  // filter drawer needs it as the numeric GROUP index (pickMetric's target). So the
+  // skeleton's data-gi ENCODES both: `encodedGi = groupIndex*2 + laneParity`
+  // (0 = player, 1 = scope). buildGroups decodes and hands buildPaletteGroups the
+  // REAL groupIndex (so pickMetric targets the right group) plus the resolved lane.
+  // `palette.closeCurrent()` closes whichever is open before a rebuild (a portaled-
+  // open panel would otherwise orphan on <body>).
+  const LANE_BY_PARITY = ["player", "scope"];
   const palette = createAddPalette({
-    buildGroups: (gi) => buildPaletteGroups(store.get(), gi, { surface: "leaderboard" }),
+    buildGroups: (encodedGi) => {
+      const groupIndex = encodedGi >> 1;
+      const lane = LANE_BY_PARITY[encodedGi & 1];
+      return buildPaletteGroups(store.get(), groupIndex, { surface: "leaderboard", lane });
+    },
   });
 
   // ── Singleton rows: show/hide + editor sync ─────────────────────────────────
@@ -1145,13 +1159,34 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       : "";
     const head = showOp || removeBtn ? `<div class="cond-group__head">${opControl}${removeBtn}</div>` : "";
     const rows = g.conds.map((c, ci) => conditionRowHTML(c, gi, ci, ns, s.formats)).join("");
+    // Chunk 5 · Phase 1: the group's add area is a two-dropdown bar — "Player
+    // Filters" | "Scope Filters" — reusing the columns section's trigger look
+    // (.cols-dd-*). Each trigger's data-gi ENCODES groupIndex*2 + laneParity so the
+    // one shared palette (see above) resolves both axes. A lane with no offered
+    // filters (never, in practice — Player always has stat metrics, Scope always has
+    // Match Details) renders its trigger disabled, matching the columns bar. The bar
+    // sits ABOVE the group's condition rows, mirroring columns (add controls above
+    // the list they add to).
+    const laneBar = LANE_BY_PARITY.map((lane, li) => {
+      const encodedGi = gi * 2 + li;
+      const label = lane === "player" ? "Player Filters" : "Scope Filters";
+      const empty = buildPaletteGroups(s, gi, { surface: "leaderboard", lane }).length === 0;
+      return paletteSkeletonHTML(encodedGi, {
+        ctlClass: "addctl cols-dd-ctl",
+        toggleClass: "cols-dd-trigger",
+        toggleAttrs: empty ? " disabled" : "",
+        toggleAriaLabel: `Add a ${label} condition`,
+        toggleInner: `<span class="cols-dd-name">${escHtml(label)}</span><span class="cols-dd-caret" aria-hidden="true">▾</span>`,
+        searchPlaceholder: "Search filters&hellip;",
+        searchAriaLabel: "Search filters",
+        emptyText: "No matching filter.",
+      });
+    }).join("");
     return `
       <div class="cond-group${multi ? " is-multi" : ""}" data-gi="${gi}">
         ${head}
+        <div class="cond-group__add"><div class="cond-lane-bar">${laneBar}</div></div>
         <div class="cond-group__rows">${rows}</div>
-        <div class="cond-group__add">
-          ${paletteSkeletonHTML(gi)}
-        </div>
       </div>`;
   }
 

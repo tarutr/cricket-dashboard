@@ -4676,6 +4676,14 @@ a { color: var(--color-accent); }
 .cond-group__remove { margin-left: auto; }
 .cond-group__rows { display: flex; flex-direction: column; gap: var(--space-3); }
 .cond-group__add { display: flex; }
+/* Chunk 5 · Phase 1: the two-dropdown "Player Filters | Scope Filters" bar inside a
+   group card's add area. Mirrors the Columns section's dropdowns-in-a-row — the
+   triggers themselves reuse the .cols-dd-trigger / .cols-dd-name / .cols-dd-caret
+   look (see the "Four-dropdown Columns layout" block), so only the bar container is
+   defined here. Stacks on narrow viewports (the shared .cols-dd-ctl 640px rule below
+   already switches the trigger wrappers to flex:1 1 auto). */
+.cond-lane-bar { display: flex; flex-wrap: wrap; gap: var(--space-2); width: 100%; }
+@media (max-width: 640px) { .cond-lane-bar { flex-direction: column; } }
 .cond-group__connector {
   font-size: var(--text-xs);
   letter-spacing: 0.06em;

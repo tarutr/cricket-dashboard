@@ -128,9 +128,59 @@ const POPUP_SCOPE_SINGLETON_KEYS = new Set([
 ]);
 const popupWithholdsSingleton = (surface, key) => surface === "popup" && !POPUP_SCOPE_SINGLETON_KEYS.has(key);
 
+// ── Chunk 5 · Phase 1: Player / Scope lane split (LAYOUT ONLY) ─────────────────
+// The leaderboard's "+ Add condition" menu is split into TWO dropdowns-in-a-row —
+// **Player Filters** (who qualifies) and **Scope Filters** (which matches/deliveries
+// the numbers come from) — mirroring the columns section's dropdowns-in-a-row. This
+// is a DISPLAY reorg only: the SAME leaf `run()` closures fire, so buildQuery /
+// buildScopeClauses / conditionToHaving are untouched (numbers sacred). Opt-in via
+// the `lane` option below — every OTHER caller (the player pop-up "Filters" tab, any
+// legacy call) passes NO lane, so `finalize` is a no-op and the returned taxonomy is
+// BYTE-IDENTICAL to before this split. The per-item `lane` / `section` props added
+// for tagging are inert on the un-laned path (addPalette.js ignores unknown props).
+//
+// A GROUP's default lane; per-item `.lane` overrides it for the handful of leaves
+// that live in a differently-laned group (owner rulings: Team is SCOPE though it
+// sits in the "Player Profile" UI group; Batting position's final home is Scope).
+const GROUP_DEFAULT_LANE = {
+  // batting / bowling groups
+  "Player Profile": "player",
+  "Match Details": "scope",
+  "Batting · Basic Stats": "player",
+  "Bowling · Basic Stats": "player",
+  "Batting · Detailed Stats": "player",
+  "Bowling · Detailed Stats": "player",
+  "Ball Ranges": "scope",
+  "Matchup (Vs)": "scope",
+  "Fielding Stats": "player", // wicket-type COUNT family = Player; fld_pos tagged Scope per-item
+  // fielding board groups
+  "Fielder Profile": "player", // Matches = Player; Team tagged Scope per-item
+  Match: "scope",
+  "Wicket Types": "player",
+  "Bowler Details": "scope",
+  "Dismissed Batter": "scope",
+};
+// The ordered section list each lane's dropdown renders (only present sections show).
+// Batting/bowling and fielding-board section names both appear; the two are mutually
+// exclusive per discipline, so the filter drops whatever isn't present.
+const PLAYER_LANE_SECTIONS = [
+  "Player Profile", "Fielder Profile",
+  "Batting · Basic Stats", "Bowling · Basic Stats", "Wicket Types",
+  "Batting · Detailed Stats", "Bowling · Detailed Stats",
+  "Fielding Stats",
+];
+const SCOPE_LANE_SECTIONS = [
+  "Match Details", "Match", "Ball Ranges", "Matchup (Vs)",
+  "Bowler Details", "Dismissed Batter", "Fielding Stats",
+];
+// Attach a lane (and optional re-home section) to an item; null-safe so it can wrap a
+// builder that returned null (e.g. a popup-withheld singleton).
+const withLane = (item, laneVal, section) =>
+  item ? { ...item, lane: laneVal, ...(section ? { section } : {}) } : item;
+
 /**
  * Bind the taxonomy builder to one surface's instance closures (its own store,
- * DOM, singleton bookkeeping). Returns `buildPaletteGroups(s, gi, {surface})`.
+ * DOM, singleton bookkeeping). Returns `buildPaletteGroups(s, gi, {surface, lane})`.
  */
 export function createPaletteGroupsBuilder(deps) {
   const {
@@ -185,7 +235,27 @@ export function createPaletteGroupsBuilder(deps) {
    * Player Profile group (#1) varies by surface; every other group is built
    * identically regardless.
    */
-  function buildPaletteGroups(s, gi, { surface = "leaderboard", popupLock = null } = {}) {
+  function buildPaletteGroups(s, gi, { surface = "leaderboard", popupLock = null, lane = null } = {}) {
+    // Chunk 5 · Phase 1: when a `lane` ("player" | "scope") is requested (the
+    // leaderboard's two-dropdown layout), redistribute the full taxonomy's items
+    // into that lane's ordered section list. No `lane` (pop-up / legacy) → the full
+    // taxonomy, byte-identical. Display-only — never a query path.
+    const finalize = (gs) => {
+      if (!lane) return gs;
+      const bySection = new Map();
+      for (const g of gs) {
+        const groupLane = GROUP_DEFAULT_LANE[g.name] || "scope";
+        for (const it of g.items) {
+          const itLane = it.lane || groupLane;
+          if (itLane !== lane) continue;
+          const sec = it.section || g.name;
+          if (!bySection.has(sec)) bySection.set(sec, []);
+          bySection.get(sec).push(it);
+        }
+      }
+      const order = lane === "player" ? PLAYER_LANE_SECTIONS : SCOPE_LANE_SECTIONS;
+      return order.filter((name) => bySection.has(name)).map((name) => ({ name, items: bySection.get(name) }));
+    };
     const excludeLeaf = (key) => surface === "popup" && POPUP_EXCLUDED_PLAYER_PROFILE_LEAVES.has(key);
     const ns = effectiveNamespace(s);
     const disc = s.discipline;
@@ -328,7 +398,9 @@ export function createPaletteGroupsBuilder(deps) {
       // + Team singleton (moved from the retired Player Profile group).
       pushGroup("Fielder Profile", [
         tallyLeaf("matches", "Matches"),
-        leafSingle("team", "Team"),
+        // Chunk 5: Team is SCOPE (owner ruling) — re-homed into the "Match" section
+        // of the Scope dropdown when laned. Inert (byte-identical) on the un-laned path.
+        withLane(leafSingle("team", "Team"), "scope", "Match"),
       ]);
       // 2 ── Match ───────────────────────────────────────────────────────────────
       // Scope singletons (honoured top-level) + the match-context fielding dims
@@ -375,7 +447,7 @@ export function createPaletteGroupsBuilder(deps) {
         dimLeaf("hand"),
         dimLeaf("batter"),
       ]);
-      return groups;
+      return finalize(groups);
     }
 
     // 1 ── Player Profile ────────────────────────────────────────────────────────
@@ -407,7 +479,10 @@ export function createPaletteGroupsBuilder(deps) {
       // slice engine resolves via a match-award EXISTS). Replaces PotM Count here.
       // T-2e: it is a per-innings slice, so it's withheld on a matchup-Vs row.
       surface === "popup" && !popupMatchupLocked ? { kind: "leaf", label: "PotM (Y/N)", metricKey: "potm", run: () => pickMetric(gi, "potm") } : null,
-      leafSingle("team", "Team"),
+      // Chunk 5: Team is SCOPE (owner ruling — it sits in this Player Profile UI group
+      // but is a match-scope filter), re-homed into "Match Details" in the Scope
+      // dropdown when laned. Inert (byte-identical) on the un-laned pop-up path.
+      withLane(leafSingle("team", "Team"), "scope", "Match Details"),
     ]);
 
     // 2 ── Match Details ─────────────────────────────────────────────────────────
@@ -455,7 +530,9 @@ export function createPaletteGroupsBuilder(deps) {
       pushGroup("Batting · Basic Stats", [
         leafMetric("matches", "Matches"),
         leafMetric("innings", "Innings"),
-        inningsNumberFamily(),
+        // Chunk 5: Innings Number is SCOPE — re-homed into "Match Details" (Scope
+        // dropdown) when laned. Inert (byte-identical) on the un-laned pop-up path.
+        withLane(inningsNumberFamily(), "scope", "Match Details"),
         // Position rework (owner-authorised 2026-08-14): the honest "Batting position"
         // filter (state.positions → `batting_position IN (…)` via buildScopeClauses)
         // is now offered in PLAIN batting too, not just matchup. It reuses the SAME
@@ -464,7 +541,9 @@ export function createPaletteGroupsBuilder(deps) {
         // a matchup — never both. leafSingle self-withholds on the popup surface
         // (strikerpos ∉ POPUP_SCOPE_SINGLETON_KEYS), so the pop-up keeps its own
         // per-innings `batting_position` slice below — no collision.
-        !matchup ? leafSingle("strikerpos", "Batting position") : null,
+        // Chunk 5: Batting position's final home is SCOPE (owner ruling) — re-homed
+        // into "Match Details" (Scope dropdown) when laned. Inert on the un-laned path.
+        !matchup ? withLane(leafSingle("strikerpos", "Batting position"), "scope", "Match Details") : null,
         // T-2e (owner 2026-08-03): Batting position — a batting-only, per-innings LIST
         // slice on the plain `batting` view's `batting_position` (compiles to
         // `batting_position IN (…)` via inningsWhere). Popup-only + withheld on a
@@ -533,7 +612,9 @@ export function createPaletteGroupsBuilder(deps) {
       pushGroup("Bowling · Basic Stats", [
         leafMetric("matches", "Matches"),
         leafMetric("innings", "Innings"),
-        inningsNumberFamily(),
+        // Chunk 5: Innings Number is SCOPE — re-homed into "Match Details" (Scope
+        // dropdown) when laned. Inert (byte-identical) on the un-laned pop-up path.
+        withLane(inningsNumberFamily(), "scope", "Match Details"),
         leafMetric("overs", "Overs"),
         leafMetric("balls", "Balls"),
         leafMetric("maidens", "Maidens"),
@@ -714,12 +795,18 @@ export function createPaletteGroupsBuilder(deps) {
         return variants.length ? { kind: "family", label: "Fielding Wicket Type", variants } : null;
       };
       pushGroup("Fielding Stats", [
+        // Fielding Wicket Type COUNT family = Player (default lane of this group).
         fieldingWicketTypeFamily(),
-        singleFamily("Dismissed batter's position", "fld_pos", FIELDING_POSITIONS.map((n) => [`Position ${n}`, preselectFielding("positions", n)])),
+        // Chunk 5: Dismissed batter's position is SCOPE — stays under the "Fielding
+        // Stats" section header but routes to the Scope dropdown when laned.
+        withLane(
+          singleFamily("Dismissed batter's position", "fld_pos", FIELDING_POSITIONS.map((n) => [`Position ${n}`, preselectFielding("positions", n)])),
+          "scope"
+        ),
       ]);
     }
 
-    return groups;
+    return finalize(groups);
   }
 
   return buildPaletteGroups;
