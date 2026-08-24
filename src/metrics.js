@@ -4478,161 +4478,72 @@ export function eligibleComposedStageKeys(discipline) {
   return keys;
 }
 
-// ── Composed EVENT × metric columns (standalone composer, Step 4, 2026-08-14) ──
-// The EVENT twin of the Stage composer immediately above — SAME shape in every
-// respect (owner ruling: FULLY INDEPENDENT of the scope filters; reads/writes
-// NOTHING on state.event). Pick value(s) [canonical event names] × a base stat →
-// one column per picked event, e.g. "Bat Avg (ICC Men's T20 World Cup)". Reuses the
-// SAME base-metric pool / component set / per-metric SPECS (COMPOSED_INNINGS_*,
-// verbatim so a base rate's formula / NULLIF guard / component `needs` can NEVER
-// drift — Rule 1) and the SAME string↔hex key codec (teamNameToToken /
-// teamTokenToName — a generic codec, no team-specific logic).
+// ── Composed EVENT × metric columns (standalone composer, Step 4, 2026-08-14;
+//    factory-built since the item-B cleanup, 2026-08-24) ───────────────────────
+// The EVENT composer — standalone and filter-independent like every other (reads/
+// writes NOTHING on state.event). Pick value(s) [CANONICAL event names] × a base stat
+// → one column per picked event, e.g. "Bat Avg (ICC Men's T20 World Cup)". Shares the
+// pool / component set / SPECS / hex codec / `''` escape via makeComposerFamily above,
+// which is also where the former `buildComposedEventMetric` body went.
 //
-// Like Stage, the value column is NOT on the base view: `event_name` lives on
-// `matches` and is surfaced to the leaderboard by the SHARED match-context sub-
-// select (filters.js matchContextSubselectSql → matchContextJoinSql), a 1:1 LEFT
-// JOIN aliased `mctx`. Step 4 EXTENDS that sub-select to ALSO project event_name /
-// venue (byte-identical for every existing consumer — additive projection only, and
-// no base view carries either name so the join stays unambiguous). The outer-query
-// reference is `mctx.event_name`. table.js adds the join (join-presence only, WITHOUT
-// flipping the match-context WHERE or the "matches" innings-level path) when an event
-// composer column is present — see table.js's eventComposerCols gate.
+// This is one of the TWO families that differ from the five raw-equality ones, and
+// both differences matter:
 //
-// CLEAN (canonical) event names (owner ruling), IDENTICAL to Stage: the value picker
-// offers CANONICAL labels (the SAME `searchEvents` fold the Event FILTER's mountEvent
-// uses), and a canonical event can map to MULTIPLE raw `event_name` spellings, so the
-// CASE-WHEN uses the SAME canonical→raw expansion the Event FILTER uses — `eventAliases`
-// (canonicalNames.js, the exact helper filters.js eventPredicateSql calls) — emitting
-// `mctx.event_name IN (<raw spellings>)`, NOT `= 'World Cup'`.
+//  1. **mechanic "membership" — the WHOLE-TEST replace.** A canonical event name maps
+//     to MULTIPLE raw `event_name` spellings (sponsor renames, rebrands), so the
+//     conditional is NOT `mctx.event_name = '<value>'` but
+//     `mctx.event_name IN (<raw spellings>)`. The factory therefore replaces the
+//     entire literal substring `innings_number = {S}` (present in EVERY spec) with the
+//     test `membershipFor` returns — a bare `{S}` swap would wrongly leave `= '<value>'`
+//     and the column would count only the one spelling that happens to match the
+//     canonical label. The expansion is `eventAliases` (canonicalNames.js), the EXACT
+//     helper filters.js eventPredicateSql calls, so a composed Event column and the
+//     Event FILTER always agree; it is never re-derived here. Defensive: an empty
+//     expansion yields no column (eventAliases always returns >= 1).
+//
+//  2. **The mctx JOIN is REQUIRED.** `event_name` lives on `matches`, not on the base
+//     views, and is read off the shared 1:1 LEFT JOIN as `mctx.event_name`. table.js
+//     lights that join for the leaderboard by scanning the chosen columns for
+//     `isComposedEvent` (table.js:1918, alongside the `event_set` key) — so the flag
+//     name below is LOAD-BEARING, not decorative: a generic flag would emit SQL
+//     referencing an unjoined alias, i.e. a FAILED query rather than a wrong number.
+//     Unlike Team/Opposition, every generated Event expression MUST contain `mctx.`.
 //
 // KEY = `event__<hexToken>__<baseKey>` e.g. `event__57...__average`. Double
-// underscore, so no single-underscore key can ever collide.
-const COMPOSED_EVENT_PREFIX = "event__";
-const COMPOSED_EVENT_SPECS = COMPOSED_INNINGS_SPECS;
-const COMPOSED_EVENT_COMPONENTS = COMPOSED_INNINGS_COMPONENTS;
-const COMPOSED_EVENT_POOL_ORDER = COMPOSED_INNINGS_POOL_ORDER;
-// The outer-query reference for the joined event_name — the mctx LEFT JOIN aliases
-// the (extended) `matches` sub-select `mctx`.
-const COMPOSED_EVENT_COL = "mctx.event_name";
-
-/** Build the composed-event column key for `baseKey` scoped to canonical `eventName`. */
-export function makeComposedEventKey(eventName, baseKey) {
-  return `${COMPOSED_EVENT_PREFIX}${teamNameToToken(eventName)}__${baseKey}`;
-}
-
-/** Parse a composed-event column key → { token, eventName, baseKey }, or null. */
-export function parseComposedEventKey(key) {
-  if (typeof key !== "string" || !key.startsWith(COMPOSED_EVENT_PREFIX)) return null;
-  const rest = key.slice(COMPOSED_EVENT_PREFIX.length);
-  const sep = rest.indexOf("__");
-  if (sep <= 0) return null;
-  const token = rest.slice(0, sep);
-  const baseKey = rest.slice(sep + 2);
-  const eventName = teamTokenToName(token);
-  if (eventName == null || !baseKey) return null;
-  return { token, eventName, baseKey };
-}
-
-/** True iff every component the `baseKey` spec needs exists in `discipline`'s view. */
-function composedEventComponentsPresent(discipline, spec) {
-  const have = COMPOSED_EVENT_COMPONENTS[discipline];
-  return !!have && spec.needs.every((c) => have.has(c));
-}
-
-/** Build the VIRTUAL metric for a composed-event column: the base metric's own
- * format / higherIsBetter / zeroIsData / kind / source ("innings"), re-badged with
- * the composed key + a "(<event>)" label, and a GENERATED conditional-aggregation
- * sqlExpression. Like Stage (and UNLIKE Team/Opposition's `<col> = '<value>'`), the
- * event conditional is `mctx.event_name IN (<raw spellings>)` — the canonical event
- * expanded to its raw event_name spelling set via eventAliases (the SAME expansion the
- * Event FILTER uses; never re-derived). Both plain disciplines; null outside
- * batting/bowling, for a missing/empty event name, an unknown base / missing component,
- * or an empty raw-spelling expansion. */
-function buildComposedEventMetric(eventName, baseKey, discipline) {
-  if (discipline !== "batting" && discipline !== "bowling") return null;
-  if (eventName == null || eventName === "") return null;
-  const specMap = COMPOSED_EVENT_SPECS[discipline];
-  const spec = specMap && specMap[baseKey];
-  if (!spec || !composedEventComponentsPresent(discipline, spec)) return null;
-  const base = getMetric(baseKey, discipline);
-  if (!base) return null;
-  // Canonical→raw expansion, IDENTICAL to the Event FILTER (filters.js
-  // eventPredicateSql → eventAliases). Each raw becomes a SQL string literal with its
-  // single quotes doubled (the SAME inline escape buildComposedTeamMetric/StageMetric
-  // use — metrics.js is not the owner of escSql, whose import would be circular).
-  // Defensive: an empty expansion yields no column (eventAliases always returns ≥1).
-  const raws = eventAliases(eventName);
-  if (!Array.isArray(raws) || raws.length === 0) return null;
-  const inList = raws.map((r) => `'${String(r).replace(/'/g, "''")}'`).join(", ");
-  const membership = `${COMPOSED_EVENT_COL} IN (${inList})`;
-  // Replace the WHOLE conditional test `innings_number = {S}` (present in every spec)
-  // with the IN-membership — a bare `{S}` swap would wrongly leave `= '<value>'`.
-  const sql = spec.sql.split("innings_number = {S}").join(membership);
-  return {
-    ...base,
-    key: makeComposedEventKey(eventName, baseKey),
-    baseKey,
-    eventName,
-    isComposedEvent: true,
-    sqlExpression: sql,
-    label: `${base.label} (${eventName})`,
-    shortLabel: `${base.shortLabel} (${eventName})`,
-  };
-}
-
-/** Resolve a composed-event COLUMN key to its virtual metric, or null. Called by getMetric. */
-export function resolveComposedEventMetric(key, discipline) {
-  const parsed = parseComposedEventKey(key);
-  if (!parsed) return null;
-  return buildComposedEventMetric(parsed.eventName, parsed.baseKey, discipline);
-}
-
-/** The ordered base metrics the `discipline` Event composer offers — the SAME pool
- * as the Team/Opposition/Stage/Innings composers, filtered to those with a spec AND
- * all components present. [] outside plain batting/bowling. */
-export function composedEventPool(discipline) {
-  if (discipline !== "batting" && discipline !== "bowling") return [];
-  const order = COMPOSED_EVENT_POOL_ORDER[discipline];
-  const specMap = COMPOSED_EVENT_SPECS[discipline];
-  if (!order || !specMap) return [];
-  const pool = [];
-  for (const baseKey of order) {
-    const spec = specMap[baseKey];
-    if (!spec || !composedEventComponentsPresent(discipline, spec)) continue;
-    const base = getMetric(baseKey, discipline);
-    if (base) pool.push(base);
-  }
-  return pool;
-}
-
-// ── Composed-event eligibility (data-driven value space) ───────────────────────
-// Mirrors the Team/Opposition/Stage composers' registries above — see the Team
-// comment for the full rationale (data-driven value space, append-only registry,
-// folded into state.eligibleColumnKeys so a picked Event column survives a re-render
-// / prune at all three prune sites, no persistence across reload).
-const _composedEventKeys = new Set();
-
-/** Record composed-event column key(s) as the composer mints them, so
- * eligibleColumnKeys can keep a chosen Event column alive across a re-render /
- * Search-prune. Ignores anything that isn't a valid composed-event key. */
-export function registerComposedEventKeys(keys) {
-  for (const k of Array.isArray(keys) ? keys : [keys]) {
-    if (typeof k === "string" && parseComposedEventKey(k)) _composedEventKeys.add(k);
-  }
-}
-
-/** Every registered composed-event column key that RESOLVES for `discipline` —
- * folded into eligibleColumnKeys so a chosen Event column survives a re-render /
- * prune, and drops the moment the discipline no longer offers that base metric. []
- * outside plain batting/bowling. */
-export function eligibleComposedEventKeys(discipline) {
-  if (discipline !== "batting" && discipline !== "bowling") return [];
-  const keys = [];
-  for (const k of _composedEventKeys) {
-    if (resolveComposedEventMetric(k, discipline)) keys.push(k);
-  }
-  return keys;
-}
+// underscore, so no single-underscore key ("event_set") can ever collide.
+//
+// The six exports are the SAME six functions, same names, same signatures, same
+// return shapes as before the factory:
+//   makeComposedEventKey(eventName, baseKey) → key
+//   parseComposedEventKey(key)               → { token, eventName, baseKey } | null
+//   resolveComposedEventMetric(key, disc)    → the virtual metric | null (getMetric)
+//   composedEventPool(disc)                  → the ordered base metrics offered
+//   registerComposedEventKeys(keys)          → record minted key(s)
+//   eligibleComposedEventKeys(disc)          → registered keys that still resolve
+export const {
+  makeKey: makeComposedEventKey,
+  parseKey: parseComposedEventKey,
+  resolveMetric: resolveComposedEventMetric,
+  pool: composedEventPool,
+  register: registerComposedEventKeys,
+  eligible: eligibleComposedEventKeys,
+} = makeComposerFamily({
+  prefix: "event__",
+  flag: "isComposedEvent",
+  nameField: "eventName",
+  gate: (discipline) => discipline === "batting" || discipline === "bowling",
+  colFor: () => "mctx.event_name",
+  mechanic: "membership",
+  // Canonical -> raw expansion, IDENTICAL to the Event FILTER (filters.js
+  // eventPredicateSql -> eventAliases). Each raw becomes a SQL string literal with its
+  // single quotes doubled, via the escape every family shares.
+  membershipFor: (eventName, col) => {
+    const raws = eventAliases(eventName);
+    if (!Array.isArray(raws) || raws.length === 0) return null;
+    return { test: `${col} IN (${raws.map(composerSqlLiteral).join(", ")})`, displayName: eventName };
+  },
+  labelFor: (text, eventName) => `${text} (${eventName})`,
+});
 
 // ── Composed VENUE × metric columns (standalone composer, Step 4, 2026-08-14;
 //    factory-built since the item-B cleanup, 2026-08-24) ────────────────────────
