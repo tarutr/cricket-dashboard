@@ -224,8 +224,12 @@ export function openFieldingRowEditor(hostDoc, deps) {
       disabled: Boolean(scopeController && scopeController.isRevealed(s.key)),
       run: () => { if (scopeController) scopeController.revealSingleton(s.key); },
     });
+    // "Batter role" (key "role") is retired here too (owner ruling 2026-08-16:
+    // "doesn't work here" — same call already made for the leaderboard's Fielding
+    // board menu, src/paletteGroups.js). The dim definition stays in fieldingDims.js
+    // (its query path is unchanged); only this offer is withheld.
     const groupItems = (name) =>
-      DIMS.filter((d) => d.group === name && dimOfferable(d)).map(nativeLeaf);
+      DIMS.filter((d) => d.group === name && d.key !== "role" && dimOfferable(d)).map(nativeLeaf);
     const push = (name, items) => { const kept = items.filter(Boolean); if (kept.length) groups.push({ name, items: kept }); };
     push("Dismissed batter", groupItems("Dismissal"));
     push("Bowler", groupItems("Bowler"));
