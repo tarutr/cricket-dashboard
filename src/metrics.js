@@ -3928,6 +3928,222 @@ export function venueSetColumnKeys(discipline) {
   return discipline === "batting" || discipline === "bowling" ? [VENUE_SET_KEY] : [];
 }
 
+// ── Composer FAMILY FACTORY (code cleanup item B, 2026-08-24) ──────────────────
+// The seven "one value × one base stat → one column" composers — Team / Opposition /
+// Stage / Event / Venue / City / Season — are ONE machine with a handful of
+// per-family parameters. This factory holds the machine; each family below supplies
+// only its parameters and destructures the six functions into its OWN export names,
+// so NO consumer changes: getMetric's `??` chain, columnsPicker's
+// SEARCH_COMPOSER_META, state's eligible fold and table.js's mctx-join gates all
+// keep calling exactly the names they called before.
+//
+// SHARED VERBATIM by every family (so a base rate's formula / NULLIF guard /
+// component `needs` can NEVER drift between composers — Rule 1):
+//   • the base-metric pool / component set / per-metric SPECS — COMPOSED_INNINGS_*
+//     (the Innings-Number composer's definitions, reused as-is);
+//   • the string↔hex key codec — teamNameToToken / teamTokenToName (generic, no
+//     team-specific logic: keeps a composed KEY a valid UNQUOTED SQL alias, free of
+//     `__` so the first `__` after the prefix cleanly splits token|baseKey, and
+//     round-tripping any string — spaces / punctuation / apostrophes / unicode);
+//   • the `'` → `''` SQL string-literal escape (metrics.js deliberately does NOT
+//     import state.js's escSql — that would be a circular import);
+//   • the append-only per-session eligibility registry — but ONE PRIVATE Set per
+//     factory call, so the seven registries stay separate exactly as before.
+//
+// PER-FAMILY spec fields:
+//   prefix        The key prefix, always ending in a DOUBLE underscore ("venue__"),
+//                 so no single-underscore key can collide
+//                 ("venue_set".startsWith("venue__") === false).
+//   flag          The metric's boolean field name ("isComposedVenue"). LOAD-BEARING
+//                 BEYOND DISPLAY: table.js lights the shared `mctx` LEFT JOIN off
+//                 these exact names (isComposedStage / Event / Venue / City /
+//                 Season), so a "generic" flag would emit SQL referencing an
+//                 unjoined alias — a failed query, not a wrong number.
+//   nameField     The field carrying the value, on BOTH the parse result and the
+//                 built metric ("venueName"). Consumers read it by name
+//                 (columnsPicker's `nameOf: (p) => p.venueName`).
+//   gate          (discipline) => truthy iff the family offers columns there. Each
+//                 family keeps its OWN gate expression — Team/Opposition gate on
+//                 their discipline-keyed column map, the other five on the explicit
+//                 plain-discipline test — rather than one "unified" gate.
+//   colFor        (discipline) => the SQL column reference the conditional reads
+//                 (discipline-dependent for Team/Opposition, a constant for the
+//                 five match-context families).
+//   mechanic      HOW the value is substituted into the spec SQL. The two shapes are
+//                 NOT interchangeable — conflating them is exactly how a literal
+//                 `mctx.venue = '<value>'` would survive into emitted SQL:
+//                   "equality"   DUAL-SPLIT: `innings_number` → the column, then
+//                                `{S}` → the escaped value, yielding
+//                                `<col> = '<value>'`. Used by the five dimensions
+//                                with NO canonical fold (Team, Opposition, Venue,
+//                                City, Season).
+//                   "membership" WHOLE-TEST REPLACE: the literal substring
+//                                `innings_number = {S}` (present in EVERY spec) is
+//                                replaced by the family's own test — e.g.
+//                                `mctx.event_stage IN ('Semi Final', …)` or
+//                                `mctx.event_stage IS NULL`. Used by the folded
+//                                dimensions (Stage, Event).
+//                 Any other value yields NO column at all — fail closed, never a
+//                 half-substituted expression.
+//   membershipFor (name, col) => { test, displayName } | null. REQUIRED for
+//                 mechanic "membership", unused otherwise. null yields no column (a
+//                 defensively empty alias expansion). `displayName` lets a family
+//                 label a sentinel differently from the value it stores (Stage's
+//                 STAGE_NONE → STAGE_NONE_LABEL).
+//   labelFor      (baseText, displayName) => the composed label text; applied to
+//                 base.label AND base.shortLabel. Team/Stage/Event/Venue/City/Season
+//                 use `${baseText} (${displayName})`; Opposition uses
+//                 `${baseText} vs ${displayName}` (owner ruling — the versus form).
+
+/** A SQL string literal for `value`, single quotes doubled. The ONE escape every
+ * composer family shares (metrics.js is not the owner of escSql — importing state.js
+ * here would be circular). */
+function composerSqlLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+/** Build one composer family's six functions from its `spec` (fields documented
+ * above). Returns { makeKey, parseKey, resolveMetric, pool, register, eligible },
+ * which each family re-exports under its own historical names. */
+function makeComposerFamily(spec) {
+  const { prefix, flag, nameField, gate, colFor, mechanic, membershipFor, labelFor } = spec;
+
+  /** Build the composed column key for `baseKey` scoped to `name`. */
+  function makeKey(name, baseKey) {
+    return `${prefix}${teamNameToToken(name)}__${baseKey}`;
+  }
+
+  /** Parse a composed column key → { token, [nameField], baseKey }, or null. Returns
+   * null for every OTHER family's keys (different prefix), for the single-underscore
+   * `x_set` keys, and for a malformed/undecodable token. */
+  function parseKey(key) {
+    if (typeof key !== "string" || !key.startsWith(prefix)) return null;
+    const rest = key.slice(prefix.length);
+    const sep = rest.indexOf("__");
+    if (sep <= 0) return null;
+    const token = rest.slice(0, sep);
+    const baseKey = rest.slice(sep + 2);
+    const name = teamTokenToName(token);
+    if (name == null || !baseKey) return null;
+    return { token, [nameField]: name, baseKey };
+  }
+
+  /** True iff every component the `baseKey` spec needs exists in `discipline`'s view. */
+  function componentsPresent(discipline, metricSpec) {
+    const have = COMPOSED_INNINGS_COMPONENTS[discipline];
+    return !!have && metricSpec.needs.every((c) => have.has(c));
+  }
+
+  /** Build the VIRTUAL metric for one composed column: the base metric's own format /
+   * higherIsBetter / zeroIsData / kind / source, re-badged with the composed key, the
+   * family's name field + boolean flag, the family's label form, and a GENERATED
+   * conditional-aggregation sqlExpression (per the family's substitution mechanic).
+   * null outside the family's gate, for a missing/empty value, for an unknown base or
+   * a missing component, and for a family whose mechanic is unrecognised. */
+  function buildMetric(name, baseKey, discipline) {
+    if (!gate(discipline)) return null;
+    if (name == null || name === "") return null;
+    const specMap = COMPOSED_INNINGS_SPECS[discipline];
+    const metricSpec = specMap && specMap[baseKey];
+    if (!metricSpec || !componentsPresent(discipline, metricSpec)) return null;
+    const base = getMetric(baseKey, discipline);
+    if (!base) return null;
+    const col = colFor(discipline);
+    if (!col) return null;
+    let sql;
+    let displayName;
+    if (mechanic === "equality") {
+      // Dual-split: the conditional column, then the value as an escaped literal.
+      sql = metricSpec.sql.split("innings_number").join(col).split("{S}").join(composerSqlLiteral(name));
+      displayName = name;
+    } else if (mechanic === "membership") {
+      // Whole-test replace: `innings_number = {S}` → the family's own test. A bare
+      // `{S}` swap would wrongly leave `<col> = '<value>'`.
+      const membership = membershipFor(name, col);
+      if (!membership || !membership.test) return null;
+      sql = metricSpec.sql.split("innings_number = {S}").join(membership.test);
+      displayName = membership.displayName;
+    } else {
+      return null; // unknown mechanic → no column (never a half-substituted expression)
+    }
+    return {
+      ...base,
+      key: makeKey(name, baseKey),
+      baseKey,
+      [nameField]: name,
+      [flag]: true,
+      sqlExpression: sql,
+      label: labelFor(base.label, displayName),
+      shortLabel: labelFor(base.shortLabel, displayName),
+    };
+  }
+
+  /** Resolve a composed COLUMN key to its virtual metric, or null. Called by getMetric. */
+  function resolveMetric(key, discipline) {
+    const parsed = parseKey(key);
+    if (!parsed) return null;
+    return buildMetric(parsed[nameField], parsed.baseKey, discipline);
+  }
+
+  /** The ordered base metrics this composer offers for `discipline` — the SAME pool
+   * every composer shares, filtered to those with a spec AND all components present.
+   * [] outside the family's gate. */
+  function pool(discipline) {
+    if (!gate(discipline)) return [];
+    const order = COMPOSED_INNINGS_POOL_ORDER[discipline];
+    const specMap = COMPOSED_INNINGS_SPECS[discipline];
+    if (!order || !specMap) return [];
+    const out = [];
+    for (const baseKey of order) {
+      const metricSpec = specMap[baseKey];
+      if (!metricSpec || !componentsPresent(discipline, metricSpec)) continue;
+      const base = getMetric(baseKey, discipline);
+      if (base) out.push(base);
+    }
+    return out;
+  }
+
+  // ── Eligibility (data-driven value space) ───────────────────────────────────
+  // These value sets are DATA-DRIVEN (the full list can't be enumerated into
+  // eligibleColumnKeys' finite Set ahead of time), so — unlike the fixed-token
+  // composers (pos__ / in__), which enumerate pool × tokens — the eligible set is
+  // whatever the user has actually COMPOSED. `registered` records every minted key
+  // (register(), called by the columns picker on confirm), and eligible() returns
+  // those that still RESOLVE for the discipline. That is folded into
+  // state.eligibleColumnKeys, which ALL three column-prune sites consult
+  // (state.pruneIneligibleState, state.isLeaderboardColumnAddable,
+  // table.pruneInvalidColumns) — so one fold keeps a picked column alive everywhere,
+  // with no query-builder edit. Append-only + harmless: a registered key that is no
+  // longer a chosen column simply never matches a slot at the prune sites. No
+  // persistence anywhere in the app (state resets on reload), so the registry and
+  // the columns reset together. One Set PER FAMILY (per factory call).
+  const registered = new Set();
+
+  /** Record composed column key(s) as the composer mints them, so eligibleColumnKeys
+   * can keep a chosen column alive across a re-render / Search-prune. Ignores
+   * anything that isn't a valid key of THIS family. */
+  function register(keys) {
+    for (const k of Array.isArray(keys) ? keys : [keys]) {
+      if (typeof k === "string" && parseKey(k)) registered.add(k);
+    }
+  }
+
+  /** Every registered key that RESOLVES for `discipline` — folded into
+   * eligibleColumnKeys so a chosen column survives a re-render / prune, and drops the
+   * moment the discipline no longer offers that base metric (e.g. a batting-only base
+   * on a bowling table). [] outside the family's gate. */
+  function eligible(discipline) {
+    if (!gate(discipline)) return [];
+    const keys = [];
+    for (const k of registered) {
+      if (resolveMetric(k, discipline)) keys.push(k);
+    }
+    return keys;
+  }
+
+  return { makeKey, parseKey, resolveMetric, pool, register, eligible };
+}
+
 // ── Composed TEAM × metric columns (standalone composer, 2026-08-14) ───────────
 // A STANDALONE composer (owner ruling: composers are FULLY INDEPENDENT of the scope
 // filters — this reads/writes NOTHING on state.teams). Pick value(s) [team names] ×
@@ -4581,138 +4797,55 @@ export function eligibleComposedEventKeys(discipline) {
   return keys;
 }
 
-// ── Composed VENUE × metric columns (standalone composer, Step 4, 2026-08-14) ──
+// ── Composed VENUE × metric columns (standalone composer, Step 4, 2026-08-14;
+//    factory-built since the item-B cleanup, 2026-08-24) ────────────────────────
 // The VENUE twin of the Stage/Event composers — SAME standalone, filter-independent
 // shape (reads/writes NOTHING on state.venue). Pick value(s) [venue names] × a base
 // stat → one column per picked venue, e.g. "Bat SR (Eden Gardens)". Reuses the SAME
-// pool / component set / SPECS (COMPOSED_INNINGS_*) and the SAME string↔hex codec.
+// pool / component set / SPECS (COMPOSED_INNINGS_*) and the SAME string↔hex codec —
+// all of which now live in makeComposerFamily above, which is also where the former
+// `buildComposedVenueMetric` body went (other files' comments still name it).
 //
 // TWO differences from Event:
 //  1. Venue has NO canonical fold anywhere (canonicalNames.js has none; the Venue
 //     FILTER's venuePredicateSql matches the RAW `venue IN (…)` strings as stored).
 //     So the value picker offers RAW venue names and the CASE-WHEN is a SINGLE-value
-//     RAW equality `mctx.venue = '<name>'` — NO IN-expansion. This is the Team/
-//     Opposition composers' `<col> = '<value>'` dual-split shape (innings_number →
-//     the venue column, {S} → the escaped raw name), not Stage/Event's IN-membership.
+//     RAW equality `mctx.venue = '<name>'` — NO IN-expansion. That is the factory's
+//     "equality" (dual-split) mechanic, the one Team/Opposition/City/Season also use
+//     (innings_number → the venue column, {S} → the escaped raw name), NOT
+//     Stage/Event's "membership" whole-test replace.
 //  2. Like Stage/Event, `venue` lives on `matches` and is read off the SHARED mctx
 //     LEFT JOIN (Step 4 extended the sub-select to project it) as `mctx.venue`.
+//     table.js lights that join off the metric's `isComposedVenue` flag, hence the
+//     exact flag name below.
 //
 // KEY = `venue__<hexToken>__<baseKey>`. Double underscore — no single-underscore key
 // can collide.
-const COMPOSED_VENUE_PREFIX = "venue__";
-const COMPOSED_VENUE_SPECS = COMPOSED_INNINGS_SPECS;
-const COMPOSED_VENUE_COMPONENTS = COMPOSED_INNINGS_COMPONENTS;
-const COMPOSED_VENUE_POOL_ORDER = COMPOSED_INNINGS_POOL_ORDER;
-// The outer-query reference for the joined venue (see note 2) — the extended mctx
-// LEFT JOIN aliases the `matches` sub-select `mctx`.
-const COMPOSED_VENUE_COL = "mctx.venue";
-
-/** Build the composed-venue column key for `baseKey` scoped to raw `venueName`. */
-export function makeComposedVenueKey(venueName, baseKey) {
-  return `${COMPOSED_VENUE_PREFIX}${teamNameToToken(venueName)}__${baseKey}`;
-}
-
-/** Parse a composed-venue column key → { token, venueName, baseKey }, or null. */
-export function parseComposedVenueKey(key) {
-  if (typeof key !== "string" || !key.startsWith(COMPOSED_VENUE_PREFIX)) return null;
-  const rest = key.slice(COMPOSED_VENUE_PREFIX.length);
-  const sep = rest.indexOf("__");
-  if (sep <= 0) return null;
-  const token = rest.slice(0, sep);
-  const baseKey = rest.slice(sep + 2);
-  const venueName = teamTokenToName(token);
-  if (venueName == null || !baseKey) return null;
-  return { token, venueName, baseKey };
-}
-
-/** True iff every component the `baseKey` spec needs exists in `discipline`'s view. */
-function composedVenueComponentsPresent(discipline, spec) {
-  const have = COMPOSED_VENUE_COMPONENTS[discipline];
-  return !!have && spec.needs.every((c) => have.has(c));
-}
-
-/** Build the VIRTUAL metric for a composed-venue column: the base metric's own format
- * / higherIsBetter / zeroIsData / kind / source ("innings"), re-badged with the
- * composed key + a "(<venue>)" label, and a GENERATED conditional-aggregation
- * sqlExpression. Venue has NO fold, so — like Team/Opposition, UNLIKE Stage/Event —
- * the conditional is a SINGLE RAW equality `mctx.venue = '<name>'` (the venue column
- * substituted for innings_number, the SQL-escaped raw venue name for {S}). Both plain
- * disciplines; null outside batting/bowling, for a missing venue name, or for an
- * unknown base / missing component. */
-function buildComposedVenueMetric(venueName, baseKey, discipline) {
-  if (discipline !== "batting" && discipline !== "bowling") return null;
-  if (venueName == null || venueName === "") return null;
-  const specMap = COMPOSED_VENUE_SPECS[discipline];
-  const spec = specMap && specMap[baseKey];
-  if (!spec || !composedVenueComponentsPresent(discipline, spec)) return null;
-  const base = getMetric(baseKey, discipline);
-  if (!base) return null;
-  // SQL string literal, single-quotes doubled (mirrors buildComposedTeamMetric's
-  // identical inline guard — metrics.js is not the owner of escSql, circular import).
-  const literal = `'${String(venueName).replace(/'/g, "''")}'`;
-  const sql = spec.sql.split("innings_number").join(COMPOSED_VENUE_COL).split("{S}").join(literal);
-  return {
-    ...base,
-    key: makeComposedVenueKey(venueName, baseKey),
-    baseKey,
-    venueName,
-    isComposedVenue: true,
-    sqlExpression: sql,
-    label: `${base.label} (${venueName})`,
-    shortLabel: `${base.shortLabel} (${venueName})`,
-  };
-}
-
-/** Resolve a composed-venue COLUMN key to its virtual metric, or null. Called by getMetric. */
-export function resolveComposedVenueMetric(key, discipline) {
-  const parsed = parseComposedVenueKey(key);
-  if (!parsed) return null;
-  return buildComposedVenueMetric(parsed.venueName, parsed.baseKey, discipline);
-}
-
-/** The ordered base metrics the `discipline` Venue composer offers — the SAME pool as
- * the Team/Opposition/Stage/Event/Innings composers, filtered to those with a spec AND
- * all components present. [] outside plain batting/bowling. */
-export function composedVenuePool(discipline) {
-  if (discipline !== "batting" && discipline !== "bowling") return [];
-  const order = COMPOSED_VENUE_POOL_ORDER[discipline];
-  const specMap = COMPOSED_VENUE_SPECS[discipline];
-  if (!order || !specMap) return [];
-  const pool = [];
-  for (const baseKey of order) {
-    const spec = specMap[baseKey];
-    if (!spec || !composedVenueComponentsPresent(discipline, spec)) continue;
-    const base = getMetric(baseKey, discipline);
-    if (base) pool.push(base);
-  }
-  return pool;
-}
-
-// ── Composed-venue eligibility (data-driven value space) ───────────────────────
-// Mirrors the Team/Opposition/Stage/Event composers' registries above — see the Team
-// comment for the full rationale (append-only registry, folded into
-// state.eligibleColumnKeys, no persistence across reload).
-const _composedVenueKeys = new Set();
-
-/** Record composed-venue column key(s) as the composer mints them. Ignores anything
- * that isn't a valid composed-venue key. */
-export function registerComposedVenueKeys(keys) {
-  for (const k of Array.isArray(keys) ? keys : [keys]) {
-    if (typeof k === "string" && parseComposedVenueKey(k)) _composedVenueKeys.add(k);
-  }
-}
-
-/** Every registered composed-venue column key that RESOLVES for `discipline` — folded
- * into eligibleColumnKeys so a chosen Venue column survives a re-render / prune. []
- * outside plain batting/bowling. */
-export function eligibleComposedVenueKeys(discipline) {
-  if (discipline !== "batting" && discipline !== "bowling") return [];
-  const keys = [];
-  for (const k of _composedVenueKeys) {
-    if (resolveComposedVenueMetric(k, discipline)) keys.push(k);
-  }
-  return keys;
-}
+//
+// The six exports are the SAME six functions, same names, same signatures, same
+// return shapes as before the factory:
+//   makeComposedVenueKey(venueName, baseKey) → key
+//   parseComposedVenueKey(key)               → { token, venueName, baseKey } | null
+//   resolveComposedVenueMetric(key, disc)    → the virtual metric | null (getMetric)
+//   composedVenuePool(disc)                  → the ordered base metrics offered
+//   registerComposedVenueKeys(keys)          → record minted key(s)
+//   eligibleComposedVenueKeys(disc)          → registered keys that still resolve
+export const {
+  makeKey: makeComposedVenueKey,
+  parseKey: parseComposedVenueKey,
+  resolveMetric: resolveComposedVenueMetric,
+  pool: composedVenuePool,
+  register: registerComposedVenueKeys,
+  eligible: eligibleComposedVenueKeys,
+} = makeComposerFamily({
+  prefix: "venue__",
+  flag: "isComposedVenue",
+  nameField: "venueName",
+  gate: (discipline) => discipline === "batting" || discipline === "bowling",
+  colFor: () => "mctx.venue",
+  mechanic: "equality",
+  labelFor: (text, venueName) => `${text} (${venueName})`,
+});
 
 // ── Composed CITY × metric columns (standalone composer, City & Season everywhere,
 //    2026-08-16) ──────────────────────────────────────────────────────────────────
