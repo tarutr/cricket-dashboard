@@ -811,20 +811,44 @@ function conditionToHaving(cond, discipline, exprFn) {
   }
 }
 
-function advancedToHaving(advanced, discipline, exprFn) {
+/** THE stat-condition group/AND-OR assembly — one copy, shared by the two entry
+ * points that compile the advanced ("Catches >= 20 / Average >= 30") conditions:
+ * `advancedToHaving` (batting/bowling/matchup HAVING) and `buildFieldingCountGate`
+ * (the fielding board's outer WHERE). Both must always render operator / between /
+ * AND-OR semantics identically, so the assembly lives here rather than in two
+ * hand-synchronised copies.
+ *
+ * `condToSql(cond)` maps ONE condition to its predicate string, or null to DROP it
+ * (an unsupported metric in this namespace, an unknown operator, a display-only
+ * column) — so a group whose every condition drops contributes nothing, and an
+ * all-dropped set returns null, leaving the caller's query byte-identical.
+ * `orAll` forces BOTH joiners — the within-group `g.op` and the across-group
+ * `advanced.op` — to OR; it is how the fielding board's degenerate player lane
+ * implements "Match any" (see buildFieldingCountGate). Default false keeps the
+ * authored joiners verbatim.
+ *
+ * NULL CONTRACT: this reads `advanced.groups` through activeGroups(), so a null /
+ * undefined `advanced` THROWS. That is deliberate — each caller owns its own
+ * contract (buildFieldingCountGate guards, advancedToHaving does not, exactly as
+ * before). Private: the two named entry points are the only callers. */
+function assembleConditionGroups(advanced, condToSql, { orAll = false } = {}) {
   const groups = activeGroups(advanced);
   if (groups.length === 0) return null;
   const parts = groups
     .map((g) => {
-      const condSql = g.conds.map((c) => conditionToHaving(c, discipline, exprFn)).filter(Boolean);
+      const condSql = g.conds.map((c) => condToSql(c)).filter(Boolean);
       if (condSql.length === 0) return null;
-      const joiner = g.op === "OR" ? " OR " : " AND ";
+      const joiner = orAll || g.op === "OR" ? " OR " : " AND ";
       return condSql.length > 1 ? `(${condSql.join(joiner)})` : condSql[0];
     })
     .filter(Boolean);
   if (parts.length === 0) return null;
-  const topJoiner = advanced.op === "OR" ? " OR " : " AND ";
+  const topJoiner = orAll || advanced.op === "OR" ? " OR " : " AND ";
   return parts.length > 1 ? `(${parts.join(topJoiner)})` : parts[0];
+}
+
+function advancedToHaving(advanced, discipline, exprFn) {
+  return assembleConditionGroups(advanced, (c) => conditionToHaving(c, discipline, exprFn));
 }
 
 /** True if any ACTIVE advanced condition targets a metric matching `pred`.
@@ -1560,7 +1584,8 @@ function conditionToFieldingWhere(cond) {
   if (!col) return null; // not a supported fielding tally → dropped (never leaks)
   return conditionToHaving(cond, "batting", () => col);
 }
-/** Mirror of advancedToHaving's group/AND-OR assembly, but routing each condition
+/** Shares advancedToHaving's group/AND-OR assembly (the one assembleConditionGroups
+ * core — cleanup item A), routing each condition
  * through conditionToFieldingWhere (membership-gated, base-column expr). Returns the
  * combined predicate string, or null when no supported fielding count condition is
  * active (so the board query stays byte-identical).
@@ -1589,20 +1614,7 @@ function conditionToFieldingWhere(cond) {
  * re-emit it into). */
 function buildFieldingCountGate(advanced, playerOp = "AND") {
   if (!advanced) return null;
-  const groups = activeGroups(advanced);
-  if (groups.length === 0) return null;
-  const orAll = playerOp === "OR";
-  const parts = groups
-    .map((g) => {
-      const condSql = g.conds.map(conditionToFieldingWhere).filter(Boolean);
-      if (condSql.length === 0) return null;
-      const joiner = orAll || g.op === "OR" ? " OR " : " AND ";
-      return condSql.length > 1 ? `(${condSql.join(joiner)})` : condSql[0];
-    })
-    .filter(Boolean);
-  if (parts.length === 0) return null;
-  const topJoiner = orAll || advanced.op === "OR" ? " OR " : " AND ";
-  return parts.length > 1 ? `(${parts.join(topJoiner)})` : parts[0];
+  return assembleConditionGroups(advanced, conditionToFieldingWhere, { orAll: playerOp === "OR" });
 }
 
 /** Base-table SELECT expression for each fielding COUNT column, keyed by metric key —
