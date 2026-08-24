@@ -3739,26 +3739,124 @@ const SCOPE_OPP_COL = { batting: "bowling_team", bowling: "batting_team" };
 export const INNINGS_NUMBER_SET_KEY = "inn_set";
 export const TEAM_SET_KEY = "team_set";
 export const OPPOSITION_SET_KEY = "opp_set";
+export const CITY_SET_KEY = "city_set";
+export const SEASON_SET_KEY = "season_set";
+export const EVENT_SET_KEY = "event_set";
+export const VENUE_SET_KEY = "venue_set";
 
-/** Resolve the Innings-Number which-values key to its VIRTUAL list metric (both
- * disciplines), or null. Called by getMetric. */
-export function resolveInningsNumberSetMetric(key, discipline) {
-  if (key !== INNINGS_NUMBER_SET_KEY || (discipline !== "batting" && discipline !== "bowling")) return null;
-  return {
+// ── Which-values ("what values did this player have in the filtered rows")
+//    columns — shared spec table (Wave-F cleanup item C, mirrors the fielding
+//    family's FIELDING_SET_SPECS/resolveFieldingSetMetric idiom, metrics.js
+//    ~5903+). Seven columns collapse the six original 30-line resolver blocks
+//    (Innings Number/Team/Opposition, added 2026-08-14; City/Season, added
+//    2026-08-16; Event/Venue, added 2026-08-16) into one row each. Every entry
+//    shares the identical constant block (source "innings", higherIsBetter
+//    false, format "list", kind "attribute", zeroIsData false, isPhaseMetric
+//    null, sqlExpression list(DISTINCT <col> ORDER BY <col>), sortExpression
+//    MIN(<col>)) — the only per-family differences are the label/shortLabel,
+//    the column, and (Innings Number only) the display-numbering override.
+//
+//   • Innings Number/Team/Opposition read a RAW column already projected on the
+//     batting/bowling view itself (innings_number / SCOPE_TEAM_COL /
+//     SCOPE_OPP_COL) — no join.
+//   • City/Season/Event/Venue live on `matches`, reachable only via the SHARED
+//     mctx LEFT JOIN (filters.js matchContextSubselectSql projects city/
+//     season/event_name/venue; table.js lights the join whenever the matching
+//     *_set column is present, exactly like the matching composer columns) —
+//     the join is 1:1 on match_id so it moves no aggregate.
+//   • Innings Number displays 1-based (raw storage is 0-based): the list AND
+//     its own inline ORDER BY add +1 so the values shown match the Innings
+//     Number filter's own numbering; sortExpression (used for column sort, not
+//     display) does NOT add +1 — this asymmetry is deliberate and preserved via
+//     an explicit `listCol` override, not a shared "+1 for everything" flag.
+// `bpos_set` (batting-only, different gate) and the fielding `fld_*_set`
+// family (materially different metric shape — MAX(fielding_cte.…) via a
+// separate CTE) are OUT of scope here by design; see the cleanup plan.
+const SCOPE_SET_SPECS = [
+  {
     key: INNINGS_NUMBER_SET_KEY,
     label: "Innings Number",
     shortLabel: "Inns #",
+    title: "Innings numbers present in the filtered rows",
+    colFor: (d) => (d === "batting" || d === "bowling" ? "innings_number" : null),
+    listCol: (col) => `${col} + 1`, // display override: sortExpression still uses the bare col.
+  },
+  {
+    key: TEAM_SET_KEY,
+    label: "Team",
+    shortLabel: "Team",
+    title: "Teams the player represented in the filtered rows",
+    colFor: (d) => SCOPE_TEAM_COL[d] || null,
+  },
+  {
+    key: OPPOSITION_SET_KEY,
+    label: "Opposition",
+    shortLabel: "Opp.",
+    title: "Opponents faced in the filtered rows",
+    colFor: (d) => SCOPE_OPP_COL[d] || null,
+  },
+  {
+    key: CITY_SET_KEY,
+    label: "City",
+    shortLabel: "City",
+    title: "Cities played in across the filtered rows",
+    colFor: (d) => (d === "batting" || d === "bowling" ? "mctx.city" : null),
+  },
+  {
+    key: SEASON_SET_KEY,
+    label: "Season",
+    shortLabel: "Season",
+    title: "Seasons present in the filtered rows",
+    colFor: (d) => (d === "batting" || d === "bowling" ? "mctx.season" : null),
+  },
+  {
+    key: EVENT_SET_KEY,
+    label: "Event",
+    shortLabel: "Event",
+    title: "Events played in across the filtered rows",
+    colFor: (d) => (d === "batting" || d === "bowling" ? "mctx.event_name" : null),
+  },
+  {
+    key: VENUE_SET_KEY,
+    label: "Venue",
+    shortLabel: "Venue",
+    title: "Venues played at across the filtered rows",
+    colFor: (d) => (d === "batting" || d === "bowling" ? "mctx.venue" : null),
+  },
+];
+const _SCOPE_SET_BY_KEY = new Map(SCOPE_SET_SPECS.map((s) => [s.key, s]));
+
+/** Resolve a which-values key (inn_set/team_set/opp_set/city_set/season_set/
+ * event_set/venue_set) to its VIRTUAL list metric for `discipline`, or null.
+ * Called only by the six one-line wrappers below (each still guards its own
+ * key first, exactly like the original per-family resolvers). */
+function resolveScopeSetMetric(key, discipline) {
+  const spec = _SCOPE_SET_BY_KEY.get(key);
+  if (!spec) return null;
+  const col = spec.colFor(discipline);
+  if (!col) return null;
+  const listCol = spec.listCol ? spec.listCol(col) : col;
+  return {
+    key: spec.key,
+    label: spec.label,
+    shortLabel: spec.shortLabel,
     discipline,
     source: "innings",
-    sqlExpression: "list(DISTINCT innings_number + 1 ORDER BY innings_number + 1)",
-    sortExpression: "MIN(innings_number)",
+    sqlExpression: `list(DISTINCT ${listCol} ORDER BY ${listCol})`,
+    sortExpression: `MIN(${col})`,
     higherIsBetter: false,
     format: "list",
     kind: "attribute",
     zeroIsData: false,
     isPhaseMetric: null,
-    columnTitle: "Innings numbers present in the filtered rows",
+    columnTitle: spec.title,
   };
+}
+
+/** Resolve the Innings-Number which-values key to its VIRTUAL list metric (both
+ * disciplines), or null. Called by getMetric. */
+export function resolveInningsNumberSetMetric(key, discipline) {
+  return key === INNINGS_NUMBER_SET_KEY ? resolveScopeSetMetric(key, discipline) : null;
 }
 /** The Innings-Number which-values key offerable for `discipline` (both) —
  * folded into eligibleColumnKeys so a chosen / auto-added column survives a
@@ -3770,23 +3868,7 @@ export function inningsNumberSetColumnKeys(discipline) {
 /** Resolve the Team which-values key to its VIRTUAL list metric (both
  * disciplines) — the player's OWN side — or null. Called by getMetric. */
 export function resolveTeamSetMetric(key, discipline) {
-  const col = SCOPE_TEAM_COL[discipline];
-  if (key !== TEAM_SET_KEY || !col) return null;
-  return {
-    key: TEAM_SET_KEY,
-    label: "Team",
-    shortLabel: "Team",
-    discipline,
-    source: "innings",
-    sqlExpression: `list(DISTINCT ${col} ORDER BY ${col})`,
-    sortExpression: `MIN(${col})`,
-    higherIsBetter: false,
-    format: "list",
-    kind: "attribute",
-    zeroIsData: false,
-    isPhaseMetric: null,
-    columnTitle: "Teams the player represented in the filtered rows",
-  };
+  return key === TEAM_SET_KEY ? resolveScopeSetMetric(key, discipline) : null;
 }
 /** The Team which-values key offerable for `discipline` (both) — folded into
  * eligibleColumnKeys so a chosen / auto-added column survives a re-render. */
@@ -3797,23 +3879,7 @@ export function teamSetColumnKeys(discipline) {
 /** Resolve the Opposition which-values key to its VIRTUAL list metric (both
  * disciplines) — the OTHER side — or null. Called by getMetric. */
 export function resolveOppositionSetMetric(key, discipline) {
-  const col = SCOPE_OPP_COL[discipline];
-  if (key !== OPPOSITION_SET_KEY || !col) return null;
-  return {
-    key: OPPOSITION_SET_KEY,
-    label: "Opposition",
-    shortLabel: "Opp.",
-    discipline,
-    source: "innings",
-    sqlExpression: `list(DISTINCT ${col} ORDER BY ${col})`,
-    sortExpression: `MIN(${col})`,
-    higherIsBetter: false,
-    format: "list",
-    kind: "attribute",
-    zeroIsData: false,
-    isPhaseMetric: null,
-    columnTitle: "Opponents faced in the filtered rows",
-  };
+  return key === OPPOSITION_SET_KEY ? resolveScopeSetMetric(key, discipline) : null;
 }
 /** The Opposition which-values key offerable for `discipline` (both) — folded
  * into eligibleColumnKeys so a chosen / auto-added column survives a re-render. */
@@ -3821,40 +3887,10 @@ export function oppositionSetColumnKeys(discipline) {
   return SCOPE_OPP_COL[discipline] ? [OPPOSITION_SET_KEY] : [];
 }
 
-// ── City / Season "which values" columns (City & Season everywhere, 2026-08-16) ──
-// TWO more which-values columns, generalising the Team/Opposition pattern to the two
-// new match-level filters. UNLIKE Team/Opposition/Innings (which read a raw column on
-// the batting/bowling view), city & season live on `matches` — reachable ONLY via the
-// SHARED mctx LEFT JOIN (filters.js matchContextSubselectSql now projects city/season;
-// table.js lights the join when a city_set/season_set column is present, exactly like
-// the city/season composer columns). The join is 1:1 on match_id, so it moves no
-// aggregate — anchors byte-identical. This is the reason the Wave-2A worker deferred
-// Stage/Event/Venue which-values (metrics.js note above): they needed this NEW join,
-// which the composer work later made available. Season orders by the raw string, which
-// is chronological because every season starts with its 4-digit start year ("2024" |
-// "2024/25"). Both disciplines (city/season are match-level, not discipline-specific).
-export const CITY_SET_KEY = "city_set";
-export const SEASON_SET_KEY = "season_set";
-
 /** Resolve the City which-values key to its VIRTUAL list metric (both disciplines),
  * or null. Reads mctx.city — needs the mctx join present (table.js city gate). */
 export function resolveCitySetMetric(key, discipline) {
-  if (key !== CITY_SET_KEY || (discipline !== "batting" && discipline !== "bowling")) return null;
-  return {
-    key: CITY_SET_KEY,
-    label: "City",
-    shortLabel: "City",
-    discipline,
-    source: "innings",
-    sqlExpression: "list(DISTINCT mctx.city ORDER BY mctx.city)",
-    sortExpression: "MIN(mctx.city)",
-    higherIsBetter: false,
-    format: "list",
-    kind: "attribute",
-    zeroIsData: false,
-    isPhaseMetric: null,
-    columnTitle: "Cities played in across the filtered rows",
-  };
+  return key === CITY_SET_KEY ? resolveScopeSetMetric(key, discipline) : null;
 }
 /** The City which-values key offerable for `discipline` (both). */
 export function citySetColumnKeys(discipline) {
@@ -3865,59 +3901,17 @@ export function citySetColumnKeys(discipline) {
  * or null. Reads mctx.season — needs the mctx join present (table.js season gate). The
  * ORDER BY is chronological (season strings start with their 4-digit start year). */
 export function resolveSeasonSetMetric(key, discipline) {
-  if (key !== SEASON_SET_KEY || (discipline !== "batting" && discipline !== "bowling")) return null;
-  return {
-    key: SEASON_SET_KEY,
-    label: "Season",
-    shortLabel: "Season",
-    discipline,
-    source: "innings",
-    sqlExpression: "list(DISTINCT mctx.season ORDER BY mctx.season)",
-    sortExpression: "MIN(mctx.season)",
-    higherIsBetter: false,
-    format: "list",
-    kind: "attribute",
-    zeroIsData: false,
-    isPhaseMetric: null,
-    columnTitle: "Seasons present in the filtered rows",
-  };
+  return key === SEASON_SET_KEY ? resolveScopeSetMetric(key, discipline) : null;
 }
 /** The Season which-values key offerable for `discipline` (both). */
 export function seasonSetColumnKeys(discipline) {
   return discipline === "batting" || discipline === "bowling" ? [SEASON_SET_KEY] : [];
 }
 
-// ── Event / Venue "which values" columns (completing City & Season everywhere,
-//    2026-08-16) ─────────────────────────────────────────────────────────────────
-// The City/Season which-values pair above deferred Event & Venue (metrics.js note at
-// the Innings-Number/Team/Opposition block above) because they needed the mctx join,
-// which the Step-4 Event/Venue composer work made available (filters.js
-// matchContextSubselectSql already projects event_name/venue; table.js already lights
-// the mctx join for the event__/venue__ composer columns — that SAME gate is extended
-// here). Owner approved completing them 2026-08-16 so all four match-context
-// dimensions are consistent. Both disciplines (event/venue are match-level).
-export const EVENT_SET_KEY = "event_set";
-export const VENUE_SET_KEY = "venue_set";
-
 /** Resolve the Event which-values key to its VIRTUAL list metric (both disciplines),
  * or null. Reads mctx.event_name — needs the mctx join present (table.js event gate). */
 export function resolveEventSetMetric(key, discipline) {
-  if (key !== EVENT_SET_KEY || (discipline !== "batting" && discipline !== "bowling")) return null;
-  return {
-    key: EVENT_SET_KEY,
-    label: "Event",
-    shortLabel: "Event",
-    discipline,
-    source: "innings",
-    sqlExpression: "list(DISTINCT mctx.event_name ORDER BY mctx.event_name)",
-    sortExpression: "MIN(mctx.event_name)",
-    higherIsBetter: false,
-    format: "list",
-    kind: "attribute",
-    zeroIsData: false,
-    isPhaseMetric: null,
-    columnTitle: "Events played in across the filtered rows",
-  };
+  return key === EVENT_SET_KEY ? resolveScopeSetMetric(key, discipline) : null;
 }
 /** The Event which-values key offerable for `discipline` (both). */
 export function eventSetColumnKeys(discipline) {
@@ -3927,22 +3921,7 @@ export function eventSetColumnKeys(discipline) {
 /** Resolve the Venue which-values key to its VIRTUAL list metric (both disciplines),
  * or null. Reads mctx.venue — needs the mctx join present (table.js venue gate). */
 export function resolveVenueSetMetric(key, discipline) {
-  if (key !== VENUE_SET_KEY || (discipline !== "batting" && discipline !== "bowling")) return null;
-  return {
-    key: VENUE_SET_KEY,
-    label: "Venue",
-    shortLabel: "Venue",
-    discipline,
-    source: "innings",
-    sqlExpression: "list(DISTINCT mctx.venue ORDER BY mctx.venue)",
-    sortExpression: "MIN(mctx.venue)",
-    higherIsBetter: false,
-    format: "list",
-    kind: "attribute",
-    zeroIsData: false,
-    isPhaseMetric: null,
-    columnTitle: "Venues played at across the filtered rows",
-  };
+  return key === VENUE_SET_KEY ? resolveScopeSetMetric(key, discipline) : null;
 }
 /** The Venue which-values key offerable for `discipline` (both). */
 export function venueSetColumnKeys(discipline) {
