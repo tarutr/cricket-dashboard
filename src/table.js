@@ -1891,47 +1891,41 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   for (const m of [...fieldingEventCols, ...pomCols, ...resultCols, ...profileCols]) {
     selectParts.push(`${m.sqlExpression} AS ${m.key}`);
   }
-  // Standalone STAGE composer (Step 3, 2026-08-14): stage__<hex>__<base> columns
-  // aggregate over `mctx.event_stage`, which lives on the SHARED match-context LEFT
-  // JOIN. Those columns are source "innings" (they inherit the base metric's source),
-  // so they are ALREADY projected via inningsMetrics above — this collection exists
-  // ONLY to light up the mctx join (see wantsMatchContext below). Column-presence
-  // gate, exactly like wantsProfile: with no stage column present this is [] and the
-  // emitted SQL is byte-identical. It does NOT go through the wantsMatchContext WHERE/
-  // inningsLevel paths (a stage COLUMN narrows nothing — see the join gate below).
-  const stageComposerCols = visibleColumns
+  // Columns whose sqlExpression READS the shared match-context LEFT JOIN, and so must
+  // light it up (see the join gate below). Five families, plus their which-values twins:
+  //   • the STAGE composer (Step 3, 2026-08-14) — stage__<hex>__<base> → mctx.event_stage
+  //   • the EVENT / VENUE composers (Step 4, 2026-08-14) — mctx.event_name / mctx.venue —
+  //     and the event_set / venue_set which-values columns, which read the SAME two
+  //     (Event & Venue which-values, completing City & Season everywhere, 2026-08-16)
+  //   • the CITY / SEASON composers AND the city_set / season_set which-values columns
+  //     (City & Season everywhere, 2026-08-16) — mctx.city / mctx.season
+  // NOT here, deliberately: the Team / Opposition composers and team_set / opp_set read
+  // the discipline's OWN innings columns (batting_team / bowling_team / opposition), so
+  // they need no join.
+  // All of these are source "innings" (a composed column inherits its base metric's
+  // source), so they are ALREADY projected via inningsMetrics above — this scan exists
+  // ONLY to light the join. Column-presence gate, exactly like wantsProfile: with none
+  // present it is false and the emitted SQL is byte-identical. It deliberately does NOT
+  // feed wantsMatchContext (the WHERE gate) or inningsLevel (the "matches" gate), because
+  // such a COLUMN narrows nothing — see the join gate below.
+  // ONE scan for all five families (cleanup follow-on 3): the five per-family collections
+  // this replaced were each used ONLY in that join gate, OR-ed on `.length > 0`, so the
+  // union predicate lights the join for exactly the same column sets.
+  const wantsMctxColumn = visibleColumns
     .map((key) => getMetric(key, discipline))
-    .filter((m) => m && m.isComposedStage);
-  // Standalone EVENT / VENUE composers (Step 4, 2026-08-14): event__/venue__ columns
-  // aggregate over `mctx.event_name` / `mctx.venue`, which live on the SHARED match-
-  // context LEFT JOIN (its sub-select now projects both — filters.js
-  // matchContextSubselectSql). Same join-presence-only gate as stageComposerCols:
-  // source "innings" (already projected via inningsMetrics), so these collections
-  // exist ONLY to light up the mctx join. With no such column present each is [] and
-  // the emitted SQL is byte-identical.
-  // Event & Venue which-values columns (completing City & Season everywhere,
-  // 2026-08-16): event_set/venue_set also aggregate over mctx.event_name/mctx.venue,
-  // so they fold into these SAME collections (mirroring how cityColsNeedingMctx below
-  // folds the city composer + city_set together).
-  const eventComposerCols = visibleColumns
-    .map((key) => getMetric(key, discipline))
-    .filter((m) => m && (m.isComposedEvent || m.key === EVENT_SET_KEY));
-  const venueComposerCols = visibleColumns
-    .map((key) => getMetric(key, discipline))
-    .filter((m) => m && (m.isComposedVenue || m.key === VENUE_SET_KEY));
-  // City & Season everywhere (2026-08-16): the city__/season__ composer COLUMNS AND the
-  // City/Season WHICH-VALUES columns (city_set/season_set) all aggregate over mctx.city
-  // / mctx.season, which live on the SHARED match-context LEFT JOIN (filters.js
-  // matchContextSubselectSql now projects both). Same join-presence-only gate as the
-  // event/venue composers: source "innings", 1:1 join → every existing aggregate is
-  // byte-identical; the collections exist ONLY to light the mctx join. With none present
-  // each is [] and the emitted SQL is byte-identical.
-  const cityColsNeedingMctx = visibleColumns
-    .map((key) => getMetric(key, discipline))
-    .filter((m) => m && (m.isComposedCity || m.key === CITY_SET_KEY));
-  const seasonColsNeedingMctx = visibleColumns
-    .map((key) => getMetric(key, discipline))
-    .filter((m) => m && (m.isComposedSeason || m.key === SEASON_SET_KEY));
+    .some(
+      (m) =>
+        m &&
+        (m.isComposedStage ||
+          m.isComposedEvent ||
+          m.isComposedVenue ||
+          m.isComposedCity ||
+          m.isComposedSeason ||
+          m.key === EVENT_SET_KEY ||
+          m.key === VENUE_SET_KEY ||
+          m.key === CITY_SET_KEY ||
+          m.key === SEASON_SET_KEY)
+    );
   // Wave D — TASK B: PotM (Y/N) leaderboard filter (state.potmYN, subset of
   // {"yes","no"}). A HAVING-style gate on the SAME per-player PotM award count the
   // PotM Count column/filter use (pom_cte.player_of_match = SUM of the 0/1 flag).
@@ -2232,19 +2226,11 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // the stage-COLUMN case above: they narrow nothing (no WHERE, 1:1 join), so every
   // existing aggregate is byte-identical; only the extra mctx columns become
   // referenceable. Event & Venue which-values columns (completing City & Season
-  // everywhere, 2026-08-16) read the SAME mctx.event_name / mctx.venue, so they fold
-  // into eventComposerCols/venueComposerCols above and light this same gate.
-  if (
-    wantsMatchContext ||
-    stageComposerCols.length > 0 ||
-    eventComposerCols.length > 0 ||
-    venueComposerCols.length > 0 ||
-    // City & Season everywhere (2026-08-16): city/season composer + which-values columns
-    // read mctx.city / mctx.season. JOIN-PRESENCE ONLY (1:1, no WHERE) — byte-identical.
-    cityColsNeedingMctx.length > 0 ||
-    seasonColsNeedingMctx.length > 0
-  )
-    fromSql += matchContextJoinSql(view);
+  // everywhere, 2026-08-16) read the SAME mctx.event_name / mctx.venue, and the
+  // city/season composer + which-values columns read mctx.city / mctx.season — all fold
+  // into wantsMctxColumn above and light this same gate, JOIN-PRESENCE ONLY (1:1, no
+  // WHERE) exactly like the stage case.
+  if (wantsMatchContext || wantsMctxColumn) fromSql += matchContextJoinSql(view);
   if (wantsFielding) fromSql += ` LEFT JOIN fielding_cte ON fielding_cte.fld_player_id = ${idCol}`;
   if (wantsPom) fromSql += ` LEFT JOIN pom_cte ON pom_cte.pom_player_id = ${idCol}`;
   // Result (Wave B): 1:1 LEFT JOIN by the unified player id — res_player_id is the
@@ -2642,8 +2628,9 @@ export function mountTable(
     // its raw spelling set. The No-Stage (event_stage IS NULL) sentinel is appended
     // iff the scope actually holds unnamed-round matches (res.hasNoStage), MIRRORING
     // the Stage FILTER's mountStage — its value/label are the filter's own STAGE_NONE /
-    // STAGE_NONE_LABEL (reused, not re-derived), and metrics.js buildComposedStageMetric
-    // recognises that sentinel and emits `mctx.event_stage IS NULL` instead of an
+    // STAGE_NONE_LABEL (reused, not re-derived), and the Stage composer family's
+    // membershipFor (metrics.js) recognises that sentinel and emits
+    // `mctx.event_stage IS NULL` instead of an
     // IN(<raw spellings>) list. Leaderboard-only, like loadTeamOptions; the pop-up
     // passes neither.
     loadStageOptions: () => {
@@ -2671,7 +2658,8 @@ export function mountTable(
     // Standalone VENUE composer (Step 4, 2026-08-14): its OWN value loader. Venue has NO
     // canonical fold anywhere (the Venue FILTER matches RAW `venue IN (…)`), so
     // searchVenues returns RAW venue names and the composer stores + matches them
-    // verbatim (metrics.js buildComposedVenueMetric → `mctx.venue = '<raw>'`). Same
+    // verbatim (the Venue composer family's "equality" mechanic in metrics.js →
+    // `mctx.venue = '<raw>'`). Same
     // scope + no-cascade + leaderboard-only rules as the Event/Stage loaders above.
     loadVenueOptions: () => {
       const s = store.get();
@@ -2681,8 +2669,8 @@ export function mountTable(
     },
     // Standalone CITY + SEASON composers (City & Season everywhere, 2026-08-16): their
     // OWN value loaders. Venue-shape — RAW city / season names (no fold), stored + matched
-    // verbatim (metrics.js buildComposedCityMetric/SeasonMetric → `mctx.city|season =
-    // '<raw>'`). searchSeasons returns seasons NEWEST-first (season-order ruling d1eba79).
+    // verbatim (metrics.js City/Season composer families via makeComposerFamily →
+    // `mctx.city|season = '<raw>'`). searchSeasons returns seasons NEWEST-first (season-order ruling d1eba79).
     // Same scope + no-cascade + leaderboard-only rules as the Event/Venue loaders above.
     loadCityOptions: () => {
       const s = store.get();
