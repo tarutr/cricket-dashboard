@@ -1357,46 +1357,33 @@ export function eligibleColumnKeys(discipline, formats) {
   for (const key of venueSetColumnKeys(discipline)) {
     keys.add(key);
   }
-  // New standalone TEAM composer (2026-08-14): the picked composed-team column keys
-  // (team__<hex>__<base>). Data-driven value space → not enumerable up front, so these
-  // are the keys the user actually composed this session (metrics._composedTeamKeys),
-  // filtered to those that resolve for `discipline`. Folding them in HERE keeps a
-  // chosen Team column alive at ALL three prune sites (pruneIneligibleState,
-  // isLeaderboardColumnAddable, table.pruneInvalidColumns) with no query-builder edit.
-  // Byte-identical when none is present (the set is empty until a Team column is added).
-  for (const key of eligibleComposedTeamKeys(discipline)) {
-    keys.add(key);
-  }
-  // New standalone OPPOSITION composer (2026-08-14): the picked composed-opposition
-  // column keys (opp__<hex>__<base>) — same data-driven-value-space fold as its Team
-  // mirror immediately above. Byte-identical when none is present.
-  for (const key of eligibleComposedOppositionKeys(discipline)) {
-    keys.add(key);
-  }
-  // New standalone STAGE composer (2026-08-14): the picked composed-stage column keys
-  // (stage__<hex>__<base>) — same data-driven-value-space fold as Team/Opposition
-  // above. Byte-identical when none is present (empty until a Stage column is added).
-  for (const key of eligibleComposedStageKeys(discipline)) {
-    keys.add(key);
-  }
-  // New standalone EVENT + VENUE composers (Step 4, 2026-08-14): the picked composed-
-  // event / composed-venue column keys (event__/venue__ <hex>__<base>) — same data-
-  // driven-value-space fold as Team/Opposition/Stage above. Byte-identical when none is
-  // present (each set is empty until an Event/Venue column is added).
-  for (const key of eligibleComposedEventKeys(discipline)) {
-    keys.add(key);
-  }
-  for (const key of eligibleComposedVenueKeys(discipline)) {
-    keys.add(key);
-  }
-  // City & Season everywhere (2026-08-16): the picked composed-city / composed-season
-  // column keys (city__/season__ <hex>__<base>) — same data-driven-value-space fold as
-  // Team/Opposition/Stage/Event/Venue. Byte-identical when none is present.
-  for (const key of eligibleComposedCityKeys(discipline)) {
-    keys.add(key);
-  }
-  for (const key of eligibleComposedSeasonKeys(discipline)) {
-    keys.add(key);
+  // The seven standalone value×stat COMPOSERS — Team + Opposition + Stage (2026-08-14),
+  // Event + Venue (Step 4, 2026-08-14), City + Season (2026-08-16): the picked composed
+  // column keys (team__ / opp__ / stage__ / event__ / venue__ / city__ / season__
+  // <hex>__<base>). Their value space is DATA-DRIVEN, so it is not enumerable up front —
+  // each family's resolver returns the keys the user actually composed this session
+  // (metrics' per-family registry), filtered to those that resolve for `discipline`.
+  // Folding them in HERE keeps a chosen composed column alive at ALL three prune sites
+  // (pruneIneligibleState, isLeaderboardColumnAddable, table.pruneInvalidColumns) with no
+  // query-builder edit. Byte-identical when none is present (every registry is empty
+  // until such a column is added). ONE loop over the seven resolvers, in the historical
+  // order — adding an eighth composer family means adding a row to the list, not a loop.
+  // The list lives INSIDE the function deliberately: metrics.js imports state.js, so a
+  // module-level const naming these imports would be read during the import cycle and
+  // throw a temporal-dead-zone ReferenceError at load.
+  const composerFamilyEligible = [
+    eligibleComposedTeamKeys,
+    eligibleComposedOppositionKeys,
+    eligibleComposedStageKeys,
+    eligibleComposedEventKeys,
+    eligibleComposedVenueKeys,
+    eligibleComposedCityKeys,
+    eligibleComposedSeasonKeys,
+  ];
+  for (const eligibleKeysFor of composerFamilyEligible) {
+    for (const key of eligibleKeysFor(discipline)) {
+      keys.add(key);
+    }
   }
   return keys;
 }
