@@ -116,14 +116,16 @@
 // a canonical value to the SAME raw spelling set the filter does, and that expansion is
 // resolved lazily inside getMetric (from the stage__/event__ <hex> key), so it must live
 // here. canonicalNames.js is a TRUE leaf (imports nothing), so this creates NO import
-// cycle. Venue has NO fold (raw match only — buildComposedVenueMetric reads mctx.venue).
+// cycle. Venue has NO fold (raw match only — its family's "equality" mechanic tests
+// mctx.venue directly).
 import { stageAliases, eventAliases, STAGE_CANONICALS } from "./canonicalNames.js";
 
 // The Stage composer's "No Stage" (event_stage IS NULL) option reuses the Stage FILTER's
-// own sentinel value + label (state.js), NOT a re-derived string — buildComposedStageMetric
-// branches on STAGE_NONE to emit `mctx.event_stage IS NULL`. This is the ONE state.js
+// own sentinel value + label (state.js), NOT a re-derived string — the Stage family's
+// `membershipFor` closure (its makeComposerFamily spec below) branches on STAGE_NONE to
+// emit `mctx.event_stage IS NULL`. This is the ONE state.js
 // import metrics.js carries, and it forms a state.js↔metrics.js CYCLE — but a provably
-// BENIGN one: STAGE_NONE / STAGE_NONE_LABEL are read ONLY inside buildComposedStageMetric
+// BENIGN one: STAGE_NONE / STAGE_NONE_LABEL are read ONLY inside that closure
 // (a runtime query-build call), and state.js reads metrics.js's exports ONLY inside its own
 // functions. Neither module touches the other's bindings during module-body evaluation, so
 // the live bindings are fully initialised by call time regardless of load order. (escSql is
@@ -4460,7 +4462,7 @@ export const {
 // stat → one column per picked venue, e.g. "Bat SR (Eden Gardens)". Reuses the SAME
 // pool / component set / SPECS (COMPOSED_INNINGS_*) and the SAME string↔hex codec —
 // all of which now live in makeComposerFamily above, which is also where the former
-// `buildComposedVenueMetric` body went (other files' comments still name it).
+// `buildComposedVenueMetric` body went.
 //
 // TWO differences from Event:
 //  1. Venue has NO canonical fold anywhere (canonicalNames.js has none; the Venue
@@ -5563,7 +5565,8 @@ const _FIELDING_SET_BY_KEY = new Map(FIELDING_SET_SPECS.map((s) => [s.key, s]));
 // LAZILY + memoised — NOT at module-eval — because they read state.js's option
 // constants (RESULT_OPTIONS / TOSS_RESULT_OPTIONS / TOSS_DECISION_OPTIONS) across the
 // benign state.js↔metrics.js cycle documented at the top import; those live bindings are
-// only guaranteed initialised at CALL time (like buildComposedStageMetric's STAGE_NONE).
+// only guaranteed initialised at CALL time (like the Stage composer family's
+// membershipFor reading STAGE_NONE).
 // Each REUSES the existing logic — no re-invented mapping:
 //   • stage        — folds raw event_stage → CANONICAL via the SAME stageAliases the
 //                    Stage FILTER/composer use (over STAGE_CANONICALS); unlisted stages
