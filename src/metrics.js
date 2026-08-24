@@ -4290,193 +4290,101 @@ export const {
   labelFor: (text, oppName) => `${text} vs ${oppName}`,
 });
 
-// ── Composed STAGE × metric columns (standalone composer, 2026-08-14) ──────────
-// A THIRD standalone composer, same shape as Team/Opposition (owner ruling —
-// FULLY INDEPENDENT of the scope filters; reads/writes NOTHING on state.stage).
-// Pick value(s) [canonical stage names] × a base stat → one column per picked
-// stage, e.g. "Bat Avg (Final)". Reuses the SAME base-metric pool / component set /
-// per-metric SPECS as the Innings/Team/Opposition composers (COMPOSED_INNINGS_*,
-// verbatim so a base rate's formula / NULLIF guard / component `needs` can NEVER
-// drift — Rule 1), and the SAME string↔hex key codec (teamNameToToken /
-// teamTokenToName — a generic codec with no team-specific logic).
+// ── Composed STAGE × metric columns (standalone composer, 2026-08-14; factory-built
+//    since the item-B cleanup, 2026-08-24) ───────────────────────────────────────
+// The STAGE composer — standalone and filter-independent like every other (owner
+// ruling: reads/writes NOTHING on state.stage). Pick value(s) [CANONICAL stage names,
+// plus the "No Stage" sentinel] × a base stat → one column per picked stage, e.g.
+// "Bat Avg (Final)". Shares the pool / component set / SPECS / hex codec / `''` escape
+// via makeComposerFamily above, which is also where the former
+// `buildComposedStageMetric` body went — so a base rate's formula / NULLIF guard /
+// component `needs` can never drift between composers (Rule 1).
 //
-// THREE things differ from Team/Opposition:
+// This is the SECOND of the two folded families (Event is the other), and it is the
+// only one with a SENTINEL value. Four things to preserve:
 //
-//  1. The value column is NOT on the base view. `event_stage` lives on `matches`
-//     and is surfaced to the leaderboard by the SHARED match-context sub-select
-//     (filters.js matchContextSubselectSql → matchContextJoinSql), a 1:1 LEFT JOIN
-//     aliased `mctx`. Every match-context clause reads it as `mctx.event_stage`
-//     (filters.js buildMatchContextClauses, A="mctx", matchCol(A,"event_stage")),
-//     so the OUTER-QUERY reference is exactly `mctx.event_stage`. table.js today
-//     adds that join only when a Stage/Result/Toss FILTER is active; it now ALSO
-//     adds it (join-presence only, WITHOUT flipping the match-context WHERE or the
-//     "matches" innings-level path) when a stage composer column is present — see
-//     table.js's stageComposerCols gate. The join is 1:1 on match_id (matches is
-//     one row per match_id) so it never multiplies innings rows: every existing
-//     aggregate stays byte-identical, only `mctx.event_stage` becomes referenceable.
+//  1. **mechanic "membership" — the WHOLE-TEST replace.** A canonical stage maps to
+//     MULTIPLE raw `event_stage` spellings ("Semi Final" / "Semi-Final" /
+//     "Semi-final"), so the conditional is NOT `mctx.event_stage = '<value>'` but
+//     `mctx.event_stage IN (<raw spellings>)`. The factory replaces the entire literal
+//     substring `innings_number = {S}` (present in EVERY spec) with the test
+//     `membershipFor` returns; a bare `{S}` swap would wrongly leave `= '<value>'` and
+//     the column would count only the one spelling that happens to match the canonical
+//     label. The expansion is `stageAliases` (canonicalNames.js), the EXACT helper
+//     filters.js stagePredicateSql calls, so a composed Stage column and the Stage
+//     FILTER always agree; it is never re-derived here. Defensive: an empty expansion
+//     yields no column (stageAliases always returns >= 1).
 //
-//  2. CLEAN (canonical) stage names (owner ruling). The value picker offers
-//     CANONICAL labels (e.g. "Semi-Final"), same as the Stage FILTER. A canonical
-//     stage can map to MULTIPLE raw `event_stage` spellings, so the CASE-WHEN uses
-//     the SAME canonical→raw expansion the Stage FILTER uses — `stageAliases`
-//     (canonicalNames.js, imported at the top of this module), the exact helper
-//     filters.js stagePredicateSql calls — emitting
-//     `mctx.event_stage IN (<raw spellings>)`, NOT `= 'Semi-Final'`. So a column on
-//     "Semi-Final" correctly counts the raw "Semi Final" / "Semi-Final" /
-//     "Semi-final" spellings alike.
+//  2. **The STAGE_NONE branch comes FIRST, and must NOT consult stageAliases.**
+//     "No Stage" is the Stage FILTER's own SENTINEL for matches whose `event_stage`
+//     IS NULL — it is not a canonical stage name, so there is no raw-spelling set to
+//     expand and the IN(...) mechanism cannot express NULL. That branch emits
+//     `mctx.event_stage IS NULL` and labels the column with the filter's own
+//     STAGE_NONE_LABEL ("No Stage") via the factory's `displayName`, which exists
+//     precisely so a family can label a sentinel differently from the value it stores.
+//     Losing either half — the IS NULL test or the STAGE_NONE_LABEL text — silently
+//     breaks an owner-ruled option.
 //
-//  3. Its own loader (table.js loadStageOptions → searchStages), not the shared
-//     team loader — folded to canonical names, mirroring the Stage FILTER's
-//     mountStage. (columnsPicker wiring, not this module.)
+//  3. **The mctx JOIN is REQUIRED.** `event_stage` lives on `matches`, not on the base
+//     views, and is read off the SHARED 1:1 LEFT JOIN as `mctx.event_stage` (filters.js
+//     matchContextSubselectSql → matchContextJoinSql; every match-context clause
+//     qualifies it the same way). table.js lights that join for the leaderboard by
+//     scanning the chosen columns for `isComposedStage` (table.js's stageComposerCols
+//     gate) — presence-only, WITHOUT flipping the match-context WHERE or the "matches"
+//     innings-level path, and 1:1 on match_id so it never multiplies innings rows. So
+//     the flag name below is LOAD-BEARING, not decorative: a generic flag would emit
+//     SQL referencing an unjoined alias, i.e. a FAILED query rather than a wrong number.
+//     Unlike Team/Opposition, every generated Stage expression MUST contain `mctx.`.
+//
+//  4. STAGE_NONE / STAGE_NONE_LABEL come from state.js, metrics.js's ONE state.js
+//     import and a benign state↔metrics cycle (see the import note at the top of this
+//     file) — benign ONLY because they are read at CALL time. Keeping them inside the
+//     `membershipFor` closure below preserves that: nothing reads either binding during
+//     module-body evaluation. Never hoist them into a module-level const here.
+//
+// Its own value loader (table.js loadStageOptions → searchStages, folded to canonical
+// names, mirroring the Stage FILTER's mountStage) is columnsPicker wiring, not this
+// module.
 //
 // KEY = `stage__<hexToken>__<baseKey>` e.g. `stage__46696e616c__average` (Final).
-// Double underscore, so no single-underscore key ("stage_set" etc.) can ever
-// collide: "stage_set".startsWith("stage__") === false.
-const COMPOSED_STAGE_PREFIX = "stage__";
-const COMPOSED_STAGE_SPECS = COMPOSED_INNINGS_SPECS;
-const COMPOSED_STAGE_COMPONENTS = COMPOSED_INNINGS_COMPONENTS;
-const COMPOSED_STAGE_POOL_ORDER = COMPOSED_INNINGS_POOL_ORDER;
-// The outer-query reference for the joined event_stage (see note 1 above): the
-// leaderboard's mctx LEFT JOIN aliases the `matches` sub-select `mctx`, and every
-// reader qualifies the column `mctx.event_stage`.
-const COMPOSED_STAGE_COL = "mctx.event_stage";
-
-/** Build the composed-stage column key for `baseKey` scoped to canonical `stageName`. */
-export function makeComposedStageKey(stageName, baseKey) {
-  return `${COMPOSED_STAGE_PREFIX}${teamNameToToken(stageName)}__${baseKey}`;
-}
-
-/** Parse a composed-stage column key → { token, stageName, baseKey }, or null. */
-export function parseComposedStageKey(key) {
-  if (typeof key !== "string" || !key.startsWith(COMPOSED_STAGE_PREFIX)) return null;
-  const rest = key.slice(COMPOSED_STAGE_PREFIX.length);
-  const sep = rest.indexOf("__");
-  if (sep <= 0) return null;
-  const token = rest.slice(0, sep);
-  const baseKey = rest.slice(sep + 2);
-  const stageName = teamTokenToName(token);
-  if (stageName == null || !baseKey) return null;
-  return { token, stageName, baseKey };
-}
-
-/** True iff every component the `baseKey` spec needs exists in `discipline`'s view. */
-function composedStageComponentsPresent(discipline, spec) {
-  const have = COMPOSED_STAGE_COMPONENTS[discipline];
-  return !!have && spec.needs.every((c) => have.has(c));
-}
-
-/** Build the VIRTUAL metric for a composed-stage column: the base metric's own
- * format / higherIsBetter / zeroIsData / kind / source ("innings"), re-badged with
- * the composed key + a "(<stage>)" label, and a GENERATED conditional-aggregation
- * sqlExpression. UNLIKE Team/Opposition (whose conditional is `<col> = '<value>'`),
- * the stage conditional is `mctx.event_stage IN (<raw spellings>)` — the canonical
- * stage expanded to its raw event_stage spelling set via stageAliases (the SAME
- * expansion the Stage FILTER uses; never re-derived). Both plain disciplines; null
- * outside batting/bowling, for a missing/empty stage name, an unknown base / missing
- * component, or an empty raw-spelling expansion. */
-function buildComposedStageMetric(stageName, baseKey, discipline) {
-  if (discipline !== "batting" && discipline !== "bowling") return null;
-  if (stageName == null || stageName === "") return null;
-  const specMap = COMPOSED_STAGE_SPECS[discipline];
-  const spec = specMap && specMap[baseKey];
-  if (!spec || !composedStageComponentsPresent(discipline, spec)) return null;
-  const base = getMetric(baseKey, discipline);
-  if (!base) return null;
-  // The membership test the spec's `innings_number = {S}` is replaced with, plus the
-  // human label — two shapes:
-  //   • "No Stage" sentinel (STAGE_NONE, the Stage FILTER's own value): matches whose
-  //     event_stage IS NULL. The canonical→raw IN(...) mechanism can't express NULL, so
-  //     this branch substitutes `mctx.event_stage IS NULL` and labels with the filter's
-  //     STAGE_NONE_LABEL. (stageAliases is NOT consulted — "(no stage)" is a sentinel,
-  //     not a canonical stage name.)
-  //   • Any real canonical stage: the canonical→raw expansion IDENTICAL to the Stage
-  //     FILTER (filters.js stagePredicateSql → stageAliases). A canonical stage maps to
-  //     ≥1 raw event_stage spelling; each raw becomes a SQL string literal with its
-  //     single quotes doubled (the SAME inline escape buildComposedTeamMetric uses —
-  //     metrics.js is not the owner of escSql, whose import would sit on the hot path).
-  //     Defensive: an empty expansion yields no column (stageAliases always returns ≥1).
-  let membership;
-  let displayName;
-  if (stageName === STAGE_NONE) {
-    membership = `${COMPOSED_STAGE_COL} IS NULL`;
-    displayName = STAGE_NONE_LABEL;
-  } else {
+// Double underscore, so no single-underscore key ("stage_set") can ever collide:
+// "stage_set".startsWith("stage__") === false.
+//
+// The six exports are the SAME six functions, same names, same signatures, same
+// return shapes as before the factory:
+//   makeComposedStageKey(stageName, baseKey) → key
+//   parseComposedStageKey(key)               → { token, stageName, baseKey } | null
+//   resolveComposedStageMetric(key, disc)    → the virtual metric | null (getMetric)
+//   composedStagePool(disc)                  → the ordered base metrics offered
+//   registerComposedStageKeys(keys)          → record minted key(s)
+//   eligibleComposedStageKeys(disc)          → registered keys that still resolve
+export const {
+  makeKey: makeComposedStageKey,
+  parseKey: parseComposedStageKey,
+  resolveMetric: resolveComposedStageMetric,
+  pool: composedStagePool,
+  register: registerComposedStageKeys,
+  eligible: eligibleComposedStageKeys,
+} = makeComposerFamily({
+  prefix: "stage__",
+  flag: "isComposedStage",
+  nameField: "stageName",
+  gate: (discipline) => discipline === "batting" || discipline === "bowling",
+  colFor: () => "mctx.event_stage",
+  mechanic: "membership",
+  membershipFor: (stageName, col) => {
+    // The SENTINEL branch FIRST, and deliberately WITHOUT stageAliases: "No Stage" is
+    // the Stage FILTER's own sentinel (event_stage IS NULL), not a canonical stage.
+    if (stageName === STAGE_NONE) return { test: `${col} IS NULL`, displayName: STAGE_NONE_LABEL };
+    // Any real canonical: the canonical→raw expansion IDENTICAL to the Stage FILTER
+    // (filters.js stagePredicateSql → stageAliases). Each raw becomes a SQL string
+    // literal with its single quotes doubled, via the escape every family shares.
     const raws = stageAliases(stageName);
     if (!Array.isArray(raws) || raws.length === 0) return null;
-    const inList = raws.map((r) => `'${String(r).replace(/'/g, "''")}'`).join(", ");
-    membership = `${COMPOSED_STAGE_COL} IN (${inList})`;
-    displayName = stageName;
-  }
-  // The innings spec's conditional test is the literal substring `innings_number = {S}`
-  // in EVERY spec; replace the whole test with the membership (a straight `{S}`
-  // swap would wrongly leave `mctx.event_stage = '<value>'`). No `{S}`/`innings_number`
-  // survives (verified: the generated SQL contains neither).
-  const sql = spec.sql.split("innings_number = {S}").join(membership);
-  return {
-    ...base,
-    key: makeComposedStageKey(stageName, baseKey),
-    baseKey,
-    stageName,
-    isComposedStage: true,
-    sqlExpression: sql,
-    label: `${base.label} (${displayName})`,
-    shortLabel: `${base.shortLabel} (${displayName})`,
-  };
-}
-
-/** Resolve a composed-stage COLUMN key to its virtual metric, or null. Called by getMetric. */
-export function resolveComposedStageMetric(key, discipline) {
-  const parsed = parseComposedStageKey(key);
-  if (!parsed) return null;
-  return buildComposedStageMetric(parsed.stageName, parsed.baseKey, discipline);
-}
-
-/** The ordered base metrics the `discipline` Stage composer offers — the SAME pool
- * as the Team/Opposition/Innings composers, filtered to those with a spec AND all
- * components present. [] outside plain batting/bowling. */
-export function composedStagePool(discipline) {
-  if (discipline !== "batting" && discipline !== "bowling") return [];
-  const order = COMPOSED_STAGE_POOL_ORDER[discipline];
-  const specMap = COMPOSED_STAGE_SPECS[discipline];
-  if (!order || !specMap) return [];
-  const pool = [];
-  for (const baseKey of order) {
-    const spec = specMap[baseKey];
-    if (!spec || !composedStageComponentsPresent(discipline, spec)) continue;
-    const base = getMetric(baseKey, discipline);
-    if (base) pool.push(base);
-  }
-  return pool;
-}
-
-// ── Composed-stage eligibility (data-driven value space) ───────────────────────
-// Mirrors the Team/Opposition composers' eligibility registries above — see the
-// Team comment for the full rationale (data-driven value space, append-only
-// registry, folded into state.eligibleColumnKeys so a picked Stage column survives
-// a re-render / prune at all three prune sites, no persistence across reload).
-const _composedStageKeys = new Set();
-
-/** Record composed-stage column key(s) as the composer mints them, so
- * eligibleColumnKeys can keep a chosen Stage column alive across a re-render /
- * Search-prune. Ignores anything that isn't a valid composed-stage key. */
-export function registerComposedStageKeys(keys) {
-  for (const k of Array.isArray(keys) ? keys : [keys]) {
-    if (typeof k === "string" && parseComposedStageKey(k)) _composedStageKeys.add(k);
-  }
-}
-
-/** Every registered composed-stage column key that RESOLVES for `discipline` —
- * folded into eligibleColumnKeys so a chosen Stage column survives a re-render /
- * prune, and drops the moment the discipline no longer offers that base metric. []
- * outside plain batting/bowling. */
-export function eligibleComposedStageKeys(discipline) {
-  if (discipline !== "batting" && discipline !== "bowling") return [];
-  const keys = [];
-  for (const k of _composedStageKeys) {
-    if (resolveComposedStageMetric(k, discipline)) keys.push(k);
-  }
-  return keys;
-}
+    return { test: `${col} IN (${raws.map(composerSqlLiteral).join(", ")})`, displayName: stageName };
+  },
+  labelFor: (text, displayName) => `${text} (${displayName})`,
+});
 
 // ── Composed EVENT × metric columns (standalone composer, Step 4, 2026-08-14;
 //    factory-built since the item-B cleanup, 2026-08-24) ───────────────────────
