@@ -1021,6 +1021,55 @@ export function buildFieldingExtraSliceClauses(state) {
 }
 
 /**
+ * Cleanup Item E — the ONE fielding scope-lane WHERE assembly, shared by the fielding
+ * TALLIES (buildFieldingCteSql) and their per-match DENOMINATOR
+ * (buildFldMatchesCteSql). Until this merge the two were separate verbatim copies of
+ * these same two branches, agreeing only by hand; they MUST always agree or a per-match
+ * fielding rate divides by a differently-scoped count. Verified character-identical
+ * across all 32 states before merging ({scope Match all, Match any} × {no slice,
+ * position slice, kind+phase slice, the full T-3a-ext slice set incl. the correlated
+ * match-context EXISTS} × {no pins, 2 pins} × {no name search, name search}).
+ *
+ * Chunk 5 Phase 2 Wave C — Part 2 (fielding SCOPE-lane OR). The fielding scope has
+ * three sources: the tagged core/scope clauses from buildScopeClausesTagged
+ * (opposition/event/venue/team + core gender/format/date/team-type), the fielding
+ * SLICE dims (buildFieldingSliceClauses — dismissal kind/phase/position + the T-3a-ext
+ * dims incl. the correlated match-context EXISTS), and the always-applies "substitute
+ * IS NOT TRUE" eligibility guard.
+ *
+ *   • scope "Match all" (default) → today's EXACT assembly, BYTE-IDENTICAL. "substitute
+ *     IS NOT TRUE" and the slice conditions are AND'd **OUTSIDE the pin exemption** —
+ *     they define WHAT is counted (like a phase column), so they apply to every fielder
+ *     including pins; pins only bypass the who/which-match scope above. That ordering is
+ *     deliberate: "tidying" it by folding the slices into the pin wrap changes numbers.
+ *   • scope "Match any" → the fielding dims join the SAME scope-OR disjunction the
+ *     batting/bowling boards use (Wave A whereWithLanes): every scope filter ORs, the
+ *     union is measured over pins too, and "substitute IS NOT TRUE" stays a "core"
+ *     always-AND guard — never an OR participant, because it defines eligibility, not
+ *     scope. The OR path reuses the EXACT predicate strings the AND path builds, so an
+ *     OR clause can never drift from its AND form.
+ *
+ * `playerOp` is hardcoded "AND" (NOT read from state.filterMatch.player): the profile
+ * semi-join (category "player") is never lowered here, because the fielding player lane
+ * is the OUTER count gate (Wave C Part 1), so profile stays a player-shortlisting AND in
+ * the pin-exempt remainder. There is no HAVING on either of these CTEs to re-emit a
+ * lowered profile clause into.
+ */
+function fieldingScopeWhere(state, { fldClauses, sliceClauses, pins }) {
+  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
+  if (filterMatch.scope !== "OR") {
+    const fldScopeSql = whereWithPinExemption(fldClauses, "fielder_id", pins);
+    return [fldScopeSql, "substitute IS NOT TRUE", ...sliceClauses].join(" AND ");
+  }
+  const combined = [
+    ...fldClauses,
+    ...sliceClauses.map((c) => alwaysClause(c, "scope")),
+    alwaysClause("substitute IS NOT TRUE", "core"),
+  ];
+  return whereWithLanes(combined, { idColumn: "fielder_id", pins, scopeOp: "OR", playerOp: "AND" });
+}
+
+/**
  * Build the `fielding_cte` definition (the CTE body WITHOUT the leading
  * "WITH " — the caller prepends/comma-joins it, like the other per-player CTEs).
  * One row per fielder over the EVENT-GRAIN `fielding` view, honoring the FULL
@@ -1050,48 +1099,16 @@ export function buildFieldingCteSql(state, composedFieldingCols = [], opts = {})
   if (state.search && state.search.trim()) {
     fldClauses.push(bypassableClause(`fielder_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
   }
-  // Chunk 5 Phase 2 Wave C — Part 2 (fielding SCOPE-lane OR). The fielding scope has
-  // three sources: the tagged core/scope clauses from buildScopeClausesTagged
-  // (opposition/event/venue/team + core gender/format/date/team-type), the fielding
-  // SLICE dims (buildFieldingSliceClauses — dismissal kind/phase/position + the T-3a-ext
-  // dims incl. the correlated match-context EXISTS), and the always-applies "substitute
-  // IS NOT TRUE" eligibility guard. Under scope-"Match all" (default) they AND exactly as
-  // before — BYTE-IDENTICAL. Under scope-"Match any" the fielding dims join the SAME
-  // scope-OR disjunction the batting/bowling boards use (Wave A whereWithLanes): every
-  // scope filter ORs, the union is measured over pins too, and "substitute IS NOT TRUE"
-  // stays a "core" always-AND guard (never an OR participant — it defines eligibility,
-  // not scope). The profile semi-join (category "player") is NOT lowered here: the
-  // fielding player lane is the OUTER count gate (Part 1), so profile stays a
-  // player-shortlisting AND (playerOp pinned "AND") in the pin-exempt remainder, exactly
-  // as today. The OR path reuses the EXACT predicate strings the AND path builds, so an
-  // OR clause can never drift from its AND form.
-  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
-  let whereSql;
-  if (filterMatch.scope !== "OR") {
-    // Scope "Match all": today's EXACT assembly. substitute + slice conditions are AND'd
-    // OUTSIDE the pin exemption — they define WHAT is counted (like a phase column), so
-    // they apply to every fielder including pins; pins only bypass the who/which-match
-    // scope above.
-    const fldScopeSql = whereWithPinExemption(fldClauses, "fielder_id", pins);
-    const fldTail = ["substitute IS NOT TRUE", ...fieldingSliceClauses];
-    whereSql = [fldScopeSql, ...fldTail].join(" AND ");
-  } else {
-    // Scope "Match any": tag the fielding dims "scope" so whereWithLanes ORs them with the
-    // opposition/event/venue/team scope clauses; keep "substitute IS NOT TRUE" a "core"
-    // always-AND. playerOp forced "AND" so the profile clause is never dropped here (the
-    // fielding board has no HAVING to re-emit a lowered profile into).
-    const combined = [
-      ...fldClauses,
-      ...fieldingSliceClauses.map((c) => alwaysClause(c, "scope")),
-      alwaysClause("substitute IS NOT TRUE", "core"),
-    ];
-    whereSql = whereWithLanes(combined, {
-      idColumn: "fielder_id",
-      pins,
-      scopeOp: "OR",
-      playerOp: "AND",
-    });
-  }
+  // Chunk 5 Phase 2 Wave C — Part 2 (fielding SCOPE-lane OR), assembled by the SHARED
+  // fieldingScopeWhere (cleanup Item E) so these tallies and the per-match denominator
+  // underneath them (buildFldMatchesCteSql) can never be scoped differently. See that
+  // helper for the two branches, the deliberate slices-outside-the-pin-wrap ordering, and
+  // why playerOp is pinned "AND" here.
+  const whereSql = fieldingScopeWhere(state, {
+    fldClauses,
+    sliceClauses: fieldingSliceClauses,
+    pins,
+  });
   // Base per-fielder tally columns (SACRED — byte-identical output). The four
   // lines carry NO trailing comma; the array is comma-joined below so appending
   // composed columns needs no edit to these lines.
@@ -1215,31 +1232,16 @@ export function buildFldMatchesCteSql(state) {
   if (state.search && state.search.trim()) {
     fldClauses.push(bypassableClause(`fielder_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
   }
-  // Chunk 5 Phase 2 Wave E — mirror buildFieldingCteSql's scope-lane assembly EXACTLY so
-  // this denominator can never drift from the fielding_cte tallies it sits beside. The
-  // "substitute IS NOT TRUE" guard + the fielding SLICE clauses are appended OUTSIDE the
-  // pin wrap (they define WHAT is counted, like a phase column), so this is NOT a blind
-  // whereWithLanes swap:
-  //   • scope "Match all" (default) → today's EXACT two lines → BYTE-IDENTICAL.
-  //   • scope "Match any" → the slice dims join the SAME scope-OR disjunction (tagged
-  //     "scope") the fielding board uses, "substitute IS NOT TRUE" stays a "core"
-  //     always-AND eligibility guard, and playerOp is forced "AND" (the fielding board
-  //     handles player-OR via the outer count gate, never by lowering profile — there is
-  //     no HAVING here to re-emit a lowered profile into, mirroring buildFieldingCteSql).
-  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
-  const sliceClauses = buildFieldingSliceClauses(state);
-  let matchesWhere;
-  if (filterMatch.scope !== "OR") {
-    const fldScopeSql = whereWithPinExemption(fldClauses, "fielder_id", pins);
-    matchesWhere = [fldScopeSql, "substitute IS NOT TRUE", ...sliceClauses].join(" AND ");
-  } else {
-    const combined = [
-      ...fldClauses,
-      ...sliceClauses.map((c) => alwaysClause(c, "scope")),
-      alwaysClause("substitute IS NOT TRUE", "core"),
-    ];
-    matchesWhere = whereWithLanes(combined, { idColumn: "fielder_id", pins, scopeOp: "OR", playerOp: "AND" });
-  }
+  // Chunk 5 Phase 2 Wave E / cleanup Item E — this denominator's scope is now the SAME
+  // FUNCTION buildFieldingCteSql's tallies use (fieldingScopeWhere), not a hand-kept
+  // mirror of it, so the count can never be scoped differently from the tallies it sits
+  // beside. Note it is NOT a blind whereWithLanes swap: "substitute IS NOT TRUE" and the
+  // fielding SLICE clauses sit OUTSIDE the pin wrap — see the helper.
+  const matchesWhere = fieldingScopeWhere(state, {
+    fldClauses,
+    sliceClauses: buildFieldingSliceClauses(state),
+    pins,
+  });
   return [
     "fld_matches_cte AS (",
     "  SELECT fielder_id AS fld_player_id, COUNT(DISTINCT match_id) AS matches",
