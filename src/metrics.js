@@ -4848,112 +4848,45 @@ export const {
 });
 
 // ── Composed CITY × metric columns (standalone composer, City & Season everywhere,
-//    2026-08-16) ──────────────────────────────────────────────────────────────────
+//    2026-08-16; factory-built since the item-B cleanup, 2026-08-24) ─────────────
 // The CITY twin of the Venue composer above — IDENTICAL Venue-shape in every respect
 // (standalone, filter-independent: reads/writes NOTHING on state.city). Pick value(s)
 // [raw city names] × a base stat → one column per picked city, e.g. "Bat Avg (Mumbai)".
 // City has NO canonical fold anywhere (the City FILTER's cityPredicateSql matches the
 // RAW `city IN (…)` strings), so the CASE-WHEN is a SINGLE RAW equality
-// `mctx.city = '<name>'` — the Team/Venue dual-split shape. `matches.city` lives on the
-// SHARED mctx LEFT JOIN (its sub-select now projects city — filters.js
-// matchContextSubselectSql). KEY = `city__<hexToken>__<baseKey>` (double underscore).
-const COMPOSED_CITY_PREFIX = "city__";
-const COMPOSED_CITY_SPECS = COMPOSED_INNINGS_SPECS;
-const COMPOSED_CITY_COMPONENTS = COMPOSED_INNINGS_COMPONENTS;
-const COMPOSED_CITY_POOL_ORDER = COMPOSED_INNINGS_POOL_ORDER;
-const COMPOSED_CITY_COL = "mctx.city";
-
-/** Build the composed-city column key for `baseKey` scoped to raw `cityName`. */
-export function makeComposedCityKey(cityName, baseKey) {
-  return `${COMPOSED_CITY_PREFIX}${teamNameToToken(cityName)}__${baseKey}`;
-}
-
-/** Parse a composed-city column key → { token, cityName, baseKey }, or null. */
-export function parseComposedCityKey(key) {
-  if (typeof key !== "string" || !key.startsWith(COMPOSED_CITY_PREFIX)) return null;
-  const rest = key.slice(COMPOSED_CITY_PREFIX.length);
-  const sep = rest.indexOf("__");
-  if (sep <= 0) return null;
-  const token = rest.slice(0, sep);
-  const baseKey = rest.slice(sep + 2);
-  const cityName = teamTokenToName(token);
-  if (cityName == null || !baseKey) return null;
-  return { token, cityName, baseKey };
-}
-
-/** True iff every component the `baseKey` spec needs exists in `discipline`'s view. */
-function composedCityComponentsPresent(discipline, spec) {
-  const have = COMPOSED_CITY_COMPONENTS[discipline];
-  return !!have && spec.needs.every((c) => have.has(c));
-}
-
-/** Build the VIRTUAL metric for a composed-city column — SINGLE RAW equality
- * `mctx.city = '<name>'` (Venue-shape). Both plain disciplines; null outside
- * batting/bowling, for a missing city name, or an unknown base / missing component. */
-function buildComposedCityMetric(cityName, baseKey, discipline) {
-  if (discipline !== "batting" && discipline !== "bowling") return null;
-  if (cityName == null || cityName === "") return null;
-  const specMap = COMPOSED_CITY_SPECS[discipline];
-  const spec = specMap && specMap[baseKey];
-  if (!spec || !composedCityComponentsPresent(discipline, spec)) return null;
-  const base = getMetric(baseKey, discipline);
-  if (!base) return null;
-  const literal = `'${String(cityName).replace(/'/g, "''")}'`;
-  const sql = spec.sql.split("innings_number").join(COMPOSED_CITY_COL).split("{S}").join(literal);
-  return {
-    ...base,
-    key: makeComposedCityKey(cityName, baseKey),
-    baseKey,
-    cityName,
-    isComposedCity: true,
-    sqlExpression: sql,
-    label: `${base.label} (${cityName})`,
-    shortLabel: `${base.shortLabel} (${cityName})`,
-  };
-}
-
-/** Resolve a composed-city COLUMN key to its virtual metric, or null. Called by getMetric. */
-export function resolveComposedCityMetric(key, discipline) {
-  const parsed = parseComposedCityKey(key);
-  if (!parsed) return null;
-  return buildComposedCityMetric(parsed.cityName, parsed.baseKey, discipline);
-}
-
-/** The ordered base metrics the `discipline` City composer offers — the SAME pool as
- * the Team/Venue/Innings composers. [] outside plain batting/bowling. */
-export function composedCityPool(discipline) {
-  if (discipline !== "batting" && discipline !== "bowling") return [];
-  const order = COMPOSED_CITY_POOL_ORDER[discipline];
-  const specMap = COMPOSED_CITY_SPECS[discipline];
-  if (!order || !specMap) return [];
-  const pool = [];
-  for (const baseKey of order) {
-    const spec = specMap[baseKey];
-    if (!spec || !composedCityComponentsPresent(discipline, spec)) continue;
-    const base = getMetric(baseKey, discipline);
-    if (base) pool.push(base);
-  }
-  return pool;
-}
-
-const _composedCityKeys = new Set();
-
-/** Record composed-city column key(s) as the composer mints them. */
-export function registerComposedCityKeys(keys) {
-  for (const k of Array.isArray(keys) ? keys : [keys]) {
-    if (typeof k === "string" && parseComposedCityKey(k)) _composedCityKeys.add(k);
-  }
-}
-
-/** Every registered composed-city column key that RESOLVES for `discipline`. */
-export function eligibleComposedCityKeys(discipline) {
-  if (discipline !== "batting" && discipline !== "bowling") return [];
-  const keys = [];
-  for (const k of _composedCityKeys) {
-    if (resolveComposedCityMetric(k, discipline)) keys.push(k);
-  }
-  return keys;
-}
+// `mctx.city = '<name>'` — the factory's "equality" (dual-split) mechanic that
+// Team/Opposition/Venue/Season also use, NOT Stage/Event's "membership" whole-test
+// replace. `matches.city` lives on the SHARED mctx LEFT JOIN (its sub-select projects
+// city — filters.js matchContextSubselectSql); table.js lights that join off the
+// metric's `isComposedCity` flag, hence the exact flag name below. The former
+// `buildComposedCityMetric` body now lives in makeComposerFamily.
+// KEY = `city__<hexToken>__<baseKey>` (double underscore — no single-underscore key
+// can collide).
+//
+// The six exports are the SAME six functions, same names, same signatures, same
+// return shapes as before the factory:
+//   makeComposedCityKey(cityName, baseKey) → key
+//   parseComposedCityKey(key)              → { token, cityName, baseKey } | null
+//   resolveComposedCityMetric(key, disc)   → the virtual metric | null (getMetric)
+//   composedCityPool(disc)                 → the ordered base metrics offered
+//   registerComposedCityKeys(keys)         → record minted key(s)
+//   eligibleComposedCityKeys(disc)         → registered keys that still resolve
+export const {
+  makeKey: makeComposedCityKey,
+  parseKey: parseComposedCityKey,
+  resolveMetric: resolveComposedCityMetric,
+  pool: composedCityPool,
+  register: registerComposedCityKeys,
+  eligible: eligibleComposedCityKeys,
+} = makeComposerFamily({
+  prefix: "city__",
+  flag: "isComposedCity",
+  nameField: "cityName",
+  gate: (discipline) => discipline === "batting" || discipline === "bowling",
+  colFor: () => "mctx.city",
+  mechanic: "equality",
+  labelFor: (text, cityName) => `${text} (${cityName})`,
+});
 
 // ── Composed SEASON × metric columns (standalone composer, City & Season everywhere,
 //    2026-08-16) ──────────────────────────────────────────────────────────────────
