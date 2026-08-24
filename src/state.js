@@ -1808,10 +1808,10 @@ export function reconcileLeaderboardColumns(state, { firstSearch = false } = {})
   const disc = state.discipline;
   // Fielding board (3rd scope): the Option-B engine runs here too (it seeds the fixed
   // five, keeps hand-added columns across Searches, and resets the sort when a column
-  // is dropped). Its filter→column mapping (activeLeaderboardFilterSources) yields
-  // NOTHING for fielding this wave — every batting/bowling which-values column it maps
-  // is filtered out by isLeaderboardColumnAddable against the fielding eligible set —
-  // so no wrong column is ever auto-added; only the seed + keep + sort behaviour apply.
+  // is dropped). The fielding board takes the same Option-B path as batting/bowling —
+  // each active fielding filter maps to its own fld_*_set list column
+  // (activeLeaderboardFilterSources' fielding branch above), auto-added/tidied exactly
+  // like the batting/bowling which-values columns.
   // Additive to batting/bowling (they still take the exact same path). (The autoManage
   // caller in main.js has its own batting/bowling gate — un-gated in step with this.)
   if (disc !== "batting" && disc !== "bowling" && disc !== "fielding") return null;

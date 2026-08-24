@@ -385,7 +385,7 @@ function conditionsToInningsWhere(conditions, discipline) {
 // buildFieldingSliceClauses (+ its additive buildFieldingExtraSliceClauses) — a
 // namespace the LEADERBOARD never sets, so its fielding column stays byte-identical:
 //   • DIRECT columns (fielding_events): out_batting_position (positions), kind (kinds),
-//     phase (phases) — the original trio — PLUS out_hand (hands), out_role (roles),
+//     phase (phases) — the original trio — PLUS out_hand (hands),
 //     out_batter_id (outBatters), bowler_id (bowlers), bowler_style (bowlerStyles),
 //     city (cities), innings_number (inningsNumbers, 0-based stored), over_number
 //     (overFrom / overTo, 0-based range).
@@ -397,7 +397,7 @@ function conditionsToInningsWhere(conditions, discipline) {
 // buildFieldingRowState just passes `row.fielding` straight through to
 // state.fielding, so wiring a new dim is a T-3b editor concern only — the query
 // engine already reads it. Availability of the profile-derived dims (out_hand /
-// out_role / bowler_style) is DATA-DRIVEN via loadDimOptions (no gender
+// bowler_style) is DATA-DRIVEN via loadDimOptions (no gender
 // hardcode): empty options ⇒ T-3b hides the filter.
 
 /** The six fielding tallies a fielding row shows, in display order. Keys match the
@@ -448,7 +448,6 @@ function describeFieldingRow(f) {
   list(f.kinds, "Wicket type", (k) => WICKET_TYPE_LABEL[k] || k);
   list(f.positions, "Batting position");
   list(f.hands, "Batting hand");
-  list(f.roles, "Role");
   if (Array.isArray(f.outBatters) && f.outBatters.length) out.push(`Batter: ${f.outBatterName || f.outBatters[0]}`);
   list(f.bowlerStyles, "Bowler style");
   if (Array.isArray(f.bowlers) && f.bowlers.length) out.push(`Bowler: ${f.bowlerName || f.bowlers[0]}`);
@@ -506,7 +505,7 @@ export function buildFieldingRowState(row, pageState) {
     // namespace instead (see below), so the leaderboard's own top-level match-context
     // never leaks into the fielding column (it keeps ignoring it, unchanged).
     // The fielding SLICE dims — the full T-3a-ext set (positions / kinds / phases +
-    // hands / roles / outBatters / bowlers / bowlerStyles / cities / inningsNumbers /
+    // hands / outBatters / bowlers / bowlerStyles / cities / inningsNumbers /
     // overFrom / overTo + seasons / stage / result / tossResult / tossDecision) — ride
     // on `state.fielding`, read by table.js buildFieldingSliceClauses. This passes
     // `row.fielding` straight through: whatever sub-fields the (T-3b) editor set are
@@ -660,7 +659,7 @@ export async function fetchFieldingRow(row, playerId, pageState, cols) {
 
 /** Build a fielding row (T-3a seeds these in code; T-3b's editor will build them).
  * `fielding` carries the full T-3a-ext slice set — the original { positions, kinds,
- * phases } trio plus any of { hands, roles, outBatters, bowlers, bowlerStyles,
+ * phases } trio plus any of { hands, outBatters, bowlers, bowlerStyles,
  * cities, inningsNumbers, overFrom, overTo, seasons, stage, result, tossResult,
  * tossDecision } the editor sets (missing ⇒ unset ⇒ no clause). `scope` / `singletons`
  * as on batting/bowling rows. Carries no conditions / ball predicates / matchupVs — a

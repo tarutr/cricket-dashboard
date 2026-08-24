@@ -55,7 +55,6 @@ export const DIMS = [
   { key: "position",     field: "positions",     group: "Dismissal", label: "Dismissed batter's position",  control: "checklist", numeric: true,
     options: () => FIELDING_POSITIONS.map((n) => ({ value: n, label: `Position ${n}` })) },
   { key: "hand",         field: "hands",         group: "Dismissal", label: "Dismissed batter hand", control: "checklist", source: "fielding", column: "out_hand" },
-  { key: "role",         field: "roles",         group: "Dismissal", label: "Batter role",       control: "checklist", source: "fielding", column: "out_role" },
   { key: "batter",       field: "outBatters",    group: "Dismissal", label: "Specific batter",   control: "player", nameField: "outBatterName", pickLabel: "Dismissed batter" },
   { key: "bowlerStyle",  field: "bowlerStyles",  group: "Bowler",    label: "Bowler style",      control: "checklist", source: "fielding", column: "bowler_style" },
   { key: "bowler",       field: "bowlers",       group: "Bowler",    label: "Specific bowler",   control: "player", nameField: "bowlerName", pickLabel: "Bowler" },
@@ -66,6 +65,9 @@ export const DIMS = [
   { key: "city",         field: "cities",        group: "Match",     label: "City",              control: "checklist", source: "fielding", column: "city" },
   // reverse: true — loadDimOptions returns ascending (ORDER BY 1); Season reads
   // newest-first (owner #13-adjacent), matching the Event ▸ Season sub-picker.
+  // Canonical season ordering lives in playerData.js's searchSeasons (ORDER BY
+  // syr DESC, season DESC) — this reverse:true flip agrees with it for every
+  // season string beginning with its 4-digit start year (all of them).
   { key: "season",       field: "seasons",       group: "Match",     label: "Season",            control: "checklist", source: "matches", column: "season", reverse: true },
   { key: "stage",        field: "stage",         group: "Match",     label: "Stage",             control: "checklist", source: "matches", column: "event_stage", canonical: true },
   { key: "result",       field: "result",        group: "Match",     label: "Match result",      control: "checklist", options: () => RESULT_OUTCOME_OPTIONS },

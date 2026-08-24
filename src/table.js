@@ -876,7 +876,7 @@ export const isProfileMetric = (m) => m && m.source === "profiles";
  * events. Reads `state.fielding`: the original trio { positions, kinds, phases }
  * (multi-select lists, mirroring the app's existing position/opposition pickers)
  * PLUS the T-3a-ext full filter set appended by buildFieldingExtraSliceClauses
- * (out_hand/out_role/out_batter_id/bowler_id/bowler_style/city/innings_number/
+ * (out_hand/out_batter_id/bowler_id/bowler_style/city/innings_number/
  * over range + Season/Stage/Result/Toss via `matches`). Returns [] when nothing is
  * set, so the fielding_cte (and the whole query) stays byte-identical to the
  * un-sliced case — the leaderboard only ever sets positions/kinds/phases, so its
@@ -914,7 +914,7 @@ export function buildFieldingSliceClauses(state) {
  * keeping buildFieldingSliceClauses — and the sacred buildFieldingCteSql that calls
  * it — byte-identical.
  *
- * DIRECT columns on the `fielding` view (fielding_events): out_hand, out_role,
+ * DIRECT columns on the `fielding` view (fielding_events): out_hand,
  * out_batter_id, bowler_id, bowler_style, city (string IN-lists); innings_number
  * (0-BASED stored ints — T-3b's editor owns the display mapping); over_number (a
  * 0-based range, over 1 = over_number 0, either bound optional). All player-scoped
@@ -950,7 +950,6 @@ export function buildFieldingExtraSliceClauses(state) {
 
   // Dismissed-batter profile dims (availability is DATA-DRIVEN — see loadDimOptions).
   pushInList("out_hand", f.hands);
-  pushInList("out_role", f.roles);
   pushInList("out_batter_id", f.outBatters);
   // Bowler dims.
   pushInList("bowler_id", f.bowlers);

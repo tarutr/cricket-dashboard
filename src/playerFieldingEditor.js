@@ -23,7 +23,7 @@
 //     drawer editors the batting/bowling editor uses.
 //   • row.fielding.*  (via buildFieldingExtraSliceClauses' additive WHERE): every
 //     other dim — Wicket Type (kinds) / Batting Position (positions) / Batting Hand
-//     (hands) / Role (roles) / specific batter (outBatters) / specific bowler
+//     (hands) / specific batter (outBatters) / specific bowler
 //     (bowlers) / Bowler Style (bowlerStyles) / Phase (phases) / Over range
 //     (overFrom-overTo, 0-based STORED) / Innings Number (inningsNumbers, 0-based
 //     STORED) / City (cities) / Season (seasons) / Stage (stage, canonical labels) /
@@ -34,7 +34,7 @@
 // the fielding query IGNORES → offering it would be a dishonest filter, SPEC §8.4).
 //
 // ── DATA-DRIVEN availability (owner ruling, T-3a-ext — NO gender hardcode) ────
-// The profile-derived + any data-sourced dims (Batting Hand / Role / Bowler Style /
+// The profile-derived + any data-sourced dims (Batting Hand / Bowler Style /
 // City / Season / Stage) load their option lists via loadDimOptions on open; a dim
 // is OFFERED in the palette ONLY when its list is non-empty. Men return values →
 // the filter shows; women return [] for the profile dims (all NULL) → hidden; when
@@ -194,11 +194,7 @@ export function openFieldingRowEditor(hostDoc, deps) {
       loadDimOptions(dim.source, dim.column, scope)
         .then((vals) => {
           if (token !== optionsToken) return;
-          // Owner ruling (2026-08-06): the profile stores the LITERAL string
-          // "Unknown" for a player with no known role — hide that one tick-box
-          // on the Batter role dim specifically (loadDimOptions only strips
-          // NULL/""); every other dim keeps whatever values it loads.
-          const rawVals = dim.column === "out_role" ? vals.filter((v) => v !== "Unknown") : vals;
+          const rawVals = vals;
           const orderedVals = dim.reverse ? [...rawVals].reverse() : rawVals;
           dimOptions[dim.key] = dim.canonical
             ? [...new Set(rawVals.map((v) => canonicalStage(v)))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((v) => ({ value: v, label: v }))
@@ -224,12 +220,8 @@ export function openFieldingRowEditor(hostDoc, deps) {
       disabled: Boolean(scopeController && scopeController.isRevealed(s.key)),
       run: () => { if (scopeController) scopeController.revealSingleton(s.key); },
     });
-    // "Batter role" (key "role") is retired here too (owner ruling 2026-08-16:
-    // "doesn't work here" — same call already made for the leaderboard's Fielding
-    // board menu, src/paletteGroups.js). The dim definition stays in fieldingDims.js
-    // (its query path is unchanged); only this offer is withheld.
     const groupItems = (name) =>
-      DIMS.filter((d) => d.group === name && d.key !== "role" && dimOfferable(d)).map(nativeLeaf);
+      DIMS.filter((d) => d.group === name && dimOfferable(d)).map(nativeLeaf);
     const push = (name, items) => { const kept = items.filter(Boolean); if (kept.length) groups.push({ name, items: kept }); };
     push("Dismissed batter", groupItems("Dismissal"));
     push("Bowler", groupItems("Bowler"));
@@ -495,7 +487,7 @@ function cloneFielding(f) {
   const src = f || {};
   const out = {};
   for (const k of [
-    "kinds", "positions", "phases", "hands", "roles", "outBatters", "bowlers",
+    "kinds", "positions", "phases", "hands", "outBatters", "bowlers",
     "bowlerStyles", "cities", "inningsNumbers", "seasons", "stage", "result",
     "tossResult", "tossDecision",
   ]) {

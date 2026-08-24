@@ -15,7 +15,7 @@
 // fielding query already honours.
 //
 // Data-driven availability (owner ruling — NO gender hardcode): the profile/location
-// dims (Batting hand / Batter role / Bowler style / City / Season / Stage) load their
+// dims (Batting hand / Bowler style / City / Season / Stage) load their
 // option lists via loadDimOptions scoped to the CURRENT leaderboard scope; a dim is
 // OFFERED only when its list is non-empty. Men return values → offered; women return
 // [] (all NULL) → absent; women's future data auto-shows them. The DATA decides.
@@ -119,9 +119,7 @@ export function createFieldingDimsController({ host, store, onChange, requestRer
       loadDimOptions(dim.source, dim.column, scope)
         .then((vals) => {
           if (token !== optionsToken) return;
-          // Owner ruling (2026-08-06): the profile stores the literal "Unknown" for a
-          // player with no known role — hide that one tick-box on the Batter role dim.
-          const rawVals = dim.column === "out_role" ? vals.filter((v) => v !== "Unknown") : vals;
+          const rawVals = vals;
           const orderedVals = dim.reverse ? [...rawVals].reverse() : rawVals;
           dimOptions[dim.key] = dim.canonical
             ? [...new Set(rawVals.map((v) => canonicalStage(v)))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((v) => ({ value: v, label: v }))

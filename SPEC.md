@@ -138,14 +138,17 @@ error. (Implemented in `src/db.js`.)
 
 ### 4.2 Parquet schemas (written by `export_parquet.py`)
 
-> **STATUS — ball-layer branch, NOT yet live.** The 9-file schema below (incl. `fielding_events`, the
-> match-context columns, and the full-build column families: by-phase components, batting composition,
-> team-relative differentials, bowling spell aggregates) is BUILT + VERIFIED on the `ball-layer` branch but is
-> **not in production**. Production currently exports the **8-file** innings layer (no `fielding_events`, no
-> full-build families) and still shows the "Group rows" control. It all goes live at the ball-layer **cutover**.
+> **STATUS — ball-layer branch, NOT yet live.** The 15-file schema below — **nine** aggregate files (incl.
+> `fielding_events`, the match-context columns, and the full-build column families: by-phase components,
+> batting composition, team-relative differentials, bowling spell aggregates) plus **six** per-delivery ball
+> files (`deliveries_<m|f>_<t20|odi|red>.parquet`, which partition every delivery exactly once) — is BUILT +
+> VERIFIED on the `ball-layer` branch but is **not in production**. Production currently exports the **8-file**
+> innings layer (no `fielding_events`, no full-build families, no ball files) and still shows the "Group rows"
+> control. It all goes live at the ball-layer **cutover**.
 
-**Nine** Parquet files are exported (the v1 spec listed four). All aggregation is done
-from the `deliveries` base table per §4.1. Compression is **zstd**; row-group size is
+**Fifteen** Parquet files are exported (the v1 spec listed four): nine aggregate files
+and six delivery files. All aggregation is done from the `deliveries` base table per
+§4.1. Compression is **zstd**; row-group size is
 **~100 000**. The innings and matchup files (and `player_matches` / `matches`) are
 **sorted by `match_date` then `match_id`** (with finer key columns after, for a stable
 order) so DuckDB row-group pruning makes date-range filters cheap; `players.parquet` and
@@ -360,7 +363,7 @@ Karanbir Singh **2,454** runs; SA Yadav **60 inns / 1,544 runs / 29.13 avg / 150
 ### 5.1a Fielding scope — third leaderboard discipline
 
 > **BUILT + VERIFIED on the `ball-layer` branch, NOT yet live.** Everything in this
-> subsection ships at the ball-layer cutover, alongside the rest of §4.2's 9-file schema.
+> subsection ships at the ball-layer cutover, alongside the rest of §4.2's 15-file schema.
 
 Selecting **Fielding** in the Discipline control ranks **fielders**, not batters/bowlers,
 off the same sacred per-fielder query (`buildFieldingCteSql`) that already powers the
@@ -428,7 +431,13 @@ Every metric is defined **once** in the shared `metrics.js` module as an object 
 shape `{key, label, discipline, source, sqlExpression, sortExpression?, higherIsBetter,
 format, isPhaseMetric, kind, additive, zeroIsData, ...}`. Both the table and the graph
 import this module; no metric is defined anywhere else. All metrics are computed in SQL
-from the exported innings/matchup components — never from raw deliveries at runtime.
+from the exported innings/matchup components. The one exception is the **opt-in ball
+engine** (`?engine=ball`, `ball-layer` branch, off by default): with it on, the
+`batting` / `bowling` / `matchup_*` views are reconstructed at runtime from the six
+`deliveries_*.parquet` files (`src/ballEngine.js` / `src/ballEngineMatchup.js`), scoped
+per query by `scopeForQuery` and verified byte-identical to the exported components. The
+Ball Ranges filter group (Phase / Over Range / Team Ball Range / Batter-Bowler Ball
+Range) is offered only in that mode.
 
 - `kind` ∈ **total | rate | percent | peak** classifies the metric for chart eligibility
   and for recombination across buckets (the Line chart requires total/rate/percent).

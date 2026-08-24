@@ -563,10 +563,11 @@ function autoManageColumns() {
   const ns = effectiveNamespace(state);
   // Option B applies to the PLAIN batting/bowling leaderboard AND the fielding board
   // (3rd scope) — the matchup namespaces keep their fixed defaults + restricted picker.
-  // reconcileLeaderboardColumns has the matching fielding gate; for fielding it only
-  // seeds the fixed five, keeps hand-added columns, and manages the sort (its
-  // filter→column mapping is empty for fielding this wave). effectiveNamespace(fielding)
-  // === "fielding" (fielding is never a matchup), so this reaches the reconciler.
+  // reconcileLeaderboardColumns has the matching fielding gate; the fielding board
+  // takes the same Option-B path as batting/bowling — it seeds the fixed five, keeps
+  // hand-added columns, manages the sort, AND maps each active fielding filter to its
+  // own fld_*_set list column. effectiveNamespace(fielding) === "fielding" (fielding
+  // is never a matchup), so this reaches the reconciler.
   if (ns !== "batting" && ns !== "bowling" && ns !== "fielding") return;
   const seeding = !((state.columnsSeeded || {})[state.discipline]);
   // reconcileLeaderboardColumns owns the whole Option-B pass: first-Search Core seed,
