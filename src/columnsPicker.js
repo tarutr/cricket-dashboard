@@ -1248,72 +1248,24 @@ export function createColumnsPicker({
     }
     return next;
   }
-  /** Remap the Team composer's ticked keys to a new base stat (the stat <select>
-   * change) — the search picker holds TEAM NAMES, so swap the base key on each ticked
-   * key structurally (team name preserved), analogous to fcRemapRangeTicks. */
-  function teamRemapTicks(newBaseKey, ticks) {
+  /** Remap a SEARCH composer's ticked keys to a new base stat (the stat <select>
+   * change) — the search picker holds VALUE NAMES (team / opponent / canonical stage /
+   * canonical event / venue / city / season), so swap the base key on each ticked key
+   * structurally with the value preserved, analogous to fcRemapRangeTicks.
+   *
+   * ONE body for all seven families (cleanup follow-on 1): the per-family key codec
+   * and name field come straight from SEARCH_COMPOSER_META's `parse` / `make` /
+   * `nameOf`, which is also what mount + confirm already use — so a new search
+   * composer needs no remap function, just its META row. A kind with no META row
+   * yields an empty Set (fail closed); the ONE caller only reaches here for kinds that
+   * have a row. */
+  function searchComposerRemapTicks(kind, newBaseKey, ticks) {
+    const meta = SEARCH_COMPOSER_META[kind];
     const next = new Set();
+    if (!meta) return next;
     for (const k of ticks) {
-      const p = parseComposedTeamKey(k);
-      if (p) next.add(makeComposedTeamKey(p.teamName, newBaseKey));
-    }
-    return next;
-  }
-  /** Remap the Opposition composer's ticked keys to a new base stat — the opponent-
-   * side mirror of teamRemapTicks immediately above. */
-  function oppRemapTicks(newBaseKey, ticks) {
-    const next = new Set();
-    for (const k of ticks) {
-      const p = parseComposedOppositionKey(k);
-      if (p) next.add(makeComposedOppositionKey(p.oppName, newBaseKey));
-    }
-    return next;
-  }
-  /** Remap the Stage composer's ticked keys to a new base stat — the CANONICAL-stage-
-   * name mirror of teamRemapTicks/oppRemapTicks above (stage name preserved). */
-  function stageRemapTicks(newBaseKey, ticks) {
-    const next = new Set();
-    for (const k of ticks) {
-      const p = parseComposedStageKey(k);
-      if (p) next.add(makeComposedStageKey(p.stageName, newBaseKey));
-    }
-    return next;
-  }
-  /** Remap the Event composer's ticked keys to a new base stat — the canonical-event-
-   * name mirror of stageRemapTicks above (event name preserved). */
-  function eventRemapTicks(newBaseKey, ticks) {
-    const next = new Set();
-    for (const k of ticks) {
-      const p = parseComposedEventKey(k);
-      if (p) next.add(makeComposedEventKey(p.eventName, newBaseKey));
-    }
-    return next;
-  }
-  /** Remap the Venue composer's ticked keys to a new base stat — the raw-venue-name
-   * mirror of stageRemapTicks above (venue name preserved). */
-  function venueRemapTicks(newBaseKey, ticks) {
-    const next = new Set();
-    for (const k of ticks) {
-      const p = parseComposedVenueKey(k);
-      if (p) next.add(makeComposedVenueKey(p.venueName, newBaseKey));
-    }
-    return next;
-  }
-  /** Remap the City composer's ticked keys to a new base stat (raw city name kept). */
-  function cityRemapTicks(newBaseKey, ticks) {
-    const next = new Set();
-    for (const k of ticks) {
-      const p = parseComposedCityKey(k);
-      if (p) next.add(makeComposedCityKey(p.cityName, newBaseKey));
-    }
-    return next;
-  }
-  /** Remap the Season composer's ticked keys to a new base stat (raw season kept). */
-  function seasonRemapTicks(newBaseKey, ticks) {
-    const next = new Set();
-    for (const k of ticks) {
-      const p = parseComposedSeasonKey(k);
-      if (p) next.add(makeComposedSeasonKey(p.seasonName, newBaseKey));
+      const p = meta.parse(k);
+      if (p) next.add(meta.make(meta.nameOf(p), newBaseKey));
     }
     return next;
   }
@@ -2112,24 +2064,14 @@ export function createColumnsPicker({
         const formats = getFormats();
         // FC-2 range dims (over/pos): composerValueRows can't remap user-defined ranges,
         // so swap the base tally on each ticked key structurally (range preserved).
-        // Team/Opposition/Stage: the search picker holds team / opponent / canonical-
-        // stage NAMES → swap the base stat on each key structurally, same idea.
+        // The seven SEARCH composers (Team / Opposition / Stage / Event / Venue / City /
+        // Season): the picker holds VALUE NAMES → swap the base stat on each key
+        // structurally, same idea. One branch for all seven, dispatched off their
+        // SEARCH_COMPOSER_META row (which is exactly the seven kinds).
         editor.ticks = FC_RANGE_KINDS.has(editor.kind)
           ? fcRemapRangeTicks(statEl.value, editor.ticks)
-          : editor.kind === "team"
-          ? teamRemapTicks(statEl.value, editor.ticks)
-          : editor.kind === "opposition"
-          ? oppRemapTicks(statEl.value, editor.ticks)
-          : editor.kind === "stage"
-          ? stageRemapTicks(statEl.value, editor.ticks)
-          : editor.kind === "event"
-          ? eventRemapTicks(statEl.value, editor.ticks)
-          : editor.kind === "venue"
-          ? venueRemapTicks(statEl.value, editor.ticks)
-          : editor.kind === "city"
-          ? cityRemapTicks(statEl.value, editor.ticks)
-          : editor.kind === "season"
-          ? seasonRemapTicks(statEl.value, editor.ticks)
+          : SEARCH_COMPOSER_META[editor.kind]
+          ? searchComposerRemapTicks(editor.kind, statEl.value, editor.ticks)
           : remapTicks(editor.kind, ns, formats, editor.sel, statEl.value, editor.ticks);
         editor.sel = statEl.value;
         rerenderInline();
