@@ -20,6 +20,71 @@ import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel, composedParamPrefixForBase, paramAppliedLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
+import { DIMS as FIELDING_DIMS } from "./fieldingDims.js";
+
+// Phase 1.5 (stage3 fix plan) — the honesty fix: the 13 fielding-dimension filters
+// besides "Dismissed batter's position" (Phase/Over range/Innings number/City/
+// Season/Stage/Match result/Toss result/Toss decision/Bowler style/Specific
+// bowler/Dismissed batter hand/Specific batter) narrowed the fielding board with
+// NO pill (audit3 §vi). This label builder is driven by the SAME dim catalogue
+// (fieldingDims.js DIMS) that already builds the filter ROWS (fieldingDimsDrawer.js)
+// and the palette leaves (paletteGroups.js) — one shared source of dim metadata, so
+// there is no separate/bespoke pill vocabulary to drift out of sync. It only reads
+// state (`fld` = state.fielding) and formats known conditions; it never mutates.
+//
+// Label conventions deliberately mirror the closest EXISTING analogous pill so a
+// fielding pill reads the same way its batting/bowling counterpart already does:
+//   - Toss result / Toss decision: no prefix — the option labels are already
+//     self-explanatory sentences ("Won toss", "Chose to bat"), matching the plain
+//     batting/bowling toss pills above.
+//   - Phase: "Powerplay + Death overs" — matches the ball-window Phase pill's
+//     join-then-"overs"-suffix convention (deliveryWindow.js pieceLabel).
+//   - Over range: "overs 6–10" — matches the ball-window Over-range pill.
+//   - Innings number: "Innings: 1st innings, 2nd innings" — matches the batting/
+//     bowling Innings Number pill exactly (same inningsNumberLabel-style option).
+//   - Match result: "Match result: Won, Lost" — the palette's own name for this
+//     dim (batting/bowling's analogous pill reads "Result: …"; fielding's is
+//     deliberately named "Match result" to avoid implying it is the same state
+//     field, since it is a separate state.fielding.result copy).
+//   - City / Season / Stage / Bowler style / Dismissed batter hand: collapse to
+//     "Label: v1, v2" (≤2 picks) else "Label: N picked" — the Stage pill's own
+//     established collapse convention above, reused for every other multi-select
+//     fielding dim so they all behave the same way.
+//   - Specific bowler / Specific batter: "Bowler: name" / "Dismissed batter: name"
+//     — the dim's own `pickLabel`, mirroring the opponent-player "vs name" pill's
+//     shape (a labelled name, not a bare "vs").
+function fieldingDimPillLabel(dim, fld, state) {
+  if (dim.control === "overrange") {
+    const from = Number.isFinite(Number(fld.overFrom)) ? Number(fld.overFrom) + 1 : null;
+    const to = Number.isFinite(Number(fld.overTo)) ? Number(fld.overTo) + 1 : null;
+    if (from == null && to == null) return null;
+    if (from != null && to != null) return `overs ${from}–${to}`;
+    return from != null ? `overs ${from}+` : `overs up to ${to}`;
+  }
+  if (dim.control === "player") {
+    const id = (fld[dim.field] || [])[0];
+    if (!id) return null;
+    return `${dim.pickLabel}: ${fld[dim.nameField] || id}`;
+  }
+  const vals = fld[dim.field];
+  if (!Array.isArray(vals) || vals.length === 0) return null;
+  // Static vocabularies (dim.options, called exactly as fieldingDimsDrawer.js's own
+  // optionsFor() does) map the stored value to its display label; data-driven dims
+  // (dim.source) store the display string AS the value already (loadDataDrivenOptions
+  // labels data-driven options `String(v)`, and canonical ones store the folded
+  // canonical string), so the raw value doubles as its own label there.
+  const optLabel = (v) => {
+    if (!dim.options) return String(v);
+    const opt = dim.options({ formats: state.formats || [] }).find((o) => String(o.value) === String(v));
+    return opt ? String(opt.label) : String(v);
+  };
+  if (dim.key === "phase") return `${vals.map(optLabel).join(" + ")} overs`;
+  if (dim.key === "tossResult" || dim.key === "tossDecision") return vals.map(optLabel).join(", ");
+  if (dim.key === "innings") return `Innings: ${vals.map(optLabel).join(", ")}`;
+  if (dim.key === "result") return `Match result: ${vals.map(optLabel).join(", ")}`;
+  const labels = vals.map(optLabel);
+  return labels.length <= 2 ? `${dim.label}: ${labels.join(", ")}` : `${dim.label}: ${labels.length} picked`;
+}
 
 // Symbol style (not a word phrasing like "at least 300") — matches the worked
 // examples in the brief ("Runs ≥ 300",
@@ -408,6 +473,40 @@ export function mountPills(
           remove: () => setFld({ positions: [] }),
           restore: () => setFld({ positions: captured }),
         });
+      }
+      // Phase 1.5: the other 13 fielding dims (position, above, already had a pill;
+      // "kind" is excluded — it has no palette leaf, paletteGroups.js ~439, and can
+      // never hold a value). Same soft-delete/staged mechanism as every pill above —
+      // only the per-dim label + which state.fielding field(s) remove/restore touch.
+      for (const dim of FIELDING_DIMS) {
+        if (dim.key === "position" || dim.key === "kind") continue;
+        const label = fieldingDimPillLabel(dim, fld, s);
+        if (!label) continue;
+        if (dim.control === "overrange") {
+          const captured = { overFrom: fld.overFrom, overTo: fld.overTo };
+          pills.push({
+            key: "fld_overs",
+            label,
+            remove: () => setFld({ overFrom: undefined, overTo: undefined }),
+            restore: () => setFld(captured),
+          });
+        } else if (dim.control === "player") {
+          const captured = { [dim.field]: [...(fld[dim.field] || [])], [dim.nameField]: fld[dim.nameField] };
+          pills.push({
+            key: `fld_${dim.key}`,
+            label,
+            remove: () => setFld({ [dim.field]: [], [dim.nameField]: undefined }),
+            restore: () => setFld(captured),
+          });
+        } else {
+          const captured = [...(fld[dim.field] || [])];
+          pills.push({
+            key: `fld_${dim.key}`,
+            label,
+            remove: () => setFld({ [dim.field]: [] }),
+            restore: () => setFld({ [dim.field]: captured }),
+          });
+        }
       }
     }
 
