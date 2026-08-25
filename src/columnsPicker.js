@@ -1811,32 +1811,16 @@ export function createColumnsPicker({
       isPlainNs && ns === "batting"
         ? [{ type: "plain", key: BATTING_POSITION_SET_KEY, label: "Batting Position" }]
         : [];
-    // Wave 2A.3: the Innings-Number / Team / Opposition which-values columns (both
-    // disciplines, plain ns) — same "virtual list column, listed explicitly" shape as
-    // bposItem above, placed right after it (interim default placement pending owner
-    // sign-off — see the Wave 2A worker report).
+    // Wave 2A.3: the Innings-Number which-values column (both disciplines, plain ns) —
+    // same "virtual list column, listed explicitly" shape as bposItem above, placed
+    // right after it (interim default placement pending owner sign-off — see the Wave
+    // 2A worker report). This is INNINGS-LEVEL (not match-level), so it stays in Basic
+    // Stats — see the Stage-3 Phase 1.3 note on matchLevelSetItems below for the
+    // match-level siblings it used to sit next to (Team/Opposition/City/Season/Event/
+    // Venue/Stage/Toss decision/Result Condition), which relocated to the Match
+    // dropdown.
     const scopeSetItems = isPlainNs
-      ? [
-          { type: "plain", key: INNINGS_NUMBER_SET_KEY, label: "Innings Number" },
-          { type: "plain", key: TEAM_SET_KEY, label: "Team" },
-          { type: "plain", key: OPPOSITION_SET_KEY, label: "Opposition" },
-          // City & Season everywhere (2026-08-16): the City / Season which-values columns.
-          { type: "plain", key: CITY_SET_KEY, label: "City" },
-          { type: "plain", key: SEASON_SET_KEY, label: "Season" },
-          // Event & Venue which-values columns (completing City & Season everywhere,
-          // 2026-08-16).
-          { type: "plain", key: EVENT_SET_KEY, label: "Event" },
-          { type: "plain", key: VENUE_SET_KEY, label: "Venue" },
-          // Stage-3 Phase 1.1 (2026-08-25): the last three match-context which-values
-          // columns. Labels mirror the fielding board's own list columns ("Stage",
-          // "Toss decision") and, for Result Condition — which has no fielding
-          // counterpart — the filter's own heading (drawerInnings.js "Result Condition"),
-          // so the boards read consistently. (Phase 1.3 relocates the match-level list
-          // columns to the Match dropdown; until then they sit with their siblings.)
-          { type: "plain", key: STAGE_SET_KEY, label: "Stage" },
-          { type: "plain", key: TOSS_DECISION_SET_KEY, label: "Toss decision" },
-          { type: "plain", key: RESULT_CONDITION_SET_KEY, label: "Result Condition" },
-        ]
+      ? [{ type: "plain", key: INNINGS_NUMBER_SET_KEY, label: "Innings Number" }]
       : [];
     const basicItems = plainItems(ownBasic);
     const bposInnIdx = basicItems.findIndex((it) => it.key === "innings");
@@ -1938,9 +1922,32 @@ export function createColumnsPicker({
     // (unchanged behaviour), and the empty group-header this produces collapses via
     // styles.css `.palette__group-header:empty` — display/layout only, no metric
     // added/removed/reordered.
+    // Stage-3 Phase 1.3 (2026-08-25, owner-ruled item #12): the batting/bowling boards'
+    // match-level which-values columns (Team/Opposition/Event/Venue/City/Season, plus
+    // the Phase-1.1 trio Stage/Toss decision/Result Condition) move here, out of Basic
+    // Stats (scopeSetItems above), mirroring the fielding board's own Match dropdown
+    // (fieldingMatchSetItems above), which already lists its match-context columns
+    // here rather than under "Fielding Stats". Placement only — same keys, same
+    // labels, same auto-add/query behaviour; only which dropdown renders them changes.
+    // Order mirrors the fielding list where the same dimension exists (Team through
+    // Stage, then Toss decision); Result Condition has no fielding counterpart, so it
+    // sits last, as it did in its previous Basic Stats spot.
+    const matchLevelSetItems = isPlainNs
+      ? [
+          { type: "plain", key: TEAM_SET_KEY, label: "Team" },
+          { type: "plain", key: OPPOSITION_SET_KEY, label: "Opposition" },
+          { type: "plain", key: EVENT_SET_KEY, label: "Event" },
+          { type: "plain", key: VENUE_SET_KEY, label: "Venue" },
+          { type: "plain", key: CITY_SET_KEY, label: "City" },
+          { type: "plain", key: SEASON_SET_KEY, label: "Season" },
+          { type: "plain", key: STAGE_SET_KEY, label: "Stage" },
+          { type: "plain", key: TOSS_DECISION_SET_KEY, label: "Toss decision" },
+          { type: "plain", key: RESULT_CONDITION_SET_KEY, label: "Result Condition" },
+        ]
+      : [];
     const matchItems = fieldingMode
       ? [...plainItems(matchesMetric ? [matchesMetric] : []), ...fieldingMatchSetItems]
-      : plainItems([...(matchesMetric ? [matchesMetric] : []), ...impact]);
+      : [...plainItems([...(matchesMetric ? [matchesMetric] : []), ...impact]), ...matchLevelSetItems];
     const matchSections = section("", matchItems);
 
     return {
