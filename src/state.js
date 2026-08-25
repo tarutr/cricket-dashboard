@@ -75,6 +75,12 @@ import {
   // 2026-08-16): same fold + auto-add shape as City/Season.
   eventSetColumnKeys,
   venueSetColumnKeys,
+  // Stage-3 Phase 1.1 (2026-08-25): the Stage / Toss-decision / Result-Condition
+  // which-values column keys (one fold + one auto-add shape for all three), plus the
+  // ONE fielding list column the batting/bowling boards offer too (Dismissed batter's
+  // position, the fld_pos singleton's column).
+  matchOutcomeSetColumnKeys,
+  plainBoardFieldingSetColumnKeys,
   INNINGS_NUMBER_SET_KEY,
   TEAM_SET_KEY,
   OPPOSITION_SET_KEY,
@@ -82,6 +88,9 @@ import {
   SEASON_SET_KEY,
   EVENT_SET_KEY,
   VENUE_SET_KEY,
+  STAGE_SET_KEY,
+  TOSS_DECISION_SET_KEY,
+  RESULT_CONDITION_SET_KEY,
   isParamComposedColumnKey,
   isComposedFieldingColumnKey,
   makeComposedPhaseKey,
@@ -1357,6 +1366,18 @@ export function eligibleColumnKeys(discipline, formats) {
   for (const key of venueSetColumnKeys(discipline)) {
     keys.add(key);
   }
+  // Stage-3 Phase 1.1 (2026-08-25): the last three match-context which-values columns —
+  // Stage / Toss decision / Result Condition (both plain disciplines) — plus the ONE
+  // fielding list column these boards also offer, Dismissed batter's position (its
+  // `fld_pos` filter is offered here, so its column must be addable here too — without
+  // this fold isLeaderboardColumnAddable rejects the key and the auto-add silently drops
+  // it, which is exactly ledger row L-040). Byte-identical when none is present.
+  for (const key of matchOutcomeSetColumnKeys(discipline)) {
+    keys.add(key);
+  }
+  for (const key of plainBoardFieldingSetColumnKeys(discipline)) {
+    keys.add(key);
+  }
   // The seven standalone value×stat COMPOSERS — Team + Opposition + Stage (2026-08-14),
   // Event + Venue (Step 4, 2026-08-14), City + Season (2026-08-16): the picked composed
   // column keys (team__ / opp__ / stage__ / event__ / venue__ / city__ / season__
@@ -1697,6 +1718,25 @@ export function activeLeaderboardFilterSources(state) {
   // composer columns already use).
   if (eventFilterActive(state)) push("filter:event", [EVENT_SET_KEY]);
   if (venueFilterActive(state)) push("filter:venue", [VENUE_SET_KEY]);
+  // Stage-3 Phase 1.1 (2026-08-25): the three match-context filters that narrowed the
+  // numbers with nothing on screen to show it — Stage (ledger L-037), Toss decision
+  // (L-038) and Result Condition (L-039) — now auto-add their which-values column, the
+  // same rule City/Season/Event/Venue follow above. Each reads the shared mctx join
+  // (table.js's wantsMctxColumn lights it on column presence). Their "All" sentinels
+  // keep the filters INACTIVE until a real value is picked, so an added-but-untouched
+  // Stage / Result Condition row adds no column — exactly like the query it emits.
+  if (stageFilterActive(state)) push("filter:mc_stage", [STAGE_SET_KEY]);
+  if (tossDecisionFilterActive(state)) push("filter:mc_toss_decision", [TOSS_DECISION_SET_KEY]);
+  if (resultConditionFilterActive(state)) push("filter:mc_result_condition", [RESULT_CONDITION_SET_KEY]);
+  // Dismissed batter's position (ledger L-040): the ONE fielding-dimension filter offered
+  // on the batting/bowling boards (drawer.js's `fld_pos` singleton, writing the same
+  // state.fielding.positions the fielding board writes and narrowing this board's
+  // fielding_cte tallies). It maps to the SAME fld_out_position_set list column the
+  // fielding board maps it to — mirrored semantics, one definition. The tag differs from
+  // the fielding branch's "filter:fld:position" deliberately: these are separate boards
+  // with separate column sets, and a shared tag would let one board's prune memory speak
+  // for the other.
+  if (fieldingPositionActive(state)) push("filter:fld_pos", ["fld_out_position_set"]);
 
   // Player-attribute filters (men-only by DATA — profile is empty for women, so this
   // is data-driven, not gender-hardcoded). One column per active profile field.

@@ -130,7 +130,20 @@ import { stageAliases, eventAliases, STAGE_CANONICALS } from "./canonicalNames.j
 // functions. Neither module touches the other's bindings during module-body evaluation, so
 // the live bindings are fully initialised by call time regardless of load order. (escSql is
 // still inlined below rather than imported, to keep that hot path free of the cycle.)
-import { STAGE_NONE, STAGE_NONE_LABEL, RESULT_OPTIONS, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
+// Phase 1.1 adds the Result-Condition option list + its three sentinels to the SAME
+// import, read the same lazy way (only inside a query-build call), so the cycle stays
+// benign for exactly the reason documented above.
+import {
+  STAGE_NONE,
+  STAGE_NONE_LABEL,
+  RESULT_OPTIONS,
+  TOSS_RESULT_OPTIONS,
+  TOSS_DECISION_OPTIONS,
+  RESULT_CONDITION_OPTIONS,
+  RESULT_CONDITION_ALL,
+  RESULT_CONDITION_NORMAL,
+  RESULT_CONDITION_SUPER_OVER,
+} from "./state.js";
 
 // ── Batting ───────────────────────────────────────────────────────────────────
 const BATTING_METRICS = [
@@ -2793,6 +2806,12 @@ export function getMetric(key, discipline) {
       // already light.
       resolveEventSetMetric(key, discipline) ??
       resolveVenueSetMetric(key, discipline) ??
+      // Stage-3 Phase 1.1 (2026-08-25): the Stage / Toss-decision / Result-Condition
+      // which-values columns (stage_set / toss_decision_set / result_condition_set, both
+      // plain disciplines) — the last three match-context filters that had no column.
+      // null for any other key. All three need the mctx join present (table.js's
+      // wantsMctxColumn gate), same join the four above already light.
+      resolveMatchOutcomeSetMetric(key, discipline) ??
       // Wave D — D1: player-profile attribute columns (attr_<field>), virtual text
       // metrics projected out of the profile_cte join (buildQuery). null for any
       // non-attr key / wrong discipline, so every other caller is unchanged.
@@ -3745,6 +3764,19 @@ export const CITY_SET_KEY = "city_set";
 export const SEASON_SET_KEY = "season_set";
 export const EVENT_SET_KEY = "event_set";
 export const VENUE_SET_KEY = "venue_set";
+// Stage-3 Phase 1.1 (2026-08-25): the three which-values columns the batting/bowling
+// boards were still missing — Stage (ledger L-037), Toss decision (L-038) and Result
+// Condition (L-039). All three read the SAME shared `mctx` LEFT JOIN the City / Season /
+// Event / Venue which-values columns already read, so they need no new join — only the
+// JOIN-PRESENCE gate in table.js (wantsMctxColumn). Unlike those four they are DERIVED,
+// not raw: each folds the match's raw context into the SAME vocabulary its own FILTER
+// uses (see the derived-expression builders below), so a value the column prints is
+// always a value the filter can select. The 2026-08-14 objection recorded above — "an
+// unfiltered Stage column would reference an unjoined alias" — was resolved when Event /
+// Venue moved the join onto a column-presence gate; Stage simply never got revisited.
+export const STAGE_SET_KEY = "stage_set";
+export const TOSS_DECISION_SET_KEY = "toss_decision_set";
+export const RESULT_CONDITION_SET_KEY = "result_condition_set";
 
 // ── Which-values ("what values did this player have in the filtered rows")
 //    columns — shared spec table (Wave-F cleanup item C, mirrors the fielding
@@ -3825,6 +3857,51 @@ const SCOPE_SET_SPECS = [
     title: "Venues played at across the filtered rows",
     colFor: (d) => (d === "batting" || d === "bowling" ? "mctx.venue" : null),
   },
+  // ── Stage-3 Phase 1.1: the three DERIVED match-context which-values columns ──
+  // `colFor` returns a whole SQL EXPRESSION here, not a bare column name — the same
+  // derived-CASE technique the fielding board's Stage / Toss decision list columns
+  // already use (derivedSetExpr below, shared verbatim so the two boards can never
+  // print different vocabularies). No new spec machinery: the default
+  // list(DISTINCT <expr> ORDER BY <expr>) / MIN(<expr>) wrappers accept an expression
+  // exactly as they accept "mctx.city".
+  {
+    key: STAGE_SET_KEY,
+    label: "Stage",
+    shortLabel: "Stage",
+    title: "Stages present in the filtered rows",
+    // Canonical fold (stageAliases over STAGE_CANONICALS — the SAME expansion the Stage
+    // FILTER and the Stage composer use) + a "No Stage" bucket for the NULL event_stage
+    // of a league fixture with no round name, matching the filter's own STAGE_NONE option.
+    colFor: (d) => (d === "batting" || d === "bowling" ? derivedSetExpr("stage", "mctx") : null),
+  },
+  {
+    key: TOSS_DECISION_SET_KEY,
+    label: "Toss decision",
+    shortLabel: "Toss dec.",
+    title: "Toss decisions in the filtered rows",
+    // matches.toss_decision mapped to TOSS_DECISION_OPTIONS' own labels ("Chose to bat" /
+    // "Chose to field"), so the column reads in the filter's words.
+    colFor: (d) => (d === "batting" || d === "bowling" ? derivedSetExpr("tossDecision", "mctx") : null),
+  },
+  {
+    key: RESULT_CONDITION_SET_KEY,
+    label: "Result Condition",
+    shortLabel: "Res. Cond.",
+    title: "Result conditions present in the filtered rows",
+    // The ONE row that cannot use the default aggregate. Result Condition is a set of
+    // FACETS, not a partition (state.js RESULT_CONDITION_OPTIONS: exactly 1 match in the
+    // data is BOTH a Super Over AND carries a method), so a single scalar label per row
+    // would have to drop one of the two facets — and a column that disagrees with its own
+    // filter is precisely the defect class ledger row L-058 flags. Each row therefore
+    // contributes a LIST of the labels that apply to it (resultConditionFacetsSql) and the
+    // aggregate flattens / de-duplicates / sorts them. `list_distinct` also strips the NULL
+    // placeholders the per-row list carries for the facets that do not apply.
+    colFor: (d) => (d === "batting" || d === "bowling" ? resultConditionFacetsSql("mctx") : null),
+    aggFor: (expr) => `list_sort(list_distinct(flatten(list(${expr}))))`,
+    // Sorting a list column needs a scalar: the FIRST applicable facet in the filter's own
+    // option order (COALESCE over the same per-facet CASEs).
+    sortFor: () => `MIN(${resultConditionPrimarySql("mctx")})`,
+  },
 ];
 const _SCOPE_SET_BY_KEY = new Map(SCOPE_SET_SPECS.map((s) => [s.key, s]));
 
@@ -3838,14 +3915,17 @@ function resolveScopeSetMetric(key, discipline) {
   const col = spec.colFor(discipline);
   if (!col) return null;
   const listCol = spec.listCol ? spec.listCol(col) : col;
+  // Phase 1.1: two OPTIONAL per-row overrides, used today only by Result Condition
+  // (a facet LIST per row rather than one label — see its spec row). Absent on the
+  // other rows, so their emitted SQL is byte-identical to before.
   return {
     key: spec.key,
     label: spec.label,
     shortLabel: spec.shortLabel,
     discipline,
     source: "innings",
-    sqlExpression: `list(DISTINCT ${listCol} ORDER BY ${listCol})`,
-    sortExpression: `MIN(${col})`,
+    sqlExpression: spec.aggFor ? spec.aggFor(listCol) : `list(DISTINCT ${listCol} ORDER BY ${listCol})`,
+    sortExpression: spec.sortFor ? spec.sortFor(col) : `MIN(${col})`,
     higherIsBetter: false,
     format: "list",
     kind: "attribute",
@@ -3928,6 +4008,26 @@ export function resolveVenueSetMetric(key, discipline) {
 /** The Venue which-values key offerable for `discipline` (both). */
 export function venueSetColumnKeys(discipline) {
   return discipline === "batting" || discipline === "bowling" ? [VENUE_SET_KEY] : [];
+}
+
+// ── Stage / Toss decision / Result Condition which-values (Phase 1.1) ──────────
+// ONE resolver + ONE key list for all three (they share a gate and a data source),
+// mirroring resolveFieldingSetMetric/fieldingSetColumnKeys rather than adding three
+// more single-key wrapper pairs. All three read the shared `mctx` join, so table.js's
+// wantsMctxColumn scan must list their keys.
+export const MATCH_OUTCOME_SET_KEYS = [STAGE_SET_KEY, TOSS_DECISION_SET_KEY, RESULT_CONDITION_SET_KEY];
+const _MATCH_OUTCOME_SET_KEY_SET = new Set(MATCH_OUTCOME_SET_KEYS);
+
+/** Resolve the Stage / Toss-decision / Result-Condition which-values key to its VIRTUAL
+ * list metric (both plain disciplines), or null. Called by getMetric. */
+export function resolveMatchOutcomeSetMetric(key, discipline) {
+  return _MATCH_OUTCOME_SET_KEY_SET.has(key) ? resolveScopeSetMetric(key, discipline) : null;
+}
+/** The Stage / Toss-decision / Result-Condition which-values keys offerable for
+ * `discipline` (both plain disciplines) — folded into eligibleColumnKeys so a chosen /
+ * auto-added column survives a re-render. */
+export function matchOutcomeSetColumnKeys(discipline) {
+  return discipline === "batting" || discipline === "bowling" ? MATCH_OUTCOME_SET_KEYS.slice() : [];
 }
 
 // ── Composer FAMILY FACTORY (code cleanup item B, 2026-08-24) ──────────────────
@@ -5579,45 +5679,99 @@ const _FIELDING_SET_BY_KEY = new Map(FIELDING_SET_SPECS.map((s) => [s.key, s]));
 //                    toss_winner → NULL, excluded — matches the filter). Labels from
 //                    TOSS_RESULT_OPTIONS.
 //   • tossDecision — matches.toss_decision mapped to TOSS_DECISION_OPTIONS' own labels.
+//
+// Phase 1.1 (2026-08-25): the match-context ALIAS is now a parameter, so the SAME four
+// builders serve BOTH boards — the fielding board's own 1:1 join (`fld_mctx`) and the
+// batting/bowling boards' shared match-context join (`mctx`, filters.js
+// matchContextSubselectSql, which projects the identical columns). This is a re-use, not
+// a behaviour change: called with "fld_mctx" every emitted string is BYTE-IDENTICAL to
+// before (verified by a before/after harness over all 13 fielding list columns and the
+// whole fielding board query). NOTE the two PLAYER-RELATIVE kinds — `result` and
+// `tossResult` — compare a bare `fielding_team`, so they remain FIELDING-BOARD ONLY
+// whatever alias is passed; only `stage` and `tossDecision` are board-agnostic. (The
+// batting/bowling boards' Match Result / Toss result filters already map to their own
+// res_* COUNT columns, so they need no list column here.)
+// The cache is keyed by kind AND alias, since the emitted string differs per alias.
 const _fldDerivedExprCache = {};
-function fieldingDerivedSetExpr(kind) {
-  if (_fldDerivedExprCache[kind]) return _fldDerivedExprCache[kind];
+function derivedSetExpr(kind, alias = "fld_mctx") {
+  const cacheKey = `${kind}|${alias}`;
+  if (_fldDerivedExprCache[cacheKey]) return _fldDerivedExprCache[cacheKey];
   const sq = (s) => String(s).replace(/'/g, "''");
+  const A = alias;
   let expr = null;
   if (kind === "stage") {
     const whens = STAGE_CANONICALS.map(
       (canon) =>
-        `WHEN fld_mctx.event_stage IN (${stageAliases(canon).map((r) => `'${sq(r)}'`).join(", ")}) THEN '${sq(canon)}'`
+        `WHEN ${A}.event_stage IN (${stageAliases(canon).map((r) => `'${sq(r)}'`).join(", ")}) THEN '${sq(canon)}'`
     ).join(" ");
     // NULL event_stage = a league fixture with no round — the Stage FILTER's own "No
     // Stage" category (STAGE_NONE_LABEL). Map it explicitly so the list shows that clean
     // label instead of a bare null (DuckDB list() keeps nulls) — faithful to the filter.
-    expr = `CASE WHEN fld_mctx.event_stage IS NULL THEN '${sq(STAGE_NONE_LABEL)}' ${whens} ELSE fld_mctx.event_stage END`;
+    expr = `CASE WHEN ${A}.event_stage IS NULL THEN '${sq(STAGE_NONE_LABEL)}' ${whens} ELSE ${A}.event_stage END`;
   } else if (kind === "result") {
     const rl = Object.fromEntries(RESULT_OPTIONS.map((o) => [o.value, o.label]));
     expr =
       `CASE ` +
-      `WHEN fielding_team = fld_mctx.match_winner THEN '${sq(rl.won)}' ` +
-      `WHEN fld_mctx.match_winner IS NOT NULL THEN '${sq(rl.lost)}' ` +
-      `WHEN fld_mctx.result_type = 'tie' THEN '${sq(rl.tied)}' ` +
-      `WHEN fld_mctx.result_type = 'no result' THEN '${sq(rl.no_result)}' ` +
-      `WHEN fld_mctx.result_type = 'draw' THEN '${sq(rl.drawn)}' ` +
+      `WHEN fielding_team = ${A}.match_winner THEN '${sq(rl.won)}' ` +
+      `WHEN ${A}.match_winner IS NOT NULL THEN '${sq(rl.lost)}' ` +
+      `WHEN ${A}.result_type = 'tie' THEN '${sq(rl.tied)}' ` +
+      `WHEN ${A}.result_type = 'no result' THEN '${sq(rl.no_result)}' ` +
+      `WHEN ${A}.result_type = 'draw' THEN '${sq(rl.drawn)}' ` +
       `ELSE NULL END`;
   } else if (kind === "tossResult") {
     const trl = Object.fromEntries(TOSS_RESULT_OPTIONS.map((o) => [o.value, o.label]));
     expr =
       `CASE ` +
-      `WHEN fielding_team = fld_mctx.toss_winner THEN '${sq(trl.won)}' ` +
-      `WHEN fld_mctx.toss_winner IS NOT NULL THEN '${sq(trl.lost)}' ` +
+      `WHEN fielding_team = ${A}.toss_winner THEN '${sq(trl.won)}' ` +
+      `WHEN ${A}.toss_winner IS NOT NULL THEN '${sq(trl.lost)}' ` +
       `ELSE NULL END`;
   } else if (kind === "tossDecision") {
     expr =
       `CASE ` +
-      TOSS_DECISION_OPTIONS.map((o) => `WHEN fld_mctx.toss_decision = '${sq(o.value)}' THEN '${sq(o.label)}'`).join(" ") +
-      ` ELSE fld_mctx.toss_decision END`;
+      TOSS_DECISION_OPTIONS.map((o) => `WHEN ${A}.toss_decision = '${sq(o.value)}' THEN '${sq(o.label)}'`).join(" ") +
+      ` ELSE ${A}.toss_decision END`;
   }
-  _fldDerivedExprCache[kind] = expr;
+  _fldDerivedExprCache[cacheKey] = expr;
   return expr;
+}
+
+// ── Result Condition facets (Phase 1.1) ───────────────────────────────────────
+// Result Condition has NO fielding-board precedent, and unlike every other list
+// dimension it is a set of FACETS rather than a partition: state.js's own comment
+// records that exactly 1 of the 108 super overs ALSO carries a method, so one match can
+// legitimately be both "Super Over" and "D/L (Rain)". These two builders emit the SAME
+// three-way classification filters.js resultConditionPredicateSql narrows by, so the
+// column can only ever print a value the filter can also select:
+//   • "Normal"      = no method AND no super over (the COALESCE on is_super_over is
+//                     REQUIRED, not cosmetic — the exported column is NULL, not false,
+//                     for every ordinary win, and a bare NOT would silently drop them).
+//   • "Super Over"  = the super-over facet flag.
+//   • each method   = one option per raw matches.method string (D/L / VJD / Awarded /
+//                     Lost fewer wickets), labelled as RESULT_CONDITION_OPTIONS labels it.
+// Labels and method strings both come from RESULT_CONDITION_OPTIONS itself — read lazily
+// at CALL time, like the derived builders above, because of the state.js↔metrics.js cycle.
+function _resultConditionFacetCases(alias) {
+  const sq = (s) => String(s).replace(/'/g, "''");
+  const superOver = `COALESCE(${alias}.is_super_over, false)`;
+  return RESULT_CONDITION_OPTIONS.filter((o) => o.value !== RESULT_CONDITION_ALL).map((o) => {
+    if (o.value === RESULT_CONDITION_NORMAL) {
+      return `CASE WHEN ${alias}.method IS NULL AND NOT ${superOver} THEN '${sq(o.label)}' END`;
+    }
+    if (o.value === RESULT_CONDITION_SUPER_OVER) {
+      return `CASE WHEN ${superOver} THEN '${sq(o.label)}' END`;
+    }
+    return `CASE WHEN ${alias}.method = '${sq(o.method)}' THEN '${sq(o.label)}' END`;
+  });
+}
+/** The per-row LIST of Result-Condition labels that apply to this match (NULL entries for
+ * the facets that don't — the aggregate's `list_distinct` strips them). */
+function resultConditionFacetsSql(alias) {
+  return `[${_resultConditionFacetCases(alias).join(", ")}]`;
+}
+/** A SCALAR representative for sorting the Result Condition list column: the first
+ * applicable facet in the filter's own option order. */
+function resultConditionPrimarySql(alias) {
+  return `COALESCE(${_resultConditionFacetCases(alias).join(", ")})`;
 }
 
 /** Resolve a fielding list-column key (`fld_*_set`) to its VIRTUAL list metric, or
@@ -5632,7 +5786,7 @@ export function resolveFieldingSetMetric(key, discipline) {
   // The list's INNER value expression: a derived CASE (Group-B stage/result/toss) or a
   // plain column (Group A + Season). ORDER BY repeats it so the list is deterministic
   // (alphabetical), matching every other list column.
-  const inner = spec.derived ? fieldingDerivedSetExpr(spec.derived) : spec.col;
+  const inner = spec.derived ? derivedSetExpr(spec.derived, "fld_mctx") : spec.col;
   return {
     key: spec.key,
     label: spec.label,
@@ -5662,6 +5816,23 @@ export function resolveFieldingSetMetric(key, discipline) {
  * Columns picker. Fielding board only. */
 export function fieldingSetColumnKeys() {
   return FIELDING_SET_KEYS.slice();
+}
+
+// ── The one fielding list column the BATTING/BOWLING boards also offer (Phase 1.1) ──
+// "Dismissed batter's position" (the `fld_pos` singleton) is the ONLY fielding-dimension
+// filter offered outside the fielding board — drawer.js's FIELDING_SLICE_KEYS is exactly
+// {fld_pos}, and it writes the SAME state.fielding.positions the fielding board writes,
+// narrowing the batting/bowling boards' fielding_cte tallies. Ledger row L-040: it had no
+// column route there because the fld_*_set keys were folded into eligibleColumnKeys only
+// for the fielding board, so the auto-add's addability check rejected the key. Exposing
+// just this ONE key keeps the boards honest without duplicating the other twelve (the
+// batting/bowling boards already have their own Team/Opposition/Event/Venue/City/Season
+// which-values columns, and the remaining fielding dims are not filterable there).
+// The metric itself already resolves for batting/bowling (resolveFieldingSetMetric) and
+// reads `out_batting_position` off the fielding view — Group A, so NO extra join.
+export const PLAIN_BOARD_FIELDING_SET_KEYS = ["fld_out_position_set"];
+export function plainBoardFieldingSetColumnKeys(discipline) {
+  return discipline === "batting" || discipline === "bowling" ? PLAIN_BOARD_FIELDING_SET_KEYS.slice() : [];
 }
 
 /**

@@ -64,6 +64,9 @@ import {
   // Event & Venue which-values column keys (completing City & Season everywhere,
   // 2026-08-16).
   EVENT_SET_KEY, VENUE_SET_KEY,
+  // Stage-3 Phase 1.1 (2026-08-25): the Stage / Toss-decision / Result-Condition
+  // which-values column keys.
+  STAGE_SET_KEY, TOSS_DECISION_SET_KEY, RESULT_CONDITION_SET_KEY,
   // Columns content rework D3 (runs-by-source + wicket-type composers).
   composedRunSourceRows, makeComposedRunSourceKey, parseComposedRunSourceKey,
   makeComposedWicketTypeKey, parseComposedWicketTypeKey,
@@ -1824,6 +1827,15 @@ export function createColumnsPicker({
           // 2026-08-16).
           { type: "plain", key: EVENT_SET_KEY, label: "Event" },
           { type: "plain", key: VENUE_SET_KEY, label: "Venue" },
+          // Stage-3 Phase 1.1 (2026-08-25): the last three match-context which-values
+          // columns. Labels mirror the fielding board's own list columns ("Stage",
+          // "Toss decision") and, for Result Condition — which has no fielding
+          // counterpart — the filter's own heading (drawerInnings.js "Result Condition"),
+          // so the boards read consistently. (Phase 1.3 relocates the match-level list
+          // columns to the Match dropdown; until then they sit with their siblings.)
+          { type: "plain", key: STAGE_SET_KEY, label: "Stage" },
+          { type: "plain", key: TOSS_DECISION_SET_KEY, label: "Toss decision" },
+          { type: "plain", key: RESULT_CONDITION_SET_KEY, label: "Result Condition" },
         ]
       : [];
     const basicItems = plainItems(ownBasic);
@@ -1886,8 +1898,19 @@ export function createColumnsPicker({
           { type: "plain", key: "fld_out_hand_set", label: "Dismissed batter hand" },
         ]
       : [];
+    // Stage-3 Phase 1.1 (2026-08-25): the batting/bowling boards' Fielding Stats section
+    // gains the ONE fielding list column whose filter they offer — Dismissed batter's
+    // position (drawer.js's `fld_pos` singleton, the only member of FIELDING_SLICE_KEYS).
+    // Mirrors fieldingSetLeaderboard's shape but for the PLAIN boards: leaderboard only
+    // (not the player popup's own-discipline picker, whose fielding rows use a different
+    // query builder) and not the fielding board (which lists it via
+    // fieldingDismissalSetItems already). Same key, same semantics, one definition.
+    const plainBoardFieldingSetItems =
+      isPlainNs && !fieldingMode && !ownDisciplineOnly
+        ? [{ type: "plain", key: "fld_out_position_set", label: "Dismissed batter's position" }]
+        : [];
     const fieldingSections = [
-      ...section("Fielding Stats", [...plainItems(fielding), ...fieldingDismissalSetItems]),
+      ...section("Fielding Stats", [...plainItems(fielding), ...fieldingDismissalSetItems, ...plainBoardFieldingSetItems]),
       ...(fieldingComposerItems.length ? [{ name: "Composers", items: fieldingComposerItems }] : []),
     ];
 

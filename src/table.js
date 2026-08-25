@@ -26,6 +26,11 @@ import {
   // mctx join too (same gate the event__/venue__ composer columns already use).
   EVENT_SET_KEY,
   VENUE_SET_KEY,
+  // Stage-3 Phase 1.1 (2026-08-25): the Stage / Toss-decision / Result-Condition
+  // which-values column keys — each reads a DERIVED expression over the same mctx
+  // columns (event_stage / toss_decision / method + is_super_over), so their presence
+  // must light the same mctx join.
+  MATCH_OUTCOME_SET_KEYS,
 } from "./metrics.js";
 import { query } from "./db.js";
 import {
@@ -1924,7 +1929,14 @@ export function buildQuery(state, visibleColumns, opts = {}) {
           m.key === EVENT_SET_KEY ||
           m.key === VENUE_SET_KEY ||
           m.key === CITY_SET_KEY ||
-          m.key === SEASON_SET_KEY)
+          m.key === SEASON_SET_KEY ||
+          // Stage-3 Phase 1.1 (2026-08-25): stage_set / toss_decision_set /
+          // result_condition_set. Same JOIN-PRESENCE-ONLY contract as the four above —
+          // each is a DERIVED read of mctx.event_stage / mctx.toss_decision /
+          // mctx.method+is_super_over, adds no WHERE clause and (the join being 1:1 on
+          // match_id) moves no aggregate. Deliberately NOT fed into wantsMatchContext or
+          // inningsLevel: such a COLUMN narrows nothing.
+          MATCH_OUTCOME_SET_KEYS.includes(m.key))
     );
   // Wave D — TASK B: PotM (Y/N) leaderboard filter (state.potmYN, subset of
   // {"yes","no"}). A HAVING-style gate on the SAME per-player PotM award count the
@@ -2076,7 +2088,15 @@ export function buildQuery(state, visibleColumns, opts = {}) {
     // "fielding_events", so already in fieldingEventCols) need their SUM(CASE …)
     // aggregation injected into fielding_cte. Pass them down; with none requested
     // this is [] and buildFieldingCteSql emits a byte-identical CTE.
-    const composedFieldingCols = fieldingEventCols.filter((m) => m && m.isComposedFielding);
+    // Stage-3 Phase 1.1 (2026-08-25): a fielding LIST column (isFieldingSet) needs the
+    // same treatment — buildFieldingCteSql's generic injection loop reads
+    // fieldingCteAlias + fieldingCteCaseSql off either kind, so one predicate covers
+    // both. On these boards that is exactly one column, Dismissed batter's position
+    // (fld_out_position_set), whose list reads the fielding view's own
+    // out_batting_position — Group A, so it lights NO extra join. ADDITIVE: with no such
+    // column shown this filter yields the same array as before and the emitted CTE is
+    // byte-identical.
+    const composedFieldingCols = fieldingEventCols.filter((m) => m && (m.isComposedFielding || m.isFieldingSet));
     fieldingCteSql = buildFieldingCteSql(state, composedFieldingCols);
   }
 
