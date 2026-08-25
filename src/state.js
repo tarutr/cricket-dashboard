@@ -1687,6 +1687,46 @@ export function activeLeaderboardFilterSources(state) {
     if (has(f.result)) push("filter:fld:result", ["fld_result_set"]);
     if (has(f.tossResult)) push("filter:fld:toss_result", ["fld_toss_result_set"]);
     if (has(f.tossDecision)) push("filter:fld:toss_decision", ["fld_toss_decision_set"]);
+    // Phase 1.2 (2026-08-25) — the three Ball Ranges dims (audit3 §(ii), ledger:
+    // Phase/Over range/Innings number never got a list column). Same rule, same
+    // shape as the pushes above; "active" mirrors buildFieldingExtraSliceClauses'
+    // (table.js) own predicates for these three fields exactly (phases/inningsNumbers
+    // non-empty arrays; overFrom/overTo either bound a finite number).
+    if (has(f.phases)) push("filter:fld:phase", ["fld_phase_set"]);
+    if (Number.isFinite(Number(f.overFrom)) || Number.isFinite(Number(f.overTo))) {
+      push("filter:fld:overs", ["fld_over_set"]);
+    }
+    if (has(f.inningsNumbers)) push("filter:fld:innings", ["fld_innings_set"]);
+    // Phase 1.2 (2026-08-25) — audit3 §(v): numeric fielding COUNT conditions (Matches
+    // / Catches / Caught & bowled / Stumpings / Run-outs / Total dismissals) never
+    // claimed a column — this branch used to `return out` before ever reaching the
+    // numeric-condition loop below (which resolves under the batting/bowling namespace
+    // and doesn't apply to fielding's own base-table board). The visible defect was
+    // "Caught & bowled ≥ N" narrowing the board with nothing on screen — it's the one
+    // tally NOT in the default fielding column set, so the other five passed "by
+    // accident" (audit3's phrase) only because they're already shown by default.
+    //
+    // These SIX keys are an identity map (metricKey === its own column key) — the SAME
+    // hardcoded set table.js's FIELDING_CONDITION_COLUMNS (the query-side count gate)
+    // and paletteGroups.js's Fielder-Profile/Wicket-Types tallyLeaf() calls (the filter
+    // OFFER) already carry, kept in sync by comment across all three (the established
+    // pattern for this fielding-only vocabulary — there is no "fielding" metrics
+    // namespace to harvest a shared list from; see metricNsFor). Not routed through
+    // conditionColumnKey/getMetric(..., "fielding") — that resolves under "batting"/
+    // "bowling" only and would need the mns indirection metricNsFor already owns
+    // elsewhere; a plain identity map is simpler and exactly matches the gate it mirrors.
+    const FIELDING_TALLY_KEYS = new Set([
+      "matches", "catches", "caught_and_bowled", "stumpings", "run_outs", "dismissals_effected",
+    ]);
+    const seenFldTally = new Set();
+    for (const g of state.advanced.groups || []) {
+      for (const c of g.conds) {
+        if (!isConditionComplete(c)) continue;
+        if (!FIELDING_TALLY_KEYS.has(c.metricKey) || seenFldTally.has(c.metricKey)) continue;
+        seenFldTally.add(c.metricKey);
+        push(`filter:cond:${c.metricKey}`, [c.metricKey]);
+      }
+    }
     return out;
   }
 

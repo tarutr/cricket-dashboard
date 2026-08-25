@@ -1898,6 +1898,18 @@ export function createColumnsPicker({
           { type: "plain", key: "fld_out_hand_set", label: "Dismissed batter hand" },
         ]
       : [];
+    // Phase 1.2 (2026-08-25): the fielding board's three Ball Ranges list columns
+    // (audit3 §(ii) — Innings number/Phase/Over never got one). Same
+    // fieldingSetLeaderboard gate (fielding board's own picker only) as
+    // fieldingDismissalSetItems above; folded into the same "Fielding Stats" section
+    // below (the picker has no separate "Ball Ranges" bucket).
+    const fieldingDeliverySetItems = fieldingSetLeaderboard
+      ? [
+          { type: "plain", key: "fld_phase_set", label: "Phase" },
+          { type: "plain", key: "fld_over_set", label: "Over" },
+          { type: "plain", key: "fld_innings_set", label: "Innings number" },
+        ]
+      : [];
     // Stage-3 Phase 1.1 (2026-08-25): the batting/bowling boards' Fielding Stats section
     // gains the ONE fielding list column whose filter they offer — Dismissed batter's
     // position (drawer.js's `fld_pos` singleton, the only member of FIELDING_SLICE_KEYS).
@@ -1910,7 +1922,7 @@ export function createColumnsPicker({
         ? [{ type: "plain", key: "fld_out_position_set", label: "Dismissed batter's position" }]
         : [];
     const fieldingSections = [
-      ...section("Fielding Stats", [...plainItems(fielding), ...fieldingDismissalSetItems, ...plainBoardFieldingSetItems]),
+      ...section("Fielding Stats", [...plainItems(fielding), ...fieldingDismissalSetItems, ...fieldingDeliverySetItems, ...plainBoardFieldingSetItems]),
       ...(fieldingComposerItems.length ? [{ name: "Composers", items: fieldingComposerItems }] : []),
     ];
 

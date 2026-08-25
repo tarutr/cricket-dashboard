@@ -143,6 +143,7 @@ import {
   RESULT_CONDITION_ALL,
   RESULT_CONDITION_NORMAL,
   RESULT_CONDITION_SUPER_OVER,
+  FIELDING_PHASE_OPTIONS,
 } from "./state.js";
 
 // ── Batting ───────────────────────────────────────────────────────────────────
@@ -5616,14 +5617,20 @@ export function eligibleComposedFieldingKeys(discipline) {
 // fielding Columns picker.
 //
 // TWO families by data source:
-//   • Group A — 8 dims that are RAW columns of the `fielding` view. Injected additively
-//     into buildFieldingCteSql's SELECT via the SAME generic loop the fc__ composers use
-//     (an extra aggregate over the SAME `GROUP BY fielder_id`, so the tallies stay
-//     byte-identical, exactly like the existing `MAX(fielder_name)`). NO join.
-//   • Group B — Season (matches.season): NOT on the fielding view. `needsFieldingMctx`
-//     marks it so table.js lights a 1:1 `LEFT JOIN … fld_mctx` on match_id (unique in
-//     matches → no row fan-out → tallies byte-identical) ONLY when a Group-B column is
-//     present. Its list expression reads `fld_mctx.season` (the join alias).
+//   • Group A — RAW columns (or a NULL-folding label CASE over one, no join) of the
+//     `fielding` view: Team/Opposition/Event/Venue/City/Bowler style/Dismissed
+//     position/Dismissed hand (8, plain columns) + Innings number/Over (Phase 1.2,
+//     display-numbering EXPRESSIONS, +1 over the 0-based storage) + Phase (Phase 1.2,
+//     a `derived` label CASE — see below — needing no join, unlike the Group-B derived
+//     kinds it shares the mechanism with). Injected additively into buildFieldingCteSql's
+//     SELECT via the SAME generic loop the fc__ composers use (an extra aggregate over
+//     the SAME `GROUP BY fielder_id`, so the tallies stay byte-identical, exactly like
+//     the existing `MAX(fielder_name)`). NO join.
+//   • Group B — Season (matches.season) + the four derived match-context kinds below:
+//     NOT on the fielding view. `needsFieldingMctx` marks each so table.js lights a 1:1
+//     `LEFT JOIN … fld_mctx` on match_id (unique in matches → no row fan-out → tallies
+//     byte-identical) ONLY when a Group-B column is present. Its list expression reads
+//     `fld_mctx.season` (the join alias).
 //
 // Keys are `fld_*_set` — DISTINCT from the batting `_set` keys: the fielding board
 // resolves metrics under the "batting" namespace (metricNsFor(fielding) === "batting"),
@@ -5649,6 +5656,21 @@ const FIELDING_SET_SPECS = [
   { key: "fld_bowler_style_set", label: "Bowler style",                col: "bowler_style",         title: "Bowler styles behind the fielder's dismissals in the filtered rows" },
   { key: "fld_out_position_set", label: "Dismissed batter's position", col: "out_batting_position", title: "Dismissed batters' positions in the filtered rows" },
   { key: "fld_out_hand_set",     label: "Dismissed batter hand",       col: "out_hand",             title: "Dismissed batters' handedness in the filtered rows" },
+  // Group A (Phase 1.2, 2026-08-25) — Innings number / Over: raw event-grain columns
+  // on the fielding view (innings_number / over_number), both 0-based STORED. `col`
+  // is the display-numbering EXPRESSION (+1), the same convention the Over range
+  // editor and the batting/bowling boards' inn_set which-values column already use
+  // (SCOPE_SET_SPECS' listCol override, metrics.js ~3812) — so a value this column
+  // prints matches what the Innings Number / Over range FILTER controls show, not
+  // the raw 0-based storage. No join, no NULL handling (innings_number/over_number
+  // are never NULL — always derived from an actual delivery).
+  { key: "fld_innings_set",      label: "Innings number",              col: "(innings_number + 1)", title: "Innings numbers present in the filtered rows" },
+  { key: "fld_over_set",         label: "Over",                        col: "(over_number + 1)",    title: "Overs present in the filtered rows" },
+  // Phase (Phase 1.2) — raw fielding-view column too (no join), but needs a label
+  // translation + a NULL fold (Test/MDM has no phase concept), so it uses the
+  // `derived` lazy-CASE mechanism like the Group-B kinds below (see the "phase"
+  // branch of derivedSetExpr) even though it needs no match join.
+  { key: "fld_phase_set",        label: "Phase",                       derived: "phase",            title: "Phases present in the filtered rows" },
   // Group B — match-level (needs the fld_mctx 1:1 join on match_id). Season reads the raw
   // column; Stage folds to canonical + Match/Toss result are player-relative + Toss
   // decision maps to the filter's labels → each carries a `derived` builder (below).
@@ -5730,6 +5752,18 @@ function derivedSetExpr(kind, alias = "fld_mctx") {
       `CASE ` +
       TOSS_DECISION_OPTIONS.map((o) => `WHEN ${A}.toss_decision = '${sq(o.value)}' THEN '${sq(o.label)}'`).join(" ") +
       ` ELSE ${A}.toss_decision END`;
+  } else if (kind === "phase") {
+    // Phase 1.2 — Group A (a raw `fielding` view column, NO join, so the alias
+    // param is unused here unlike the four Group-B kinds above). Labels come
+    // straight from FIELDING_PHASE_OPTIONS (pp/mid/death -> Powerplay/Middle/
+    // Death) — the SAME vocabulary the fielding Phase FILTER offers. NULL phase =
+    // a Test/MDM delivery (export_parquet.py's phase_expr has no phase concept
+    // for those formats) — folded into a "No Phase" bucket, the same NULL-folding
+    // technique STAGE_NONE_LABEL uses above (list() keeps NULLs otherwise).
+    expr =
+      `CASE ` +
+      FIELDING_PHASE_OPTIONS.map((o) => `WHEN phase = '${sq(o.value)}' THEN '${sq(o.label)}'`).join(" ") +
+      ` WHEN phase IS NULL THEN 'No Phase' ELSE phase END`;
   }
   _fldDerivedExprCache[cacheKey] = expr;
   return expr;
