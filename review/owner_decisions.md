@@ -1125,3 +1125,15 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       extended to fielding's ~10 filters); Chunk 4 (cleanup sweep); Chunk 5 (the two-dropdown Player/Scope
       reorg + Match-all/Match-any AND/OR) — including the fielding filters' own Player-vs-Scope split, which
       the owner flagged as **UNDETERMINED**.
+
+74. **STAGE-3 SPOT RULINGS (owner, 2026-08-25, during Phase 0 of the Stage-3 fix programme):**
+    - **Date inputs are DAY-PRECISION everywhere** (native calendar `type="date"` — "Date inputs - day
+      precision please"). This SUPERSEDES the dates half of decision 69 ("dates = searchable month-list
+      everywhere") — that target is retired, and the harmonisation sweep must NOT convert date inputs to
+      month-lists. All four current date-input sites (filters.js, table.js, playerFilterEditor.js,
+      playerFieldingEditor.js) already use day precision, so no build was needed.
+    - **The preset indicator jumping to "Custom" is CONFIRMED correct** ("Jump to custom confirmed"): whenever
+      the shown columns differ from a preset's exact list (e.g. a filter has auto-added a column), the
+      indicator reads "Custom".
+    - **%-columns offered only through their paired count column's toggle is CONFIRMED correct** ("Only
+      through the count column's toggle is confirmed") — the columns-picker pairing stays as built.
