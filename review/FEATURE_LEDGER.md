@@ -39,12 +39,15 @@ ledgered" at the bottom):
 
 | Status | Count |
 |---|---|
-| CONFORMS | 109 |
+| CONFORMS | 111 |
 | GAP | 15 |
-| LOST | 7 |
-| DEFERRED | 13 |
+| LOST | 4 |
+| DEFERRED | 14 |
 | NEEDS-HUMAN | 3 |
 | **Total** | **147** |
+
+*(Counts updated 2026-08-26, Stage-3 Phase 4: L-113 count badges + L-115 rank-by-first LOST→CONFORMS
+(commits 51b3419/1c68658); L-114 Group rows LOST→DEFERRED (decision 76.4, post-launch log).)*
 
 *(Counts updated 2026-08-26, end of Stage-3 Phase 2: commits 997ed53 (Phase 2.1/2.2) + b592079 (Phase 2.3)
 moved L-143, L-144, L-145 GAP→CONFORMS — the fielding per-match divisor + Matches column + Won/Lost/PotM
@@ -245,9 +248,9 @@ Phase-1.5 fielding pills. Gate A: 140 PASS / 0 FAIL / 10 DEFERRED / 4 EXEMPT.)*
 
 | ID | Ruling | Source | Surface(s) | Expected behaviour | Status today | Mechanical check? | Notes |
 |---|---|---|---|---|---|---|---|
-| L-113 | Column-dropdown count badges — each of the four column dropdowns shows a live count of chosen columns in that dropdown. | Checkpoint 14; Checkpoint 10 | Leaderboard/player popup columns picker | A visible count badge on each of the 4 dropdown toggles. | LOST — built then silently removed | Y — columnsPicker.js `cols-dd-badge` class-presence probe + styles.css rule-presence probe | Introduced in commit 9be63ea, touched in 892cd9b and dc3b8fa, now ABSENT from both src/ and styles.css entirely. Stale in-file comments in columnsPicker.js and styles.css still promise it. Explicit restore-or-retire decision due at Phase 3 (the batched owner design sitting) per stage3-fix-plan.md. |
-| L-114 | "Group rows / Split by" control stays, tucked away in the table toolbar, off by default ("KEEP, TUCKED AWAY"). | Decision 29; Checkpoint 15 | Leaderboard table toolbar | A small Group-rows control exists in the toolbar. | LOST — removed with no authorising decision on record | Y — table.js/main.js grep for the Group-rows control and the splitBy plumbing | Removed in commit 0244e18 during the polish fix rounds; splitBy plumbing removed in d7fa8d7. Decision 42 only cut DISMISSAL GROUPING from the control (a narrower change) — no decision in owner_decisions.md authorises removing the control itself, and decision 29 explicitly said KEEP. SPEC.md still records production as "still shows the Group rows control". Needs an owner check: either an unlogged chat ruling removed it, or this is a genuine unauthorised regression. Explicit restore-or-retire decision due at Phase 3. |
-| L-115 | A filtered numeric stat condition auto-adds its column AND the table sorts by that (first) filtered column. | Decision 61(4); Checkpoint 19 | Leaderboard table (sort behaviour) | Adding e.g. "Runs ≥ 300" both shows the Runs column and re-ranks the table by Runs. | LOST — the auto-add half survives; the sort half was dropped | Y — state.js auto-add probe (present) + sort-key-after-condition-add probe (absent, defaults to Innings/first column) | The Wave-D engine's own comment says "NO force-include anywhere"; Wave D's ruling #17 ("no force-include — never sort by an invisible metric") does NOT license this loss, since the auto-added column IS visible. Audit1 calls this "a quiet loss, not a ruled change. Owner call." Explicit restore-or-retire decision due at Phase 3. |
+| L-113 | Column-dropdown count badges — each of the four column dropdowns shows a live count of chosen columns in that dropdown. | Checkpoint 14; Checkpoint 10 | Leaderboard/player popup columns picker | A visible count badge on each of the 4 dropdown toggles. | CONFORMS — restored 2026-08-26 (Stage-3 Phase 4, decision 76.3, commit 51b3419) | Y — columnsPicker.js `cols-dd-badge` + `data-dd` probe + styles.css `.cols-dd-badge` rule probe | Restored 2026-08-26 (51b3419): the original W4 impl (dropdownCounts) brought back and adapted to the current key vocabulary; badges update live on add/remove/prune. Verified live: batting Match=1/Batting=7, increments on add. |
+| L-114 | "Group rows / Split by" control stays, tucked away in the table toolbar, off by default ("KEEP, TUCKED AWAY"). | Decision 29; Checkpoint 15 | Leaderboard table toolbar | Not restored for launch; reachable per-player via the player popup; logged as a post-launch beat. | DEFERRED — owner ruled 2026-08-26 (decision 76.4) | N | Owner decided (decision 76.4) NOT to restore the leaderboard Group-rows control for launch: the same per-value breakdown is reachable per-player in the player popup, so it is a demand-driven post-launch beat, logged in review/POST_LAUNCH_FEATURES.md (item 1). Supersedes the decision-29 "KEEP" for launch scope. |
+| L-115 | A filtered numeric stat condition auto-adds its column AND the table sorts by that (first) filtered column. | Decision 61(4); Checkpoint 19 | Leaderboard table (sort behaviour) | Adding e.g. "Runs ≥ 300" both shows the Runs column and re-ranks the table by Runs; a non-rankable which-values filter column does NOT re-sort. | CONFORMS — restored 2026-08-26 (Stage-3 Phase 4, decision 76.5, commit 1c68658) | Y — state.js rank-by-first sort-resolution probe (isRankableColumn + firstNewlyRankableFilterSlot) | Restored 2026-08-26 (1c68658) WITH the owner's rankable-column rule: a newly-active filter whose column is rankable (kind !== "attribute") sorts by it; which-values list/text columns leave the sort on innings-desc. Sort-order only, query builders untouched. OPEN (decision 76.5 flag): categorical filters mapping to a COUNT column (PotM/Result/Toss) also re-sort under the literal rule — owner to confirm keep vs narrow. |
 
 ---
 
