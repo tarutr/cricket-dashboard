@@ -2652,6 +2652,21 @@ export function formatValue(metric, value) {
   }
 }
 
+/** Stage 3 (draggable column resize / decision 77.5): per-column width
+ * overrides set by dragging a header's resize handle. Keyed by the column's
+ * SLOT id — the same per-copy identity sort/drag/highlight already key by
+ * (E1b/E2 multi-instance), so two copies of one stat resize independently; a
+ * bare metric key is the fallback for a slot-less caller. MODULE-level and
+ * display-only: headerCellHTML/dataCellHTML below read it to bake a fixed
+ * pixel width straight into the rendered `<th>`/`<td>` markup, so ANY
+ * re-render — a re-sort, a highlight toggle, add/remove column, a fresh
+ * Search — reproduces whatever width the user set, for the lifetime of this
+ * module (one mountTable instance = one page session; NOT persisted across a
+ * reload, which the brief doesn't require). Never read by any query path —
+ * pure presentation state, like highlightedColumns/nameExpanded nearby. */
+const columnWidths = new Map();
+const MIN_COL_WIDTH_PX = 48;
+
 /** Render one metric's `<td>`. Sample-based muting (decision 44c) was removed
  * (Batch B1 Wave 5, owner decision): every value — however thin its backing
  * sample — renders identically, plain and un-greyed. §8.1's hasMetricData
@@ -2673,7 +2688,18 @@ function dataCellHTML(metric, row, isHighlighted = false, slotId = null) {
   // 🖍️ toggle is on — display-only (highlightedColumns), never a query change.
   const hlClass = isHighlighted ? " is-highlighted" : "";
   const slotAttr = slotId != null ? ` data-slot-id="${escAttr(slotId)}"` : "";
-  return `<td class="data-table__td${hlClass}" data-key="${metric.key}"${slotAttr}>${text}</td>`;
+  // Stage 3 resize: mirror whatever width the header carries for this same
+  // slot — an auto-layout table's column width is the max across ALL its
+  // cells, so a td left at its natural content width would silently force
+  // the column back wide even after the user narrowed the header. --resized
+  // (styles.css) clips overflow with an ellipsis instead of re-widening.
+  const widthKey = slotId != null ? slotId : metric.key;
+  const storedWidth = columnWidths.get(widthKey);
+  const widthStyle = storedWidth
+    ? ` style="width:${storedWidth}px;min-width:${storedWidth}px;max-width:${storedWidth}px;"`
+    : "";
+  const resizedClass = storedWidth ? " data-table__td--resized" : "";
+  return `<td class="data-table__td${hlClass}${resizedClass}" data-key="${metric.key}"${slotAttr}${widthStyle}>${text}</td>`;
 }
 
 // The Columns picker's dismissal-% / rare-dismissals grouping + rendering
@@ -3573,8 +3599,19 @@ export function mountTable(
     // the by-key fallback only matters for pre-slot callers.
     const slotAttr = slotId != null ? ` data-slot-id="${escAttr(slotId)}"` : "";
     const sortLabel = escAttr(`Sort by ${metric.label || metric.shortLabel}`);
-    return `<th data-key="${metric.key}"${slotAttr} class="data-table__th data-table__th--draggable ${isSorted ? "is-sorted" : ""}${hlClass}" scope="col"${titleAttr}>
-      <span class="data-table__th-label">${metric.shortLabel}</span><button type="button" class="data-table__sort-arrow" title="${sortLabel}" aria-label="${sortLabel}">${sortGlyph}</button>
+    // Stage 3 (draggable column resize / decision 77.5): a narrow hit-zone
+    // (`.data-table__th-resizer`, styles.css) sits at the header's right-hand
+    // divider — wireColumnResize (below) wires it. Bake in whatever width the
+    // user already dragged this slot to, from the module-level columnWidths
+    // store, so it survives this render (and every future one) unchanged.
+    const widthKey = slotId != null ? slotId : metric.key;
+    const storedWidth = columnWidths.get(widthKey);
+    const widthStyle = storedWidth
+      ? ` style="width:${storedWidth}px;min-width:${storedWidth}px;max-width:${storedWidth}px;"`
+      : "";
+    const resizedClass = storedWidth ? " data-table__th--resized" : "";
+    return `<th data-key="${metric.key}"${slotAttr} class="data-table__th data-table__th--draggable ${isSorted ? "is-sorted" : ""}${hlClass}${resizedClass}" scope="col"${titleAttr}${widthStyle}>
+      <span class="data-table__th-label">${metric.shortLabel}</span><button type="button" class="data-table__sort-arrow" title="${sortLabel}" aria-label="${sortLabel}">${sortGlyph}</button><span class="data-table__th-resizer" data-resize-key="${escAttr(widthKey)}" aria-hidden="true"></span>
     </th>`;
   }
 
@@ -4135,6 +4172,88 @@ export function mountTable(
     });
   }
 
+  /** Wire the drag-to-resize handle on one metric header (Stage 3 / decision
+   * 77.5: cursor-only affordance — NO glow/highlight/grip-dots; hovering the
+   * handle just swaps the cursor to col-resize via CSS, spreadsheet-standard).
+   * Mouse/pen only, same touch policy as wireColumnDrag (a touch pointerdown
+   * falls through to native horizontal scroll — no long-press escape hatch).
+   *
+   * Two separate guards keep a resize from ALSO sorting/highlighting/
+   * reordering, matching the two ways a trailing click can land after a real
+   * mouse drag: (1) the handle's own pointerdown/click stopPropagation() so a
+   * click that lands back on the handle itself never reaches th's drag-reorder
+   * pointerdown or highlight-toggle click listener; (2) `lastHeaderDragEndTs`
+   * (the SAME gate wireColumnDrag's onUp sets) for the case a fast mouse-up
+   * lands the click on the th body instead — the header's own click handler
+   * (renderLoaded, below) already ignores anything within 250ms of that.
+   *
+   * Writes straight into the module-level `columnWidths` on every pointermove
+   * for live feedback and restyles both the header cell and every currently-
+   * rendered `<td>` in the column (only ~PAGE_SIZE rows are ever mounted, so
+   * this is cheap) — there is nothing further to "commit" on drop, since
+   * headerCellHTML/dataCellHTML always read the width straight out of that
+   * same map on every render. */
+  function wireColumnResize(handle, th) {
+    const slotId = th.dataset.slotId || null;
+    const key = th.dataset.key;
+    const widthKey = slotId != null ? slotId : key;
+    const cellSel = slotId ? `[data-slot-id="${slotId}"]` : `[data-key="${key}"]`;
+    let startX = null;
+    let startWidth = null;
+    let resizing = false;
+
+    function applyWidth(px) {
+      const w = Math.max(MIN_COL_WIDTH_PX, Math.round(px));
+      columnWidths.set(widthKey, w);
+      th.style.width = `${w}px`;
+      th.style.minWidth = `${w}px`;
+      th.style.maxWidth = `${w}px`;
+      th.classList.add("data-table__th--resized");
+      tbodyEl.querySelectorAll(`td${cellSel}`).forEach((td) => {
+        td.style.width = `${w}px`;
+        td.style.minWidth = `${w}px`;
+        td.style.maxWidth = `${w}px`;
+        td.classList.add("data-table__td--resized");
+      });
+    }
+
+    function onMove(e) {
+      if (startX === null) return;
+      resizing = true;
+      applyWidth(startWidth + (e.clientX - startX));
+    }
+
+    function onUp() {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.body.classList.remove("is-col-resizing");
+      if (resizing) {
+        // See doc comment above: reuse wireColumnDrag's trailing-click guard
+        // so a resize's post-drop click never also sorts/highlights.
+        lastHeaderDragEndTs = Date.now();
+      }
+      startX = null;
+      startWidth = null;
+      resizing = false;
+    }
+
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.pointerType !== "mouse" && e.pointerType !== "pen") return;
+      if (e.button !== 0) return;
+      e.stopPropagation(); // never let this reach th's own drag-reorder pointerdown
+      e.preventDefault();
+      startX = e.clientX;
+      startWidth = th.getBoundingClientRect().width;
+      document.body.classList.add("is-col-resizing");
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+    });
+    // A plain click on the handle (no drag at all) must not bubble to th's
+    // highlight-toggle listener either — belt-and-braces alongside the
+    // lastHeaderDragEndTs gate above, which only covers an ACTUAL drag.
+    handle.addEventListener("click", (e) => { e.stopPropagation(); });
+  }
+
   const setNeedsInput = (el, on) => { if (el) el.classList.toggle("needs-input", !!on); };
 
   /** Owner-approved, display-only (polish-b1-mechanical, item 2a/2b): fire the
@@ -4642,8 +4761,14 @@ export function mountTable(
     // sticky Player column — it doesn't get the --draggable class) can be
     // dragged left/right to reorder state.columns[ns]. Rebound on every
     // renderLoaded call, same as the sort click handler just above.
+    // Column drag-to-RESIZE (Stage 3 / decision 77.5) rides the same
+    // --draggable set — every metric header, same scope as reorder; not the
+    // sticky Player column (it auto-sizes to its content — widestNameColWidthPx
+    // — and not the pin/rank control columns, which are fixed-width icons).
     theadEl.querySelectorAll(".data-table__th--draggable").forEach((th) => {
       wireColumnDrag(th, ns);
+      const handle = th.querySelector(".data-table__th-resizer");
+      if (handle) wireColumnResize(handle, th);
     });
   }
 

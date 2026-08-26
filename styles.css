@@ -2093,6 +2093,48 @@ a { color: var(--color-accent); }
 .data-table__th--drop-before { box-shadow: inset 3px 0 0 0 var(--color-accent); }
 .data-table__th--drop-after { box-shadow: inset -3px 0 0 0 var(--color-accent); }
 
+/* Column resize (Stage 3 / decision 77.5): a narrow hit-zone sitting at a
+   metric header's right-hand divider — hovering it swaps the cursor to
+   col-resize and that is the ONLY affordance (the owner explicitly dropped
+   the glow/highlight/grip-dot options: "just the cursor changing... a person
+   who has used a spreadsheet will recognise it"). Sized to sit fully INSIDE
+   the header's own box rather than overflowing into the next `<th>` — that
+   sibling is a later, equally-stacked positioned element (both carry the
+   header row's z-index: 2) and would otherwise paint over an overflowing
+   handle, breaking the hit-test. `.data-table thead th` is already
+   `position: sticky`, which is a valid containing block for this absolutely
+   positioned child, so no extra positioning context is needed here. */
+.data-table__th-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+/* A resized column's label/values clip with an ellipsis instead of forcing
+   the column back to its content width — standard spreadsheet behaviour once
+   a column is dragged narrower than what it holds. Scoped to ONLY the
+   columns the user has actually resized (--resized), via inline width/
+   min-width/max-width set by wireColumnResize/headerCellHTML/dataCellHTML;
+   every other column keeps today's untouched, content-sized, never-clipped
+   look. */
+.data-table__th--resized .data-table__th-label,
+.data-table__td--resized {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Set on <body> for the duration of a resize drag (table.js wireColumnResize)
+   so the cursor stays col-resize and no stray text gets selected while the
+   pointer is outside the 8px handle mid-drag. */
+body.is-col-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
 /* Columns popover */
 
 .columns-popover {
