@@ -2,6 +2,9 @@
 
 Contract: see `CLAUDE.md` (numbers-sacred rule, Rule 1); anchor baselines in `SPEC.md`. Decisions log: `review/owner_decisions.md`.
 
+**Scope note (owner 2026-08-26):** this backlog is for **pre-launch** work. Small standalone features parked to
+ship *after* launch as demand-driven updates / marketing beats live in a separate log — `review/POST_LAUNCH_FEATURES.md`.
+
 ---
 
 ## Standing anchor scope

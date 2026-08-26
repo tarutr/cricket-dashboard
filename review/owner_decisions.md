@@ -1191,8 +1191,13 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
        promoted from its `.orchestrator/` working copy. It is the durable conformance record.
     3. **Column-dropdown count badges: RESTORE** — each of the four column dropdowns shows a live count of the
        columns chosen in it (built once, silently lost).
-    4. **"Group rows / Split by" toolbar control: PENDING** — owner wants a fuller explanation before deciding
-       (doesn't recall it). NOT yet restored or retired.
+    4. **"Group rows / Split by" toolbar control: DEFERRED (not built for launch)** — after the explanation,
+       owner ruled it not needed for now: the same per-value breakdown is already reachable per-player in the
+       player popup, so it's a demand-driven post-launch beat, not a gap. Logged in `review/POST_LAUNCH_FEATURES.md`.
+    - **NEW LOG (owner, 2026-08-26): `review/POST_LAUNCH_FEATURES.md`** — a running list of small, standalone
+      features parked before launch, each deployable afterwards as its own update / marketing beat to drive new
+      users. Distinct from `review/BACKLOG.md` (pre-launch work). Seeded with item 4 (Group rows) and item 6
+      (Add Group / nested condition groups). Maintain it whenever a feature is parked "add later if demand".
     5. **Rank-by-first-filtered-column: RESTORE, with a rule** — only a filter whose auto-added column is a
        RANKABLE (numeric/sortable) metric drives the auto-sort; a filter whose column is NOT sortable (a
        which-values list/text column — Opposition, Stage, Venue, …) does NOT re-sort, the table stays on its
