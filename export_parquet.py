@@ -3649,8 +3649,20 @@ def run_ball_layer_gates(con, out_dir):
                   expect_rows):
         key_sql = ", ".join(keys)
         n = q(f"SELECT COUNT(*) FROM {orx}")
-        gate(n == expect_rows, f"[oracle] {label} row count",
-             f"{n} vs expected {expect_rows}")
+        # Row-count sanity: NON-FATAL (owner-approved 2026-08-26). expect_rows is a
+        # snapshot-specific literal, so a bigger/smaller CI Cricsheet would otherwise
+        # hard-fail the build on a stale number even when the data is perfectly correct.
+        # It is logged as a WARN reference only. The REAL correctness guarantees stay
+        # HARD gates and scale with data: `ref_n == n` (export row set == the from-balls
+        # reconstruction), no-duplicate-keys, and the no-missing/no-invented-keys
+        # reconcile below. If this WARNs, refresh the literal to COUNT(*) on the
+        # just-written parquet; it is a heads-up, not a failure.
+        if n == expect_rows:
+            log(f"  PASS  [oracle] {label} row-count sanity: {n} (== expected literal)")
+        else:
+            log(f"  WARN  [oracle] {label} row-count sanity: {n} "
+                f"(expected literal {expect_rows}; non-fatal — a data-size change is fine, "
+                f"the reconstruction-equality + key-reconcile gates below are the hard checks)")
         distinct_keys = q(f"SELECT COUNT(*) FROM (SELECT DISTINCT {key_sql} FROM {orx})")
         gate(distinct_keys == n, f"[oracle] {label} no duplicate keys",
              f"{n - distinct_keys} duplicated key groups")
