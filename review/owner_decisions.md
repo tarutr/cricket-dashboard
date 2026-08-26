@@ -1211,3 +1211,21 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
        always-applied (Ball Ranges / matchup Vs stay always-AND under Match-any).
     Build items 3/5/6 land at Phase 4 (build the sitting's outcomes); 7 (icon) + 8 go to mocks first;
     item 4 awaits the owner's decision after the explanation.
+
+77. **STAGE-3 PHASE-3 MOCK REVIEW — RULINGS (owner, 2026-08-26)** on .orchestrator/phase3-mocks.html:
+    1. **Highlight icon = Option C** (the spotlight/marker glyph — replaces the misleading pencil).
+    2. **NO "pending until Search" cue anywhere; highlighting is INSTANT** — REVISES decision 76.7's
+       "keep staged" framing. Rationale (owner): highlighting a column in the RENDERED TABLE is an instant
+       view action like sort / drag-reorder / column-resize — it does not wait for Search. In the leaderboard/
+       player popups, highlight applies on Search WITH the rest of the staged config, so a per-highlight
+       pending cue is redundant (the whole popup is staged). Highlight is display-only (a repaint, not a
+       re-query), so instant is safe. Build = the Option-C icon + ensure table-side highlighting is instant.
+    3. **Match-any visibility = Option C** (visually distinguish the OR'd conditions from the always-applied
+       ones) **condensed to a SINGLE LINE** so the results toolbar doesn't get cluttered.
+    4. **Matchup dropdown = the collapsed / progressive-disclosure ("closed") layout** — the define-the-opponent
+       axes start CLOSED and expand on demand, not all-axes-open. [Orchestrator interpretation of "closed drop
+       down" — confirm at build.]
+    5. **Column resize = NO highlight/glow** — just the cursor changing to the resize icon on hover
+       (spreadsheet-standard); the glow/grip-dot options are dropped.
+    6. **Pick-flash = Option A (the flash) but WITHOUT the tick boxes** — just the brief selection flash; the
+       checkbox visual is dropped (owner: "quite ugly").
