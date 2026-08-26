@@ -1862,6 +1862,38 @@ function sortStillShown(sort, slots) {
   return (slots || []).some((s) => (sort.slotId != null ? s.id === sort.slotId : s.key === sort.key));
 }
 
+/** decision 76.5 — a column is RANKABLE (may drive the auto-sort when its filter is
+ * added) iff it resolves to a numeric/sortable metric. The ONLY non-rankable columns are
+ * the which-values LIST columns (team_set / opp_set / stage_set / … — each carries
+ * kind "attribute") and the player-attribute TEXT columns (attr_role_group / … — also
+ * kind "attribute"); every counting / rate / percent / peak metric is rankable, INCLUDING
+ * the str-format peaks (Best Bowling / High Score) that rank via a numeric sortExpression
+ * — so `format` is not a safe test, but `kind` is. Read straight off the catalogue via
+ * getMetric(...).kind — never a hand-copied key list, since the metadata already draws the
+ * line. `mns` is the metric namespace (fielding→"batting", mirroring table.js metricNsFor). */
+function isRankableColumn(key, mns) {
+  const m = getMetric(key, mns);
+  return Boolean(m) && m.kind !== "attribute";
+}
+
+/** decision 76.5 (restoring decision 61(4)) — the slot to rank by when a filter added on
+ * THIS Search auto-adds a RANKABLE column. Returns the FIRST (source-order) filter that
+ * became active since the last Search whose mapped column is both SHOWN (a live slot) and
+ * rankable; null when this Search added no such filter (a no-filter-change Search, or one
+ * that added only which-values / text columns → the table keeps its default / remembered
+ * sort). A newly-active filter's column is always shown (its prune was cleared at Q3b and
+ * push() already dropped ineligible cols), so this never ranks by an invisible metric. */
+function firstNewlyRankableFilterSlot(sources, prevTags, slots, mns) {
+  for (const { tag, cols } of sources) {
+    if (prevTags.has(tag)) continue; // only a filter NEWLY active this Search re-ranks
+    for (const c of cols) {
+      const slot = slots.find((s) => sameColumnIdentity(s.key, c));
+      if (slot && isRankableColumn(slot.key, mns)) return slot;
+    }
+  }
+  return null;
+}
+
 /** Apply `presetKeys` onto the working slots/origins/pruned (mutates origins + pruned,
  * returns the new slot array). Preset columns move to the FRONT (preset-first order,
  * #14); a key already shown is reused (keeps its id + other origins) and re-tagged
@@ -1979,10 +2011,28 @@ export function reconcileLeaderboardColumns(state, { firstSearch = false } = {})
   });
   gcOrigins(origins, slots);
 
-  // Sort [#3/#7]: default on the first seed; otherwise remember the user's sort until
-  // its column is gone, then fall back to the default. NO force-include anywhere.
+  // Sort resolution [#3/#7 + decision 76.5], in priority order:
+  //  (1) RANK-BY-FIRST-FILTERED-COLUMN (decision 76.5, restoring decision 61(4)): a
+  //      filter that became active on THIS Search whose auto-added column is a RANKABLE
+  //      metric (numeric/sortable — see isRankableColumn) drives the sort — the FIRST such
+  //      column, DESCENDING (as ruled). A which-values list / text column (kind
+  //      "attribute" — Opposition / Stage / Venue / … / player-attribute) does NOT
+  //      re-rank; the table stays on its default. Adding a ranking filter is a fresh,
+  //      explicit ranking intent, so it overrides both the seed default AND a previously-
+  //      remembered sort — the pre-Wave-D behaviour, now gated on the rankable-only rule.
+  //  (2) else, on the first seed or when the remembered sort's column is gone → the
+  //      default (innings-desc-if-shown, else the first / left-most column).
+  //  (3) else keep the user's remembered sort (a manual header sort survives every Search
+  //      that adds no new rankable filter, until its column / source filter is removed).
+  // NO force-include anywhere — the ranked column is one already SHOWN.
+  const mns = disc === "fielding" ? "batting" : disc; // metric namespace (metricNsFor)
   let sort = state.sort;
-  if (seeding || !sortStillShown(sort, slots)) sort = defaultLeaderboardSort(slots, disc);
+  const rankSlot = firstNewlyRankableFilterSlot(sources, prevTags, slots, mns);
+  if (rankSlot) {
+    sort = { key: rankSlot.key, dir: "desc", slotId: rankSlot.id };
+  } else if (seeding || !sortStillShown(sort, slots)) {
+    sort = defaultLeaderboardSort(slots, disc);
+  }
 
   return {
     columns: { ...state.columns, [disc]: slots },
