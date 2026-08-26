@@ -701,42 +701,61 @@ export function createPaletteGroupsBuilder(deps) {
 
     // 6 ── Matchup (Vs) ───────────────────────────────────────────────────────────
     // T-F3: unaffected by `surface` — kept whole on "popup" (Team + every Matchup
-    // entry stays). The profile-backed entries (vs bowling style / vs batting hand /
-    // Batting position) are offered DATA-DRIVEN (owner "remove the hardcode
-    // everywhere", 2026-08-03) — via isFilterAvailable, not the old `!women` gate.
-    // Matchup rows key every bowler/batter through profiles, so today the mapped-
-    // style data exists for men only (women are all '(unmapped)') → men offered,
-    // women absent, identical to before; women's future profiles auto-restore it.
-    // T-1's "vs opponent player" is GENDER-AGNOSTIC + ball-engine-gated (see below),
-    // so the group can already surface on the women view (opponent-only) when on.
+    // entry stays). The profile-backed entries (vs bowling style / vs batting hand)
+    // are offered DATA-DRIVEN (owner "remove the hardcode everywhere", 2026-08-03)
+    // — via isFilterAvailable, not the old `!women` gate. Matchup rows key every
+    // bowler/batter through profiles, so today the mapped-style data exists for men
+    // only (women are all '(unmapped)') → men offered, women absent, identical to
+    // before; women's future profiles auto-restore it.
+    //
+    // M2a follow-up (owner ruling, 2026-08-27): on the LEADERBOARD ("leaderboard"
+    // surface — the default, reached via drawer.js's lane-split Filters popup) the
+    // "vs bowling style" / "vs batting hand" matchupVsFamily(...) entries are now
+    // WITHHELD (`surface === "popup"` guard below) — decision 80 gave the Matchup
+    // lane (drawer.js's third Filters-popup lane) sole ownership of "define the
+    // opponent" there, so these two entries duplicated it: a redundant second route
+    // to the same `state.matchupVs` (both wrote it via `pickSingleton("vs", …)`).
+    // On the PLAYER POP-UP ("popup" surface) they are UNCHANGED — the pop-up's
+    // Filters tab has no Matchup lane; this IS its sole matchup-Vs mechanism (T-2e
+    // Option A), so nothing there is redundant. The shared `matchupVsFamily` helper
+    // + `state.matchupVs` + `buildMatchupQuery` are UNTOUCHED — the Matchup lane and
+    // the toolbar's native Vs <select> still use them exactly as before; only the
+    // leaderboard Scope-palette *listing* is gone. Batting position and vs opponent
+    // player (below) are INDEPENDENT filters that merely share this section header
+    // (Chunk 5 owner ruling / decision 70 grouping respectively) — neither
+    // duplicates the Matchup lane, so both stay on every surface, and the
+    // "Matchup (Vs)" heading itself stays in the Scope palette (it now holds just
+    // these two there).
     {
       const vsItems = [];
-      if (disc === "batting") {
-        // vs bowling style — offered iff mapped bowling styles exist in scope.
-        if (isFilterAvailable("vsBowlingStyle", s)) {
-          const vsTypes = getVsBowlingTypes() || [];
-          vsItems.push(matchupVsFamily("vs bowling style", [
-            ["Pace", preselectMatchupVs("group", "Pace")],
-            ["Spin", preselectMatchupVs("group", "Spin")],
-            ...vsTypes.map((t) => [matchupBucketLabel(t), preselectMatchupVs("type", t)]),
-          ]));
-          // Fine bowling styles load lazily (matchup_batting distinct-values); once
-          // they arrive, rebuild so they appear as variants (renderNumeric closes any
-          // open palette first). One-shot: the next build has getVsBowlingTypes() set,
-          // so this branch's caller-side guard won't re-fire. Skipped when the family
-          // isn't offered (popup non-empty row), so a matchup/slice row fires no load.
-          if (surface !== "popup" || popupMatchupOffered) ensureVsBowlingTypesLoaded();
-        }
-      } else {
-        // vs batting hand — offered iff mapped batting hands exist in scope.
-        if (isFilterAvailable("vsBattingHand", s)) {
-          // R4-C naming (locked): the leaf LABEL reads "Right-hand batter" /
-          // "Left-hand batter" — the preselect's stored bucket VALUE ("Right-hand
-          // bat" / "Left-hand bat") is data, untouched.
-          vsItems.push(matchupVsFamily("vs batting hand", [
-            ["Right-hand batter", preselectMatchupVs("hand", "Right-hand bat")],
-            ["Left-hand batter", preselectMatchupVs("hand", "Left-hand bat")],
-          ]));
+      if (surface === "popup") {
+        if (disc === "batting") {
+          // vs bowling style — offered iff mapped bowling styles exist in scope.
+          if (isFilterAvailable("vsBowlingStyle", s)) {
+            const vsTypes = getVsBowlingTypes() || [];
+            vsItems.push(matchupVsFamily("vs bowling style", [
+              ["Pace", preselectMatchupVs("group", "Pace")],
+              ["Spin", preselectMatchupVs("group", "Spin")],
+              ...vsTypes.map((t) => [matchupBucketLabel(t), preselectMatchupVs("type", t)]),
+            ]));
+            // Fine bowling styles load lazily (matchup_batting distinct-values); once
+            // they arrive, rebuild so they appear as variants (renderNumeric closes any
+            // open palette first). One-shot: the next build has getVsBowlingTypes() set,
+            // so this branch's caller-side guard won't re-fire. Skipped when the family
+            // isn't offered (popup non-empty row), so a matchup/slice row fires no load.
+            if (popupMatchupOffered) ensureVsBowlingTypesLoaded();
+          }
+        } else {
+          // vs batting hand — offered iff mapped batting hands exist in scope.
+          if (isFilterAvailable("vsBattingHand", s)) {
+            // R4-C naming (locked): the leaf LABEL reads "Right-hand batter" /
+            // "Left-hand batter" — the preselect's stored bucket VALUE ("Right-hand
+            // bat" / "Left-hand bat") is data, untouched.
+            vsItems.push(matchupVsFamily("vs batting hand", [
+              ["Right-hand batter", preselectMatchupVs("hand", "Right-hand bat")],
+              ["Left-hand batter", preselectMatchupVs("hand", "Left-hand bat")],
+            ]));
+          }
         }
       }
       // Striker batting position — matchup-only (matchupVsActive already false for
@@ -746,8 +765,10 @@ export function createPaletteGroupsBuilder(deps) {
       // Y" (bowler_id when batting / batter_id when bowling). BALL-ENGINE ONLY —
       // flag-gated exactly like the Ball Ranges group (per-delivery ids are absent
       // from the innings parquets). NOT men-only: those ids exist for every delivery,
-      // so it works for both genders (unlike the profile-backed vs entries above).
-      // Placed beside vs bowling style / vs batting hand (decision-70 grouping).
+      // so it works for both genders. Kept in this "Matchup (Vs)" section on its own
+      // now (decision-70 grouping) — the M2a follow-up above removed the profile-backed
+      // vs entries it used to sit beside; vs_opp is untouched (not yet in the Matchup
+      // lane, so removing it here would make it unreachable — a later, separate task).
       // T-2e: vs_opp is a ball predicate (threaded to db.query, IGNORED by
       // buildMatchupQuery), so it is withheld on a matchup-Vs row (popupSliceOffered
       // is false there) — it belongs to the per-innings-slice side of the exclusivity.
