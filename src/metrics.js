@@ -1566,10 +1566,13 @@ for (const disc of ["batting", "bowling"]) {
 // Matches — a rate, so kind "rate" / format dec2 / zeroIsData false. The numerator
 // reuses the EXACT fielding_cte expression of its count sibling (so count and
 // per-match can never disagree); the denominator is a per-player match count from a
-// dedicated `pmatch_cte` over player_matches (MAX(pmatch_cte.match_count) — the same
-// COUNT(DISTINCT match_id) core scope the Player Matches column / pom_cte use, so a
-// fielder's per-match reconciles with their Matches column in the un-sliced
-// leaderboard). `perMatch: true` is the flag table.js/charts.js gate the pmatch_cte
+// dedicated `pmatch_cte` over player_matches (MAX(pmatch_cte.match_count) — matches the
+// player PLAYED in the filtered set. Stage-3 Phase 2.2 makes the fielding Matches column
+// read the SAME pmatch_cte, so a fielder's per-match ALWAYS reconciles with their Matches
+// column, filtered or not — Phase 2.1 taught pmatch_cte the match-selecting filters
+// (opposition + fielding season/city/stage/result/toss); credit-defining fielding slices
+// leave it alone. Won/Lost/PotM's own divisors [pom_cte/result_cte] gain the same clauses
+// in Phase 2.3.) `perMatch: true` is the flag table.js/charts.js gate the pmatch_cte
 // build+join on (like source "result" gates result_cte); source stays
 // "fielding_events" so the fielding_cte join lights up too. Only the count/per-match
 // TOGGLE surfaces these (COLUMN_TOGGLE_PAIRS) — never their own picker row.

@@ -102,7 +102,10 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   // Per-match fielding metrics (Wave C) divide a fielding_cte count by the per-player
   // match count in pmatch_cte (sqlExpression references BOTH CTEs), so charting one
   // needs the SAME pmatch_cte the Stats table builds — attach it with the SAME
-  // predicate buildQuery uses (isFieldingEventMetric already adds fielding_cte).
+  // predicate buildQuery uses (isFieldingEventMetric already adds fielding_cte). Stage-3
+  // Phase 2.1 taught buildPmatchCteSql the match-selecting filters (opposition + fielding
+  // season/city/stage/result/toss), so a charted per-match value tracks the SAME fixed
+  // divisor the table shows — no change here (same builder, same state).
   const wantsPmatch = metrics.some(isPerMatchMetric);
 
   // Opposition + batting-position filters (D4 Piece 3) apply here too — the

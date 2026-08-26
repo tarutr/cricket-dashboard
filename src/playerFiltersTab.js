@@ -63,14 +63,12 @@ import {
   buildQuery,
   formatValue,
   buildFieldingCteSql,
-  // FC-2: the per-player match-count CTE (per-match fielding denominator) — reused
-  // UNCHANGED so a pop-up per-match value == the leaderboard's (same definition).
+  // FC-2 + Stage-3 Phase 2.1/2.2: the per-player match-count CTE — both the per-match
+  // fielding rate DENOMINATOR and (Phase 2.2, owner ruling 2) the Matches COLUMN source,
+  // so a pop-up per-match value AND its Matches value == the leaderboard's (same builder,
+  // same match-selecting clauses). The former narrowed→fld_matches switch
+  // (fieldingMatchesNarrowed / buildFldMatchesCteSql) is retired here — no longer imported.
   buildPmatchCteSql,
-  // Fielding "Matches" honesty switch — SHARED with the leaderboard so the two can
-  // never drift: un-narrowed = appearances (pmatch_cte), narrowed = matches-with-a-
-  // credit (fld_matches_cte, whose body buildFldMatchesCteSql now owns for both).
-  fieldingMatchesNarrowed,
-  buildFldMatchesCteSql,
 } from "./table.js";
 import { getMetric, resolveColumnMetric, metricDisplayLabel, matchupBucketLabel, DISMISSAL_KINDS, parseComposedFieldingKey, makeComposedFieldingKey } from "./metrics.js";
 import {
@@ -368,13 +366,14 @@ function conditionsToInningsWhere(conditions, discipline) {
 // fielding columns use — so a NO-FILTER fielding row equals that player's
 // leaderboard fielding numbers BY CONSTRUCTION (Matches included — see below). This
 // module only (a) reuses that CTE verbatim and (b) resolves "Matches" through the
-// SHARED fielding switch fieldingMatchesNarrowed (table.js): un-narrowed = the
-// fielder's appearance count (buildPmatchCteSql), == the leaderboard's un-narrowed
-// Matches; narrowed (opposition or any fielding slice) = COUNT(DISTINCT match_id)
-// over the filtered fielding rows (buildFldMatchesCteSql, the SHARED body). Because
-// both the switch and the narrowed-Matches CTE now live in table.js, the pop-up and
-// leaderboard cannot drift. buildQuery / buildMatchupQuery / conditionToHaving are
-// entirely untouched.
+// SHARED buildPmatchCteSql (table.js) — Stage-3 Phase 2.2 (owner ruling 2): the Matches
+// COLUMN is ALWAYS the per-player match count = ALL matches the player PLAYED in the
+// filtered set (matches without a credit included), the SAME source the fielding
+// LEADERBOARD now uses, so the pop-up and leaderboard cannot drift. buildPmatchCteSql
+// honours the match-selecting filters (opposition + fielding season/city/stage/result/
+// toss) additively; credit-defining fielding slices leave the count alone. The former
+// narrowed→credited-matches (fld_matches_cte) switch is retired. buildQuery /
+// buildMatchupQuery / conditionToHaving are entirely untouched.
 //
 // SCOPE COVERAGE (top-level state, via buildFieldingCteSql's buildScopeClausesTagged
 // — matches the leaderboard fielding column, so no leaderboard change): core (gender
@@ -515,16 +514,18 @@ export function buildFieldingRowState(row, pageState) {
   };
 }
 
-// FC-2: the SELECT expression (over fielding_cte / fld_matches_cte) for each BASE
-// fielding COUNT column. dismissals_effected is derived; matches comes from the
-// matches CTE. Per-match variants divide these by pmatch_cte.match_count.
+// FC-2: the SELECT expression (over fielding_cte) for each BASE fielding COUNT column.
+// dismissals_effected is derived; `matches` is the Phase-2.2 pmatch source (its VALUE is
+// only ever read if `matches_per_match` were requested — it is not a real metric; the KEY
+// exists so FIELDING_BASE_KEYS skips the always-projected Matches column below). Per-match
+// variants divide these by pmatch_cte.match_count.
 const FIELDING_BASE_COUNT_EXPR = {
   catches: "fielding_cte.catches",
   caught_and_bowled: "fielding_cte.caught_and_bowled",
   stumpings: "fielding_cte.stumpings",
   run_outs: "fielding_cte.run_outs",
   dismissals_effected: "(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs)",
-  matches: "fld_matches_cte.matches",
+  matches: "COALESCE(pmatch_cte.match_count, 0)",
 };
 const FIELDING_BASE_KEYS = new Set(Object.keys(FIELDING_BASE_COUNT_EXPR));
 const FC_PER_MATCH_SUFFIX = "_per_match";
@@ -557,31 +558,28 @@ function fieldingRowSelectExpr(key) {
  * id + the six base columns (catches, caught_and_bowled, stumpings, run_outs,
  * dismissals_effected = catches+stumpings+run_outs, matches).
  *
- * MATCHES honours the SHARED fielding switch fieldingMatchesNarrowed (table.js), the
- * SAME source the fielding LEADERBOARD uses — so the pop-up and leaderboard agree
- * UN-narrowed and narrow IDENTICALLY (they can't drift):
- *   • NOT narrowed → appearances = buildPmatchCteSql.match_count (COUNT(DISTINCT
- *     match_id) over player_matches) — EXACTLY the leaderboard's un-narrowed Matches.
- *   • NARROWED (opposition OR any fielding slice) → buildFldMatchesCteSql = COUNT(
- *     DISTINCT match_id) over the SAME filtered `fielding` rows the fielding_cte
- *     tallies come from (matches with ≥1 credit inside the active filter).
- * Before this switch the pop-up ALWAYS used fld_matches_cte, so un-narrowed it showed
- * matches-with-a-credit and DISAGREED with the leaderboard's appearance count for the
- * same player (owner-confirmed defect) — now fixed.
+ * MATCHES — Stage-3 Phase 2.2 (owner ruling 2, 2026-08-24): ALWAYS the per-player match
+ * count buildPmatchCteSql.match_count = ALL matches the player PLAYED in the filtered set
+ * (matches WITHOUT a credit included), the SAME source the fielding LEADERBOARD now uses,
+ * so the pop-up and leaderboard agree BY CONSTRUCTION (identical builder + swap). This
+ * SUPERSEDES decision 73's narrowed→credited-matches (fld_matches_cte) switch: whenever a
+ * match-selecting filter (opposition + fielding season/city/stage/result/toss) is active,
+ * buildPmatchCteSql narrows the count additively (Phase 2.1); a credit-defining fielding
+ * slice (wicket type / position / phase / bowler / over / innings) leaves it alone. With
+ * no match-selecting filter active it is byte-identical to the pre-Phase-2 un-narrowed
+ * appearance count.
  *
  * FC-2: `cols` (the pop-up's requested fielding column keys) ADDS projections beyond the
  * base 6 — fc__ composer counts (injected into fielding_cte via the UNCHANGED
  * buildFieldingCteSql 2nd arg) and per-match variants (base OR fc__, dividing by
- * pmatch_cte.match_count from the UNCHANGED buildPmatchCteSql). With no cols (or only
- * base-6 cols) the emitted SQL is the former base query → the base-tally NUMBERS are
- * unchanged (the extra fielding_cte SUM(CASE) columns + the LEFT-JOINed CTEs are
- * additive and never alter catches/stumpings/…). NO sacred builder is modified.
+ * pmatch_cte.match_count from buildPmatchCteSql). With no cols (or only base-6 cols) the
+ * emitted SQL is the base query → the base-tally NUMBERS are unchanged (the extra
+ * fielding_cte SUM(CASE) columns are additive and never alter catches/stumpings/…). NO
+ * sacred builder is modified.
  *
- * Tallies come from the SACRED buildFieldingCteSql UNCHANGED. The narrowed Matches CTE
- * is the SHARED buildFldMatchesCteSql, whose WHERE mirrors buildFieldingCteSql's BY
- * CONSTRUCTION (same scope+slice+substitute), so the count can never diverge from the
- * four tallies. Both call sites now import that one definition — no local mirror to
- * keep in sync.
+ * Tallies come from the SACRED buildFieldingCteSql UNCHANGED. pmatch_cte is the SHARED
+ * buildPmatchCteSql — one build + join serves both the Matches column and the per-match
+ * rate denominator.
  */
 export function buildFieldingRowQuery(state, cols) {
   const requested = Array.isArray(cols) ? cols : [];
@@ -596,12 +594,15 @@ export function buildFieldingRowQuery(state, cols) {
   }
   const cte = buildFieldingCteSql(state, composedFieldingCols); // SACRED — 2nd arg is the FC-1 gate
 
-  // Matches: SHARED switch with the leaderboard (un-narrowed = appearances; narrowed =
-  // matches-with-a-credit). See the doc comment above.
-  const narrowed = fieldingMatchesNarrowed(state);
-  const matchesExpr = narrowed
-    ? "fld_matches_cte.matches AS matches"
-    : "COALESCE(pmatch_cte.match_count, 0) AS matches";
+  // Matches — Stage-3 Phase 2.2 (owner ruling 2, 2026-08-24): the Matches COLUMN shows
+  // ALL matches the player PLAYED in the filtered set (matches WITHOUT a credit included)
+  // = the Phase-2.1 filtered pmatch_cte, SUPERSEDING decision 73's narrowed→credited
+  // (fld_matches_cte) switch. The Matches source is now ALWAYS pmatch_cte, identical to
+  // the fielding LEADERBOARD's Phase-2.2 swap — so the pop-up and board can never disagree
+  // (they make the exact same change). buildPmatchCteSql now honours the match-selecting
+  // filters (opposition + fielding season/city/stage/result/toss) additively, so with none
+  // active it is byte-identical to the pre-Phase-2 un-narrowed appearance count.
+  const matchesExpr = "COALESCE(pmatch_cte.match_count, 0) AS matches";
 
   // Extra projections (requested keys beyond the base 6): fc__ counts + per-match.
   const selectCols = [
@@ -613,29 +614,20 @@ export function buildFieldingRowQuery(state, cols) {
     "(fielding_cte.catches + fielding_cte.stumpings + fielding_cte.run_outs) AS dismissals_effected",
     matchesExpr,
   ];
-  let wantsPmatch = false;
   const seen = new Set(FIELDING_BASE_KEYS);
   for (const key of requested) {
     if (seen.has(key)) continue; // base 6 already projected + de-dup
     seen.add(key);
     const expr = fieldingRowSelectExpr(key);
     if (!expr) continue;
-    if (expr.perMatch) wantsPmatch = true;
     selectCols.push(`${expr.sql} AS ${key}`); // key is identifier-safe (fc__… / …_per_match)
   }
 
-  const cteDefs = [cte];
-  let fromSql = "FROM fielding_cte";
-  if (narrowed) {
-    cteDefs.push(buildFldMatchesCteSql(state)); // SHARED — the matches-with-a-credit denominator
-    fromSql += "\nLEFT JOIN fld_matches_cte ON fld_matches_cte.fld_player_id = fielding_cte.fld_player_id";
-  }
-  // pmatch_cte is needed for the Matches column when NOT narrowed (appearances), and/or
-  // for any per-match column (wantsPmatch). Build + join it ONCE when either applies.
-  if (!narrowed || wantsPmatch) {
-    cteDefs.push(buildPmatchCteSql(state)); // UNCHANGED — the leaderboard's per-match denominator
-    fromSql += "\nLEFT JOIN pmatch_cte ON pmatch_cte.pm_player_id = fielding_cte.fld_player_id";
-  }
+  // pmatch_cte is the Matches source (Phase 2.2) AND the per-match rate denominator — one
+  // build + join covers both. buildPmatchCteSql now carries the additive match-selecting
+  // clauses (Phase 2.1); no fld_matches_cte / narrowed switch any more.
+  const cteDefs = [cte, buildPmatchCteSql(state)];
+  const fromSql = "FROM fielding_cte\nLEFT JOIN pmatch_cte ON pmatch_cte.pm_player_id = fielding_cte.fld_player_id";
 
   return ["WITH " + cteDefs.join(",\n"), "SELECT " + selectCols.join(",\n       "), fromSql].join("\n");
 }
