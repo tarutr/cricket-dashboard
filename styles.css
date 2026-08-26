@@ -847,6 +847,55 @@ a { color: var(--color-accent); }
   .cond-lane__match { margin-left: 0; }
 }
 
+/* ── Matchup lane (decision 80) — the "define the opponent" panel ──────────────
+   The third lane's body is a compact stacked panel (NOT the floating popover the
+   mock drew — it lives inline in the popup like the other lanes). One collapsed
+   <details> axis per opponent attribute (progressive disclosure, decision 77.4 /
+   mock Set 3 Layout B); today just vs bowling style (batting) / vs batting hand
+   (bowling). The axis body hosts the shared vsSel picker (mountSearchSelect). */
+.opponent-panel { display: flex; flex-direction: column; gap: var(--space-2); align-self: stretch; }
+.opponent-panel__subtitle {
+  font-size: var(--text-sm2);
+  color: var(--color-muted);
+  margin: 0;
+}
+/* Each axis = a hairline card with a click-to-expand summary. The summary shows the
+   axis name (left) and its current pick inline (right, muted — reads "Anyone" until
+   an opponent is defined), plus a rotating ▾/▴ affordance. */
+.opponent-axis {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm, 4px);
+  overflow: hidden;
+}
+.opponent-axis + .opponent-axis { margin-top: var(--space-2); }
+.opponent-axis > summary {
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  background: var(--color-panel, var(--color-bg-raised));
+  font-size: 0.9rem;
+}
+.opponent-axis > summary::-webkit-details-marker { display: none; }
+.opponent-axis > summary::after {
+  content: "▾";
+  color: var(--color-muted);
+  font-size: 0.75em;
+  margin-left: auto;
+}
+.opponent-axis[open] > summary::after { content: "▴"; }
+.opponent-axis__name { font-weight: 600; color: var(--color-fg); }
+.opponent-axis__pick { font-weight: 400; font-size: var(--text-sm2); color: var(--color-muted); }
+.opponent-axis__body { padding: var(--space-3); }
+.opponent-axis__body .search-select { width: auto; }
+.opponent-axis__body .search-select__toggle { min-width: 9rem; }
+.opponent-panel__footer { display: flex; }
+/* "Clear opponent" is the vs singleton's remove control — small, ghosted, only shown
+   while an opponent is defined (renderMatchupLane toggles [hidden]). */
+.opponent-panel__clear { font-size: var(--text-sm2); }
+
 /* R5 Wave 1a (item 8): applied-condition rows are sized to their CONTENT, not
    stretched to the popup width. align-items:flex-start stops the column from
    stretching the line; __main / __value hug their editors (flex:0 1 auto) so a

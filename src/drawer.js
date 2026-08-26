@@ -231,15 +231,20 @@ const SINGLETON_TYPES = [
 // applied rows can render as one list PER lane (Player Filters / Scope Filters),
 // each under its own always-visible Match-all/any toggle. This mirrors the
 // owner-ruled Phase-1 taxonomy split (paletteGroups.js GROUP_DEFAULT_LANE): the
-// Player Profile singletons are the only player-lane ones; everything else (Team,
-// Opposition, Event/Stage/Venue/City/Season, Match/Toss Result, Innings Number,
-// Batting position, Ball Ranges, Matchup Vs, Dismissed-batter position) is Scope.
-// Numeric metric conditions are always player-lane (all metric groups are tagged
-// "player"). Display-only — a row's lane never changes WHAT its editor writes or
-// what the query returns; the OR toggle it lands under drives state.filterMatch,
-// which the engine (Waves A–E) already reads.
+// Player Profile singletons are the only player-lane ones; the Matchup "Vs" selector
+// is its OWN third lane now (decision 80 — the "define the opponent" home; see the
+// matchup lane markup above); everything else (Team, Opposition, Event/Stage/Venue/
+// City/Season, Match/Toss Result, Innings Number, Batting position, Ball Ranges,
+// Dismissed-batter position) is Scope. Numeric metric conditions are always
+// player-lane (all metric groups are tagged "player"). Display-only — a row's lane
+// never changes WHAT its editor writes or what the query returns; the OR toggle it
+// lands under drives state.filterMatch, which the engine (Waves A–E) already reads.
+// (The matchup lane has NO Match all/any toggle — a matchup Vs is a single mode, not
+// an AND/OR-able condition; it always ANDs with scope, decision 47a.)
 const PLAYER_LANE_SINGLETONS = new Set(["role", "hand", "bowling", "bowlingHand", "potm_yn"]);
-const singletonLane = (key) => (PLAYER_LANE_SINGLETONS.has(key) ? "player" : "scope");
+const MATCHUP_LANE_SINGLETONS = new Set(["vs"]);
+const singletonLane = (key) =>
+  MATCHUP_LANE_SINGLETONS.has(key) ? "matchup" : PLAYER_LANE_SINGLETONS.has(key) ? "player" : "scope";
 
 // (The "metrics DELETED from the + Add condition picker" list — decision 68 —
 // moved into src/paletteGroups.js with the taxonomy builder itself: T-F3,
@@ -376,6 +381,50 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
           <div class="cond-builder__rows" data-role="fielding-dim-rows"></div>
         </div>
       </section>
+      <!-- ── Matchup lane (decision 80) ─────────────────────────────────────────
+           A THIRD lane, peer to Player Filters / Scope Filters — the HOME for
+           "define the opponent" (decision 77.4 collapsed / progressive-disclosure,
+           mock Set 3 Layout B). It reuses the SAME state.matchupVs / buildMatchupQuery
+           mechanism the (untouched) results-toolbar Vs <select> writes; both stay in
+           sync through the shared store (main.js store.subscribe → drawer.sync).
+           The "vs" singleton's editor/remove wiring lives HERE now (data-cond="vs",
+           data-role="editor-vs", data-remove="vs") instead of a generic Scope row —
+           renderMatchupLane() drives the lane's visibility (data-driven — shown iff
+           the board's matchup data exists), the discipline-swapped subtitle + axis
+           label, and the collapsed axis's inline current pick. The single axis today
+           is vs bowling style (batting) / vs batting hand (bowling); vs PotMs and vs a
+           specific opponent slot in later as sibling <details> axes (see the SEAM). -->
+      <section class="cond-lane cond-lane--matchup" data-lane="matchup" hidden>
+        <div class="cond-lane__head">
+          <span class="cond-lane__title">Matchup</span>
+        </div>
+        <div class="cond-lane__list">
+          <div class="opponent-panel" data-cond="vs">
+            <p class="opponent-panel__subtitle" data-role="matchup-subtitle"></p>
+            <details class="opponent-axis" open>
+              <summary>
+                <span class="opponent-axis__name" data-role="matchup-axis-label">Bowling style</span>
+                <span class="opponent-axis__pick" data-role="matchup-axis-pick">Anyone</span>
+              </summary>
+              <div class="opponent-axis__body">
+                <div data-role="editor-vs"></div>
+              </div>
+            </details>
+            <!-- SEAM (decision 80): the two follow-on axes slot in HERE as sibling
+                 <details class="opponent-axis"> blocks, each collapsed by default —
+                 · vs PotMs (BOTH boards; needs the pipeline vs_potm column, coming
+                   after a data re-run — M2b), and
+                 · vs a specific opponent (frontend-only — filters on the bowler/batter
+                   id already present). Each writes state.matchupVs (a new dim/value)
+                   and reflects through renderMatchupLane below. Availability is
+                   data-driven (a filter/axis appears iff its data exists), matching the
+                   style/hand gate here, so they land WITHOUT reworking this lane. -->
+            <div class="opponent-panel__footer">
+              <button type="button" class="btn btn--ghost opponent-panel__clear" data-remove="vs" hidden>Clear opponent</button>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>`;
 
   const rowEls = {};
@@ -386,6 +435,14 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     typeLabelEls[t.key] = advancedHost.querySelector(`[data-role="type-label-${t.key}"]`);
     editorHosts[t.key] = advancedHost.querySelector(`[data-role="editor-${t.key}"]`);
   }
+  // Matchup lane (decision 80) refs — the third lane's own chrome (the vs picker
+  // itself is editorHosts.vs, mounted below like every singleton editor). Cached
+  // once; renderMatchupLane() drives their content on every sync.
+  const matchupLaneEl = advancedHost.querySelector('[data-lane="matchup"]');
+  const matchupSubtitleEl = advancedHost.querySelector('[data-role="matchup-subtitle"]');
+  const matchupAxisLabelEl = advancedHost.querySelector('[data-role="matchup-axis-label"]');
+  const matchupAxisPickEl = advancedHost.querySelector('[data-role="matchup-axis-pick"]');
+  const matchupClearEl = advancedHost.querySelector('.opponent-panel__clear');
   const numericEl = advancedHost.querySelector('[data-role="numeric-rows"]');
 
   // ── Lane Match-all / Match-any toggles (Chunk 5 · Phase 2 · Wave D) ──────────
@@ -624,6 +681,47 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     }
     vsSel.setOptions(opts);
     vsSel.setValue(current);
+  }
+
+  // ── Matchup lane chrome (decision 80) ────────────────────────────────────────
+  // Drives the third lane's visibility + the "define the opponent" panel text. The
+  // pickable control is the SAME vsSel (renderVsEditor above) — this only paints the
+  // lane frame: show the lane iff the current board's matchup data exists (data-driven,
+  // never gender-hardcoded — same gate singletonDataAvailable("vs") uses; fielding has
+  // no matchup grain so the lane never shows there), swap the subtitle + axis label by
+  // discipline (batting → "vs bowling style" / bowling → "vs batting hand"), and reflect
+  // the current pick inline in the collapsed axis summary ("Anyone" until defined). No
+  // query path here — buildMatchupQuery is untouched (numbers sacred).
+  function matchupLaneAvailable(s) {
+    // Batting/bowling only; fielding is excluded (no matchup grain). Reuses the async,
+    // optimistic-until-loaded availability probe — availabilityOnReady re-syncs once it
+    // resolves, so women (no mapped matchup data) settle to "lane hidden".
+    return (s.discipline === "batting" || s.discipline === "bowling") && singletonDataAvailable("vs", s);
+  }
+  function matchupPickLabel(s) {
+    if (!matchupVsActive(s)) return "Anyone";
+    const { dim, value } = s.matchupVs;
+    if (dim === "hand") return value === "Left-hand bat" ? "Left-hand batter" : "Right-hand batter";
+    if (dim === "group") return value; // "Pace" / "Spin"
+    return matchupBucketLabel(value); // fine bowling type
+  }
+  function renderMatchupLane() {
+    if (!matchupLaneEl) return;
+    const s = store.get();
+    matchupLaneEl.hidden = !matchupLaneAvailable(s);
+    // Batting board = the bowlers you faced (vs bowling style); bowling board = the
+    // batters you bowled to (vs batting hand). Fielding never reaches here (lane hidden).
+    if (matchupSubtitleEl) {
+      matchupSubtitleEl.textContent =
+        s.discipline === "bowling" ? "The batters you bowled to." : "The bowlers you faced.";
+    }
+    if (matchupAxisLabelEl) {
+      matchupAxisLabelEl.textContent = s.discipline === "bowling" ? "Batting hand" : "Bowling style";
+    }
+    if (matchupAxisPickEl) matchupAxisPickEl.textContent = matchupPickLabel(s);
+    // "Clear opponent" only when an opponent is actually defined (matchupVsActive) —
+    // it is the vs singleton's remove-×, wired in the SINGLETON_TYPES remove loop.
+    if (matchupClearEl) matchupClearEl.hidden = !matchupVsActive(s);
   }
 
   // Push the current option lists + values into the mounted panels (setOptions
@@ -1122,6 +1220,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   function syncSingletonRows() {
     const s = store.get();
     for (const t of SINGLETON_TYPES) {
+      // "vs" is NOT a generic show-until-present row any more — it lives in the
+      // always-present Matchup lane (decision 80), whose "define the opponent" panel
+      // reads "Anyone" until an opponent is defined. Its visibility follows the lane's
+      // data-availability gate (renderMatchupLane), not isPresent. Skip it here so the
+      // panel is never hidden merely because no Vs value is picked yet.
+      if (t.key === "vs") continue;
       rowEls[t.key].hidden = !isPresent(t, s);
     }
     // "Batting position" has its own static type label ("Batting position" from
@@ -1129,6 +1233,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // any matchup (position rework 2026-08-14).
 
     renderVsEditor();
+    renderMatchupLane();
     battingPositionController.sync();
     teamController.sync();
     oppositionController.sync();
