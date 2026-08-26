@@ -1229,3 +1229,20 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
        (spreadsheet-standard); the glow/grip-dot options are dropped.
     6. **Pick-flash = Option A (the flash) but WITHOUT the tick boxes** — just the brief selection flash; the
        checkbox visual is dropped (owner: "quite ugly").
+
+78. **RANK-BY-FIRST NARROWED + DATA-GATED MATCHUP GO-NOW (owner, 2026-08-26):**
+    - **Rank-by-first fires ONLY for a numeric STAT-CONDITION filter** (Runs/Average/Strike Rate/%s/Innings
+      Score/etc.). The three categorical filters that auto-add a COUNT column — **PotM (Y/N), Match Result,
+      Toss Result** — do NOT trigger a re-sort; the table keeps its default (innings) or the user's already-
+      chosen sort. Amends the as-built broad reading (commit 1c68658, which re-ranked on any numeric column).
+      Build = a small state.js change (require the newly-active filter to be a stat condition, not just its
+      column to be numeric).
+    - **Terminology clarification (owner):** the auto-sort is NEVER "silent" — a table can only ever be sorted
+      by a VISIBLE column (decisions 44/61), so a re-rank is always shown on screen (the column is present and
+      the sort indicator points at it). The orchestrator's earlier "silently re-rank" wording was inaccurate.
+    - **Data-gated matchup: DO NOW (reverses decision 75's recommended defer-to-the-cut).** Owner agreed doing
+      it now does not add net complexity to the ball-layer cut (the cut reconstructs matchup regardless). (a)
+      the 3 bowling "% Runs Conceded in…" variants (non-boundary/wides/no-balls) via an export_parquet.py add
+      (wides_runs, noball_runs, mirroring bowling_innings) + an owner-triggered data re-run, staged data-first;
+      (b) the new axes vs bowling arm + vs PotMs paired with the Matchup-dropdown (M2) build (vs-PotMs needs
+      PotM status joined into the matchup aggregation — the most involved piece).
