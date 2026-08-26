@@ -1519,7 +1519,7 @@ const FIELDING_METRIC_SPECS = [
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.caught_and_bowled)" },
   { key: "stumpings", label: "Stumpings", shortLabel: "F. Stumping", section: "fielding",
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.stumpings)" },
-  { key: "run_outs", label: "Run-outs", shortLabel: "F. Run-out", section: "fielding",
+  { key: "run_outs", label: "Run outs", shortLabel: "F. Run out", section: "fielding",
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.run_outs)" },
   { key: "dismissals_effected", label: "Fielding Dismissals", shortLabel: "F. Wkts", section: "fielding",
     source: "fielding_events",
@@ -5483,7 +5483,7 @@ const _FC_TALLIES = new Map([
   ["catches",    { pred: "kind IN ('caught', 'caught and bowled')", label: "Catches", short: "F. Catch" }],
   ["cab",        { pred: "kind = 'caught and bowled'", label: "Caught & bowled", short: "F. C&B" }],
   ["stumpings",  { pred: "kind = 'stumped'", label: "Stumpings", short: "F. Stumping" }],
-  ["runouts",    { pred: "kind = 'run out'", label: "Run-outs", short: "F. Run-out" }],
+  ["runouts",    { pred: "kind = 'run out'", label: "Run outs", short: "F. Run out" }],
   ["dismissals", { pred: "kind IN ('caught', 'caught and bowled', 'stumped', 'run out')", label: "Fielding Dismissals", short: "F. Wkts" }],
 ]);
 

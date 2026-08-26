@@ -1358,7 +1358,7 @@ export function createColumnsPicker({
     { value: "catches", label: "Catches" },
     { value: "cab", label: "Caught & bowled" },
     { value: "stumpings", label: "Stumpings" },
-    { value: "runouts", label: "Run-outs" },
+    { value: "runouts", label: "Run outs" },
     { value: "dismissals", label: "Fielding Dismissals" },
   ];
   // Finite dimension value tokens + labels (mirror metrics.js _FC_PHASE / _FC_HAND /

@@ -430,7 +430,7 @@ export function createPaletteGroupsBuilder(deps) {
         tallyLeaf("catches", "Catches"),
         tallyLeaf("caught_and_bowled", "Caught & bowled"),
         tallyLeaf("stumpings", "Stumpings"),
-        tallyLeaf("run_outs", "Run-outs"),
+        tallyLeaf("run_outs", "Run outs"),
         tallyLeaf("dismissals_effected", "Total dismissals"),
       ]);
       // 5 ── Bowler Details (was "Bowler") ───────────────────────────────────────
@@ -790,7 +790,7 @@ export function createPaletteGroupsBuilder(deps) {
         // measure the documented, distinct things.
         const cbowled = leafMetric("caught_and_bowled", "Caught & bowled");
         if (cbowled) variants.push(cbowled);
-        const runout = leafMetric("run_outs", "Run-out");
+        const runout = leafMetric("run_outs", "Run out");
         if (runout) variants.push(runout);
         const stumped = leafMetric("stumpings", "Stumped");
         if (stumped) variants.push(stumped);
