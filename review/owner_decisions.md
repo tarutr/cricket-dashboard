@@ -1246,3 +1246,33 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       (wides_runs, noball_runs, mirroring bowling_innings) + an owner-triggered data re-run, staged data-first;
       (b) the new axes vs bowling arm + vs PotMs paired with the Matchup-dropdown (M2) build (vs-PotMs needs
       PotM status joined into the matchup aggregation — the most involved piece).
+
+79. **DASHBOARD GOES BEHIND THE MEMBERS PAYWALL PRE-LAUNCH (owner, 2026-08-26):**
+    - The stats dashboard + the `data.the-cordon.com` cricket-data layer move **behind the members
+      entitlement** (built by the separate "The Cordon" backend folder) **before launch**. Today all of it
+      is public — R2 public-read, public GitHub repo, public Vercel (`cricdb.vercel.app`).
+    - **Same founding membership + price** initially; keep the design flexible so parts can stay public
+      later for marketing (a partial-public split is NOT yet decided — build everything gate-able so it
+      stays possible).
+    - **Sequencing:** done AFTER the members/entitlement layer exists; the gating work is owned by THIS
+      (cricdb/data) folder's own session, not the backend build — but it reuses that entitlement layer.
+    - **Technical constraint:** whatever gates the data must preserve HTTP `Range`/`Content-Range` (signed
+      R2 URLs or a range-passing Worker proxy) or DuckDB-WASM's client-side query model breaks. Also
+      entails taking the repo private + moving off public Vercel onto a gated `stats.the-cordon.com`.
+    - Backend handoff context lives in the local-only (gitignored) `pre_launch_handoff/` pack.
+
+80. **MATCHUP EXPANSION — UX HOME + AXIS TRIM (owner, 2026-08-26):**
+    - **The Matchup control is a THIRD LANE inside the Filters popup**, a peer to the existing Player Filters
+      and Scope Filters lanes — NOT a toolbar element. **The toolbar's native "vs" select is LEFT UNTOUCHED**
+      (the R3 ruling "keep the toolbar tight, Vs stays native" stands; L-015 / Gate B unchanged). This CORRECTS
+      decision 75's "the Matchup dropdown becomes the home, reconcile the toolbar Vs" wording — there is NO
+      toolbar reconciliation and the mock's three-dropdowns-across-the-toolbar look is NOT built (that mock
+      diverged from the real toolbar, which is one Filters button → popup lanes). The Matchup lane is the home
+      for "define the opponent" (collapsed / progressive-disclosure per decision 77.4), reusing the shared
+      attribute pickers — it and the untouched toolbar quick-Vs both write the same state.matchupVs.
+    - **vs bowling arm axis: DROPPED** — the bowling_arm profile data isn't well-mapped (a large "(unmapped)"
+      bucket; arm isn't determined by bowling style), so it's not a reliable filter axis. Removed from the
+      pipeline (M2b) too. This overturns the vs-arm part of decision 75.
+    - **Final Matchup axis set:** vs bowling style + vs batting hand (existing) · vs PotMs (new, BOTH boards,
+      confirmed) · vs a specific opponent (new; frontend-only — filters on the bowler/batter id already present,
+      no pipeline column). NOT vs bowling arm, NOT vs playing role, NOT vs batting position.
