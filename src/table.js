@@ -1281,6 +1281,14 @@ function laneScope(clauses, state, { idColumn, playerOp } = {}) {
  */
 export function buildPomCteSql(state) {
   const pomClauses = buildScopeClausesTagged(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
+  // Stage-3 Phase 2.3 (owner-ruled, audit7 ruling 3): the ADDITIVE match-selecting
+  // clauses so the PotM count OBEYS the board's OWN top-level filters (opposition +
+  // stage/result/toss/result-condition) — the same set buildQuery narrows the main
+  // numbers by. Tagged "scope" so laneScope's OR path picks them up; empty when no
+  // match-selecting filter is active → byte-identical. Pushed before the name search
+  // (mirrors buildResultCteSql / buildPmatchCteSql). EXISTS shape (not a mctx LEFT JOIN)
+  // so pom_cte, which carries no mctx join, matches result_cte's scope predicate exactly.
+  for (const c of buildBoardDivisorMatchClauses(state)) pomClauses.push(c);
   if (state.search && state.search.trim()) {
     pomClauses.push(bypassableClause(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
   }
@@ -1356,6 +1364,13 @@ export function buildProfileCteSql() {
  */
 export function buildResultCteSql(state) {
   const resClauses = buildScopeClausesTagged(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
+  // Stage-3 Phase 2.3 (owner-ruled, audit7 ruling 3): the ADDITIVE match-selecting
+  // clauses so the Won/Lost/Tied/No-result/Toss-Won counts OBEY the board's OWN
+  // top-level filters (opposition + stage/result/toss/result-condition) — the same set
+  // buildQuery narrows the main numbers by. Tagged "scope" so laneScope's OR path picks
+  // them up; empty when no match-selecting filter is active → byte-identical. Pushed with
+  // the scope lane, before the name search (mirrors buildPmatchCteSql).
+  for (const c of buildBoardDivisorMatchClauses(state)) resClauses.push(c);
   if (state.search && state.search.trim()) {
     resClauses.push(bypassableClause(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
   }
@@ -1484,6 +1499,80 @@ export function buildFieldingDivisorMatchClauses(state) {
     resultCondition: [],
   };
   const mctxClauses = buildMatchContextClauses(mctxAdapter, "player_matches.team");
+  if (mctxClauses.length) {
+    const inner = ["mctx.mctx_match_id = player_matches.match_id", ...mctxClauses].join(" AND ");
+    clauses.push(alwaysClause(`EXISTS (SELECT 1 FROM ${matchContextSubselectSql()} WHERE ${inner})`, "scope"));
+  }
+
+  return clauses;
+}
+
+/**
+ * Stage-3 Phase 2.3 (owner-ruled 2026-08-24, audit7 ruling 3) — the ADDITIVE
+ * MATCH-SELECTING clauses the per-player Won/Lost/PotM DENOMINATORS must honour so
+ * those columns "obey the board's filters": they count over the matches the player
+ * PLAYED that the batting/bowling board's OWN TOP-LEVEL match-selecting filters keep,
+ * exactly the same set buildQuery narrows the board's main numbers by.
+ *
+ * This is the SIBLING of buildFieldingDivisorMatchClauses, split out deliberately:
+ * that helper is for the FIELDING surfaces, where season/city/stage/result/toss live in
+ * the fielding NAMESPACE (state.fielding.*). result_cte / pom_cte are batting/bowling-
+ * board columns, whose match-selecting filters live at TOP LEVEL — and state.fielding.*
+ * is reset to {} off the fielding board, so the fielding helper would read empty fields
+ * here and silently leave the board's Stage/Result/Toss filters unhonoured. So this
+ * helper reads TOP-LEVEL state, mirroring buildQuery's own main-WHERE scope:
+ *   • Opposition — TOP-LEVEL state.opposition. player_matches has no opposition column,
+ *     so the opponent is derived from the match's own two sides (matches.team_1/team_2)
+ *     via a correlated EXISTS on a LOCAL `matches` alias — identical shape to the
+ *     fielding helper's opposition clause, only the SOURCE is top-level (which, for
+ *     Opposition, the fielding helper already used too). Total by construction (audit7:
+ *     0 player_matches rows with team ∉ {team_1,team_2}).
+ *   • Stage / Result / Toss result / Toss decision / Result Condition —
+ *     buildMatchContextClauses(state, "player_matches.team") reused VERBATIM (no drift)
+ *     reading TOP-LEVEL `state` — the SAME call buildQuery makes at its main WHERE
+ *     (buildMatchContextClauses(state, teamCol)), only comparing the player's own
+ *     player_matches.team — inside a correlated EXISTS on the shared
+ *     matchContextSubselectSql (the result_cte pattern). An EXISTS (not the outer mctx
+ *     LEFT JOIN result_cte already carries) so pom_cte — which has NO mctx join — uses
+ *     the IDENTICAL shape and the scope-lane tag threads cleanly through both. The inner
+ *     `mctx` alias is scoped to the subquery, so it never collides with result_cte's own
+ *     outer mctx join.
+ *
+ * City / Season / Event / Venue are DELIBERATELY ABSENT: buildScopeClausesTagged already
+ * emits their TOP-LEVEL semi-joins inside both CTEs (player_matches carries match_id), so
+ * they are already honoured and already consistent with the board — adding them here would
+ * duplicate. (The fielding helper adds the fielding-NAMESPACE city/season for symmetry on
+ * the fielding board; that concern does not exist here.)
+ *
+ * The base is `player_matches` for both callers (result_cte / pom_cte), so the correlation
+ * columns are FIXED (player_matches.match_id / player_matches.team). Each clause is tagged
+ * alwaysClause(…, "scope") so the lane-OR path (laneScope → whereWithLanes) folds it into a
+ * "Match any" disjunction, exactly as buildQuery tags its main-WHERE match-context clauses.
+ * Every clause emits NOTHING when its filter is unset, so with no match-selecting filter
+ * active this returns [] and both callers are BYTE-IDENTICAL to before (anchors safe by
+ * construction).
+ */
+export function buildBoardDivisorMatchClauses(state) {
+  const clauses = [];
+
+  // (a) Opposition (top-level) — derived opponent IN the picked teams, via a correlated
+  //     EXISTS on the match's own two sides (LOCAL `matches` alias `bdiv_opp`).
+  if (oppositionFilterActive(state)) {
+    const opp = state.opposition.map((t) => `'${esc(t)}'`).join(", ");
+    clauses.push(
+      alwaysClause(
+        `EXISTS (SELECT 1 FROM matches bdiv_opp WHERE bdiv_opp.match_id = player_matches.match_id ` +
+          `AND (CASE WHEN player_matches.team = bdiv_opp.team_1 THEN bdiv_opp.team_2 ELSE bdiv_opp.team_1 END) ` +
+          `IN (${opp}))`,
+        "scope"
+      )
+    );
+  }
+
+  // (b) Stage / Result / Toss result / Toss decision / Result Condition — the SAME
+  //     TOP-LEVEL match-context filters buildQuery applies to the board's main numbers,
+  //     comparing the player's own player_matches.team, inside the shared mctx EXISTS.
+  const mctxClauses = buildMatchContextClauses(state, "player_matches.team");
   if (mctxClauses.length) {
     const inner = ["mctx.mctx_match_id = player_matches.match_id", ...mctxClauses].join(" AND ");
     clauses.push(alwaysClause(`EXISTS (SELECT 1 FROM ${matchContextSubselectSql()} WHERE ${inner})`, "scope"));
