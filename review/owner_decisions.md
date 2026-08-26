@@ -1137,3 +1137,13 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       indicator reads "Custom".
     - **%-columns offered only through their paired count column's toggle is CONFIRMED correct** ("Only
       through the count column's toggle is confirmed") — the columns-picker pairing stays as built.
+    - **The fielding board's Stage filter gains a "No Stage" option** ("Yes, add No Stage to fielding as
+      well") — mirroring the batting/bowling Stage filter, which already offers it (STAGE_NONE sentinel =
+      `event_stage IS NULL`). Fielding-only change; batting/bowling untouched.
+    - **The cross-discipline columns dropdown gets tidy family controls** (owner picked this over hide-the-
+      loose-entries or leave-as-is): when the board is on one discipline and the OTHER discipline's columns
+      dropdown is opened, enumerated metric families (% Runs in…, % Runs Conceded in…, wicket types) render
+      as ONE collapsed family control exactly as they do in the own-discipline dropdown — every column stays
+      reachable, one design language. This is the fix for the owner's reproduced "% Runs in 1s/2s/3s as
+      separate rows, no matchup" sighting (root cause: columnsPicker.js `crossSource` never applied the
+      D3/D4 enumerated-hidden-keys exclusions the own-discipline list applies). Display-only.
