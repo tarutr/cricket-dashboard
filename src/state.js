@@ -93,6 +93,11 @@ import {
   RESULT_CONDITION_SET_KEY,
   isParamComposedColumnKey,
   isComposedFieldingColumnKey,
+  // Stage-3 Phase 1.4: the cross-discipline columns dropdown's D3/D4 family-collapse
+  // (columnsPicker.js) can now mint a CROSS-wrapped composed parametric column
+  // (x__<other>__isr__… / x__<other>__wh__…) — the structural "keep alive" check its
+  // own-discipline sibling already has (isParamComposedColumnKey above).
+  isCrossParamComposedColumnKey,
   makeComposedPhaseKey,
   makeComposedBallKey,
   makeComposedWicketTypeKey,
@@ -1267,6 +1272,34 @@ export function eligibleColumnKeys(discipline, formats) {
   for (const m of eligibleCrossMetrics(discipline, formats)) {
     keys.add(makeCrossKey(OTHER_DISCIPLINE[discipline], m.key));
   }
+  // Stage-3 Phase 1.4 (2026-08-26): the cross-discipline columns dropdown's D3
+  // family-collapse (columnsPicker.js) offers the OTHER discipline's Runs by Source /
+  // Runs Conceded by Source / Wicket Type composers, wrapped in the SAME x__ scheme
+  // the plain cross columns above use — fold the wrapped keys in so a chosen cross
+  // composed column survives a re-render/prune, exactly like its own-discipline
+  // sibling three blocks below. Byte-identical when none is present (the extra keys
+  // just never match a chosen column). The value-dynamic D4 family (Innings Score
+  // Range / Wicket Haul) is kept alive via the structural check instead (see
+  // isCrossParamComposedColumnKey at the prune sites), mirroring its own-discipline
+  // sibling isr__/wh__.
+  {
+    const crossOther = OTHER_DISCIPLINE[discipline];
+    if (crossOther) {
+      // runsource self-gates to batting / runsourceconc to bowling (both return []
+      // off the wrong discipline), so folding both in unconditionally is safe either
+      // way round. Wicket Type is the ONE exception — it is offerable on BOTH
+      // disciplines (a batter's own out_* dismissal-type breakdown too), but that
+      // batting-side family was never part of D3_ENUMERATED_HIDDEN_KEYS / crossSource
+      // to begin with (eligibleCrossMetrics already excludes section:"dismissal"
+      // entirely) — so only the bowling wkt_* variant, the one this fix actually
+      // makes reachable from cross, is folded in here.
+      for (const key of eligibleComposedRunSourceKeys(crossOther)) keys.add(makeCrossKey(crossOther, key));
+      for (const key of eligibleComposedRunSourceConcededKeys(crossOther)) keys.add(makeCrossKey(crossOther, key));
+      if (crossOther === "bowling") {
+        for (const key of eligibleComposedWicketTypeKeys(crossOther)) keys.add(makeCrossKey(crossOther, key));
+      }
+    }
+  }
   // Columns content rework D1: composed phase×metric column keys (ph__<phase>__
   // <base>) are valid columns too, so they must survive a re-render — but drop the
   // moment the format no longer permits their phase (eligibleComposedPhaseKeys
@@ -1443,7 +1476,8 @@ export function pruneIneligibleState(store) {
         (sl) =>
           allowed.has(sl.key) ||
           isParamComposedColumnKey(sl.key, s.discipline) ||
-          isComposedFieldingColumnKey(sl.key, s.discipline)
+          isComposedFieldingColumnKey(sl.key, s.discipline) ||
+          isCrossParamComposedColumnKey(sl.key, s.discipline)
       )
     : cols;
   const colsChanged = prunedCols.length !== cols.length;

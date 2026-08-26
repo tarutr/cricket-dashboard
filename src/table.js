@@ -16,6 +16,10 @@ import {
   resolveColumnMetric,
   isParamComposedColumnKey,
   isComposedFieldingColumnKey,
+  // Stage-3 Phase 1.4: the cross-discipline columns dropdown's D4 family-collapse can
+  // mint a CROSS-wrapped parametric column (x__<other>__isr__… / x__<other>__wh__…) —
+  // the structural "keep alive" check its own-discipline sibling already has.
+  isCrossParamComposedColumnKey,
   OTHER_DISCIPLINE,
   // City & Season everywhere (2026-08-16): the City / Season which-values column keys
   // — read mctx.city / mctx.season, so their presence must light the mctx join too.
@@ -2919,7 +2923,8 @@ export function mountTable(
       (sl) =>
         allowedKeys.has(sl.key) ||
         isParamComposedColumnKey(sl.key, ns) ||
-        isComposedFieldingColumnKey(sl.key, mns)
+        isComposedFieldingColumnKey(sl.key, mns) ||
+        isCrossParamComposedColumnKey(sl.key, ns)
     );
     if (pruned.length !== cols.length) {
       store.set({ columns: { ...state.columns, [ns]: pruned } });

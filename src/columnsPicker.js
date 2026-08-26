@@ -43,7 +43,7 @@
 
 import { escHtml } from "./html.js";
 import {
-  DISMISSAL_KINDS, metricDisplayLabel, makeCrossKey, getMetric,
+  DISMISSAL_KINDS, metricDisplayLabel, makeCrossKey, parseCrossKey, getMetric,
   resolveColumnMetric,
   OTHER_DISCIPLINE, COLUMN_TOGGLE_PAIRS,
   // Columns content rework D1 (phase composer): the composed-key scheme + pool.
@@ -1087,6 +1087,33 @@ export function createColumnsPicker({
 
   // Fixed order + labels for the dimension / category composers (compose editors).
   const DIM_COMPOSER_KINDS = ["phase", "ball", "innings", "battingposition", "team", "opposition", "stage", "event", "venue", "city", "season", "runsource", "runsourceconc", "wickettype"];
+
+  // Stage-3 Phase 1.4 (2026-08-26, decision 74 cluster — "tidy family controls on the
+  // cross-discipline dropdown"): the D3 enumerated-family composer kinds each cross
+  // bucket is entitled to, keyed by the OTHER discipline (the bucket's own ns). Only
+  // the kinds that actually correspond to a D3_ENUMERATED_HIDDEN_KEYS family for that
+  // discipline — NOT the full DIM_COMPOSER_KINDS list (Team/Phase/etc. stay own-
+  // discipline-only, unchanged) — and NOT "wickettype" under "batting" (a batter's own
+  // out_* dismissal breakdown, which was never offered in cross at all: eligibleCross-
+  // Metrics already excludes section:"dismissal" outright, so hiding+re-offering it
+  // would be new reach, not a restore). Reuses the SAME composer machinery
+  // (composerAvailable/composerSelectOptions/composerValueRows/composeEditorHTML) the
+  // own-discipline dropdown already runs, just invoked against `other` instead of the
+  // board's own ns — see openComposeEditor/composeEditorHTML's `cross` threading below.
+  const CROSS_D3_COMPOSER_KINDS = { batting: ["runsource"], bowling: ["runsourceconc", "wickettype"] };
+
+  /** Unwrap an x__ cross-discipline key → { baseKey, cross }, where `cross` is the
+   * OTHER discipline the key measures ("batting"/"bowling") or null for a non-cross
+   * key (baseKey === key unchanged). The composer/param machinery below is generic
+   * over kind/ns already — cross columns just need their OUTER wrapper stripped
+   * before parsing, and re-applied when minting a NEW column (see composerKindForKey/
+   * composerSelForKey/isParamComposerKey/paramRowHTML/wireComposeEditor's confirm and
+   * wireParamRows below). Safe on plain (non-cross) keys and stray strings alike —
+   * parseCrossKey returns null for anything not shaped `x__<disc>__<rest>`. */
+  function unwrapCrossKey(key) {
+    const parsed = parseCrossKey(key);
+    return parsed ? { baseKey: parsed.baseKey, cross: parsed.discipline } : { baseKey: key, cross: null };
+  }
   const COMPOSER_KIND_LABEL = {
     phase: "Phase Range", ball: "Ball Range", innings: "Innings Range",
     // Chunk 1B: the per-position breakdown composer (batting-only; self-gates via
@@ -1286,18 +1313,23 @@ export function createColumnsPicker({
 
   /** The dimension/category composer KIND a column key belongs to, or null (plain,
    * cross, parametric, or boundary_runs — which stays a plain column despite its
-   * dual composer home). Parametric keys are handled separately (isParamComposerKey). */
+   * dual composer home). Parametric keys are handled separately (isParamComposerKey).
+   * Stage-3 Phase 1.4: unwraps an x__ cross key first, so a cross-composed column
+   * (e.g. `x__batting__rs__1s__pct`) is recognised the SAME as its own-discipline
+   * sibling — a plain cross key's baseKey never matches any parseComposed* shape, so
+   * this stays a no-op for the existing plain cross columns (still no edit pencil). */
   function composerKindForKey(key) {
-    if (parseComposedPhaseKey(key)) return "phase";
-    if (parseComposedBallKey(key)) return "ball";
-    if (parseComposedInningsKey(key)) return "innings";
-    if (parseComposedPositionKey(key)) return "battingposition";
+    const { baseKey } = unwrapCrossKey(key);
+    if (parseComposedPhaseKey(baseKey)) return "phase";
+    if (parseComposedBallKey(baseKey)) return "ball";
+    if (parseComposedInningsKey(baseKey)) return "innings";
+    if (parseComposedPositionKey(baseKey)) return "battingposition";
     // Team/Opposition composed keys deliberately return null here (ADD-only — no edit
     // pencil, mirroring the Team composer's own ruling; see teamComposeBodyHTML).
-    if (parseComposedRunSourceKey(key)) return "runsource";
-    if (parseComposedRunSourceConcededKey(key)) return "runsourceconc";
-    if (parseComposedWicketTypeKey(key)) return "wickettype";
-    const fc = parseComposedFieldingKey(key);
+    if (parseComposedRunSourceKey(baseKey)) return "runsource";
+    if (parseComposedRunSourceConcededKey(baseKey)) return "runsourceconc";
+    if (parseComposedWicketTypeKey(baseKey)) return "wickettype";
+    const fc = parseComposedFieldingKey(baseKey);
     if (fc) return FC_DIM_KIND[fc.dim] || null;
     return null;
   }
@@ -1311,17 +1343,19 @@ export function createColumnsPicker({
   // composer row survives. A composer-made row is re-edited in place (single-select).
 
   /** The row selection (base metric key, or count/% axis) a composed slot key
-   * belongs to — the value we group slots by into rows. null for a non-composed key. */
+   * belongs to — the value we group slots by into rows. null for a non-composed key.
+   * Stage-3 Phase 1.4: unwraps an x__ cross key first (see composerKindForKey). */
   function composerSelForKey(kind, key) {
-    if (kind === "phase") { const p = parseComposedPhaseKey(key); return p ? p.baseKey : null; }
-    if (kind === "ball") { const p = parseComposedBallKey(key); return p ? p.baseKey : null; }
-    if (kind === "innings") { const p = parseComposedInningsKey(key); return p ? p.baseKey : null; }
-    if (kind === "battingposition") { const p = parseComposedPositionKey(key); return p ? p.baseKey : null; }
-    if (kind === "runsource") { const p = parseComposedRunSourceKey(key); return p ? p.axis : null; }
-    if (kind === "runsourceconc") { const p = parseComposedRunSourceConcededKey(key); return p ? p.axis : null; }
-    if (kind === "wickettype") { const p = parseComposedWicketTypeKey(key); return p ? p.axis : null; }
+    const { baseKey } = unwrapCrossKey(key);
+    if (kind === "phase") { const p = parseComposedPhaseKey(baseKey); return p ? p.baseKey : null; }
+    if (kind === "ball") { const p = parseComposedBallKey(baseKey); return p ? p.baseKey : null; }
+    if (kind === "innings") { const p = parseComposedInningsKey(baseKey); return p ? p.baseKey : null; }
+    if (kind === "battingposition") { const p = parseComposedPositionKey(baseKey); return p ? p.baseKey : null; }
+    if (kind === "runsource") { const p = parseComposedRunSourceKey(baseKey); return p ? p.axis : null; }
+    if (kind === "runsourceconc") { const p = parseComposedRunSourceConcededKey(baseKey); return p ? p.axis : null; }
+    if (kind === "wickettype") { const p = parseComposedWicketTypeKey(baseKey); return p ? p.axis : null; }
     // FC-2: a fielding composer row groups by its base TALLY (the compose editor's stat).
-    if (FC_KIND_DIM[kind]) { const p = parseComposedFieldingKey(key); return p ? p.tally : null; }
+    if (FC_KIND_DIM[kind]) { const p = parseComposedFieldingKey(baseKey); return p ? p.tally : null; }
     return null;
   }
 
@@ -1438,11 +1472,14 @@ export function createColumnsPicker({
     return opts.length ? opts[0] : null;
   }
 
-  /** True iff `key` is the OWN-discipline parametric composed column for `ns`. */
+  /** True iff `key` is the parametric composed column for `ns` — its own-discipline
+   * form, OR (Stage-3 Phase 1.4) a CROSS-wrapped one from the other discipline's D4
+   * family, unwrapped first exactly like composerKindForKey. */
   function isParamComposerKey(key, ns) {
-    const p = parseComposedParamKey(key);
+    const { baseKey, cross } = unwrapCrossKey(key);
+    const p = parseComposedParamKey(baseKey);
     if (!p) return false;
-    const desc = composedParamDescriptor(ns);
+    const desc = composedParamDescriptor(cross || ns);
     return !!desc && p.prefix === desc.prefix;
   }
 
@@ -1476,8 +1513,9 @@ export function createColumnsPicker({
    * from the param slot — no separate row state. "" for a mismatched/stray key. */
   function paramRowHTML(slot) {
     const ns = getDiscipline();
-    const desc = composedParamDescriptor(ns);
-    const parsed = parseComposedParamKey(slot.key);
+    const { baseKey, cross } = unwrapCrossKey(slot.key);
+    const desc = composedParamDescriptor(cross || ns);
+    const parsed = parseComposedParamKey(baseKey);
     if (!desc || !parsed || parsed.prefix !== desc.prefix) return "";
     const opKey = _PARAM_OPTOKEN_TO_KEY[parsed.opToken] || "gte";
     const isBt = parsed.opToken === "bt";
@@ -1486,7 +1524,7 @@ export function createColumnsPicker({
     const opts = OPERATORS.map(
       (o) => `<option value="${o.key}"${o.key === opKey ? " selected" : ""}>${escHtml(o.label)}</option>`
     ).join("");
-    return `<div class="cols-param-row" data-slot-id="${slot.id}" data-param-prefix="${desc.prefix}" data-param-min="${desc.min}">
+    return `<div class="cols-param-row" data-slot-id="${slot.id}" data-param-prefix="${desc.prefix}" data-param-min="${desc.min}"${cross ? ` data-param-cross="${escHtml(cross)}"` : ""}>
       <span class="cols-param-row__noun">${escHtml(desc.noun)}</span>
       <select class="select cols-param__op" data-role="param-op" aria-label="${escHtml(desc.noun)} operator">${opts}</select>
       <input type="number" class="input cols-param__val" data-role="param-v1" value="${v1}" min="${desc.min}" step="${desc.step}" aria-label="${escHtml(desc.noun)} value" />
@@ -1503,14 +1541,14 @@ export function createColumnsPicker({
    * "Choose…" option, value="", selected — no default ≥) AND the value input is BLANK
    * (placeholder = the base default). NO column exists yet — it is minted only once
    * BOTH an operator and a valid value are set (wireParamRows / tryCommit). */
-  function pendingParamRowHTML(id, ns) {
-    const desc = composedParamDescriptor(ns);
+  function pendingParamRowHTML(id, ns, cross) {
+    const desc = composedParamDescriptor(cross || ns);
     if (!desc) return "";
     // No `selected` on any real operator — the blank placeholder below carries it.
     const opts = OPERATORS.map(
       (o) => `<option value="${o.key}">${escHtml(o.label)}</option>`
     ).join("");
-    return `<div class="cols-param-row cols-param-row--pending" data-param-pending="${id}" data-param-prefix="${desc.prefix}" data-param-min="${desc.min}">
+    return `<div class="cols-param-row cols-param-row--pending" data-param-pending="${id}" data-param-prefix="${desc.prefix}" data-param-min="${desc.min}"${cross ? ` data-param-cross="${escHtml(cross)}"` : ""}>
       <span class="cols-param-row__noun">${escHtml(desc.noun)}</span>
       <select class="select cols-param__op" data-role="param-op" aria-label="${escHtml(desc.noun)} operator"><option value="" selected>Choose…</option>${opts}</select>
       <input type="number" class="input cols-param__val" data-role="param-v1" value="" placeholder="${escHtml(String(desc.default))}" min="${desc.min}" step="${desc.step}" aria-label="${escHtml(desc.noun)} value" />
@@ -1624,15 +1662,19 @@ export function createColumnsPicker({
    * card holding the stat/axis <select> + dimension inputs + Add/Save + Cancel. It is NOT
    * a persistent column row — on confirm it spawns one standalone chosen-column row per
    * ticked dimension (ADD) or swaps the edited row's key in place (EDIT), then closes.
-   * `editor` = inlineState.editor = { mode, kind, sel, ticks:Set<composedKey>, slotId }. */
+   * `editor` = inlineState.editor = { mode, kind, sel, ticks:Set<composedKey>, slotId,
+   * cross }. `cross` (Stage-3 Phase 1.4) is the OTHER discipline when this editor is
+   * composing a CROSS column — the effective ns for every pool/option lookup below is
+   * `editor.cross || ns` (own-discipline editors are unaffected: cross is null). */
   function composeEditorHTML(editor, ns, formats) {
-    const { kind, sel, ticks, mode } = editor;
+    const { kind, sel, ticks, mode, cross } = editor;
+    const effNs = cross || ns;
     const single = mode === "edit";
     const label = composerKindLabel(kind);
     // #35: axis-only composers (Runs by Source / Wicket Type) show NO stat/axis select —
     // count/% is the per-row toggle, not an editor choice. `sel` is still the count
     // variant (ADD) or the column's own preserved axis (EDIT); it just isn't offered.
-    const options = AXIS_ONLY_COMPOSER_KINDS.has(kind) ? [] : composerSelectOptions(kind, ns, formats);
+    const options = AXIS_ONLY_COMPOSER_KINDS.has(kind) ? [] : composerSelectOptions(kind, effNs, formats);
     const selectHTML = options.length
       ? `<select class="select cols-compose-editor__stat" data-role="compose-stat" aria-label="${escHtml(label)} stat">${options
           .map((o) => `<option value="${escHtml(o.value)}"${o.value === sel ? " selected" : ""}>${escHtml(o.label)}</option>`)
@@ -1648,7 +1690,7 @@ export function createColumnsPicker({
       // (wired later), not a fixed tick-box grid.
       bodyHTML = teamComposeBodyHTML();
     } else {
-      const body = composeEditorBody(kind, ns, formats, sel, ticks, single);
+      const body = composeEditorBody(kind, effNs, formats, sel, ticks, single);
       bodyHTML = body.empty
         ? `<div class="cols-compose-editor__empty">No options for the current format.</div>`
         : body.html;
@@ -1704,7 +1746,7 @@ export function createColumnsPicker({
       if (isParamComposerKey(s.key, ns)) rows.push(paramRowHTML(s));
       else rows.push(chosenColumnRowHTML(s, composerKindForKey(s.key)));
     }
-    for (const p of (inlineState && inlineState.pendingParams) || []) rows.push(pendingParamRowHTML(p.id, ns));
+    for (const p of (inlineState && inlineState.pendingParams) || []) rows.push(pendingParamRowHTML(p.id, ns, p.cross));
     // Compose-then-add: the transient ADD editor sits at the bottom of the list.
     if (editor && editor.mode === "add") rows.push(composeEditorHTML(editor, ns, formats));
     const body = rows.filter(Boolean).join("");
@@ -1767,15 +1809,38 @@ export function createColumnsPicker({
 
     let crossBasic = [];
     let crossDetailed = [];
+    // Stage-3 Phase 1.4 (2026-08-26): the cross-discipline composer entries the OTHER
+    // discipline's D3 enumerated families offer here — computed alongside crossBasic/
+    // crossDetailed below so both stay gated on the SAME `crossDiscipline && isPlainNs`
+    // condition (the matchup-mode hole this fix does NOT touch — matchup ns is not
+    // isPlainNs, so this block never runs there, matching the 1.4 reproduction).
+    const crossComposerItems = [];
     if (crossDiscipline && isPlainNs) {
       const other = OTHER_DISCIPLINE[ns];
       const otherBasicOrder = other === "bowling" ? BOWLING_BASIC_ORDER : BATTING_BASIC_ORDER;
       const otherDetailedOrder = other === "bowling" ? BOWLING_DETAILED_ORDER : BATTING_DETAILED_ORDER;
-      const crossSource = eligibleCrossMetrics(ns, formats).filter((m) => !HIDDEN_COLUMN_KEYS.has(m.key));
+      // 1.4(a): apply the SAME D3/D4 enumerated-family exclusions the own-discipline
+      // `core` list applies (BALL_RANGE_ENUMERATED_KEYS stays OUT of scope — the owner's
+      // ruling names the D3/D4 treatment specifically; see CROSS_D3_COMPOSER_KINDS above)
+      // — the 19 D3 keys (8 batting runs_*_pct + 5 bowling runs_conc_*_pct + 6 bowling
+      // wkt_*) and the 2 D4 keys (innings_score_ge / wicket_hauls_ge) no longer render as
+      // flat rows here; each family gets its OWN collapsed composer control below instead
+      // (mirroring COMPOSER_KIND_LABEL/composedParamDescriptor), so every column stays
+      // reachable exactly as the own-discipline dropdown already does.
+      const crossSource = eligibleCrossMetrics(ns, formats).filter(
+        (m) => !HIDDEN_COLUMN_KEYS.has(m.key) && !D3_ENUMERATED_HIDDEN_KEYS.has(m.key) && !D4_ENUMERATED_HIDDEN_KEYS.has(m.key)
+      );
       const crossBasicSrc = orderByKeys(crossSource.filter((m) => !isDetailed(m)), otherBasicOrder);
       const crossDetailedSrc = orderByKeys(crossSource.filter((m) => isDetailed(m)), otherDetailedOrder);
       crossBasic = crossBasicSrc.map((base) => ({ ...base, key: makeCrossKey(other, base.key) }));
       crossDetailed = crossDetailedSrc.map((base) => ({ ...base, key: makeCrossKey(other, base.key) }));
+      for (const kind of CROSS_D3_COMPOSER_KINDS[other] || []) {
+        if (composerAvailable(kind, other, formats)) {
+          crossComposerItems.push({ type: "composer", kind, label: COMPOSER_KIND_LABEL[kind], cross: other });
+        }
+      }
+      const crossDesc = composedParamDescriptor(other);
+      if (crossDesc) crossComposerItems.push({ type: "param", prefix: crossDesc.prefix, label: crossDesc.sectionLabel, cross: other });
     }
 
     const plainItems = (list) => list.map((m) => ({ type: "plain", key: m.key, label: metricDisplayLabel(m, formats) }));
@@ -1838,6 +1903,7 @@ export function createColumnsPicker({
     const crossSections = [
       ...section("Basic Stats", plainItems(crossBasic)),
       ...section("Detailed Stats", plainItems(crossDetailed)),
+      ...(crossComposerItems.length ? [{ name: "Composers", items: crossComposerItems }] : []),
     ];
 
     // FC-2: fielding composer entries (Phase / Over Range / Innings / Dismissed
@@ -2012,8 +2078,8 @@ export function createColumnsPicker({
           it.type === "plain"
             ? () => addPlainColumn(it.key)
             : it.type === "composer"
-            ? () => openComposeEditor(it.kind)
-            : () => addParamRow(),
+            ? () => openComposeEditor(it.kind, it.cross)
+            : () => addParamRow(it.cross),
       })),
     }));
   }
@@ -2028,19 +2094,24 @@ export function createColumnsPicker({
   /** Open the TRANSIENT compose editor for `kind` (owner ruling R4-A "compose then
    * add"): an ADD-mode editor pre-set to the first stat/axis with NO dimensions ticked.
    * Replaces any editor already open (one at a time). The columns are minted only on
-   * confirm (compose-confirm), one standalone row per ticked dimension. */
-  function openComposeEditor(kind) {
+   * confirm (compose-confirm), one standalone row per ticked dimension. `cross` (Stage-3
+   * Phase 1.4) is the OTHER discipline when this composer was opened from the cross
+   * dropdown's family control — null for the own-discipline composers (unchanged). The
+   * editor runs the SAME composer machinery either way; only `cross` threads through to
+   * pick the right ns for the pool functions and to wrap/unwrap minted keys. */
+  function openComposeEditor(kind, cross) {
     if (!inlineState) return;
-    const sel = defaultComposerSel(kind, getDiscipline(), getFormats());
+    const sel = defaultComposerSel(kind, cross || getDiscipline(), getFormats());
     if (sel == null) return;
-    inlineState.editor = { mode: "add", kind, sel, ticks: new Set(), slotId: null };
+    inlineState.editor = { mode: "add", kind, sel, ticks: new Set(), slotId: null, cross: cross || null };
     rerenderInline();
   }
   /** Materialise a BLANK pending parametric row (owner ruling: parametric composers start
-   * empty; the column is minted only once a valid operator + value is entered). */
-  function addParamRow() {
+   * empty; the column is minted only once a valid operator + value is entered). `cross`
+   * (Stage-3 Phase 1.4) — see openComposeEditor above. */
+  function addParamRow(cross) {
     if (!inlineState) return;
-    inlineState.pendingParams.push({ id: nextPendingId() });
+    inlineState.pendingParams.push({ id: nextPendingId(), cross: cross || null });
     rerenderInline();
   }
 
@@ -2089,7 +2160,12 @@ export function createColumnsPicker({
         const kind = composerKindForKey(slot.key);
         if (!kind) return;
         const sel = composerSelForKey(kind, slot.key);
-        inlineState.editor = { mode: "edit", kind, sel, ticks: new Set([slot.key]), slotId: id };
+        // Stage-3 Phase 1.4: unwrap a cross-composed slot key so `ticks` holds the BARE
+        // composed key (matching composerValueRows' output for comparison in the
+        // single-select render), with `cross` carried separately on the editor so
+        // confirm re-wraps it on Save.
+        const { baseKey, cross } = unwrapCrossKey(slot.key);
+        inlineState.editor = { mode: "edit", kind, sel, ticks: new Set([baseKey]), slotId: id, cross };
         rerenderInline();
       });
     });
@@ -2102,7 +2178,7 @@ export function createColumnsPicker({
     const statEl = rootEl.querySelector('[data-role="compose-stat"]');
     if (statEl)
       statEl.addEventListener("change", () => {
-        const ns = getDiscipline();
+        const ns = editor.cross || getDiscipline();
         const formats = getFormats();
         // FC-2 range dims (over/pos): composerValueRows can't remap user-defined ranges,
         // so swap the base tally on each ticked key structurally (range preserved).
@@ -2268,15 +2344,23 @@ export function createColumnsPicker({
       confirmEl.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        const ns = getDiscipline();
+        // Stage-3 Phase 1.4: `editor.cross` (the OTHER discipline) is set when this
+        // editor was opened from the cross dropdown's family control — the pool
+        // functions below run against it, and every minted key gets wrapped in the
+        // SAME x__ scheme the plain cross columns already use before landing in the
+        // board's own slot list (own-discipline editors are unaffected: cross is null,
+        // wrap is a no-op).
+        const ns = editor.cross || getDiscipline();
         const formats = getFormats();
+        const wrap = (k) => (editor.cross ? makeCrossKey(editor.cross, k) : k);
         if (editor.mode === "edit") {
           const key = [...editor.ticks][0];
           if (key) {
+            const finalKey = wrap(key);
             const slots = (getSlots() || []).slice();
             const i = slots.findIndex((s) => s.id === editor.slotId);
-            if (i >= 0 && slots[i].key !== key) {
-              slots[i] = { ...slots[i], key };
+            if (i >= 0 && slots[i].key !== finalKey) {
+              slots[i] = { ...slots[i], key: finalKey };
               applySlots(slots);
             }
           }
@@ -2296,8 +2380,11 @@ export function createColumnsPicker({
             // can't be enumerated into eligibleColumnKeys ahead of time — see
             // metrics.registerComposed*Keys). Registry picked BY KIND via
             // SEARCH_COMPOSER_META.register (Team/Opposition/Stage each keep their own).
+            // Not reachable with `cross` set today (those kinds aren't in
+            // CROSS_D3_COMPOSER_KINDS), so registering the bare (unwrapped) key is
+            // correct either way.
             if (SEARCH_COMPOSER_META[editor.kind]) SEARCH_COMPOSER_META[editor.kind].register(keys);
-            applySlots([...(getSlots() || []), ...keys.map((k) => makeSlot(k))]);
+            applySlots([...(getSlots() || []), ...keys.map((k) => makeSlot(wrap(k)))]);
           }
         }
         inlineState.editor = null;
@@ -2323,6 +2410,10 @@ export function createColumnsPicker({
       const id = row.dataset.paramPending;
       const prefix = row.dataset.paramPrefix;
       const min = Number(row.dataset.paramMin) || 0;
+      // Stage-3 Phase 1.4: a cross-composed pending row carries the OTHER discipline in
+      // data-param-cross (set by pendingParamRowHTML) — wrap the minted key in the SAME
+      // x__ scheme the plain cross columns already use. Absent for own-discipline rows.
+      const cross = row.dataset.paramCross || null;
       const opEl = row.querySelector('[data-role="param-op"]');
       const v1El = row.querySelector('[data-role="param-v1"]');
       const v2El = row.querySelector('[data-role="param-v2"]');
@@ -2347,7 +2438,7 @@ export function createColumnsPicker({
           values = [v1];
         }
         const key = makeComposedParamKey(prefix, opToken, values);
-        applySlots([...(getSlots() || []), makeSlot(key)]);
+        applySlots([...(getSlots() || []), makeSlot(cross ? makeCrossKey(cross, key) : key)]);
         if (inlineState) inlineState.pendingParams = inlineState.pendingParams.filter((p) => p.id !== id);
         rerenderInline();
       };
@@ -2375,6 +2466,9 @@ export function createColumnsPicker({
       const id = row.dataset.slotId;
       const prefix = row.dataset.paramPrefix;
       const min = Number(row.dataset.paramMin) || 0;
+      // Stage-3 Phase 1.4: see the pending-row note above — a live cross-composed row
+      // re-wraps its minted key the same way on every edit.
+      const cross = row.dataset.paramCross || null;
       const opEl = row.querySelector('[data-role="param-op"]');
       const v1El = row.querySelector('[data-role="param-v1"]');
       const v2El = row.querySelector('[data-role="param-v2"]');
@@ -2392,7 +2486,7 @@ export function createColumnsPicker({
         } else {
           values = [v1];
         }
-        const key = makeComposedParamKey(prefix, opToken, values);
+        const key = cross ? makeCrossKey(cross, makeComposedParamKey(prefix, opToken, values)) : makeComposedParamKey(prefix, opToken, values);
         const slots = (getSlots() || []).slice();
         const i = slots.findIndex((s) => s.id === id);
         if (i < 0) return;
@@ -2426,7 +2520,7 @@ export function createColumnsPicker({
       slots: slotsForNs().map((s) => `${s.id}:${s.key}`),
       // The transient compose editor's identity (open / for-what / which row) — NOT its
       // staged ticks: ticks toggle WITHOUT re-rendering, so they must not force a rebuild.
-      editor: ed ? `${ed.mode}:${ed.kind}:${ed.sel}:${ed.slotId || ""}` : null,
+      editor: ed ? `${ed.mode}:${ed.kind}:${ed.sel}:${ed.slotId || ""}:${ed.cross || ""}` : null,
       pending: ((inlineState && inlineState.pendingParams) || []).map((p) => p.id),
     });
   }

@@ -5248,6 +5248,25 @@ export function isParamComposedColumnKey(key, discipline) {
   return !!parsed && COMPOSED_PARAM_SPECS[parsed.prefix].discipline === discipline;
 }
 
+/** True iff `key` is a CROSS-discipline composed parametric column key
+ * (`x__<other>__isr__…` / `x__<other>__wh__…`) valid for `discipline` — i.e. its
+ * cross-key wrapper names `discipline`'s sibling AND the inner key is a valid
+ * OWN-discipline parametric composed key for that sibling. Stage-3 Phase 1.4: the
+ * cross-discipline columns dropdown now offers the Innings Score Range / Wicket
+ * Haul composer (mirroring the D3 run-source/wicket-type families) wrapped in the
+ * SAME x__ scheme eligibleCrossMetrics' plain columns already use, so a chosen
+ * cross parametric column needs the SAME "keep alive structurally" treatment as
+ * its own-discipline sibling (isParamComposedColumnKey above) — these are used
+ * ONLY at the column-prune sites (state.pruneIneligibleState, table.
+ * pruneInvalidColumns), never in query building. */
+export function isCrossParamComposedColumnKey(key, discipline) {
+  const other = OTHER_DISCIPLINE[discipline];
+  if (!other) return false;
+  const parsed = parseCrossKey(key);
+  if (!parsed || parsed.discipline !== other) return false;
+  return isParamComposedColumnKey(parsed.baseKey, other);
+}
+
 /** Builder descriptor for the leaderboard picker's parametric composer (D4): the
  * section label + the numeric input's default / min / step / unit, derived from the
  * base metric's `param` so there is ONE source of truth. Returns null outside plain
