@@ -1147,3 +1147,11 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       reachable, one design language. This is the fix for the owner's reproduced "% Runs in 1s/2s/3s as
       separate rows, no matchup" sighting (root cause: columnsPicker.js `crossSource` never applied the
       D3/D4 enumerated-hidden-keys exclusions the own-discipline list applies). Display-only.
+    - **Matchup (Vs) mode must ALSO show tidy families — "I don't want loose flat rows anywhere"** (owner,
+      2026-08-26). In matchup mode the columns dropdown currently renders "% Runs in…" and the wicket-type
+      Dismissals section as loose flat rows (a different underpinning from the plain/cross families — matchup
+      metrics are statically catalogued under matchup_batting/matchup_bowling, not the rs__/wt__ composed-key
+      scheme). Build a tidy-family presentation over the matchup metrics THAT EXIST — display-only,
+      buildMatchupQuery untouched, no invented metrics. NOTE (to confirm, not yet ruled): matchup mode appears
+      to register FEWER variants than plain mode (e.g. 3 of 8 % Runs sources); the tidy family shows exactly
+      what exists — whether to ALSO add the missing variants (a separate numbers/data question) is NOT decided.
