@@ -20,6 +20,8 @@ import { query } from "../db.js";
 import {
   buildScopeClausesTagged,
   whereWithPinExemption,
+  whereWithLanes,
+  alwaysClause,
   buildMatchContextClauses,
   matchContextJoinSql,
 } from "../filters.js";
@@ -140,7 +142,14 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   // byte-identical to before this change.
   const wantsMatchContext = matchContextActive(state);
   if (wantsMatchContext) {
-    for (const c of buildMatchContextClauses(state, teamCol)) whereClauses.push(c);
+    // Chunk 5 Phase 2 Wave A parity (Stage-3 Phase 2.4): match-context clauses
+    // select WHICH matches are measured (like opposition/event/venue), so they
+    // are lane "scope" and join the scope-OR disjunction under "Match any" —
+    // EXACTLY as table.js's buildQuery tags them. Tagging is SQL-invisible on the
+    // AND path (alwaysClause sets bypassable:false, whereWithPinExemption reads
+    // only .sql/.bypassable), so with scope-lane "Match all" this is byte-identical
+    // to the bare-string push it replaces.
+    for (const c of buildMatchContextClauses(state, teamCol)) whereClauses.push(alwaysClause(c, "scope"));
   }
 
   // Pinned players: the Graph Builder must treat a PIN exactly as the Stats table
@@ -161,7 +170,30 @@ export async function fetchSelectedPlayerMetrics(state, playerIds, metricKeys) {
   // With no pins the helper returns `clauses.join(" AND ")` — byte-identical to
   // what this line emitted before.
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
-  const whereSql = whereWithPinExemption(whereClauses, idCol, pins);
+  // Scope-lane "Match all/any" parity (Stage-3 Phase 2.4): the Stats table's
+  // buildQuery routes its scope WHERE through the SAME guard — when BOTH lanes are
+  // "Match all" (the default) it runs whereWithPinExemption VERBATIM (byte-identical
+  // to the single line this replaces), otherwise it hands the SAME tagged clause
+  // list to whereWithLanes, which under scope-OR emits `core AND (scope OR …) AND
+  // [pin-wrapped remainder]`. Before this the graph ALWAYS ran the plain-AND
+  // whereWithPinExemption, so a charted player read a different number from the
+  // Stats table whenever the user set "Match any" (the table OR-ed the scope lane;
+  // the graph AND-ed it). Now the graph combines the lanes and the pin exemption
+  // EXACTLY as buildQuery does, so a charted value equals the table value in both
+  // modes. The always-applies charted-roster clause pushed above is UNTAGGED, so
+  // whereWithLanes places it in the always-AND remainder — it never joins the scope
+  // disjunction and is never widened by the pin exemption (a pin not on the graph
+  // still cannot appear), identical to buildQuery's treatment of always-AND clauses.
+  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
+  const whereSql =
+    filterMatch.scope === "AND" && filterMatch.player === "AND"
+      ? whereWithPinExemption(whereClauses, idCol, pins)
+      : whereWithLanes(whereClauses, {
+          idColumn: idCol,
+          pins,
+          scopeOp: filterMatch.scope,
+          playerOp: filterMatch.player,
+        });
 
   // Fielding/Impact CTEs + LEFT JOINs (mirrors buildQuery's FROM assembly): each
   // CTE is one row per player joined on the id column, so it never multiplies
