@@ -791,6 +791,12 @@ export function mountSearchMultiSelect(hostEl, {
    * pinned selection) — renderList draws a hairline under the last of them. */
   let pinnedRowCount = 0;
 
+  /** The value currently showing the pick-flash row-wash (decision 77.6), and
+   * the timer that clears it — see toggle() for why this is closure state
+   * consulted by renderList's template rather than a post-render DOM class. */
+  let flashValue = null;
+  let flashTimer = null;
+
   function applyFilter(term) {
     const t = term.trim().toLowerCase();
     const match = (o) => o.label.toLowerCase().includes(t);
@@ -859,6 +865,7 @@ export function mountSearchMultiSelect(hostEl, {
         const active = i === activeIndex;
         const rowDisabled = isRowDisabled(o);
         const pinEdge = pinnedRowCount > 0 && i === pinnedRowCount - 1;
+        const isFlash = flashValue !== null && o.value === flashValue;
         let header = "";
         const grouped = i >= pinnedRowCount;
         if (grouped && o.group && o.group !== prevGroup) {
@@ -867,7 +874,7 @@ export function mountSearchMultiSelect(hostEl, {
         if (grouped) prevGroup = o.group;
         return (
           header +
-          `<div id="${uid}-opt-${i}" class="search-select__option search-select__option--multi${active ? " is-active" : ""}${isSel ? " is-selected" : ""}${o.missing ? " is-missing" : ""}${rowDisabled ? " is-disabled" : ""}${pinEdge ? " is-pin-last" : ""}"` +
+          `<div id="${uid}-opt-${i}" class="search-select__option search-select__option--multi${active ? " is-active" : ""}${isSel ? " is-selected" : ""}${o.missing ? " is-missing" : ""}${rowDisabled ? " is-disabled" : ""}${pinEdge ? " is-pin-last" : ""}${isFlash ? " is-pick-flash" : ""}"` +
           ` role="option" aria-selected="${isSel}" data-idx="${i}">${rowInnerHTML(o)}</div>`
         );
       })
@@ -917,6 +924,7 @@ export function mountSearchMultiSelect(hostEl, {
   function toggle(idx) {
     const o = filtered[idx];
     if (!o || isRowDisabled(o)) return;
+    const justPicked = !selected.has(o.value); // turning this option ON, not OFF
     if (selected.has(o.value)) selected.delete(o.value);
     else selected.add(o.value);
     // Re-render so cap/floor-driven disabled states, the note, and the summary
@@ -928,6 +936,32 @@ export function mountSearchMultiSelect(hostEl, {
       // real option, so it must not stay behind un-ticked and re-tickable.
       applyFilter(filterEl.value);
       if (activeIndex >= filtered.length) activeIndex = filtered.length - 1;
+    }
+    // Brief row-wash flash as pick confirmation (decision 77.6, mock Set 4
+    // Option A "row-wash") — only on a PICK (option turning ON), never on
+    // un-tick. Set as CLOSURE STATE (flashValue) that renderList's row
+    // template consults on every render, rather than a one-off post-render DOM
+    // class add: this widget's onChange fires synchronously into caller code
+    // (the scope-filter store) that echoes the new selection straight back via
+    // this same widget's setValues()/setOptions(), which call renderList()
+    // again 1-2 more times in the SAME tick — a DOM-mutation approach would
+    // have its class wiped by that echo before the browser ever paints it.
+    // Driving the class from renderList's template instead means every one of
+    // those re-renders reapplies it, so whichever render is last before paint
+    // still carries it. flashTimer clears flashValue so a later, UNRELATED
+    // re-render (e.g. typing in the filter box) doesn't keep re-flashing it.
+    if (justPicked) {
+      flashValue = o.value;
+      clearTimeout(flashTimer);
+      flashTimer = setTimeout(() => {
+        flashValue = null;
+      }, 550); // > the 0.5s CSS animation, so a stray extra render can't cut it short
+    } else if (flashValue === o.value) {
+      // Un-ticking the row within its own still-running flash window (a quick
+      // pick-then-untick) cancels the flash outright — the pick it was
+      // confirming no longer holds, so there is nothing left to confirm.
+      flashValue = null;
+      clearTimeout(flashTimer);
     }
     renderList();
     onChange(selectedValues());

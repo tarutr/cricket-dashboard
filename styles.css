@@ -3613,6 +3613,20 @@ a { color: var(--color-accent); }
   border-bottom: 1px solid var(--color-line);
 }
 
+/* PICK-FLASH (decision 77.6, approved mock Set 4 Option A "row-wash"): a brief
+   background wash on the row just PICKED (turned on), as transient confirmation
+   feedback — distinct from the persistent .is-selected tick above, which never
+   changes here. Added/removed by mountSearchMultiSelect's toggle() only when an
+   option is turned ON, never on un-tick. NOT a checkbox-pop (owner rejected
+   that option) — the tick itself is untouched by this rule. */
+@keyframes pickFlashBg {
+  0% { background: color-mix(in srgb, var(--color-accent) 35%, transparent); }
+  100% { background: transparent; }
+}
+.search-select__option--multi.is-pick-flash {
+  animation: pickFlashBg 0.5s ease-out;
+}
+
 /* Trailing games-count meta on Team / Event / Venue rows (R2-2b-ii). The multi
    row is flex-start (box → label), so push the meta to the trailing edge; muted
    + non-wrapping so it reads as an annotation, not part of the name. */
