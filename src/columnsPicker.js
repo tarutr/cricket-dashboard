@@ -1139,6 +1139,12 @@ export function createColumnsPicker({
     city: "City",
     season: "Season",
     runsource: "Runs by Source", runsourceconc: "Runs Conceded by Source", wickettype: "Wicket Type",
+    // Stage-3 M1 (decisions 74/75): the matchup-mode family controls. The % Runs
+    // families keep the owner's own wording ("% Runs in…" / "% Runs Conceded in…") —
+    // matchup carries the percent variant only (no count sibling), so the plain
+    // "Runs by Source" wording (which implies a Count/% choice) would misread; the
+    // dismissals family reuses the plain "Wicket Type" label verbatim.
+    m_runsource: "% Runs in…", m_runsourceconc: "% Runs Conceded in…", m_wickettype: "Wicket Type",
   };
   // The composers whose value control is a data-driven SEARCH picker rather than a
   // fixed tick-box list (their `ticks` ARE the composed column keys, like the fielding
@@ -1196,7 +1202,67 @@ export function createColumnsPicker({
   // variant on ADD and is preserved silently on EDIT (composerSelForKey), while the
   // per-row count/% control does the switching. Every other composer keeps its real
   // stat select (base metric for Phase/Ball/Innings, base tally for the fc_ family).
-  const AXIS_ONLY_COMPOSER_KINDS = new Set(["runsource", "runsourceconc", "wickettype"]);
+  const AXIS_ONLY_COMPOSER_KINDS = new Set([
+    "runsource", "runsourceconc", "wickettype",
+    // Stage-3 M1: the matchup family kinds are axis-less too — matchup carries a
+    // single variant of each metric (no Count/% sibling), so their compose editor
+    // renders NO stat/axis <select>, just the tick list.
+    "m_runsource", "m_runsourceconc", "m_wickettype",
+  ]);
+
+  // ── Matchup-mode family controls (Stage-3 M1, decisions 74/75) ────────────────
+  // Owner: "I don't want loose flat rows anywhere." In matchup (Vs) mode the columns
+  // dropdown used to render the "% Runs in…" percents and the wicket-type Dismissals
+  // counts as LOOSE FLAT ROWS. These three kinds collapse each enumerated family into
+  // ONE family control + variant picker, mirroring the plain/cross Runs-by-Source &
+  // Wicket-Type composers so matchup reads in the same design language.
+  //
+  // CRUCIAL — these are a pure PRESENTATION adapter over the STATIC matchup catalogue,
+  // NOT the rs__/wt__ composed-key scheme. Each family's tick rows carry the REAL
+  // catalogued matchup metric key (runs_4s_run_pct, dis_caught, …), so confirming a
+  // tick appends exactly the catalogued column the flat checkbox used to — makeSlot on
+  // the identical key. buildMatchupQuery is UNTOUCHED and the numbers cannot move.
+  // ADD-only (no edit pencil), exactly like the Team/Opposition composers.
+  //
+  // The families list only the variants that EXIST in the matchup catalogue today:
+  // batting % Runs = all 8 (M1 Part A added the 5 missing); bowling % Runs Conceded =
+  // 4s/6s only (the 3 non-boundary/wides/no-balls variants are pipeline-gated and are
+  // NOT catalogued under matchup_bowling yet, so they simply don't appear). Dismissals
+  // are harvested by section, so both boards' six kinds come through automatically.
+  const MATCHUP_RUNSOURCE_KEYS = [
+    "runs_1s_pct", "runs_2s_pct", "runs_3s_pct",
+    "runs_4s_run_pct", "runs_4s_boundary_pct", "runs_5s_pct",
+    "runs_6s_run_pct", "runs_6s_boundary_pct",
+  ];
+  const MATCHUP_RUNSOURCECONC_KEYS = ["runs_conc_4s_pct", "runs_conc_6s_pct"];
+  const MATCHUP_FAMILY_KINDS = ["m_runsource", "m_runsourceconc", "m_wickettype"];
+  // ns/keys gate the two % families to their board; the dismissals family harvests by
+  // section (works on either matchup ns). matchupFamilyRows filters to what's eligible.
+  const MATCHUP_FAMILY_SPEC = {
+    m_runsource: { ns: "matchup_batting", keys: MATCHUP_RUNSOURCE_KEYS },
+    m_runsourceconc: { ns: "matchup_bowling", keys: MATCHUP_RUNSOURCECONC_KEYS },
+    m_wickettype: { section: "dismissal" },
+  };
+  /** The tick rows for a matchup family kind: the REAL catalogued matchup metrics that
+   * (a) belong to the family and (b) are eligible for this ns/format, labelled from the
+   * metric def so the family reads identically to the flat rows it replaces. Ordered by
+   * MATCHUP_FAMILY_SPEC.keys for the % families; catalogue order (== section order) for
+   * dismissals. Empty ⇒ the family isn't offered (e.g. the % Runs family on the wrong
+   * board). `sel` is unused (axis-less). */
+  function matchupFamilyRows(kind, ns, formats) {
+    const spec = MATCHUP_FAMILY_SPEC[kind];
+    if (!spec) return [];
+    const pool = eligibleMetrics(ns, formats);
+    let metrics;
+    if (spec.section) {
+      metrics = pool.filter((m) => m.section === spec.section);
+    } else {
+      if (ns !== spec.ns) return [];
+      const rank = new Map(spec.keys.map((k, i) => [k, i]));
+      metrics = pool.filter((m) => rank.has(m.key)).sort((a, b) => rank.get(a.key) - rank.get(b.key));
+    }
+    return metrics.map((m) => ({ label: metricDisplayLabel(m, formats), key: m.key, rare: false }));
+  }
   // opToken (ge/le/eq/bt) → the operator <select>'s value (gte/lte/eq/between).
   const _PARAM_OPTOKEN_TO_KEY = Object.fromEntries(
     Object.entries(COMPOSED_PARAM_OP_TOKEN).map(([k, v]) => [v, k])
@@ -1386,6 +1452,9 @@ export function createColumnsPicker({
    * [{ label, key, rare }]. `key` is the composed (or, for Boundaries, catalogued)
    * column key ticking that value produces. rare = the batting-Dismissals rare split. */
   function composerValueRows(kind, ns, formats, sel) {
+    // Stage-3 M1: matchup family kinds — tick rows are the REAL catalogued metric keys
+    // (no composed-key scheme), so a tick adds exactly that catalogued column.
+    if (MATCHUP_FAMILY_SPEC[kind]) return matchupFamilyRows(kind, ns, formats);
     if (kind === "phase") {
       return composedPhaseTokensForFormats(formats).map((ph) => ({ label: COMPOSED_PHASE_LABEL[ph], key: makeComposedPhaseKey(ph, sel), rare: false }));
     }
@@ -1441,6 +1510,9 @@ export function createColumnsPicker({
   /** True iff a composer `kind` is offerable for the current ns/format (≥1 metric/axis
    * option AND ≥1 tick-box value for the first option) — the add-menu gate. */
   function composerAvailable(kind, ns, formats) {
+    // Stage-3 M1: a matchup family is offered iff it has ≥1 eligible catalogued variant
+    // for this ns (matchupFamilyRows self-gates the % families to their board).
+    if (MATCHUP_FAMILY_SPEC[kind]) return matchupFamilyRows(kind, ns, formats).length > 0;
     // FC-2 fielding composers: Bowler Style is gated on the fielding.bowling_group
     // column's presence (FC-1b pipeline data — hidden until it lands); the range dims
     // (over/pos) are always offerable (their editor defines values); the finite dims
@@ -1466,6 +1538,9 @@ export function createColumnsPicker({
   /** The default stat/axis selection for a freshly-opened ADD compose editor of
    * `kind`: the first option. null when the kind is unavailable for this ns/format. */
   function defaultComposerSel(kind, ns, formats) {
+    // Stage-3 M1: matchup families are axis-less — `sel` is inert (composerValueRows
+    // ignores it) but must be NON-null so openComposeEditor proceeds (it bails on null).
+    if (MATCHUP_FAMILY_SPEC[kind]) return matchupFamilyRows(kind, ns, formats).length ? "matchup" : null;
     // FC-2: a fielding composer opens on the first base tally ("catches").
     if (FC_KIND_DIM[kind]) return FC_TALLY_OPTIONS[0].value;
     const opts = composerSelectOptions(kind, ns, formats).map((o) => o.value);
@@ -1780,12 +1855,19 @@ export function createColumnsPicker({
     const isDetailed = (m) => m.kind === "rate" || m.kind === "percent" || DETAILED_TOTAL_KEYS.has(m.key);
     const isPlainNs = ns === "batting" || ns === "bowling";
     const hiddenAlts = isPlainNs ? toggleAltKeys(ns) : new Set();
+    // Stage-3 M1: on a MATCHUP ns, the "% Runs in…" / "% Runs Conceded in…" percents
+    // move out of the flat "Detailed Stats" list into their family control below — hide
+    // them from `core` so they don't render twice. (The dismissal counts are already
+    // section:"dismissal", excluded from core; their flat "Dismissals" section is dropped
+    // below in favour of the Wicket Type family control.)
+    const matchupFamilyHiddenKeys = isPlainNs
+      ? new Set()
+      : new Set(MATCHUP_FAMILY_KINDS.flatMap((k) => matchupFamilyRows(k, ns, formats).map((r) => r.key)));
 
     const impact = all.filter(
       (m) => m.section === "impact" && !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key)) && !hiddenAlts.has(m.key)
     );
     const fielding = all.filter((m) => m.section === "fielding" && !hiddenAlts.has(m.key));
-    const dismissal = all.filter((m) => m.section === "dismissal");
     const matchesMetric = isPlainNs ? all.find((m) => m.key === "matches") || null : null;
     const core = all.filter(
       (m) =>
@@ -1798,6 +1880,7 @@ export function createColumnsPicker({
         !(isPlainNs && BALL_RANGE_ENUMERATED_KEYS.has(m.key)) &&
         !(isPlainNs && D3_ENUMERATED_HIDDEN_KEYS.has(m.key)) &&
         !(isPlainNs && D4_ENUMERATED_HIDDEN_KEYS.has(m.key)) &&
+        !matchupFamilyHiddenKeys.has(m.key) &&
         !hiddenAlts.has(m.key)
     );
     const basicOrder = bucket === "bowling" ? BOWLING_BASIC_ORDER : BATTING_BASIC_ORDER;
@@ -1856,6 +1939,18 @@ export function createColumnsPicker({
       const desc = composedParamDescriptor(ns);
       if (desc) composerItems.push({ type: "param", prefix: desc.prefix, label: desc.sectionLabel });
     }
+    // Stage-3 M1: the matchup-mode family controls (non-plain ns only) — the % Runs /
+    // % Runs Conceded / Wicket Type families collapsed into ONE composer control each,
+    // reusing the SAME compose-editor machinery as the plain composers. Each is offered
+    // iff it has ≥1 eligible catalogued variant (matchupFamilyRows self-gates the two %
+    // families to their own board). Composers is empty on a matchup ns, so these fill
+    // its own "Composers" section below (never both — the guards are mutually exclusive).
+    const matchupComposerItems = [];
+    if (!isPlainNs) {
+      for (const kind of MATCHUP_FAMILY_KINDS) {
+        if (composerAvailable(kind, ns, formats)) matchupComposerItems.push({ type: "composer", kind, label: composerKindLabel(kind) });
+      }
+    }
 
     // Wave D — D1: the player-profile attribute columns (Playing role / Detailed
     // role / Batting hand / Bowling style / Bowling hand) as a "Player Profile"
@@ -1896,9 +1991,13 @@ export function createColumnsPicker({
     const ownSections = [
       ...section("Basic Stats", basicWithBpos),
       ...section("Detailed Stats", plainItems(ownDetailed)),
-      ...(isPlainNs ? [] : section("Dismissals", plainItems(dismissal))),
+      // Stage-3 M1: matchup mode no longer renders a flat "Dismissals" section — the
+      // wicket-type counts are reachable through the "Wicket Type" family control in
+      // the matchup Composers section below (no loose flat rows). Plain ns never had a
+      // flat Dismissals section here (its Wicket Type composer owns them).
       ...section("Player Profile", profileItems),
       ...(composerItems.length ? [{ name: "Composers", items: composerItems }] : []),
+      ...(matchupComposerItems.length ? [{ name: "Composers", items: matchupComposerItems }] : []),
     ];
     const crossSections = [
       ...section("Basic Stats", plainItems(crossBasic)),

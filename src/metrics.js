@@ -2130,6 +2130,70 @@ const MATCHUP_BATTING_METRICS = [
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
   },
+  // % Runs in 4s (run) / 5s / 6s (run) / 4s (boundary) / 6s (boundary)
+  // (decision 75, Matchup Vs expansion): the five remaining "% Runs in…" sources,
+  // completing the batting family against a Vs bucket. Each mirrors its plain
+  // BATTING_METRICS sibling BYTE-FOR-BYTE (same key / label / shortLabel /
+  // sqlExpression / kind), with only discipline→matchup_batting + source→matchup
+  // swapped — exactly as the runs_1s/2s/3s_pct trio above already does. All source
+  // columns (nb_fours, fives, nb_sixes, fours_hit, sixes_hit, runs) are carried by
+  // the matchup_batting view (computability audit confirmed). Descriptive style
+  // split, higherIsBetter null, denominator NULLIF-guarded.
+  {
+    key: "runs_4s_run_pct",
+    label: "% Runs in 4s (run)",
+    shortLabel: "4s-run%",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "(4 * SUM(nb_fours)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_5s_pct",
+    label: "% Runs in 5s",
+    shortLabel: "5s Run%",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "(5 * SUM(fives)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_6s_run_pct",
+    label: "% Runs in 6s (run)",
+    shortLabel: "6s-run%",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "(6 * SUM(nb_sixes)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_4s_boundary_pct",
+    label: "% Runs in 4s (boundary)",
+    shortLabel: "4s-bdry%",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "(4 * SUM(fours_hit)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_6s_boundary_pct",
+    label: "% Runs in 6s (boundary)",
+    shortLabel: "6s-bdry%",
+    discipline: "matchup_batting",
+    source: "matchup",
+    sqlExpression: "(6 * SUM(sixes_hit)) * 100.0 / NULLIF(SUM(runs), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
   {
     key: "balls_per_four",
     label: "Balls per Four",
@@ -2393,6 +2457,38 @@ const MATCHUP_BOWLING_METRICS = [
     source: "matchup",
     sqlExpression: "(4 * SUM(fours_conceded) + 6 * SUM(sixes_conceded)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
     higherIsBetter: false, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  // % Runs Conceded in 4s / 6s (decision 75, Matchup Vs expansion): the two
+  // buildable-now members of the "% Runs Conceded in…" family against a Vs bucket.
+  // Each mirrors its plain BOWLING_METRICS sibling BYTE-FOR-BYTE (key / label /
+  // shortLabel / sqlExpression / kind), with only discipline→matchup_bowling +
+  // source→matchup swapped. Source columns fours_conceded / sixes_conceded /
+  // runs_conceded are all carried by the matchup_bowling view (computability audit
+  // confirmed). The three remaining plain siblings (non-boundary / wides / no-balls)
+  // are pipeline-gated (matchup_bowling lacks wides_runs / noball_runs) and are NOT
+  // added here — they wait for the export_parquet.py add + data re-run. Descriptive
+  // composition split, higherIsBetter null, denominator NULLIF-guarded.
+  {
+    key: "runs_conc_4s_pct",
+    label: "% Runs Conceded in 4s",
+    shortLabel: "4s Con%",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "(4 * SUM(fours_conceded)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_conc_6s_pct",
+    label: "% Runs Conceded in 6s",
+    shortLabel: "6s Con%",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "(6 * SUM(sixes_conceded)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
+    higherIsBetter: null, format: "pct1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
   },
