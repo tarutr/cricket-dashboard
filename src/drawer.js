@@ -245,6 +245,37 @@ const singletonLane = (key) => (PLAYER_LANE_SINGLETONS.has(key) ? "player" : "sc
 // moved into src/paletteGroups.js with the taxonomy builder itself: T-F3,
 // popup-tab2-build-plan.md. See that file for the full note.)
 
+// #26 (audit3 §c, "Escape strands the composer/filter value list"): shared
+// capture-phase document Escape guard for this file's searchSelect.js panels
+// (the six mountSearchSelect calls below — Role/Detailed role/Batting hand/
+// Bowling style/Bowling hand/Matchup Vs). Mirrors columnsPicker.js's
+// onSearchPickerEscape and addPalette.js's own document Escape handler: once
+// the user clicks a row (moving focus off the widget's own filter box),
+// Escape skips searchSelect.js's onFilterKeydown entirely and falls straight
+// through to the Filters popup's own document-level Escape handler (main.js),
+// which hides the popup but leaves this portaled panel floating over the
+// table. Guards on the toggle's OWN aria-expanded (no isOpen getter on the
+// handle) so it only acts — and only stops the popup's handler — while the
+// panel is actually open; a second Escape still closes the popup as normal.
+// Every one of these six pickers is mounted ONCE here at drawer boot and
+// lives for the app's lifetime (mountFilterDrawer itself is called once from
+// main.js's boot() — never re-rendered/destroyed), so — unlike columnsPicker's
+// transient composer editor — this listener needs no re-mount teardown: it is
+// created once, in lockstep with its (permanent) widget.
+function wireSearchPickerEscape(hostEl, handle) {
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "Escape") return;
+      const toggleBtn = hostEl.querySelector(".search-select__toggle");
+      if (!toggleBtn || toggleBtn.getAttribute("aria-expanded") !== "true") return;
+      handle.close({ focusToggle: true });
+      e.stopPropagation();
+    },
+    true
+  );
+}
+
 /**
  * Mount the condition builder into `advancedHost` (the Advanced Filters section
  * body). Returns `{ onShow, onHide, sync, activeCount, validate }` for main.js.
@@ -448,6 +479,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       onChange();
     },
   });
+  wireSearchPickerEscape(roleGroupHost, roleGroupSel);
   const roleSubSel = mountSearchSelect(roleSubHost, {
     searchable: false,
     portal: true,
@@ -459,6 +491,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       onChange();
     },
   });
+  wireSearchPickerEscape(roleSubHost, roleSubSel);
   const handSel = mountSearchSelect(handHost, {
     searchable: false,
     portal: true,
@@ -470,6 +503,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       onChange();
     },
   });
+  wireSearchPickerEscape(handHost, handSel);
   const bowlingSel = mountSearchSelect(bowlingHost, {
     searchable: false,
     portal: true,
@@ -481,6 +515,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       onChange();
     },
   });
+  wireSearchPickerEscape(bowlingHost, bowlingSel);
   const bowlingHandSel = mountSearchSelect(bowlingHandHost, {
     searchable: false,
     portal: true,
@@ -492,6 +527,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       onChange();
     },
   });
+  wireSearchPickerEscape(bowlingHandHost, bowlingHandSel);
 
   // ── "Vs" matchup editor (R3.2; R3 harmonisation: raw <select> → shared panel) ──
   // Mirrors the results-toolbar's bonded Vs control — both edit state.matchupVs,
@@ -524,6 +560,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       onChange();
     },
   });
+  wireSearchPickerEscape(editorHosts.vs, vsSel);
   let vsBowlingTypes = null; // fetched once; null until loaded (Vs disabled/coarse-only until then)
   async function loadVsBowlingTypes() {
     if (vsBowlingTypes) return vsBowlingTypes;

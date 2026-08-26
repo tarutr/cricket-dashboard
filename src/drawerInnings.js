@@ -1505,6 +1505,33 @@ function mountScopedMultiSelect(container, store, onChange, config) {
 
   const toggleEl = hostEl.querySelector(".search-select__toggle");
 
+  // #26 (audit3 §c, "Escape strands the composer/filter value list"): capture-
+  // phase document Escape guard — mirrors columnsPicker.js's onSearchPickerEscape
+  // and addPalette.js's own document Escape handler. This panel portals (portal:
+  // true, above), so once the user clicks a row (moving focus off the widget's
+  // own filter box), Escape skips searchSelect.js's onFilterKeydown entirely and
+  // falls straight through to the Filters popup's own document-level Escape
+  // handler (main.js), which hides the popup but leaves this panel floating over
+  // the table. Guards on the toggle's OWN aria-expanded (no isOpen getter on the
+  // handle) so it only acts — and only stops the popup's handler — while the
+  // panel is actually open; a second Escape still closes the popup as normal.
+  // Every mountScopedMultiSelect caller (Team/Opposition/Event/Venue/City/Season)
+  // is mounted ONCE at drawer boot and lives for the app's lifetime (drawer.js's
+  // mountFilterDrawer is itself called once from main.js's boot() — never
+  // re-rendered/destroyed), so — unlike columnsPicker's transient composer editor
+  // — this listener needs no re-mount teardown: it is created once, in lockstep
+  // with its (permanent) widget.
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "Escape") return;
+      if (!toggleEl || toggleEl.getAttribute("aria-expanded") !== "true") return;
+      handle.close({ focusToggle: true });
+      e.stopPropagation();
+    },
+    true
+  );
+
   // ── Async option loading (full-scope: gender|teamType|format|date, lazy) ────
   // A9 (decision 47e): the option lists scope to the FULL Search Conditions, so
   // the cache key carries every scope dimension — a change to gender, team type,
