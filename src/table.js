@@ -1270,6 +1270,62 @@ function laneScope(clauses, state, { idColumn, playerOp } = {}) {
   });
 }
 
+// ── Stage-3 Phase 4 — Match-any pill lane classification (display-only, decision
+// 77.3) ───────────────────────────────────────────────────────────────────────
+// When a lane's "Match any" toggle is on, pills.js's applied-pill row must show
+// which pills are actually being OR'd together and which ALWAYS apply regardless
+// (owner-approved mock, Option C, condensed to one line). This function is the
+// single read-only mapping from a pill's KEY (pills.js's own vocabulary) onto the
+// SAME "scope"/"player" category tags whereWithLanes/laneScope already compile
+// into SQL above — it duplicates no query logic, builds no SQL, and is never
+// called by any query path; pills.js calls it purely to choose which pills to
+// visually group.
+//
+//   "scope"  — folds into the scope-lane OR when filterMatch.scope === "OR":
+//              Team / Opposition / Innings Number / Event / Venue / City /
+//              Season / Batting position (all tagged category "scope" in
+//              buildScopeClausesTagged, filters.js) + Result / Toss result /
+//              Toss decision / Stage / Result condition (each its own
+//              alwaysClause(…, "scope") at the buildMatchContextClauses call
+//              sites above) + every fielding-dim pill (fieldingScopeWhere above
+//              tags the fielding slice clauses "scope" the same way).
+//   "player" — folds into the player-lane OR when filterMatch.player === "OR":
+//              the player-profile pills (role / batting hand / bowling style /
+//              bowling arm — the ONE profile semi-join, tagged category "player"
+//              in buildScopeClausesTagged), lowered to a HAVING disjunct by the
+//              table.js callers under player-OR.
+//   null     — NEVER folds into either lane's OR, regardless of filterMatch:
+//              the delivery-window pills (Phase / Over range / Ball range /
+//              Player balls) and the opponent-player "vs {name}" matchup pill
+//              are baked into the ball VIEW itself before any WHERE is built
+//              (db.js/deliveryWindow.js, db.js/opponentFilter.js) — decision
+//              77.3's two named "always applies" exceptions (Ball Ranges +
+//              matchup Vs). The free-text name search, the PotM Y/N gate, and
+//              the numeric stat-condition pills are untagged/HAVING-gated and
+//              also never fold into either lane's OR, so they classify here too.
+export function pillMatchAnyLane(key) {
+  if (
+    key.startsWith("team:") ||
+    key === "opposition" ||
+    key === "inn_num" ||
+    key.startsWith("event:") ||
+    key.startsWith("venue:") ||
+    key.startsWith("city:") ||
+    key.startsWith("season:") ||
+    key === "positions" ||
+    key === "mc_result" ||
+    key === "mc_toss_result" ||
+    key === "mc_toss_decision" ||
+    key === "mc_stage" ||
+    key === "mc_result_condition" ||
+    key.startsWith("fld_")
+  ) {
+    return "scope";
+  }
+  if (key.startsWith("profile:")) return "player";
+  return null;
+}
+
 /**
  * Build the `pom_cte` definition (Player-of-the-Match, source player_matches) —
  * same "CTE body without leading WITH" convention as buildFieldingCteSql. A

@@ -2831,6 +2831,56 @@ a { color: var(--color-accent); }
    "bring this back" instead of "remove". */
 .pill__x--restore:hover { color: var(--color-steel-strong); background: var(--color-steel-tint); }
 
+/* Match-any pill grouping (Stage-3 Phase 4, decision 77.3 — owner-approved mock
+   Set 2 Option C, condensed to ONE line). Only rendered while a lane's "Match
+   any" toggle is on AND the applied pills actually mix OR'd conditions with
+   always-applies ones (pills.js pillMatchAnyLane) — otherwise the plain
+   `.pills-row` above renders unchanged. `.pills-row--matchany` keeps the SAME
+   flex-wrap the plain row uses, so overflow behaves identically (wraps, never a
+   second summary line); the two groups are just flex children of that one row,
+   so at typical widths they read as one line and at narrow widths (~380px) they
+   wrap exactly like an ordinary pill row would. */
+.pills-row--matchany {
+  align-items: center;
+}
+
+/* The OR'd pills' bracket — echoes the dashed "pill--staged" convention already
+   in this file (a boundary, not a new pill colour), condensed from the mock's
+   stacked block into one inline flex item that itself wraps at narrow widths
+   rather than forcing a second line. */
+.pill-or-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px dashed var(--color-steel);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-steel-tint) 55%, transparent);
+}
+
+/* Short inline label ("matching any of" / "always applies") — plain wording,
+   never "slice". Small and muted so it reads as a caption, not another pill. */
+.pill-lane-tag {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: var(--color-steel-strong);
+}
+.pill-lane-tag--always {
+  color: var(--color-muted);
+}
+
+/* A quiet separator between the two groups — a rule, not another pill. */
+.pill-lane-divider {
+  width: 1px;
+  align-self: stretch;
+  min-height: 1.1em;
+  background: var(--color-line-strong);
+}
+
 /* ── "All filters" drawer (owner decision 29) ──────────────────────────────── */
 
 /* Shared overlay base (task 1): full-viewport fixed host + semi-opaque

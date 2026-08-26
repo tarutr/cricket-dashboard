@@ -21,6 +21,11 @@ import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel, composedParamPrefixForBase, paramAppliedLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
 import { DIMS as FIELDING_DIMS } from "./fieldingDims.js";
+// Stage-3 Phase 4 (decision 77.3): read-only pill→lane classifier — table.js's own
+// mapping of a pill KEY onto the "scope"/"player" category tags whereWithLanes/
+// laneScope already compile into SQL. This module NEVER builds SQL itself; it only
+// asks table.js which lane (if any) a pill belongs to, to decide how to style it.
+import { pillMatchAnyLane } from "./table.js";
 
 // Phase 1.5 (stage3 fix plan) — the honesty fix: the 13 fielding-dimension filters
 // besides "Dismissed batter's position" (Phase/Over range/Innings number/City/
@@ -581,15 +586,56 @@ export function mountPills(
       return;
     }
 
-    container.innerHTML = `<div class="pills-row">${display
-      .map((p, i) => {
-        const cls = `pill${p.inert ? " pill--inert" : ""}${p.pinned ? " pill--pinned" : ""}${p.staged ? " pill--staged" : ""}${p.noInnings ? " pill--no-innings" : ""}`;
-        const btnCls = `pill__x${p.staged ? " pill__x--restore" : ""}`;
-        const glyph = p.staged ? "&plus;" : "&times;";
-        const aria = p.staged ? "Restore filter" : "Remove filter";
-        return `<span class="${cls}"${p.title ? ` title="${esc(p.title)}"` : ""}>${esc(p.label)} <button type="button" class="${btnCls}" data-idx="${i}" aria-label="${aria}">${glyph}</button></span>`;
-      })
-      .join("")}</div>`;
+    // One pill's markup, unchanged from before this task — `i` is always the
+    // pill's index into `display` (the SAME array the ×/+ delegation below reads
+    // by data-idx), regardless of where it visually renders.
+    const pillSpan = (p, i) => {
+      const cls = `pill${p.inert ? " pill--inert" : ""}${p.pinned ? " pill--pinned" : ""}${p.staged ? " pill--staged" : ""}${p.noInnings ? " pill--no-innings" : ""}`;
+      const btnCls = `pill__x${p.staged ? " pill__x--restore" : ""}`;
+      const glyph = p.staged ? "&plus;" : "&times;";
+      const aria = p.staged ? "Restore filter" : "Remove filter";
+      return `<span class="${cls}"${p.title ? ` title="${esc(p.title)}"` : ""}>${esc(p.label)} <button type="button" class="${btnCls}" data-idx="${i}" aria-label="${aria}">${glyph}</button></span>`;
+    };
+
+    // Stage-3 Phase 4 (decision 77.3, Option C condensed to one line): while a lane's
+    // "Match any" is on, split the row into the pills actually being OR'd together
+    // (pillMatchAnyLane matches the ACTIVE lane) vs the ones that always apply
+    // regardless (Ball Ranges / matchup Vs / everything else pillMatchAnyLane can
+    // never fold into an OR). Only bothers grouping when BOTH sides are non-empty —
+    // a lane with nothing OR-eligible currently applied has nothing to distinguish,
+    // so it falls through to the plain row below, byte-identical to today. Under
+    // Match-all (both lanes AND) this whole branch is unreachable (matchAnyActive is
+    // false), so the plain row is emitted exactly as before this task.
+    const filterMatch = s.filterMatch || { player: "AND", scope: "AND" };
+    const matchAnyActive = filterMatch.scope === "OR" || filterMatch.player === "OR";
+    const isOrParticipant = (p) => {
+      const lane = pillMatchAnyLane(p.key);
+      return (lane === "scope" && filterMatch.scope === "OR") || (lane === "player" && filterMatch.player === "OR");
+    };
+    const indexed = display.map((p, i) => ({ p, i }));
+    const anyOfIdx = matchAnyActive ? indexed.filter(({ p }) => isOrParticipant(p)) : [];
+    const alwaysIdx = matchAnyActive ? indexed.filter(({ p }) => !isOrParticipant(p)) : [];
+    const grouped = matchAnyActive && anyOfIdx.length > 0 && alwaysIdx.length > 0;
+
+    if (!grouped) {
+      container.innerHTML = `<div class="pills-row">${display.map((p, i) => pillSpan(p, i)).join("")}</div>`;
+    } else {
+      // ONE flex-wrapping row (matches the plain row's own overflow behaviour —
+      // wraps like today, never a second summary line). The OR'd pills sit inside
+      // a single dashed-bordered group (Option C's "draws a boundary around the
+      // OR'd set" language, condensed here to one inline flex item instead of the
+      // mock's stacked block) so they read as one bracketed unit; the always-
+      // applies pills follow, plain, after a short muted label — no new pill kind,
+      // no second row, no tick boxes.
+      const anyHtml = anyOfIdx.map(({ p, i }) => pillSpan(p, i)).join("");
+      const alwaysHtml = alwaysIdx.map(({ p, i }) => pillSpan(p, i)).join("");
+      container.innerHTML =
+        `<div class="pills-row pills-row--matchany">` +
+        `<span class="pill-or-group"><span class="pill-lane-tag pill-lane-tag--any">matching any of</span>${anyHtml}</span>` +
+        `<span class="pill-lane-divider" aria-hidden="true"></span>` +
+        `<span class="pill-lane-tag pill-lane-tag--always">always applies</span>${alwaysHtml}` +
+        `</div>`;
+    }
 
     container.querySelectorAll(".pill__x").forEach((btn) => {
       btn.addEventListener("click", () => {
