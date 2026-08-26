@@ -1876,16 +1876,33 @@ function isRankableColumn(key, mns) {
   return Boolean(m) && m.kind !== "attribute";
 }
 
-/** decision 76.5 (restoring decision 61(4)) — the slot to rank by when a filter added on
- * THIS Search auto-adds a RANKABLE column. Returns the FIRST (source-order) filter that
- * became active since the last Search whose mapped column is both SHOWN (a live slot) and
- * rankable; null when this Search added no such filter (a no-filter-change Search, or one
- * that added only which-values / text columns → the table keeps its default / remembered
- * sort). A newly-active filter's column is always shown (its prune was cleared at Q3b and
- * push() already dropped ineligible cols), so this never ranks by an invisible metric. */
+/** decision 76.5 (restoring decision 61(4)), NARROWED by decision 78 — the slot to rank by
+ * when a filter added on THIS Search auto-adds a RANKABLE column. Returns the FIRST
+ * (source-order) filter that became active since the last Search whose mapped column is
+ * SHOWN (a live slot), rankable, AND itself a numeric STAT-CONDITION filter (built through
+ * the numeric-condition UI — state.advanced.groups[].conds — NOT a categorical/singleton
+ * filter that merely happens to auto-add a numeric COUNT column); null when this Search
+ * added no such filter (a no-filter-change Search, one that added only which-values / text
+ * columns, or one that added only a categorical count column → the table keeps its
+ * default / remembered sort).
+ *
+ * decision 78: PotM (Y/N), Match Result and Toss Result are the three categorical filters
+ * whose auto-added columns (potm_count / res_won.../ res_toss_won) are otherwise rankable —
+ * they must NOT drive the sort. Rather than hardcode those three keys, this reads the
+ * distinction straight off activeLeaderboardFilterSources' own tagging convention: every
+ * numeric stat condition (both the batting/bowling loop and the fielding-tally loop) is
+ * pushed as `filter:cond:${key}`, and ONLY stat conditions use that prefix — every
+ * categorical/singleton filter (potm_yn, mc_result, mc_toss_result, positions, teams,
+ * opposition, city, season, event, venue, mc_stage, fld:*, profile:*, …) is pushed under a
+ * different tag. So gating on the "filter:cond:" prefix is exactly "is a stat condition",
+ * with no fragile key list to keep in sync.
+ *
+ * A newly-active filter's column is always shown (its prune was cleared at Q3b and push()
+ * already dropped ineligible cols), so this never ranks by an invisible metric. */
 function firstNewlyRankableFilterSlot(sources, prevTags, slots, mns) {
   for (const { tag, cols } of sources) {
     if (prevTags.has(tag)) continue; // only a filter NEWLY active this Search re-ranks
+    if (!tag.startsWith("filter:cond:")) continue; // decision 78: stat conditions only
     for (const c of cols) {
       const slot = slots.find((s) => sameColumnIdentity(s.key, c));
       if (slot && isRankableColumn(slot.key, mns)) return slot;
@@ -2011,15 +2028,20 @@ export function reconcileLeaderboardColumns(state, { firstSearch = false } = {})
   });
   gcOrigins(origins, slots);
 
-  // Sort resolution [#3/#7 + decision 76.5], in priority order:
-  //  (1) RANK-BY-FIRST-FILTERED-COLUMN (decision 76.5, restoring decision 61(4)): a
-  //      filter that became active on THIS Search whose auto-added column is a RANKABLE
-  //      metric (numeric/sortable — see isRankableColumn) drives the sort — the FIRST such
-  //      column, DESCENDING (as ruled). A which-values list / text column (kind
-  //      "attribute" — Opposition / Stage / Venue / … / player-attribute) does NOT
-  //      re-rank; the table stays on its default. Adding a ranking filter is a fresh,
-  //      explicit ranking intent, so it overrides both the seed default AND a previously-
-  //      remembered sort — the pre-Wave-D behaviour, now gated on the rankable-only rule.
+  // Sort resolution [#3/#7 + decisions 76.5/78], in priority order:
+  //  (1) RANK-BY-FIRST-FILTERED-COLUMN (decision 76.5, restoring decision 61(4); NARROWED
+  //      by decision 78): a filter that became active on THIS Search whose auto-added
+  //      column is a RANKABLE metric (numeric/sortable — see isRankableColumn) AND is
+  //      itself a numeric STAT-CONDITION filter (not a categorical/singleton filter that
+  //      merely auto-adds a numeric count column — see firstNewlyRankableFilterSlot) drives
+  //      the sort — the FIRST such column, DESCENDING (as ruled). A which-values list /
+  //      text column (kind "attribute" — Opposition / Stage / Venue / … / player-attribute)
+  //      does NOT re-rank, and NOR does a categorical count column (PotM Y/N → potm_count,
+  //      Match Result → res_won/…, Toss Result → res_toss_won, decision 78); the table
+  //      stays on its default / remembered sort. Adding a ranking stat condition is a
+  //      fresh, explicit ranking intent, so it overrides both the seed default AND a
+  //      previously-remembered sort — the pre-Wave-D behaviour, now gated on the
+  //      rankable-stat-condition-only rule.
   //  (2) else, on the first seed or when the remembered sort's column is gone → the
   //      default (innings-desc-if-shown, else the first / left-most column).
   //  (3) else keep the user's remembered sort (a manual header sort survives every Search
