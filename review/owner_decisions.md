@@ -1155,3 +1155,26 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       buildMatchupQuery untouched, no invented metrics. NOTE (to confirm, not yet ruled): matchup mode appears
       to register FEWER variants than plain mode (e.g. 3 of 8 % Runs sources); the tidy family shows exactly
       what exists — whether to ALSO add the missing variants (a separate numbers/data question) is NOT decided.
+
+75. **MATCHUP VS EXPANSION (owner, 2026-08-26):**
+    - **Metrics to add:** the "% Runs in…" family (batting, full set) + the "% Runs Conceded in…" family
+      (bowling, full set). NOT ball tallies / milestones (50s/100s/ducks/not-outs) / maidens / N-fors /
+      innings-score≥N — those are innings/over-level achievements that don't decompose by opponent bucket.
+      Presented as TIDY FAMILIES (no loose flat rows — ratifies the tidy-families note in decision 74).
+      Computability (verified, .orchestrator/progress/matchup-pctruns-computability.md): batting 5/5 + bowling
+      4s/6s buildable now (metrics.js only); bowling non-boundary/wides/no-balls need an export_parquet.py add
+      (wides_runs, noball_runs) + a data re-run.
+    - **Axes:** ADD **vs bowling arm**, **vs PotMs** (performances against the Player-of-the-Match), **vs a
+      specific opponent** (extend the player popup's to the leaderboard). Existing: vs bowling style, vs batting
+      hand. NOT vs playing role, NOT vs batting position.
+    - **Container / UX (owner ratified the orchestrator's opinion):** a DEDICATED "Matchup" dropdown — a third
+      alongside Player / Scope — reflecting that Vs is a distinct MODE (it changes the unit of analysis, your
+      innings → your deliveries vs a bucket), NOT a simple toggle and NOT loose discrete rows. Inside it,
+      "**define the opponent**": ONE composite opponent definition built from the SHARED attribute pickers
+      (style / arm / hand / PotM status / specific player), reusing existing controls — no duplicated filter
+      list. Mental model = Player (who you are) · Scope (which matches) · Matchup (who you faced). To be MOCKED
+      + detailed at the Phase-3 design sitting BEFORE build.
+    - **Data / sequencing (orchestrator RECOMMENDATION, not yet ruled):** the buildable-now % Runs metrics ship
+      near-term; the data-gated pieces (vs arm + vs PotMs axes; the 3 bowling % Runs Conceded variants) need a
+      data-layer add — recommended to fold into the ball-layer cut (matchup rebuilt from raw balls → they come
+      free) rather than a throwaway parquet patch + re-run, unless the owner wants them sooner.
