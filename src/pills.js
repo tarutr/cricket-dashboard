@@ -74,6 +74,11 @@ function fieldingDimPillLabel(dim, fld, state) {
   // labels data-driven options `String(v)`, and canonical ones store the folded
   // canonical string), so the raw value doubles as its own label there.
   const optLabel = (v) => {
+    // The Stage dim's STAGE_NONE sentinel (state.js — SAME token the top-level
+    // Stage pill maps at line ~440) never has its raw "(no stage)" text leak into
+    // a pill; data-driven dims store the display string AS the value (comment
+    // above), so this check must come before that generic fallback.
+    if (v === STAGE_NONE) return STAGE_NONE_LABEL;
     if (!dim.options) return String(v);
     const opt = dim.options({ formats: state.formats || [] }).find((o) => String(o.value) === String(v));
     return opt ? String(opt.label) : String(v);

@@ -22,10 +22,11 @@
 
 import { wirePortalDropdown } from "./filters.js";
 import { mountOpponentPlayer } from "./drawerInnings.js";
-import { loadDimOptions } from "./dimOptions.js";
+import { loadDimOptions, hasNullValue } from "./dimOptions.js";
 import { canonicalStage } from "./canonicalNames.js";
 import { DIMS, CHECKLIST_FILTER_THRESHOLD } from "./fieldingDims.js";
 import { escHtml, escAttr } from "./html.js";
+import { STAGE_NONE, STAGE_NONE_LABEL } from "./state.js";
 
 // Position stays on the existing `fld_pos` singleton (byte-identical on every board),
 // so this controller owns every OTHER catalogue dim.
@@ -116,14 +117,24 @@ export function createFieldingDimsController({ host, store, onChange, requestRer
     const scope = loaderScope();
     for (const dim of CONTROLLER_DIMS) {
       if (!dim.source) continue;
-      loadDimOptions(dim.source, dim.column, scope)
-        .then((vals) => {
+      // Stage-only: ALSO check for stage-less matches in scope (event_stage IS NULL),
+      // exactly mirroring the batting/bowling Stage filter's "No Stage" mechanism
+      // (drawerInnings.js mountStage / searchStages' hasNoStage). Every other
+      // data-driven fielding dim resolves `false` here and is untouched.
+      const noStagePromise = dim.key === "stage" ? hasNullValue(dim.source, dim.column, scope) : Promise.resolve(false);
+      Promise.all([loadDimOptions(dim.source, dim.column, scope), noStagePromise])
+        .then(([vals, hasNoStage]) => {
           if (token !== optionsToken) return;
           const rawVals = vals;
           const orderedVals = dim.reverse ? [...rawVals].reverse() : rawVals;
-          dimOptions[dim.key] = dim.canonical
+          const named = dim.canonical
             ? [...new Set(rawVals.map((v) => canonicalStage(v)))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((v) => ({ value: v, label: v }))
             : orderedVals.map((v) => ({ value: v, label: String(v) }));
+          // The STAGE_NONE sentinel (state.js — SAME token/label the batting/bowling
+          // Stage filter uses) is appended ONLY when the scope actually holds
+          // stage-less matches — an option that can only return zero rows is not a
+          // choice, same rule the named list already follows.
+          dimOptions[dim.key] = dim.key === "stage" && hasNoStage ? [...named, { value: STAGE_NONE, label: STAGE_NONE_LABEL }] : named;
           if (requestRerender) requestRerender();
         })
         .catch(() => {

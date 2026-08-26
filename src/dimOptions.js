@@ -49,3 +49,38 @@ export async function loadDimOptions(source, column, scope = {}) {
   const { rows } = await query(sql);
   return rows.map((r) => r.v).filter((v) => v != null && v !== "");
 }
+
+/**
+ * Does `source` have at least one row (within `scope`) where `column IS NULL`?
+ *
+ * A companion to loadDimOptions, which — by design — always excludes NULLs (a NULL
+ * profile value normally means "no data", never an option). Stage is the one
+ * caller-side exception: a NULL `event_stage` is a MEANINGFUL, selectable value
+ * ("No Stage" — a league fixture with no round name), mirroring the batting/bowling
+ * Stage filter's STAGE_NONE sentinel (state.js STAGE_NONE/STAGE_NONE_LABEL,
+ * drawerInnings.js mountStage's `hasNoStage` flag from searchStages). This helper
+ * lets a caller offer that sentinel ONLY when the current scope actually contains
+ * NULLs — an option that can only return zero rows is not a choice, same rule
+ * loadDimOptions itself follows for its named values. Purely additive: loadDimOptions
+ * is untouched, so every existing caller (out_hand, bowler_style, city, season, …)
+ * stays byte-identical.
+ *
+ * @param {string} source  Same contract as loadDimOptions.
+ * @param {string} column  Same contract as loadDimOptions.
+ * @param {object} scope   Same contract as loadDimOptions.
+ * @returns {Promise<boolean>}
+ */
+export async function hasNullValue(source, column, scope = {}) {
+  const scopeState = {
+    gender: scope.gender,
+    formats: scope.formats,
+    teamType: scope.teamType,
+    dateFrom: scope.dateFrom,
+    dateTo: scope.dateTo,
+  };
+  const core = buildCoreScopeClauses(scopeState).join(" AND ");
+  const where = core ? `${core} AND ${column} IS NULL` : `${column} IS NULL`;
+  const sql = `SELECT 1 AS x FROM ${source} WHERE ${where} LIMIT 1`;
+  const { rows } = await query(sql);
+  return rows.length > 0;
+}
