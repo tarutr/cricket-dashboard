@@ -191,14 +191,23 @@ function toggleAltKeys(ns) {
 // is enforced in metrics.js's spec templates. Rows flow through the SAME checkbox +
 // W2 Sort-by/Highlight wiring as any other column (itemRowHTML).
 
-// A monochrome highlighter/marker glyph, filled via currentColor — mirrors the
-// pin toggle's PIN_GLYPH convention in src/table.js (owner fix: the old 🖍️
-// emoji couldn't take a CSS `color`, so its "on" state was faked with a solid
-// chip background; that chip is gone, this SVG lets .col-hl-btn recolour it
-// exactly like .pin-toggle does). Defined locally rather than imported from
-// table.js to avoid a circular import (table.js already imports this module).
+// Decision 77.1 (owner, Stage-3 Phase-3 mock review, 2026-08-26): the highlight
+// toggle's glyph is OPTION C — a spotlight/sun mark — from the approved mock
+// (.orchestrator/phase3-mocks.html, Set 1). Pasted verbatim from the mock's
+// markup: a filled circle (inherits currentColor via .col-hl-btn svg's
+// `fill: currentColor`) plus a stroked ray group with its OWN `fill="none"`
+// (a presentation attribute on the <g>, so it is NOT overridden by the
+// ancestor svg's fill rule) and `stroke="currentColor"` (unopposed — the CSS
+// sets no `stroke` on this button, exactly like .col-dup-btn's stroked glyph).
+// REPLACES the old rotated-rectangle-plus-wedge "highlighter" mark, which read
+// as a misleading pencil/edit icon at 16px (the owner's Set-1 framing) and was
+// too easily confused with the real edit-pencil (EDIT_GLYPH below, ~col-edit-btn
+// — that one is untouched: it still means "edit this composer column", a
+// different action entirely). Mirrors the pin toggle's PIN_GLYPH convention in
+// src/table.js. Defined locally rather than imported from table.js to avoid a
+// circular import (table.js already imports this module).
 const HIGHLIGHT_GLYPH =
-  '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g transform="rotate(45 12 12)"><rect x="9" y="2" width="6" height="12" rx="1"/><polygon points="9,14 15,14 12,19"/></g><rect x="4" y="19" width="10" height="2" rx="1"/></svg>';
+  '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"><path d="M12 2v2.4"/><path d="M12 19.6V22"/><path d="M2 12h2.4"/><path d="M19.6 12H22"/><path d="M4.9 4.9l1.7 1.7"/><path d="M17.4 17.4l1.7 1.7"/><path d="M4.9 19.1l1.7-1.7"/><path d="M17.4 6.6l1.7-1.7"/></g></svg>';
 
 // Columns content rework E1b: the "duplicate this column" glyph — the standard
 // duplicate/copy symbol of two overlapping rectangles ("two cards, one in front of
