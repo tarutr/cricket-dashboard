@@ -50,7 +50,6 @@ import {
   activeConditionCount,
   conditionHasError,
   addConditionToGroup,
-  addGroup,
   removeGroup,
   setGroupOp,
   setLaneOp,
@@ -306,9 +305,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   // Filters" and "Scope Filters", each headed by an ALWAYS-VISIBLE "Match all /
   // Match any" toggle (data-role="lane-op") wired to state.filterMatch.<lane> and
   // each holding ONE merged applied-filter list. The Player list holds the player
-  // singletons + the numeric metric GROUPS (which KEEP their own "+ Add group" and
-  // per-group Match-all/any toggle — owner ruling Q1, nested sub-groups stay). The
-  // Scope list holds the scope singletons + (on the Fielding board) the fielding
+  // singletons + the numeric metric GROUPS (each group KEEPS its own per-group
+  // Match-all/any toggle once it has ≥2 conditions — owner ruling Q1; the "+ Add
+  // group" nested-sub-group control was KILLED as non-functional, decision 76.6).
+  // The Scope list holds the scope singletons + (on the Fielding board) the fielding
   // dim rows. The "+ Add condition" dropdowns still live inside each numeric group
   // card (owner Q1's group-targeted add model, unchanged) — adding a scope filter
   // from there routes its row into the Scope list here.
@@ -1134,9 +1134,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   function realGroups(s) {
     return s.advanced.groups || [];
   }
-  function totalNumericConds(s) {
-    return realGroups(s).reduce((n, g) => n + g.conds.length, 0);
-  }
 
   function structuralKey(s) {
     return JSON.stringify({
@@ -1300,17 +1297,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     const multi = groups.length > 1;
     const connector = `<div class="cond-group__connector">and</div>`;
     const cards = groups.map((g, gi) => (gi > 0 ? connector : "") + groupCardHTML(g, gi, ns, s, multi)).join("");
-    // "+ Add group" appears once at least one numeric condition exists (adding
-    // empty groups before the first condition would be pointless). Groups
-    // AND-combine (advanced.op stays "AND") exactly as advancedToHaving renders.
-    const addGroupBtn =
-      totalNumericConds(s) >= 1
-        ? `<button type="button" class="text-btn text-btn--add-group" data-role="add-group">+ Add group</button>`
-        : "";
     // Close any open palette before wiping the cards: a portaled-open panel would
     // otherwise be orphaned on <body> when its host addctl is replaced.
     palette.closeCurrent();
-    numericEl.innerHTML = cards + addGroupBtn;
+    numericEl.innerHTML = cards;
     wireNumeric();
   }
 
@@ -1342,16 +1332,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
         onChange();
       });
     });
-
-    // "+ Add group".
-    const addGroupBtn = numericEl.querySelector('[data-role="add-group"]');
-    if (addGroupBtn) {
-      addGroupBtn.addEventListener("click", () => {
-        addGroup(store);
-        renderNumeric(store.get(), true);
-        onChange();
-      });
-    }
 
     // Condition rows (operator / value / remove), addressed by group + index.
     numericEl.querySelectorAll(".cond-row--metric").forEach((rowEl) => {

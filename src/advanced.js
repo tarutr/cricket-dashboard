@@ -136,15 +136,6 @@ export function addConditionToGroup(store, gi, metricKey) {
   store.set({ advanced: { ...advanced, groups } });
 }
 
-/** Append a new empty AND group (ROUND 3, task 7 — "+ Add group"). Groups
- * combine with AND across the set (advanced.op stays "AND"), exactly as
- * table.js's advancedToHaving already renders them. */
-export function addGroup(store) {
-  const advanced = store.get().advanced;
-  const groups = [...(advanced.groups || []), newGroup()];
-  store.set({ advanced: { ...advanced, groups } });
-}
-
 /** Remove group `gi` entirely (ROUND 3, task 7 — per-group "Remove group"). */
 export function removeGroup(store, gi) {
   const advanced = store.get().advanced;
