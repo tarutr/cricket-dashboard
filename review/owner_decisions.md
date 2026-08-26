@@ -1055,7 +1055,8 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       flag-on `?engine=ball` runtime) → **0 blockers**, a short cleanup list.
     - **Owner rulings this session:**
       • **Hide the literal "Unknown" tick-box** from the fielding "Batter role" filter (out_role) — keep the filter
-        itself; matches the app-wide `playing_role==="Unknown"` drop (2026-08-06).
+        itself; matches the app-wide `playing_role==="Unknown"` drop (2026-08-06). **[SUPERSEDED by decision 76.1
+        (2026-08-26): the whole fielding "Batter role" filter was later REMOVED, not just its Unknown option.]**
       • **Gender hardcode removed END-TO-END → DATA-DRIVEN everywhere** (2026-08-06/07). Extends the offer-path
         ruling ([[feedback-data-driven-filters-not-gender]]) into the **NUMBERS path** (`matchupVsActive` /
         `profileSemiJoinSql` now key on a resolved per-gender `state.dataAvail` map — new `src/dataAvailability.js`,
@@ -1117,6 +1118,8 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       Wicket Types (Catches · Caught & bowled · Stumpings · Run-outs · Total dismissals) · Bowler Details ·
       Dismissed Batter (position · dismissed batter hand · role · specific batter). The old fielding "Player
       Profile" group and the redundant standalone "Wicket type" picker were REMOVED (folded into Wicket Types).
+      **[UPDATE — decision 76.1 (2026-08-26): the "role" entry in this Dismissed-Batter list was later REMOVED
+      entirely; the group is now position · dismissed batter hand · specific batter.]**
     - **Batting-hand on the fielding menu is owner-approved** (extends decision 54 — the bowling board still
       hides it). Data facts confirmed during the build: the only 4 fielder-credited dismissal types are caught /
       caught & bowled / stumped / run out (all covered); Run-outs count fielder CREDITS (a two-fielder run-out
@@ -1178,3 +1181,28 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       near-term; the data-gated pieces (vs arm + vs PotMs axes; the 3 bowling % Runs Conceded variants) need a
       data-layer add — recommended to fold into the ball-layer cut (matchup rebuilt from raw balls → they come
       free) rather than a throwaway parquet patch + re-run, unless the owner wants them sooner.
+
+76. **STAGE-3 PHASE-3 DESIGN SITTING — RULINGS (owner, 2026-08-26):**
+    1. **Fielding "Batter role" (out_role) filter: REMOVED — confirmed.** SUPERSEDES decision 71's "keep the
+       filter, hide only its Unknown tick-box" and the "role" entry in decision 73's Dismissed-Batter group
+       list — the WHOLE filter is gone (code 3db8a5d / 0864148 + the leaderboard-side removal). Those two lines
+       are tagged superseded.
+    2. **The Feature Ledger's permanent home = `review/FEATURE_LEDGER.md`** (committed, beside this log),
+       promoted from its `.orchestrator/` working copy. It is the durable conformance record.
+    3. **Column-dropdown count badges: RESTORE** — each of the four column dropdowns shows a live count of the
+       columns chosen in it (built once, silently lost).
+    4. **"Group rows / Split by" toolbar control: PENDING** — owner wants a fuller explanation before deciding
+       (doesn't recall it). NOT yet restored or retired.
+    5. **Rank-by-first-filtered-column: RESTORE, with a rule** — only a filter whose auto-added column is a
+       RANKABLE (numeric/sortable) metric drives the auto-sort; a filter whose column is NOT sortable (a
+       which-values list/text column — Opposition, Stage, Venue, …) does NOT re-sort, the table stays on its
+       innings-count default. The sort indicator must make clear what the table is ranked by. (Consistent with
+       decisions 44/61: never sort by something the user can't see/understand.)
+    6. **"+ Add Group": KILL the non-functional control for now** (remove the dead button); revisit only if
+       there is demand for nested condition groups.
+    7. **Highlight toggle: KEEP staged-until-Search** (timing unchanged) but **CHANGE the misleading pencil
+       icon** (new glyph + a clearer "pending until Search" cue — mock to follow).
+    8. **Match-any visibility: owner wants MOCK OPTIONS** for surfacing which conditions are OR'd vs
+       always-applied (Ball Ranges / matchup Vs stay always-AND under Match-any).
+    Build items 3/5/6 land at Phase 4 (build the sitting's outcomes); 7 (icon) + 8 go to mocks first;
+    item 4 awaits the owner's decision after the explanation.
