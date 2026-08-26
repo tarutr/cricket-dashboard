@@ -1296,17 +1296,23 @@ export function createColumnsPicker({
   // the identical key. buildMatchupQuery is UNTOUCHED and the numbers cannot move.
   // ADD-only (no edit pencil), exactly like the Team/Opposition composers.
   //
-  // The families list only the variants that EXIST in the matchup catalogue today:
+  // The families list every variant that EXISTS in the matchup catalogue today:
   // batting % Runs = all 8 (M1 Part A added the 5 missing); bowling % Runs Conceded =
-  // 4s/6s only (the 3 non-boundary/wides/no-balls variants are pipeline-gated and are
-  // NOT catalogued under matchup_bowling yet, so they simply don't appear). Dismissals
-  // are harvested by section, so both boards' six kinds come through automatically.
+  // all 5 as of Stage-3 M2 (the non-boundary/wides/no-balls variants were pipeline-gated
+  // and are now catalogued under matchup_bowling after the wides_runs/noball_runs data
+  // re-run — decision 78). Dismissals are harvested by section, so both boards' six kinds
+  // come through automatically. A key that isn't (yet) in the catalogue is silently
+  // skipped by matchupFamilyRows (rank.has-filtered against eligibleMetrics), so the list
+  // stays a safe superset.
   const MATCHUP_RUNSOURCE_KEYS = [
     "runs_1s_pct", "runs_2s_pct", "runs_3s_pct",
     "runs_4s_run_pct", "runs_4s_boundary_pct", "runs_5s_pct",
     "runs_6s_run_pct", "runs_6s_boundary_pct",
   ];
-  const MATCHUP_RUNSOURCECONC_KEYS = ["runs_conc_4s_pct", "runs_conc_6s_pct"];
+  const MATCHUP_RUNSOURCECONC_KEYS = [
+    "runs_conc_4s_pct", "runs_conc_6s_pct", "runs_conc_nonbdry_pct",
+    "runs_conc_wides_pct", "runs_conc_noballs_pct",
+  ];
   const MATCHUP_FAMILY_KINDS = ["m_runsource", "m_runsourceconc", "m_wickettype"];
   // ns/keys gate the two % families to their board; the dismissals family harvests by
   // section (works on either matchup ns). matchupFamilyRows filters to what's eligible.

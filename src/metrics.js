@@ -2460,16 +2460,19 @@ const MATCHUP_BOWLING_METRICS = [
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
   },
-  // % Runs Conceded in 4s / 6s (decision 75, Matchup Vs expansion): the two
-  // buildable-now members of the "% Runs Conceded in…" family against a Vs bucket.
-  // Each mirrors its plain BOWLING_METRICS sibling BYTE-FOR-BYTE (key / label /
-  // shortLabel / sqlExpression / kind), with only discipline→matchup_bowling +
-  // source→matchup swapped. Source columns fours_conceded / sixes_conceded /
-  // runs_conceded are all carried by the matchup_bowling view (computability audit
-  // confirmed). The three remaining plain siblings (non-boundary / wides / no-balls)
-  // are pipeline-gated (matchup_bowling lacks wides_runs / noball_runs) and are NOT
-  // added here — they wait for the export_parquet.py add + data re-run. Descriptive
-  // composition split, higherIsBetter null, denominator NULLIF-guarded.
+  // % Runs Conceded in 4s / 6s (decision 75, Matchup Vs expansion) + non-boundary /
+  // wides / no-balls (Stage-3 M2, decision 78): the full five-member "% Runs Conceded
+  // in…" family against a Vs bucket. Each mirrors its plain BOWLING_METRICS sibling
+  // BYTE-FOR-BYTE (key / label / shortLabel / sqlExpression / kind), with only
+  // discipline→matchup_bowling + source→matchup swapped. M1 shipped 4s/6s (source cols
+  // fours_conceded / sixes_conceded / runs_conceded already carried). The remaining
+  // three siblings (non-boundary / wides / no-balls) were pipeline-gated on the
+  // wides_runs / noball_runs columns; M2 adds them now that the export_parquet.py add
+  // + owner-triggered data re-run (decision 78) have landed those columns on the
+  // matchup_bowling view (R2, orchestrator-verified). Non-Boundary is DERIVED — its
+  // formula is the plain sibling's verbatim (runs_conceded minus the wides / no-ball /
+  // 4× four / 6× six components). Descriptive composition split, higherIsBetter null,
+  // denominator NULLIF-guarded (0 runs conceded → NULL, never Infinity).
   {
     key: "runs_conc_4s_pct",
     label: "% Runs Conceded in 4s",
@@ -2488,6 +2491,39 @@ const MATCHUP_BOWLING_METRICS = [
     discipline: "matchup_bowling",
     source: "matchup",
     sqlExpression: "(6 * SUM(sixes_conceded)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_conc_nonbdry_pct",
+    label: "% Runs Conceded in Non-Boundary",
+    shortLabel: "NB Con%",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "(SUM(runs_conceded) - SUM(wides_runs) - SUM(noball_runs) - 4 * SUM(fours_conceded) - 6 * SUM(sixes_conceded)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_conc_wides_pct",
+    label: "% Runs Conceded in Wides",
+    shortLabel: "Wd Con%",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "(SUM(wides_runs)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
+    higherIsBetter: null, format: "pct1",
+    isPhaseMetric: null, zeroIsData: false,
+    kind: "percent",
+  },
+  {
+    key: "runs_conc_noballs_pct",
+    label: "% Runs Conceded in No-balls",
+    shortLabel: "Nb Con%",
+    discipline: "matchup_bowling",
+    source: "matchup",
+    sqlExpression: "(SUM(noball_runs)) * 100.0 / NULLIF(SUM(runs_conceded), 0)",
     higherIsBetter: null, format: "pct1",
     isPhaseMetric: null, zeroIsData: false,
     kind: "percent",
