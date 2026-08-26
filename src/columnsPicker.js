@@ -715,6 +715,65 @@ export function createColumnsPicker({
     return ns === "bowling" || ns === "matchup_bowling" ? "bowling" : "batting";
   }
 
+  // Decision 76.3 (owner, 2026-08-26) — RESTORE the count badges: each of the four
+  // discipline dropdown triggers shows a live count of columns currently chosen from
+  // it (built once in W4 — 9be63ea — then silently lost; ledger L-113). W4's own
+  // dropdownForColumnKey/dropdownCounts classified a CHOSEN key by which dropdown it
+  // came from; the picker has since moved on (composers, search-composers, cross-D3
+  // families, set/list columns) so this is a faithful re-derivation over the CURRENT
+  // key shapes, not a byte-for-byte restore of the old function bodies. The literal
+  // key sets below mirror the OFFER-side partitioning columnsPaletteModel already
+  // applies (matchLevelSetItems / fieldingMatchSetItems / fieldingDismissalSetItems /
+  // fieldingDeliverySetItems / scopeSetItems / bposItem below) — run in reverse over
+  // an already-minted key. Display-only: classifies for counting, mutates nothing.
+  const MATCH_LEVEL_SET_KEYS = new Set([
+    TEAM_SET_KEY, OPPOSITION_SET_KEY, EVENT_SET_KEY, VENUE_SET_KEY,
+    CITY_SET_KEY, SEASON_SET_KEY, STAGE_SET_KEY, TOSS_DECISION_SET_KEY, RESULT_CONDITION_SET_KEY,
+    "fld_team_set", "fld_opposition_set", "fld_event_set", "fld_venue_set", "fld_city_set",
+    "fld_season_set", "fld_stage_set", "fld_result_set", "fld_toss_result_set", "fld_toss_decision_set",
+  ]);
+  const FIELDING_BUCKET_SET_KEYS = new Set([
+    "fld_bowler_style_set", "fld_out_position_set", "fld_out_hand_set",
+    "fld_phase_set", "fld_over_set", "fld_innings_set",
+  ]);
+  const OWN_BUCKET_SET_KEYS = new Set([BATTING_POSITION_SET_KEY, INNINGS_NUMBER_SET_KEY]);
+
+  /** Which of the four dropdowns (match/batting/bowling/fielding) a currently-CHOSEN
+   * column key belongs to, or null for a stray/unrecognised key (never counted). A
+   * cross key (x__<disc>__…) always resolves to its OWN encoded discipline, whatever
+   * kind of key it wraps. Literal set/list keys and "matches" are special-cased first
+   * (their resolved metric carries no section, or the same section:"fielding" as an
+   * unrelated family, so section alone can't place them); a composed fielding key
+   * (fc__…) is always Fielding; everything else falls to its real/virtual metric's
+   * `.section` (impact → Match, fielding → Fielding, else the ns's own bucket). */
+  function dropdownForKey(key, ns) {
+    const { baseKey, cross } = unwrapCrossKey(key);
+    if (cross) return disciplineBucket(cross);
+    if (baseKey === "matches") return "match";
+    if (MATCH_LEVEL_SET_KEYS.has(baseKey)) return "match";
+    if (FIELDING_BUCKET_SET_KEYS.has(baseKey)) return "fielding";
+    if (OWN_BUCKET_SET_KEYS.has(baseKey)) return disciplineBucket(ns);
+    if (baseKey.startsWith("attr_")) return disciplineBucket(ns); // Player Profile columns
+    if (parseComposedFieldingKey(baseKey)) return "fielding";
+    const m = getMetric(baseKey, ns);
+    if (!m) return null;
+    if (m.section === "impact") return "match";
+    if (m.section === "fielding") return "fielding";
+    return disciplineBucket(ns);
+  }
+
+  /** Per-dropdown count of columns currently SHOWN (the badge value) — decision 76.3
+   * restore. Counts getColumns(), the same dedup visible-key list the picker itself
+   * shows/prunes against, so the badge always agrees with what's actually on screen. */
+  function dropdownCounts(ns) {
+    const counts = { match: 0, batting: 0, bowling: 0, fielding: 0 };
+    for (const key of getColumns()) {
+      const dd = dropdownForKey(key, ns);
+      if (dd && dd in counts) counts[dd] += 1;
+    }
+    return counts;
+  }
+
   // ── Columns content rework Wave A (2026-08-07, display-only) ─────────────────
   // Owner-approved v5 rename/regroup: (1) `player_of_match` (the Y/N flag) and
   // `wickets_per_innings` are REMOVED from the columns picker only — they stay
@@ -1029,6 +1088,10 @@ export function createColumnsPicker({
       btn.classList.toggle("is-active", on);
       btn.setAttribute("aria-pressed", on ? "true" : "false");
     });
+    // Decision 76.3: keep the four count badges honest too — covers an EXTERNAL prune
+    // (a column dropped by the host under a discipline/format change that didn't touch
+    // the chosen-rows region itself).
+    updateBadges(rootEl);
   }
 
 
@@ -2126,9 +2189,12 @@ export function createColumnsPicker({
   /** Build the four discipline dropdown TRIGGERS (a bar). Each is a paletteSkeleton whose
    * floating panel createAddPalette fills + wires (search + list). A discipline with no
    * offered columns renders its trigger disabled. NONE open by default (clean empty state,
-   * like the filters section). */
+   * like the filters section). Decision 76.3: each trigger also carries a live
+   * `.cols-dd-badge` count of columns currently chosen from it (data-dd identifies the
+   * bucket for updateBadges' no-rebuild refresh below). */
   function buildAddMenuHTML(ns, formats) {
     const model = columnsPaletteModel(ns, formats);
+    const counts = dropdownCounts(ns);
     // R5: the player pop-up (ownDisciplineOnly) shows only Match + the CURRENT
     // discipline's dropdown — no cross-discipline bucket, no Fielding column-family.
     // The leaderboard leaves it off → all four. gi is still the DISCIPLINE_ORDER
@@ -2148,15 +2214,29 @@ export function createColumnsPicker({
       return paletteSkeletonHTML(gi, {
         ctlClass: "addctl cols-dd-ctl",
         toggleClass: "cols-dd-trigger",
-        toggleAttrs: disabled ? " disabled" : "",
+        toggleAttrs: `${disabled ? " disabled" : ""} data-dd="${disc}"`,
         toggleAriaLabel: `Add a ${label} column`,
-        toggleInner: `<span class="cols-dd-name">${escHtml(label)}</span><span class="cols-dd-caret" aria-hidden="true">▾</span>`,
+        toggleInner: `<span class="cols-dd-name">${escHtml(label)}</span><span class="cols-dd-badge">${counts[disc] || 0}</span><span class="cols-dd-caret" aria-hidden="true">▾</span>`,
         searchPlaceholder: "Search columns&hellip;",
         searchAriaLabel: "Search columns",
         emptyText: "No matching column.",
       });
     }).join("");
     return `<div class="cols-dropdowns cols-add"><div class="cols-add__label">Add columns</div><div class="cols-dd-bar">${skeletons}</div></div>`;
+  }
+
+  /** Decision 76.3 restore: refresh the four dropdown triggers' count badges from the
+   * live column list WITHOUT rebuilding the bar (an open floating palette's search
+   * text/scroll survive). No-op if the bar isn't in `rootEl` (popover mode). Mirrors
+   * syncInstanceControls' "resync without rebuild" shape. */
+  function updateBadges(rootEl) {
+    const bar = rootEl.querySelector(".cols-dd-bar");
+    if (!bar) return;
+    const counts = dropdownCounts(getDiscipline());
+    bar.querySelectorAll(".cols-dd-trigger[data-dd]").forEach((btn) => {
+      const badge = btn.querySelector(".cols-dd-badge");
+      if (badge) badge.textContent = String(counts[btn.dataset.dd] || 0);
+    });
   }
 
   /** The palette group/leaf tree for ONE discipline dropdown (gi = its index in
@@ -2693,6 +2773,11 @@ export function createColumnsPicker({
     chosenHost.replaceWith(fresh);
     wireChosen(container);
     inlineState.sig = inlineSignature(ns, formats);
+    // Decision 76.3: this swap only replaces the chosen-rows region — the dropdown
+    // bar above it (and its badges) stays mounted, so every add/remove/duplicate/
+    // composer/param edit that funnels through here (the sole path for all of them)
+    // must refresh the badges explicitly.
+    updateBadges(container);
     // keepOpenOnPick: the dropdown bar now sits ABOVE the chosen list (#17), so
     // adding a column no longer shifts the (still-open) discipline trigger — this
     // reposition is now a defensive no-op, kept for any other layout shift (e.g.
