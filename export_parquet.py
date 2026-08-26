@@ -94,10 +94,16 @@ EXPORT_FILES = {
     ],
     # D4 matchup files (men-only in practice; unmapped opponents bucketed as
     # '(unmapped)' so the browser can compute an honest N-of-M denominator).
-    "matchup_batting.parquet": ["match_id", "innings_number", "batter_id", "bowling_type"],
+    # M2b: matchup_batting grain gained vs_potm (whether the bowler was that match's
+    # PotM) as a 5th PK column; matchup_bowling gained vs_potm (whether the batter
+    # faced was that match's PotM) as a 6th PK column. (The vs-bowling-arm axis was
+    # dropped by owner ruling — bowling_arm not reliably mapped — so no arm PK column.)
+    "matchup_batting.parquet": ["match_id", "innings_number", "batter_id", "bowling_type",
+                                "vs_potm"],
     # D4-R4: matchup_bowling grain gained batting_position (STRIKER's own
     # batting position at each delivery) as a 5th PK column.
-    "matchup_bowling.parquet": ["match_id", "innings_number", "bowler_id", "batting_hand", "batting_position"],
+    "matchup_bowling.parquet": ["match_id", "innings_number", "bowler_id", "batting_hand",
+                                "batting_position", "vs_potm"],
 }
 
 CONTENT_TYPES = {
@@ -1356,6 +1362,19 @@ def sql_matchup_batting():
     across). Verified (dev harness, real DB): 0 mismatching rows vs a direct
     join to the batting_innings-equivalent query; NOT NULL and within 1..12
     everywhere.
+
+    M2b GRAIN CHANGE (decisions 75 + 78): the primary key gained ONE column,
+    `vs_potm` (1 iff the BOWLER on the delivery was a Player-of-the-Match winner of
+    that match, else 0). It is a per-delivery bowler attribute, so it splits each
+    (match,innings,batter,bowling_type) group into finer buckets exactly as D4-R4
+    split by batting_position. Rolling the new grain back up to the OLD
+    (match,inn,batter,bowling_type) grain reproduces every pre-M2b column exactly
+    (numbers-sacred; verified). dis_kind is keyed on the same new column so dis_*
+    still sums to dismissals; team_type_agg (team_rel_*, unreachable) is deliberately
+    LEFT at bowling_type grain. vs_potm identity join is opposition-restricted (a
+    same-team PotM is never the bowler in the batter's innings).
+    (The vs-bowling-arm axis was dropped — owner ruling: bowling_arm is not reliably
+    mapped, so it is not a trustworthy axis. No bowling_arm column is emitted.)
     """
     cte = build_delivery_cte(hundred_only=None)
     pos_cte = build_positions_cte()
@@ -1368,6 +1387,19 @@ def sql_matchup_batting():
         JOIN kept_innings ki
           ON w.match_id = ki.match_id AND w.innings_number = ki.innings_number
         WHERE w.kind IN ({_KINDS_IN})
+    ),
+    -- M2b (ADDITIVE): Player-of-the-Match set for the vs-PotM axis. One row per
+    -- (match, PotM winner). PK (match_id, player_id) => at most ONE row per
+    -- (match, given player), so a LEFT JOIN on the opponent id never multiplies a
+    -- delivery. DISTINCT collapses the 9 known dup-entry files (same convention as
+    -- sql_player_matches()'s pom CTE). A batting-matchup row's OPPONENT is the
+    -- bowler, so vs_potm below joins pom on d.bowler_id: a same-team PotM is never
+    -- the bowler in the batter's own innings, so the identity join self-restricts
+    -- to opposition PotMs (no team predicate needed).
+    pom AS (
+        SELECT DISTINCT match_id, player_id
+        FROM match_player_of_match
+        WHERE player_id IS NOT NULL
     ),
     -- Credited-wicket count per delivery (mirrors the bowling export's join so
     -- totals reconcile). Credited kinds always dismiss the striker (d.batter_id).
@@ -1386,6 +1418,9 @@ def sql_matchup_batting():
     dis_kind AS (
         SELECT d.match_id, d.innings_number, d.batter_id,
                COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)') AS bowling_type,
+               -- M2b (ADDITIVE): keyed identically to mb's new grain column so
+               -- the join back stays 1:1 and dis_* still sums exactly to dismissals.
+               CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END AS vs_potm,
                SUM(CASE WHEN kw.kind = 'bowled'            THEN 1 ELSE 0 END) AS dis_bowled,
                SUM(CASE WHEN kw.kind = 'lbw'               THEN 1 ELSE 0 END) AS dis_lbw,
                SUM(CASE WHEN kw.kind = 'caught'            THEN 1 ELSE 0 END) AS dis_caught,
@@ -1397,14 +1432,22 @@ def sql_matchup_batting():
           ON kw.match_id = d.match_id AND kw.innings_number = d.innings_number
          AND kw.over_number = d.over_number AND kw.ball_index = d.ball_index
         LEFT JOIN player_profiles pp ON d.bowler_id = pp.player_id
+        LEFT JOIN pom ON pom.match_id = d.match_id AND pom.player_id = d.bowler_id
         GROUP BY d.match_id, d.innings_number, d.batter_id,
-                 COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)')
+                 COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)'),
+                 CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END
     ),
     mb AS (
         SELECT
             d.match_id, d.innings_number, d.batter_id,
             COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)') AS bowling_type,
             COALESCE(pp.bowling_group, '(unmapped)')                  AS bowling_group,
+            -- M2b (ADDITIVE) new bucket dimension. vs_potm = 1 iff the BOWLER on the
+            -- delivery was a Player-of-the-Match winner of that match (the opponent,
+            -- opposition-restricted by the identity join). It splits each (batter,
+            -- type) group into finer buckets; rolling back up to (match,inn,batter,
+            -- type) reproduces the pre-M2b output exactly on every column.
+            CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END      AS vs_potm,
             ANY_VALUE(d.batter) AS batter_name,
             ANY_VALUE(d.batting_team) AS batting_team,
             ANY_VALUE(CASE WHEN d.team_1 = d.batting_team THEN d.team_2 ELSE d.team_1 END) AS bowling_team,
@@ -1478,6 +1521,7 @@ def sql_matchup_batting():
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' THEN COALESCE(cwkt.wkts, 0) ELSE 0 END) AS odi_death_dismissals
         FROM d
         LEFT JOIN player_profiles pp ON d.bowler_id = pp.player_id
+        LEFT JOIN pom ON pom.match_id = d.match_id AND pom.player_id = d.bowler_id
         LEFT JOIN cwkt
           ON d.match_id = cwkt.match_id AND d.innings_number = cwkt.innings_number
          AND d.over_number = cwkt.over_number AND d.ball_index = cwkt.ball_index
@@ -1485,7 +1529,8 @@ def sql_matchup_batting():
         WHERE d.batter_id IS NOT NULL
         GROUP BY d.match_id, d.innings_number, d.batter_id,
                  COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)'),
-                 COALESCE(pp.bowling_group, '(unmapped)')
+                 COALESCE(pp.bowling_group, '(unmapped)'),
+                 CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END
     ),
     -- Team-relative batting at matchup grain (Wave 2, ADDITIVE). "team vs that
     -- type" = the WHOLE side's aggregate against that bowling_type this innings
@@ -1509,6 +1554,7 @@ def sql_matchup_batting():
     )
     SELECT
         mb.match_id, mb.innings_number, mb.batter_id, mb.bowling_type, mb.bowling_group,
+        mb.vs_potm,
         mb.batter_name, mb.batting_team, mb.bowling_team, mb.match_type, mb.gender, mb.team_type,
         mb.match_date, mb.year, mb.month,
         mb.runs, mb.balls_faced, mb.dots, mb.fours_hit, mb.sixes_hit, mb.dismissals,
@@ -1571,13 +1617,21 @@ def sql_matchup_batting():
     LEFT JOIN dis_kind dk
       ON mb.match_id = dk.match_id AND mb.innings_number = dk.innings_number
      AND mb.batter_id = dk.batter_id AND mb.bowling_type = dk.bowling_type
+     AND mb.vs_potm = dk.vs_potm
     LEFT JOIN positions pos
       ON mb.match_id = pos.match_id AND mb.innings_number = pos.innings_number
      AND mb.batter_id = pos.pid
+    -- team_type_agg stays at (match,inn,bowling_type) grain: team-relative
+    -- differentials (team_rel_*) are NOT split by arm/vs_potm, so this join fans
+    -- the whole-type team totals across the new arm/vs_potm sub-buckets. team_rel_*
+    -- is unreachable by any metrics.js metric today, so this changes no app number;
+    -- it is documented so a future wiring step knows the differential denominator
+    -- is the whole bowling_type, not the arm/PotM slice. ORACLE 3 mirrors this.
     LEFT JOIN team_type_agg tt
       ON mb.match_id = tt.match_id AND mb.innings_number = tt.innings_number
      AND mb.bowling_type = tt.bowling_type
-    ORDER BY mb.match_date, mb.match_id, mb.innings_number, mb.batter_id, mb.bowling_type
+    ORDER BY mb.match_date, mb.match_id, mb.innings_number, mb.batter_id,
+             mb.bowling_type, mb.vs_potm
     """
 
 
@@ -1611,6 +1665,16 @@ def sql_matchup_bowling():
     OLD grain (GROUP BY match, innings, bowler, batting_hand) reproduces the
     pre-D4-R4 output exactly on every numeric column (verified in the dev
     harness against the real DB, 0 rows differing either direction).
+
+    M2b GRAIN CHANGE (decisions 75 + 78): item 1 added `wides_runs`/`noball_runs`
+    (SUM(COALESCE(wides,0))/SUM(COALESCE(noballs,0)), identical to bowling_innings)
+    with NO grain change. Item 3 added `vs_potm` (1 iff the BATTER faced on the
+    delivery was a Player-of-the-Match winner of that match) as a 6th PK column,
+    splitting each (match,inn,bowler,batting_hand,batting_position) group exactly as
+    D4-R4 split by batting_position. wkt_by_ball/wkt_agg carry vs_potm so wkt_* still
+    sums to wickets; team_hp_agg (team_rel_*, unreachable) is LEFT at the old grain.
+    Rolling back up to the pre-M2b grain reproduces every existing column exactly
+    (numbers-sacred; verified). vs_potm identity join is opposition-restricted.
     """
     cte = build_delivery_cte(hundred_only=None)
     pos_cte = build_positions_cte()
@@ -1634,6 +1698,17 @@ def sql_matchup_bowling():
         GROUP BY d.match_id, d.innings_number, d.over_number, d.ball_index,
                  d.batter_id, d.bowler_id
     ),
+    -- M2b (ADDITIVE): Player-of-the-Match set for the vs-PotM axis (mirror of the
+    -- matchup_batting pom CTE). A bowling-matchup row's OPPONENT is the BATTER, so
+    -- vs_potm below joins pom on d.batter_id: a same-team PotM is never a batter the
+    -- bowler dismisses/bowls to in that innings, so the identity join self-restricts
+    -- to opposition PotMs. PK (match_id,player_id) => at most one pom row per
+    -- (match, batter), so the LEFT JOIN never multiplies a delivery.
+    pom AS (
+        SELECT DISTINCT match_id, player_id
+        FROM match_player_of_match
+        WHERE player_id IS NOT NULL
+    ),
     -- Named wkt_by_ball (matching sql_bowling's CTE) so t20_phase_expr_wba() /
     -- odi_phase_wba() -- which hard-code the "wkt_by_ball." prefix -- apply
     -- unmodified. Extra dims here: batting_hand (dismissed batter's mapped
@@ -1644,6 +1719,8 @@ def sql_matchup_bowling():
         SELECT d.match_id, d.innings_number, d.bowler_id,
                COALESCE(pp.batting_style, '(unmapped)') AS batting_hand,
                pos.batting_position,
+               -- M2b: keyed identically to mbowl's new vs_potm so wkt_* stays 1:1.
+               CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END AS vs_potm,
                d.over_number, d.balls_per_over, d.legal_ordinal,
                kw.kind,
                COUNT(*) AS wkts
@@ -1652,16 +1729,18 @@ def sql_matchup_bowling():
           ON kw.match_id = d.match_id AND kw.innings_number = d.innings_number
          AND kw.over_number = d.over_number AND kw.ball_index = d.ball_index
         LEFT JOIN player_profiles pp ON d.batter_id = pp.player_id
+        LEFT JOIN pom ON pom.match_id = d.match_id AND pom.player_id = d.batter_id
         LEFT JOIN positions pos
           ON d.match_id = pos.match_id AND d.innings_number = pos.innings_number
          AND d.batter_id = pos.pid
         GROUP BY d.match_id, d.innings_number, d.bowler_id,
                  COALESCE(pp.batting_style, '(unmapped)'),
                  pos.batting_position,
+                 CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END,
                  d.over_number, d.balls_per_over, d.legal_ordinal, kw.kind
     ),
     wkt_agg AS (
-        SELECT match_id, innings_number, bowler_id, batting_hand, batting_position,
+        SELECT match_id, innings_number, bowler_id, batting_hand, batting_position, vs_potm,
                SUM(wkts) AS wickets,
                SUM(CASE WHEN kind = 'bowled'            THEN wkts ELSE 0 END) AS wkt_bowled,
                SUM(CASE WHEN kind = 'lbw'               THEN wkts ELSE 0 END) AS wkt_lbw,
@@ -1676,13 +1755,18 @@ def sql_matchup_bowling():
                SUM(CASE WHEN ({odi_phase_wba()}) = 'mid'   THEN wkts ELSE 0 END) AS odi_mid_wickets,
                SUM(CASE WHEN ({odi_phase_wba()}) = 'death' THEN wkts ELSE 0 END) AS odi_death_wickets
         FROM wkt_by_ball
-        GROUP BY match_id, innings_number, bowler_id, batting_hand, batting_position
+        GROUP BY match_id, innings_number, bowler_id, batting_hand, batting_position, vs_potm
     ),
     mbowl AS (
         SELECT
             d.match_id, d.innings_number, d.bowler_id,
             COALESCE(pp.batting_style, '(unmapped)') AS batting_hand,
             pos.batting_position,
+            -- M2b (ADDITIVE) new bucket dimension: vs_potm = 1 iff the BATTER faced on
+            -- the delivery was a Player-of-the-Match winner of that match (the opponent,
+            -- opposition-restricted by the identity join). Splits each (bowler,hand,
+            -- position) group; rolling back up reproduces the pre-M2b output exactly.
+            CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END AS vs_potm,
             ANY_VALUE(d.bowler) AS bowler_name,
             ANY_VALUE(d.batting_team) AS batting_team,
             ANY_VALUE(CASE WHEN d.team_1 = d.batting_team THEN d.team_2 ELSE d.team_1 END) AS bowling_team,
@@ -1698,6 +1782,13 @@ def sql_matchup_bowling():
             SUM(CASE WHEN {LEGAL_BOWLER} AND d.runs_batter = 0 THEN 1 ELSE 0 END) AS dots,
             SUM(CASE WHEN {HIT_BOUNDARY_4} THEN 1 ELSE 0 END) AS fours_conceded,
             SUM(CASE WHEN {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS sixes_conceded,
+            -- M2b (ADDITIVE): wides/no-ball runs conceded, so the browser can compute
+            -- the 3 gated "% Runs Conceded in..." variants (non-boundary/wides/no-balls).
+            -- IDENTICAL definition to sql_bowling()'s bowling_innings columns (which the
+            -- plain runs_conc_nonbdry_pct/wides_pct/noballs_pct already divide by), off
+            -- the same shared delivery CTE `d`. byes/leg-byes excluded (never charged).
+            SUM(COALESCE(d.wides,0)) AS wides_runs,
+            SUM(COALESCE(d.noballs,0)) AS noball_runs,
             SUM(COALESCE(cwkt.wkts, 0)) AS wickets,
             SUM(CASE WHEN {t20_phase_expr()} = 'pp'    AND {LEGAL_BOWLER} THEN 1 ELSE 0 END) AS pp_balls,
             SUM(CASE WHEN {t20_phase_expr()} = 'pp'    THEN {BOWLER_RUNS} ELSE 0 END) AS pp_runs_conceded,
@@ -1733,6 +1824,7 @@ def sql_matchup_bowling():
             SUM(CASE WHEN ({ODI_PHASE_OVER}) = 'death' AND {HIT_BOUNDARY_6} THEN 1 ELSE 0 END) AS odi_death_sixes_conceded
         FROM d
         LEFT JOIN player_profiles pp ON d.batter_id = pp.player_id
+        LEFT JOIN pom ON pom.match_id = d.match_id AND pom.player_id = d.batter_id
         LEFT JOIN positions pos
           ON d.match_id = pos.match_id AND d.innings_number = pos.innings_number
          AND d.batter_id = pos.pid
@@ -1743,7 +1835,8 @@ def sql_matchup_bowling():
         WHERE d.bowler_id IS NOT NULL
         GROUP BY d.match_id, d.innings_number, d.bowler_id,
                  COALESCE(pp.batting_style, '(unmapped)'),
-                 pos.batting_position
+                 pos.batting_position,
+                 CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END
     ),
     -- Team-relative bowling at matchup grain (Wave 2, ADDITIVE). "team" = the
     -- WHOLE bowling side's aggregate against that (batting_hand, batting_position)
@@ -1784,10 +1877,11 @@ def sql_matchup_bowling():
     )
     SELECT
         mbowl.match_id, mbowl.innings_number, mbowl.bowler_id, mbowl.batting_hand,
-        mbowl.batting_position,
+        mbowl.batting_position, mbowl.vs_potm,
         mbowl.bowler_name, mbowl.batting_team, mbowl.bowling_team, mbowl.match_type, mbowl.gender, mbowl.team_type,
         mbowl.match_date, mbowl.year, mbowl.month,
         mbowl.balls, mbowl.runs_conceded, mbowl.wickets, mbowl.dots, mbowl.fours_conceded, mbowl.sixes_conceded,
+        mbowl.wides_runs, mbowl.noball_runs,
         COALESCE(wk.wkt_bowled, 0)            AS wkt_bowled,
         COALESCE(wk.wkt_lbw, 0)               AS wkt_lbw,
         COALESCE(wk.wkt_caught, 0)            AS wkt_caught,
@@ -1849,13 +1943,19 @@ def sql_matchup_bowling():
     LEFT JOIN wkt_agg wk
       ON mbowl.match_id = wk.match_id AND mbowl.innings_number = wk.innings_number
      AND mbowl.bowler_id = wk.bowler_id AND mbowl.batting_hand = wk.batting_hand
-     AND mbowl.batting_position = wk.batting_position
+     AND mbowl.batting_position = wk.batting_position AND mbowl.vs_potm = wk.vs_potm
+    -- team_hp_agg stays at (match,inn,batting_hand,batting_position) grain: the
+    -- team-relative differentials (team_rel_*, unreachable by any metrics.js metric)
+    -- are NOT split by vs_potm, so this join fans the whole-(hand,position) team
+    -- totals across the vs_potm sub-buckets. Changes no app number; documented so a
+    -- future wiring step knows the denominator is the whole (hand,position) slice.
+    -- ORACLE 4 mirrors this (thp left at the old grain).
     LEFT JOIN team_hp_agg thp
       ON mbowl.match_id = thp.match_id AND mbowl.innings_number = thp.innings_number
      AND mbowl.batting_hand = thp.batting_hand
      AND mbowl.batting_position = thp.batting_position
     ORDER BY mbowl.match_date, mbowl.match_id, mbowl.innings_number, mbowl.bowler_id,
-             mbowl.batting_hand, mbowl.batting_position
+             mbowl.batting_hand, mbowl.batting_position, mbowl.vs_potm
     """
 
 
@@ -3220,6 +3320,16 @@ def run_gates(con, out_dir):
     gate(sum_noball_runs == ref_noball_runs, "bowling_innings noball_runs == SUM(noballs) (global)",
          f"{sum_noball_runs} vs {ref_noball_runs}")
 
+    # M2b (ADDITIVE): matchup_bowling gained the same two columns (feed the 3 gated
+    # "% Runs Conceded in..." variants). Global SUM is grain-agnostic, so it holds
+    # unchanged under the vs-PotM grain split below.
+    mbowl_wides = q(f"SELECT SUM(wides_runs) FROM read_parquet('{mbowl_p}')")
+    mbowl_noball = q(f"SELECT SUM(noball_runs) FROM read_parquet('{mbowl_p}')")
+    gate(mbowl_wides == ref_wides_runs, "matchup_bowling wides_runs == SUM(wides) (global)",
+         f"{mbowl_wides} vs {ref_wides_runs}")
+    gate(mbowl_noball == ref_noball_runs, "matchup_bowling noball_runs == SUM(noballs) (global)",
+         f"{mbowl_noball} vs {ref_noball_runs}")
+
     # --- (e) Vocabulary gates. Allow-lists verified against the real DB
     # 2026-07-09 (see BOWLING_TYPE_VOCAB / BATTING_HAND_VOCAB / BOWLING_GROUP_VOCAB
     # comments for exactly which values are populated today).
@@ -3244,6 +3354,17 @@ def run_gates(con, out_dir):
     )
     gate(bad_type == 0, "matchup_batting.bowling_type within decision-13 taxonomy",
          f"{bad_type} rows outside {BOWLING_TYPE_VOCAB}")
+
+    # M2b (ADDITIVE): the new vs-PotM bucket column (both boards).
+    bad_potm_bat = q(
+        f"SELECT COUNT(*) FROM read_parquet('{mbat_p}') WHERE vs_potm NOT IN (0, 1)"
+    )
+    gate(bad_potm_bat == 0, "matchup_batting.vs_potm is 0/1", f"{bad_potm_bat} rows outside (0,1)")
+
+    bad_potm_bowl = q(
+        f"SELECT COUNT(*) FROM read_parquet('{mbowl_p}') WHERE vs_potm NOT IN (0, 1)"
+    )
+    gate(bad_potm_bowl == 0, "matchup_bowling.vs_potm is 0/1", f"{bad_potm_bowl} rows outside (0,1)")
 
     # =========================================================================
     # Backlog #3 — phase-component column gates (ADDITIVE, 2026-07-23). Consistency
@@ -3817,9 +3938,16 @@ def run_ball_layer_gates(con, out_dir):
     WITH b AS (
         SELECT b0.*,
                COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)') AS bowling_type,
-               COALESCE(pp.bowling_group, '(unmapped)') AS bowling_group
+               COALESCE(pp.bowling_group, '(unmapped)') AS bowling_group,
+               -- M2b grain refinement (independent hand-written derivation): vs_potm
+               -- from raw match_player_of_match (PotM is not a ball column),
+               -- opposition-restricted by the bowler-id join.
+               CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END AS vs_potm
         FROM read_parquet('{dv}') b0
         LEFT JOIN {prof} pp ON pp.player_id = b0.bowler_id
+        LEFT JOIN (SELECT DISTINCT match_id, player_id FROM match_player_of_match
+                   WHERE player_id IS NOT NULL) pom
+               ON pom.match_id = b0.match_id AND pom.player_id = b0.bowler_id
         WHERE NOT b0.is_super_over AND b0.batter_id IS NOT NULL
     ),
     tta AS (SELECT match_id, innings_number, bowling_type,
@@ -3829,7 +3957,7 @@ def run_ball_layer_gates(con, out_dir):
                    SUM(CASE WHEN {B4} THEN 1 ELSE 0 END) t_fours,
                    SUM(CASE WHEN {B6} THEN 1 ELSE 0 END) t_sixes
             FROM b GROUP BY 1,2,3),
-    mb AS (SELECT match_id, innings_number, batter_id, bowling_type,
+    mb AS (SELECT match_id, innings_number, batter_id, bowling_type, vs_potm,
                   ANY_VALUE(bowling_group) bowling_group, ANY_VALUE(batter_name) batter_name,
                   ANY_VALUE(batting_team) batting_team, ANY_VALUE(bowling_team) bowling_team,
                   ANY_VALUE(match_type) match_type, ANY_VALUE(gender) gender, ANY_VALUE(team_type) team_type,
@@ -3856,8 +3984,9 @@ def run_ball_layer_gates(con, out_dir):
                   {bat_phase_cols(ODIP, 'odi_')},
                   {bat_phase_dis(T20P, '', 'bowler_credited_wkts')},
                   {bat_phase_dis(ODIP, 'odi_', 'bowler_credited_wkts')}
-           FROM b GROUP BY match_id, innings_number, batter_id, bowling_type)
-    SELECT mb.match_id, mb.innings_number, mb.batter_id, mb.bowling_type, mb.bowling_group,
+           FROM b GROUP BY match_id, innings_number, batter_id, bowling_type, vs_potm)
+    SELECT mb.match_id, mb.innings_number, mb.batter_id, mb.bowling_type, mb.vs_potm,
+        mb.bowling_group,
         mb.batter_name, mb.batting_team, mb.bowling_team, mb.match_type, mb.gender, mb.team_type,
         mb.match_date, mb.year, mb.month, mb.is_hundred, mb.batting_position,
         mb.runs, mb.balls_faced, mb.dots, mb.fours_hit, mb.sixes_hit, mb.dismissals,
@@ -3892,17 +4021,27 @@ def run_ball_layer_gates(con, out_dir):
                 "odi_mid_dots", "odi_mid_fours", "odi_mid_sixes", "odi_mid_dismissals",
                 "odi_death_dots", "odi_death_fours", "odi_death_sixes", "odi_death_dismissals"]
     mbat_float = ["team_rel_sr", "team_rel_dot_pct", "team_rel_bpb", "team_rel_nbsr"]
+    # M2b: key gained vs_potm (the vs-arm axis was dropped by owner ruling).
+    # expect_rows is snapshot-specific (this DB snapshot). If a fresh CI data pull
+    # changes the row set, recompute it the same way the other export row counts are
+    # (COUNT(*) on the just-written parquet).
     reconcile("matchup_batting", "orx_mbat", mbat_ref,
-              ["match_id", "innings_number", "batter_id", "bowling_type"],
-              mbat_plain, mbat_odi, mbat_float, 964860)
+              ["match_id", "innings_number", "batter_id", "bowling_type", "vs_potm"],
+              mbat_plain, mbat_odi, mbat_float, 990367)
 
     # ================= ORACLE 4 — matchup_bowling =====================
     con.execute(f"""
     CREATE OR REPLACE TEMP TABLE orx_mbowl AS
     WITH b AS (
-        SELECT b0.*, COALESCE(pp.batting_style, '(unmapped)') AS batting_hand
+        SELECT b0.*, COALESCE(pp.batting_style, '(unmapped)') AS batting_hand,
+               -- M2b: vs_potm from raw match_player_of_match (PotM is not a ball
+               -- column), opposition-restricted by the batter-id join.
+               CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END AS vs_potm
         FROM read_parquet('{dv}') b0
         LEFT JOIN {prof} pp ON pp.player_id = b0.batter_id
+        LEFT JOIN (SELECT DISTINCT match_id, player_id FROM match_player_of_match
+                   WHERE player_id IS NOT NULL) pom
+               ON pom.match_id = b0.match_id AND pom.player_id = b0.batter_id
         WHERE NOT b0.is_super_over AND b0.bowler_id IS NOT NULL
     ),
     thp AS (SELECT match_id, innings_number, batting_hand, batting_position,
@@ -3911,7 +4050,7 @@ def run_ball_layer_gates(con, out_dir):
                    SUM(CASE WHEN {LEGAL} AND runs_batter=0 THEN 1 ELSE 0 END) t_dots,
                    SUM(bowler_credited_wkts) t_wkts
             FROM b GROUP BY 1,2,3,4),
-    mbowl AS (SELECT match_id, innings_number, bowler_id, batting_hand, batting_position,
+    mbowl AS (SELECT match_id, innings_number, bowler_id, batting_hand, batting_position, vs_potm,
                      ANY_VALUE(bowler_name) bowler_name, ANY_VALUE(batting_team) batting_team,
                      ANY_VALUE(bowling_team) bowling_team, ANY_VALUE(match_type) match_type,
                      ANY_VALUE(gender) gender, ANY_VALUE(team_type) team_type,
@@ -3923,16 +4062,19 @@ def run_ball_layer_gates(con, out_dir):
                      SUM(CASE WHEN {LEGAL} AND runs_batter=0 THEN 1 ELSE 0 END) dots,
                      SUM(CASE WHEN {B4} THEN 1 ELSE 0 END) fours_conceded,
                      SUM(CASE WHEN {B6} THEN 1 ELSE 0 END) sixes_conceded,
+                     SUM(COALESCE(wides,0)) wides_runs, SUM(COALESCE(noballs,0)) noball_runs,
                      SUM({kindct('bowled')}) wkt_bowled, SUM({kindct('lbw')}) wkt_lbw,
                      SUM({kindct('caught')}) wkt_caught, SUM({kindct('caught and bowled')}) wkt_caught_and_bowled,
                      SUM({kindct('stumped')}) wkt_stumped, SUM({kindct('hit wicket')}) wkt_hit_wicket,
                      {bowl_phase_cols(T20P, '')},
                      {bowl_phase_cols(ODIP, 'odi_')}
-              FROM b GROUP BY match_id, innings_number, bowler_id, batting_hand, batting_position)
+              FROM b GROUP BY match_id, innings_number, bowler_id, batting_hand, batting_position, vs_potm)
     SELECT mbowl.match_id, mbowl.innings_number, mbowl.bowler_id, mbowl.batting_hand, mbowl.batting_position,
+        mbowl.vs_potm,
         mbowl.bowler_name, mbowl.batting_team, mbowl.bowling_team, mbowl.match_type, mbowl.gender, mbowl.team_type,
         mbowl.match_date, mbowl.year, mbowl.month, mbowl.is_hundred,
         mbowl.balls, mbowl.runs_conceded, mbowl.wickets, mbowl.dots, mbowl.fours_conceded, mbowl.sixes_conceded,
+        mbowl.wides_runs, mbowl.noball_runs,
         mbowl.wkt_bowled, mbowl.wkt_lbw, mbowl.wkt_caught, mbowl.wkt_caught_and_bowled, mbowl.wkt_stumped, mbowl.wkt_hit_wicket,
         mbowl.pp_balls, mbowl.pp_runs_conceded, mbowl.pp_wickets,
         mbowl.mid_balls, mbowl.mid_runs_conceded, mbowl.mid_wickets,
@@ -3955,7 +4097,7 @@ def run_ball_layer_gates(con, out_dir):
     """)
     mbowl_plain = ["bowler_name", "batting_team", "bowling_team", "match_type", "gender",
                    "team_type", "match_date", "year", "month", "balls", "runs_conceded", "wickets",
-                   "dots", "fours_conceded", "sixes_conceded",
+                   "dots", "fours_conceded", "sixes_conceded", "wides_runs", "noball_runs",
                    "wkt_bowled", "wkt_lbw", "wkt_caught", "wkt_caught_and_bowled", "wkt_stumped", "wkt_hit_wicket",
                    "pp_balls", "pp_runs_conceded", "pp_wickets", "mid_balls", "mid_runs_conceded", "mid_wickets",
                    "death_balls", "death_runs_conceded", "death_wickets",
@@ -3969,8 +4111,12 @@ def run_ball_layer_gates(con, out_dir):
                  "odi_mid_dots", "odi_mid_fours_conceded", "odi_mid_sixes_conceded",
                  "odi_death_dots", "odi_death_fours_conceded", "odi_death_sixes_conceded"]
     mbowl_float = ["team_rel_econ", "team_rel_pbe", "team_rel_dot_pct", "team_rel_sr"]
+    # M2b: key gained vs_potm. Row count is UNCHANGED (1,354,907): batting_position is
+    # 1:1 with the batter within an innings, so (bowler,hand,position) already fixes the
+    # batter and vs_potm is functionally determined — it adds a column, not rows. (Still
+    # snapshot-specific; recompute from the just-written parquet if CI data differs.)
     reconcile("matchup_bowling", "orx_mbowl", mbowl_ref,
-              ["match_id", "innings_number", "bowler_id", "batting_hand", "batting_position"],
+              ["match_id", "innings_number", "bowler_id", "batting_hand", "batting_position", "vs_potm"],
               mbowl_plain, mbowl_odi, mbowl_float, 1354907)
 
     # ================= STRUCTURAL + SUPER-OVER + ORDER ================
