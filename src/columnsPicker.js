@@ -2323,6 +2323,13 @@ export function createColumnsPicker({
       inlineState.searchPickerHandle.destroy();
       inlineState.searchPickerHandle = null;
     }
+    // #26 (audit3 §c): the capture-phase Escape listener mounted alongside the search
+    // widget below must be torn down in lockstep with it — otherwise it would outlive
+    // the widget it guards and could fire against a stale/destroyed handle.
+    if (inlineState && inlineState.searchPickerEscHandler) {
+      document.removeEventListener("keydown", inlineState.searchPickerEscHandler, true);
+      inlineState.searchPickerEscHandler = null;
+    }
 
     // Edit pencil on a composer-made standalone row → open an EDIT-mode compose editor
     // pre-filled with that column's stat/axis + its single dimension (radio, single-
@@ -2477,6 +2484,26 @@ export function createColumnsPicker({
           },
         });
         inlineState.searchPickerHandle = handle;
+        // #26 (audit3 §c, "Escape strands the composer/filter value list"): mirror
+        // addPalette.js's own capture-phase document Escape handler (src/addPalette.js
+        // `onKeydown`) so this portaled value list is never stranded over the table —
+        // without it, once the user clicks a row (moving focus off the widget's own
+        // filter box), Escape skips searchSelect.js's onFilterKeydown entirely and falls
+        // straight through to the Filters popup's own document-level Escape handler
+        // (main.js), which hides the popup but never this portaled panel. Exactly like
+        // addPalette's `if (e.key === "Escape" && opened)` guard: only acts — and only
+        // stops the popup's handler — while the panel is actually open (read off the
+        // widget's own aria-expanded, since the handle exposes no isOpen getter), so a
+        // second Escape still closes the popup as normal.
+        const onSearchPickerEscape = (e) => {
+          if (e.key !== "Escape") return;
+          const toggleBtn = host.querySelector(".search-select__toggle");
+          if (!toggleBtn || toggleBtn.getAttribute("aria-expanded") !== "true") return;
+          handle.close({ focusToggle: true });
+          e.stopPropagation();
+        };
+        document.addEventListener("keydown", onSearchPickerEscape, true);
+        inlineState.searchPickerEscHandler = onSearchPickerEscape;
         // Async option load. Guard against a superseded editor: only apply if THIS
         // handle is still the mounted one (a stat change / close swaps it out).
         Promise.resolve()
@@ -2772,6 +2799,19 @@ export function createColumnsPicker({
     const fresh = tmp.firstElementChild;
     chosenHost.replaceWith(fresh);
     wireChosen(container);
+    // #27 (audit3 §d, "composer Add button falls below the dialog at short window
+    // heights"): the transient compose editor renders at the BOTTOM of the chosen-rows
+    // list (buildChosenHTML) inside `.filters-popup__body`, the panel's only scroller —
+    // nothing scrolled it into view, so at short heights its Add/Cancel row could sit
+    // hundreds of px below the visible dialog. Scroll the actions row itself (not just
+    // the editor's top) into view on every render that leaves the editor open — this
+    // covers the initial open, an edit-pencil re-open, and any in-place re-render
+    // (stat/axis change, an FC range chip add) that keeps it open. `nearest` is a no-op
+    // once the row is already visible, so normal window heights are unaffected.
+    if (inlineState.editor) {
+      const actionsEl = container.querySelector(".cols-compose-editor__actions");
+      if (actionsEl) actionsEl.scrollIntoView({ block: "nearest" });
+    }
     inlineState.sig = inlineSignature(ns, formats);
     // Decision 76.3: this swap only replaces the chosen-rows region — the dropdown
     // bar above it (and its badges) stays mounted, so every add/remove/duplicate/
