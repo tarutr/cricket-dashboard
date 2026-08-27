@@ -68,6 +68,9 @@ import {
   COLUMN_PRESET_DEFS,
   activePresetKey,
   matchupVsActive,
+  // Decision 81A: normalise state.matchupVs (legacy single object OR composite
+  // map) into the active { dim, value } opponent axes buildMatchupQuery ANDs.
+  matchupVsAxes,
   effectiveNamespace,
   // Chunk 5 Phase 2 Wave B: the profile semi-join, reused VERBATIM as a HAVING/step-3
   // disjunct under player-lane "Match any" (WHERE→HAVING lowering) so the OR form can
@@ -413,9 +416,24 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // generically off each metric's peakInner/peakOuter/peakOuterSort recipe.
   const peakMetrics = allMetrics.filter((m) => m.kind === "peak");
 
-  const mv = state.matchupVs;
-  const bucketCol = mv.dim === "hand" ? "batting_hand" : mv.dim === "type" ? "bowling_type" : "bowling_group";
-  const bucketClause = `${bucketCol} = '${esc(mv.value)}'`;
+  // Composite opponent bucket (decision 81A). state.matchupVs may now hold
+  // SEVERAL opponent axes — different dimensions AND-ed together, same dimension
+  // mutually exclusive, always ALL / never ANY. matchupVsAxes() normalises both
+  // the legacy single { dim, value } shape (→ one axis) and the composite map
+  // (→ one axis per present dim, in a fixed order). Keep ONLY the axes whose
+  // dimension is an opponent classification on THIS board (batting → the faced
+  // bowler's group/type; bowling → the faced batter's hand), so a stale
+  // cross-board axis can never leak into the predicate — buildMatchupQuery only
+  // runs when matchupVsActive(state) is true, which guarantees ≥1 surviving
+  // axis. Each axis maps to its board-independent bucket column and is
+  // esc()'d; the clauses AND together into ONE bucketClause. With a single axis
+  // this reproduces the former string byte-for-byte, so every ≤1-axis query is
+  // byte-identical. `bucketClause` threads UNCHANGED into the per-aggregate
+  // FILTER (WHERE …) below and the peak CTE's peakWhere.
+  const BUCKET_COL_BY_DIM = { hand: "batting_hand", type: "bowling_type", group: "bowling_group" };
+  const boardDims = discipline === "batting" ? ["group", "type"] : ["hand"];
+  const bucketAxes = matchupVsAxes(state.matchupVs).filter((a) => boardDims.includes(a.dim));
+  const bucketClause = bucketAxes.map((a) => `${BUCKET_COL_BY_DIM[a.dim]} = '${esc(a.value)}'`).join(" AND ");
 
   // Column alias registry for step 1 (`agg`): every ticked/extra metric key
   // gets its own alias (m.key). The min-innings gate and any active stat

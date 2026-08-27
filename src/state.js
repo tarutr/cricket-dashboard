@@ -309,6 +309,65 @@ export function positionsFilterActive(state) {
 // bucket, with a coverage figure attached. Men-only in practice — matchup
 // coverage for women is ~0% (decision 21).
 
+// Canonical dimension order for the composite matchup opponent filter (decision
+// 81A) — fixes the order axes are emitted in so the generated SQL is
+// deterministic. AND is commutative, so the order is a byte-stability choice
+// only.
+const MATCHUP_VS_DIMS = ["group", "type", "hand"];
+
+/**
+ * Normalise `state.matchupVs` into an array of active `{ dim, value }` opponent
+ * axes (decision 81A — combinable matchup opponent filter). The "Vs" mode can
+ * now hold SEVERAL opponent conditions AND-ed together: different DIMENSIONS
+ * combine, same-dimension values are mutually exclusive, and the join is ALWAYS
+ * ALL / never ANY. Two shapes are accepted and both normalise here:
+ *   • null / undefined              → []                (no axis)
+ *   • legacy single { dim, value }  → [{ dim, value }]  (exactly ONE axis — the
+ *        shape the current single-axis lane writer still emits; kept working
+ *        byte-identically so nothing downstream changes at ≤1 axis)
+ *   • composite map { group?, type?, hand? } (each value is the bucket string)
+ *        → one { dim, value } per present, non-empty dim, in MATCHUP_VS_DIMS
+ *        order. The map keying makes same-dimension exclusivity STRUCTURAL (one
+ *        value per dim).
+ * The two shapes are told apart by whether a `dim` STRING key is present (only
+ * the legacy single object has one).
+ *
+ * NOTE (cross-task): the composite WRITE path is Task C (drawer.js) and is not
+ * built yet — today only the legacy single object is ever written, so every
+ * existing direct reader of `state.matchupVs.dim`/`.value` (drawer/pills/graph/
+ * timeseries/playerFilters + the describe token in this file) still sees the
+ * single object and keeps working. When the composite writer lands, those
+ * readers must move onto matchupVsAxes() too.
+ */
+export function matchupVsAxes(matchupVs) {
+  if (!matchupVs) return [];
+  // Legacy single object: a `dim` string names the one dimension.
+  if (typeof matchupVs.dim === "string") {
+    return matchupVs.value != null && matchupVs.value !== ""
+      ? [{ dim: matchupVs.dim, value: matchupVs.value }]
+      : [];
+  }
+  // Composite map keyed by dimension → one axis per present, non-empty value.
+  const axes = [];
+  for (const dim of MATCHUP_VS_DIMS) {
+    const value = matchupVs[dim];
+    if (value != null && value !== "") axes.push({ dim, value });
+  }
+  return axes;
+}
+
+/** Is one opponent-axis dimension applicable to the current discipline + data?
+ * Data-presence gated, NOT gender (owner directive 2026-08-06): the `hand` dim
+ * (batting_hand bucket) needs matchup_bowling on the bowling board; `group`/
+ * `type` (bowling_group/bowling_type buckets) need matchup_batting on the
+ * batting board. This is the exact rule the single-axis gate always applied,
+ * factored out so the composite gate can `.some()` over its axes. */
+function matchupAxisApplicable(dim, state) {
+  if (dim === "hand") return state.discipline === "bowling" && dataAvailBool(state, "matchupBowling");
+  if (dim === "group" || dim === "type") return state.discipline === "batting" && dataAvailBool(state, "matchupBatting");
+  return false;
+}
+
 /**
  * True iff a matchup "Vs" selection is currently active AND applicable to the
  * current discipline. A stale value in the OTHER discipline (e.g. dim "hand"
@@ -324,11 +383,12 @@ export function positionsFilterActive(state) {
  * data-presence block above dataAvailBool for why the sync read is always correct.
  */
 export function matchupVsActive(state) {
-  if (!state.matchupVs) return false;
-  const { dim } = state.matchupVs;
-  if (dim === "hand") return state.discipline === "bowling" && dataAvailBool(state, "matchupBowling");
-  if (dim === "group" || dim === "type") return state.discipline === "batting" && dataAvailBool(state, "matchupBatting");
-  return false;
+  const axes = matchupVsAxes(state.matchupVs);
+  if (!axes.length) return false;
+  // Active iff ≥1 opponent axis is applicable to the current discipline + data.
+  // For the legacy single shape this is one axis, so `.some()` collapses to the
+  // exact former dim check — byte-identical behaviour at ≤1 axis.
+  return axes.some((a) => matchupAxisApplicable(a.dim, state));
 }
 
 /** Effective metrics namespace for the current state: matchup_batting/
@@ -964,7 +1024,13 @@ export function createInitialState(maxMonth) {
                    // folds the ball predicate into the same base-CTE hook as the delivery window (so
                    // pins obey it too). `id` reaches SQL; `name` is display-only (pill/scope label).
                    // See src/opponentFilter.js + opponentPlayerActive() below.
-    matchupVs: null, // null | { dim: "group"|"type"|"hand", value } — leaderboard matchup mode (R3, decision 33)
+    matchupVs: null, // leaderboard matchup "Vs" mode (R3, decision 33). Two shapes, both read via
+                   // matchupVsAxes() (decision 81A — combinable opponent filter):
+                   //   • legacy single { dim: "group"|"type"|"hand", value } — ONE opponent axis
+                   //     (the only shape written today; the single-axis lane writer still emits it)
+                   //   • composite map { group?, type?, hand? } — SEVERAL axes AND-ed (different dims
+                   //     combine, same dim mutually exclusive, always ALL). Written by Task C's
+                   //     multi-axis UI; until then null/legacy only. null = no matchup.
     dataAvail: null, // Data-presence gate (Group 3, owner 2026-08-06): resolved per-gender existence map
                    // { matchupBatting, matchupBowling, profileRole, profileHand, profileBowling } that
                    // matchupVsActive / profileSemiJoinSql key on instead of gender. null = UNRESOLVED;
