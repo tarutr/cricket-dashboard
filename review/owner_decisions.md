@@ -1277,3 +1277,29 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       confirmed) · vs a specific opponent (new; frontend-only — filters on the bowler/batter id already present,
       no pipeline column). NOT vs bowling arm, NOT vs playing role, NOT vs batting position.
 
+81. **MATCHUP AXES COMBINABILITY + BATTING POSITION — RULINGS (owner, 2026-08-27):**
+    - **(A) Combinability — matchup opponent filters are always ALL (AND), never ANY.** Different opponent
+      DIMENSIONS combine; SAME-dimension values are mutually exclusive. Confirmed model:
+      · vs bowling style (batting board) — one value; combines with vs PotMs + scope; not Spin AND Pace.
+      · vs batting hand (bowling board) — one value; combines with vs PotMs + scope.
+      · vs PotMs (yes) — combines with style / hand / opponent-position + scope.
+      · vs opponent batting position (see B) — one range; combines with vs hand + vs PotMs + scope.
+      · vs a specific opponent player — combines with SCOPE only; naming a player fixes that player's
+        attributes, so it is effectively exclusive with the attribute axes; lives in the Matchup lane (migrate
+        vs_opp out of the Scope palette when wired).
+      Engine (for the build, not itself a ruling): buildMatchupQuery is single-bucket today (state.matchupVs a
+      single {dim,value}); combinable ⇒ a composite state + AND-ed bucket clauses, ADDITIVE / byte-identical at
+      zero-or-one active axis; anchors sacred; full numbers ritual + independent DuckDB for combined cases.
+    - **(B) Batting position — split the overloaded single control** (today one `state.positions` →
+      `batting_position IN (...)`, mislabelled "Batting position" and placed under the Scope "Matchup (Vs)"
+      heading; NOT a duplicate). Its two real meanings become two distinct things:
+      · the SUBJECT's OWN batting position (batting board) → a Basic/Detailed stat in the Player dropdown,
+        REMOVED from the "Matchup (Vs)" grouping (it is a self attribute, not a matchup axis);
+      · the OPPONENT batter's position (bowling side — "vs batters 1-3") → a proper, clearly-labelled matchup
+        axis **"vs opponent batting position."**
+      This REFINES decision 75/80's "NOT vs batting position": that earlier "no" was to a conflated concept —
+      the OPPONENT's position IS wanted (as a matchup axis); the SUBJECT's OWN position is a basic self-stat.
+      `out_batting_position` ("Dismissed batter's position", fielding) is a separate, unaffected filter.
+    - **(C) Labels:** `runs_conc_nonbdry_pct` display label = **"NB Runs Con. %"**; and add full column names on
+      header **hover (tooltips)** generally, so abbreviated short-labels are always disambiguated.
+
