@@ -518,7 +518,7 @@ export async function searchEventSeasons(
   const byKey = new Map();
   for (const r of rows) {
     const canon = canonicalEvent(r.raw);
-    const key = `${canon} ${r.season}`;
+    const key = `${canon}__${r.season}`;
     let o = byKey.get(key);
     if (!o) {
       o = { event: canon, season: r.season, syr: null, games: 0 };
