@@ -94,12 +94,40 @@ export function statCardsHTML(cards) {
     .join("")}</div>`;
 }
 
+/** One `<th>`, from either a plain header string (no tooltip, today's shape
+ * unchanged) or `{ text, title }` (decision 81C: a full-name hover tooltip
+ * for an abbreviated header — same `<th title="...">` mechanism the
+ * leaderboard already uses via metric.columnTitle). `title` is optional even
+ * on the object form; omitted/falsy emits a bare `<th>`, same as a string. */
+function headerCellHTML(h) {
+  if (h && typeof h === "object") {
+    const titleAttr = h.title ? ` title="${escAttr(h.title)}"` : "";
+    return `<th${titleAttr}>${escHtml(h.text)}</th>`;
+  }
+  return `<th>${escHtml(h)}</th>`;
+}
+
+/** Zips a plain header-text array (first entry = a bucket/group column with no
+ * metric of its own, e.g. "Bucket"/"Team"/"Pos") against the metric objects
+ * for the rest, so each abbreviated header gets its metric's full `label` as
+ * a hover tooltip (decision 81C) — the same {text, title} shape
+ * `headerCellHTML` renders. Any header beyond `metrics.length` (e.g. the
+ * composition-% column, which has no single metric per row) passes through
+ * bare, untitled. */
+function titledHeaders(headerText, metrics) {
+  return headerText.map((text, i) => {
+    if (i === 0) return text;
+    const m = metrics[i - 1];
+    return m ? { text, title: m.label } : text;
+  });
+}
+
 export function miniTableHTML(headers, bodyRows) {
   if (bodyRows.length === 0) {
     return `<p class="player-page__note">No rows in this scope.</p>`;
   }
   return `<div class="mini-table-wrap"><table class="mini-table">
-    <thead><tr>${headers.map((h) => `<th>${escHtml(h)}</th>`).join("")}</tr></thead>
+    <thead><tr>${headers.map(headerCellHTML).join("")}</tr></thead>
     <tbody>${bodyRows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody>
   </table></div>`;
 }
@@ -163,7 +191,18 @@ export function positionsTableHTML(rows) {
     escHtml(formatValue(m.average, r.average)),
     escHtml(formatValue(m.strike_rate, r.strike_rate)),
   ]);
-  return miniTableHTML(["Pos", "Inns", "Runs", "Avg", "SR"], body);
+  // decision 81C: full metric names as header hover tooltips for the
+  // abbreviated column headers.
+  return miniTableHTML(
+    [
+      "Pos",
+      { text: "Inns", title: m.innings.label },
+      { text: "Runs", title: m.runs.label },
+      { text: "Avg", title: m.average.label },
+      { text: "SR", title: m.strike_rate.label },
+    ],
+    body
+  );
 }
 
 /** "Vs opposition" (owner task #20): shows every team type (was
@@ -176,8 +215,11 @@ export function positionsTableHTML(rows) {
  * honestly as "No rows in this scope". */
 export function oppositionSectionHTML(discipline, rows) {
   const keys = discipline === "batting" ? ["innings", "runs", "average", "strike_rate"] : ["innings", "wickets", "average", "economy"];
-  const headers = discipline === "batting" ? ["Team", "Inns", "Runs", "Avg", "SR"] : ["Team", "Inns", "Wkts", "Avg", "Econ"];
+  const headerText = discipline === "batting" ? ["Team", "Inns", "Runs", "Avg", "SR"] : ["Team", "Inns", "Wkts", "Avg", "Econ"];
   const metrics = keys.map((k) => getMetric(k, discipline));
+  // decision 81C: full metric names as header hover tooltips (Team has no
+  // metric to name, so it stays a bare header).
+  const headers = [headerText[0], ...metrics.map((m, i) => ({ text: headerText[i + 1], title: m.label }))];
   const body = (rows || []).map((r) => [escHtml(r.team), ...metrics.map((m) => escHtml(formatValue(m, r[m.key])))]);
   const tableHTML = miniTableHTML(headers, body);
   // Round-6 item #11: what the table COMPUTES is unchanged (still every
@@ -422,7 +464,7 @@ function fineBowlingTypeSectionHTML(title, headers, entries) {
   return `<div class="matchup__subtable">
     <p class="matchup__subtable-title">${escHtml(title)}</p>
     <div class="mini-table-wrap"><table class="mini-table">
-      <thead><tr>${headers.map((h) => `<th>${escHtml(h)}</th>`).join("")}</tr></thead>
+      <thead><tr>${headers.map(headerCellHTML).join("")}</tr></thead>
       <tbody>${bodyHTML}</tbody>
     </table></div>
   </div>`;
@@ -446,9 +488,12 @@ export function battingMatchupsHTML(matchups) {
   ]);
   const fineEntries = matchups.fine.map((r) => ({ bucket: r.bucket, cells: rowFor(matchupBucketLabel(r.bucket), r) }));
 
-  return `${coverageHTML}${subTableHTML("Vs pace and spin", BATTING_COARSE_HEADERS, coarseRows)}${fineBowlingTypeSectionHTML(
+  // decision 81C: full metric names as header hover tooltips.
+  const coarseHeaders = titledHeaders(BATTING_COARSE_HEADERS, metrics);
+  const fineHeaders = titledHeaders(BATTING_MATCHUP_HEADERS, metrics);
+  return `${coverageHTML}${subTableHTML("Vs pace and spin", coarseHeaders, coarseRows)}${fineBowlingTypeSectionHTML(
     "Vs bowling type",
-    BATTING_MATCHUP_HEADERS,
+    fineHeaders,
     fineEntries
   )}`;
 }
@@ -481,7 +526,8 @@ export function bowlingMatchupsHTML(matchups) {
     ...metrics.map((m) => escHtml(formatValue(m, r[m.key]))),
     compositionPctCell("matchup_bowling", HAND_COMP_KEY[r.bucket] ?? "comp_uncat", r.balls, total),
   ]);
-  return `${coverageHTML}${miniTableHTML(BOWLING_HAND_HEADERS, rows)}`;
+  // decision 81C: full metric names as header hover tooltips.
+  return `${coverageHTML}${miniTableHTML(titledHeaders(BOWLING_HAND_HEADERS, metrics), rows)}`;
 }
 
 // ── Section rendering ────────────────────────────────────────────────────────
