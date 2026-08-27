@@ -2787,6 +2787,15 @@ function compareRows(a, b, metric, dir) {
 const PIN_GLYPH =
   '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg>';
 
+// Stage-3 Phase-5 header gesture (owner 2026-08, header-final-mock): the metric
+// header's top-right highlight icon. Pasted VERBATIM from columnsPicker.js:210
+// (the same Option-C spotlight mark the Columns panel's Highlight toggle uses),
+// re-declared locally rather than imported because columnsPicker.js keeps it as a
+// private const (to avoid the table.js ↔ columnsPicker.js circular import), exactly
+// as PIN_GLYPH is declared here for its own header/body use.
+const HIGHLIGHT_GLYPH =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"><path d="M12 2v2.4"/><path d="M12 19.6V22"/><path d="M2 12h2.4"/><path d="M19.6 12H22"/><path d="M4.9 4.9l1.7 1.7"/><path d="M17.4 17.4l1.7 1.7"/><path d="M4.9 19.1l1.7-1.7"/><path d="M17.4 6.6l1.7-1.7"/></g></svg>';
+
 /**
  * Float pinned players to the TOP of the displayed rows (owner decision 50, #3;
  * #2 folds in because a searched-in player IS a pin — main.js pinPlayer). `rows`
@@ -3083,12 +3092,13 @@ export function mountTable(
   // inside wireColumnDrag's own closure) purely so onUp() can read where the
   // pointer last was over — see wireColumnDrag's doc comment.
   let dragState = null;
-  // E2: timestamp of the last drag-END (drop). onUp rebuilds the thead (renderLoaded),
-  // which re-binds fresh header click handlers, so the old capture-phase "swallow the
-  // trailing click" trick can't reliably reach whatever element the post-drop click
-  // lands on. Instead the header sort-arrow / highlight click handlers ignore any click
-  // that arrives within a short window of a drop — so a drag never ALSO sorts or
-  // highlights, deterministically. A normal click (no drag) leaves this untouched.
+  // Timestamp of the last drag-END (drop) — also set by a resize drag's mouse-up.
+  // onUp rebuilds the thead (renderLoaded), which re-binds fresh header click handlers,
+  // so the old capture-phase "swallow the trailing click" trick can't reliably reach
+  // whatever element the post-drop click lands on. Instead the header sort / highlight
+  // click handlers ignore any click that arrives within a short window of a drop — so a
+  // drag never ALSO sorts or highlights, deterministically. A normal click (no drag)
+  // leaves this untouched.
   let lastHeaderDragEndTs = 0;
   // Mobile name-column expansion (task 7 / #11): on ≤640px the Player column is
   // clamped to a narrow fixed width (styles.css), truncating long names.
@@ -3590,16 +3600,21 @@ export function mountTable(
         ? state.sort.slotId === slotId
         : state.sort.key === metric.key);
     const dir = isSorted ? state.sort.dir : null;
-    // E2 (owner 2026-08-08): the sort control is now a PERSISTENT small arrow on
-    // every metric header — "↕" idle (click it to sort by this column), "▲"/"▼"
-    // when this column IS the active sort. Clicking the ARROW sorts (toggles
-    // asc/desc); clicking ANYWHERE ELSE on the header toggles this column's
-    // highlight. This splits the former whole-header-click-sorts into the two
-    // gestures the owner approved (arrow = sort, rest = highlight); drag still
-    // reorders. R1 (2026-08-09): these TABLE-HEADER gestures stay INSTANT
-    // (sortByColumn / applyHighlightIdsInstant); the popup row's Sort-by / Highlight
-    // controls now STAGE (stageSort / stageHighlightIds) and apply on Search.
-    const sortGlyph = isSorted ? (dir === "asc" ? "▲" : "▼") : "↕";
+    // Stage-3 Phase-5 (owner 2026-08, header-final-mock): the sort control is no
+    // longer an always-on arrow BUTTON. The WHOLE header cell is the sort target —
+    // a plain click on the <th> sorts by this column (toggles asc/desc); a small
+    // inline ▲/▼ caret is appended after the label ONLY on the column that IS the
+    // active sort (in-flow, no reserved slot, reusing the .is-sorted accent).
+    // Highlight moved to a small top-right corner ICON (.th-hi-btn, absolutely
+    // positioned) whose click toggles the column highlight and stops propagation so
+    // it never sorts. Drag still reorders; the right-edge resizer still resizes.
+    // This SUPERSEDES the former E2 model (arrow = sort, header-click = highlight).
+    // R1 (2026-08-09): these TABLE-HEADER gestures stay INSTANT (sortByColumn /
+    // applyHighlightIdsInstant); the popup row's Sort-by / Highlight controls STAGE
+    // (stageSort / stageHighlightIds) and apply on Search.
+    const sortInd = isSorted
+      ? `<span class="data-table__th-sortind" aria-hidden="true">${dir === "asc" ? "▲" : "▼"}</span>`
+      : "";
     // `data-table__th--draggable` (task 2): every metric column can be
     // reordered via drag — see wireColumnDrag. The sticky Player column
     // (rendered elsewhere in renderLoaded, never through this function) never
@@ -3616,7 +3631,9 @@ export function mountTable(
     // than on "the first column with this key". Metric columns always carry a slot;
     // the by-key fallback only matters for pre-slot callers.
     const slotAttr = slotId != null ? ` data-slot-id="${escAttr(slotId)}"` : "";
-    const sortLabel = escAttr(`Sort by ${metric.label || metric.shortLabel}`);
+    // The highlight icon is the ONLY interactive control left in the header markup
+    // (sorting is the whole-cell click) — give it an accessible label naming the column.
+    const hiLabel = escAttr(`Highlight the ${metric.label || metric.shortLabel} column`);
     // Stage 3 (draggable column resize / decision 77.5): a narrow hit-zone
     // (`.data-table__th-resizer`, styles.css) sits at the header's right-hand
     // divider — wireColumnResize (below) wires it. Bake in whatever width the
@@ -3628,8 +3645,11 @@ export function mountTable(
       ? ` style="width:${storedWidth}px;min-width:${storedWidth}px;max-width:${storedWidth}px;"`
       : "";
     const resizedClass = storedWidth ? " data-table__th--resized" : "";
-    return `<th data-key="${metric.key}"${slotAttr} class="data-table__th data-table__th--draggable ${isSorted ? "is-sorted" : ""}${hlClass}${resizedClass}" scope="col"${titleAttr}${widthStyle}>
-      <span class="data-table__th-label">${metric.shortLabel}</span><button type="button" class="data-table__sort-arrow" title="${sortLabel}" aria-label="${sortLabel}">${sortGlyph}</button><span class="data-table__th-resizer" data-resize-key="${escAttr(widthKey)}" aria-hidden="true"></span>
+    // `is-sortable` = whole-cell click sorts (cursor + hover, styles.css); `has-hi`
+    // reserves the SYMMETRIC left/right padding that both keeps the label centred and
+    // clears the corner highlight icon from the label/caret and the resize handle.
+    return `<th data-key="${metric.key}"${slotAttr} class="data-table__th data-table__th--draggable is-sortable has-hi ${isSorted ? "is-sorted" : ""}${hlClass}${resizedClass}" scope="col"${titleAttr}${widthStyle}>
+      <span class="data-table__th-label">${metric.shortLabel}</span>${sortInd}<button type="button" class="th-hi-btn${isHighlighted ? " is-active" : ""}" title="Highlight column" aria-label="${hiLabel}" aria-pressed="${isHighlighted ? "true" : "false"}">${HIGHLIGHT_GLYPH}</button><span class="data-table__th-resizer" data-resize-key="${escAttr(widthKey)}" aria-hidden="true"></span>
     </th>`;
   }
 
@@ -4679,36 +4699,39 @@ export function mountTable(
 
     syncToolbar();
 
-    // E2 (owner 2026-08-08): the metric header is split into two click gestures,
-    // both re-bound on every renderLoaded (like the drag handler below):
-    //   • the ▲/▼ SORT ARROW re-sorts by that column INSTANTLY via sortByColumn —
-    //     the SAME path the Columns section's per-copy Sort-by control uses (so the
-    //     two are two-way bound), now passed THIS copy's slot id so a duplicated
-    //     stat sorts by the exact copy clicked;
-    //   • a click ANYWHERE ELSE on the header toggles that copy's HIGHLIGHT
-    //     (toggleHeaderHighlight → the same per-slot highlightedColumns set + repaint
-    //     the popup's Highlight control reads/writes — two-way bound too).
-    // The sort-state class (is-sorted / arrow direction) reflects the FROZEN `state`
-    // and is recomputed on every renderLoaded, so it stays on the applied sort until
-    // the next re-sort. A drop (drag end) sets lastHeaderDragEndTs; a trailing click
-    // within that window is ignored so a drag never ALSO sorts/highlights. The sticky
-    // Player header is EXCLUDED here (task 6/7) — it keeps its own single-click-sort
-    // vs double-click-expand handling.
+    // Stage-3 Phase-5 (header-final-mock): the metric header carries two click
+    // gestures, both re-bound on every renderLoaded (like the drag handler below):
+    //   • a plain click ANYWHERE on the <th> (except the corner highlight icon and
+    //     the right-edge resizer, both of which stopPropagation) SORTS by that column
+    //     INSTANTLY via sortByColumn — the SAME path the Columns section's per-copy
+    //     Sort-by control uses (two-way bound), passed THIS copy's slot id so a
+    //     duplicated stat sorts by the exact copy clicked;
+    //   • a click on the top-right HIGHLIGHT ICON (.th-hi-btn) toggles that copy's
+    //     HIGHLIGHT (toggleHeaderHighlight → the same per-slot highlightedColumns set +
+    //     repaint the popup's Highlight control reads/writes — two-way bound too), and
+    //     stopPropagation keeps that click off the sort handler.
+    // This SUPERSEDES the former E2 split (arrow = sort, header-click = highlight). The
+    // sort-state class (is-sorted / caret direction) reflects the FROZEN `state` and is
+    // recomputed on every renderLoaded, so it stays on the applied sort until the next
+    // re-sort. A drop (drag end) — and a resize drag — set lastHeaderDragEndTs; a
+    // trailing click within that window is ignored so a drag never ALSO sorts/highlights.
+    // The sticky Player header is EXCLUDED here (task 6/7) — it keeps its own
+    // single-click-sort vs double-click-expand handling.
     theadEl.querySelectorAll(".data-table__th[data-key]:not(.data-table__th--sticky)").forEach((th) => {
       const key = th.dataset.key;
       const slotId = th.dataset.slotId || null;
-      const sortArrow = th.querySelector(".data-table__sort-arrow");
-      if (sortArrow) {
-        sortArrow.addEventListener("click", (e) => {
-          e.stopPropagation(); // the arrow sorts; don't also toggle the header's highlight
+      const hiBtn = th.querySelector(".th-hi-btn");
+      if (hiBtn) {
+        hiBtn.addEventListener("click", (e) => {
+          e.stopPropagation(); // the icon highlights; don't also sort the column
           if (Date.now() - lastHeaderDragEndTs < 250) return; // ignore a drop's trailing click
-          sortByColumn(key, slotId);
+          toggleHeaderHighlight(ns, slotId);
         });
       }
       th.addEventListener("click", (e) => {
-        if (e.target.closest(".data-table__sort-arrow")) return; // arrow handled above
+        if (e.target.closest(".th-hi-btn")) return; // highlight icon handled above
         if (Date.now() - lastHeaderDragEndTs < 250) return; // ignore a drop's trailing click
-        toggleHeaderHighlight(ns, slotId);
+        sortByColumn(key, slotId);
       });
     });
 

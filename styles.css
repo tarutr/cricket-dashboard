@@ -2089,29 +2089,77 @@ a { color: var(--color-accent); }
 
 .data-table__th.is-sorted .data-table__sort-btn:hover { color: var(--color-accent-strong); }
 
-/* E2 (owner 2026-08-08): a metric header splits into a LABEL and a persistent
-   ▲/▼/↕ SORT ARROW. Clicking the ARROW sorts (toggles asc/desc); clicking the
-   LABEL — or anywhere else on the header — toggles the column's highlight; the
-   header still drags to reorder. (The sticky Player column keeps the older
-   whole-header .data-table__sort-btn, so its look is untouched.) The idle arrow
-   is a muted "↕"; it becomes the accent ▲/▼ when this column IS the active sort
-   (via .is-sorted, alongside the header-wide accent above). */
-.data-table__th-label { cursor: pointer; }
-.data-table__sort-arrow {
-  font: inherit;
-  background: none;
+/* Stage-3 Phase-5 header gesture (owner 2026-08, header-final-mock). SUPERSEDES the
+   former E2 model (an always-on ▲/▼/↕ sort BUTTON + click-elsewhere-to-highlight).
+   Now:
+     • a plain click anywhere on the metric <th> SORTS (cursor: pointer via
+       .is-sortable); the header still drags to reorder and resizes at its right edge;
+     • the active-sort column shows a small inline ▲/▼ caret after its label
+       (.data-table__th-sortind, in-flow — no reserved slot), accent-tinted to match
+       the header-wide .is-sorted rule above;
+     • every metric header carries a small (8px ≈ 64% of the 12.48px label) HIGHLIGHT
+       icon absolutely pinned to its TOP-RIGHT corner (.th-hi-btn), in its own reserved
+       space that clears both the resize handle and the centred label/caret in every
+       state (resting / hover / sorted / highlighted). Clicking it toggles the column
+       highlight and never sorts (table.js stopPropagation).
+   (The sticky Player column keeps the older whole-header .data-table__sort-btn above,
+   so its look is untouched.) Sizes/positions are lifted from the approved mock. */
+:root {
+  --hi-size: 8px;               /* ~64% of the real 12.48px header label font-size */
+  --hi-rest-opacity: 0.45;      /* resting icon: present but clearly subordinate */
+  --hi-resizer-gap: 3px;        /* icon's right edge → the 8px resize handle's zone */
+  --hi-text-gap: 4px;           /* icon's left edge → the centred label/caret's edge */
+  /* Total reserved on EACH side (IDENTICAL left AND right — the symmetry that keeps the
+     label centred once the column widens to fit the icon): resizer(8) + gap(3) + icon +
+     gap(4). The blank left mirror carries no control; it exists only so the centred
+     label stays equidistant from both true cell edges. */
+  --hi-reserve: calc(8px + var(--hi-resizer-gap) + var(--hi-size) + var(--hi-text-gap));
+}
+
+/* NB — deliberately NO `position: relative` here (the mock added it as belt-and-braces).
+   `.data-table thead th` is already `position: sticky`, itself a valid containing block
+   for the absolutely-positioned icon/resizer. On the REAL scrolling leaderboard a
+   `position: relative` on `.has-hi` would OUT-SPECIFY (0,2,0 vs the sticky rule's 0,1,2)
+   and override that sticky, un-freezing the header — so `has-hi` sets only the symmetric
+   padding, and the sticky th anchors the icon (exactly as it already anchors the resizer). */
+.data-table__th.has-hi {
+  padding-left: var(--hi-reserve);
+  padding-right: var(--hi-reserve);
+}
+
+/* Whole-cell sort affordance. Pointer out-specifies the --draggable grab cursor at rest
+   (two classes vs one), so the header reads as clickable; an ACTUAL drag still shows
+   grabbing via .data-table__th--draggable:active (equal specificity, declared later). */
+.data-table__th.is-sortable { cursor: pointer; }
+.data-table__th.is-sortable:hover { color: var(--color-fg); }
+
+/* Inline sort caret — only on the active-sort column, in the same centred text run as
+   the label. Accent-tinted, matching the header-wide .is-sorted accent above. */
+.data-table__th-sortind { color: var(--color-accent); font-size: 0.72em; margin-left: 3px; }
+
+/* Top-right highlight icon (reuses HIGHLIGHT_GLYPH from columnsPicker.js). Absolutely
+   pinned inside the sticky th, --hi-resizer-gap clear of the resize handle, never
+   overlapping the label or caret in any state. */
+.th-hi-btn {
+  position: absolute;
+  top: 5px;
+  right: calc(8px + var(--hi-resizer-gap));
+  width: var(--hi-size);
+  height: var(--hi-size);
+  padding: 0;
   border: none;
+  background: none;
   cursor: pointer;
   color: var(--color-muted);
-  opacity: 0.6;
-  padding: 0 var(--space-1);
-  min-height: 0;
-  line-height: 1;
-  vertical-align: baseline;
+  opacity: var(--hi-rest-opacity);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
-.data-table__sort-arrow:hover { opacity: 1; color: var(--color-fg); }
-.data-table__th.is-sorted .data-table__sort-arrow { opacity: 1; color: var(--color-accent); }
-.data-table__th.is-sorted .data-table__sort-arrow:hover { color: var(--color-accent-strong); }
+.th-hi-btn svg { width: 100%; height: 100%; display: block; }
+.th-hi-btn:hover { opacity: 1; color: var(--color-fg); }
+.th-hi-btn.is-active { opacity: 1; color: var(--color-accent); }
+.th-hi-btn.is-active:hover { color: var(--color-accent-strong); }
 
 /* Highlighted columns (columns-rejig W2): a SOFT accent wash on the cells of a
    column whose 🖍️ toggle is on in the Columns section. Display-only (the
@@ -3269,13 +3317,6 @@ body.is-col-resizing {
     min-height: 40px;
     min-width: 40px;
     justify-content: flex-end;
-  }
-
-  /* E2: give the metric header's sort arrow a comfortable touch target too (the
-     rest of the header is a large tap area for the highlight toggle). */
-  .data-table__sort-arrow {
-    min-height: 40px;
-    min-width: 2.25rem;
   }
 
   .chip,

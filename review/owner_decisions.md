@@ -1303,3 +1303,21 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
     - **(C) Labels:** `runs_conc_nonbdry_pct` display label = **"NB Runs Con. %"**; and add full column names on
       header **hover (tooltips)** generally, so abbreviated short-labels are always disambiguated.
 
+82. **LEADERBOARD HEADER GESTURE — sort vs highlight (owner, 2026-08-27; refines Phase-5 #3, SUPERSEDES the E2
+    split):** After several rejected mock rounds, the owner ruled the column-header model, citing their own site
+    `womenst20wc.vercel.app` "Compare Stats" as the clean reference. Final (mock approved: header-final-mock.html):
+    - **Whole-header click = SORT** (toggle asc/desc). The always-on ↕/▲/▼ arrow BUTTON is retired.
+    - **Active-sort column only** shows a small **inline ▲/▼ caret** after the label (decision 52's
+      indicator-only-on-active-sort rule preserved; the caret is `.data-table__th-sortind`).
+    - **Column HIGHLIGHT → a small icon** (≈8px, ~64% of the ~12.5px header label) in each metric header's
+      **TOP-RIGHT corner**, in its OWN reserved space (`.th-hi-btn`), never overlapping the label / caret / resize
+      handle in any state; clicking it toggles `.is-highlighted` and must NOT sort (stopPropagation).
+    - **Narrow numeric columns WIDEN symmetrically** to make room, with the label kept **CENTRED** (equidistant).
+    - Deliberate deviation from the reference (owner-instructed): widen columns rather than the reference's
+      hover-overlay (owner rejected ANY overlap). Drag-to-reorder + column-resize still work, disambiguated from
+      the sort click. Reconciliation note: `.has-hi` does NOT set `position:relative` (would override the header's
+      `position:sticky`); the sticky `<th>` is already the containing block for the absolute icon.
+    - Display-only: query builders byte-identical; anchors hold (2,813 / Karanbir 2,454). Open item flagged to
+      owner: the 8px icon is a small MOBILE tap target (the old arrow's 40px mobile expansion was removed) — a
+      product call the owner has not yet made; the Columns-panel 🖍️ remains the touch path.
+
