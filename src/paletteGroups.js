@@ -533,19 +533,17 @@ export function createPaletteGroupsBuilder(deps) {
         // Chunk 5: Innings Number is SCOPE — re-homed into "Match Details" (Scope
         // dropdown) when laned. Inert (byte-identical) on the un-laned pop-up path.
         withLane(inningsNumberFamily(), "scope", "Match Details"),
-        // Position rework (owner-authorised 2026-08-14): the honest "Batting position"
-        // filter (state.positions → `batting_position IN (…)` via buildScopeClauses)
-        // is now offered in PLAIN batting too, not just matchup. It reuses the SAME
-        // `strikerpos` singleton control + editor the matchup Vs group uses (below).
-        // Gated `!matchup` so it shows HERE in plain batting and in the Vs group under
-        // a matchup — never both. leafSingle self-withholds on the popup surface
-        // (strikerpos ∉ POPUP_SCOPE_SINGLETON_KEYS), so the pop-up keeps its own
-        // per-innings `batting_position` slice below — no collision.
-        // Chunk 5: Batting position's final home is the SCOPE dropdown's "Matchup (Vs)"
-        // section (owner ruling / waveE-design.md — it sits beside vs bowling style / vs
-        // batting hand / vs opponent, matching where the matchup-mode copy renders below).
-        // Inert (byte-identical) on the un-laned pop-up path.
-        !matchup ? withLane(leafSingle("strikerpos", "Batting position"), "scope", "Matchup (Vs)") : null,
+        // Batting position (state.positions → `batting_position IN (…)` via
+        // buildScopeClauses). Position split (decision 81B, owner 2026-08-27): on the
+        // BATTING board this is the subject's OWN batting position — a SELF attribute, so
+        // it lives here in "Batting · Basic Stats" (the Player Filters dropdown), NOT under
+        // "Matchup (Vs)". Offered on batting whether or not a Vs is active (the bowling-board
+        // "vs opponent batting position" copy is handled separately in the Matchup (Vs)
+        // section below, `matchup && disc==="bowling"`). Same `strikerpos` singleton control
+        // + editor throughout — the query (batting_position IN) is byte-identical either way.
+        // leafSingle self-withholds on the popup surface (strikerpos ∉ POPUP_SCOPE_SINGLETON_KEYS),
+        // so the pop-up keeps its own per-innings `batting_position` slice below — no collision.
+        leafSingle("strikerpos", "Batting position"),
         // T-2e (owner 2026-08-03): Batting position — a batting-only, per-innings LIST
         // slice on the plain `batting` view's `batting_position` (compiles to
         // `batting_position IN (…)` via inningsWhere). Popup-only + withheld on a
@@ -758,9 +756,14 @@ export function createPaletteGroupsBuilder(deps) {
           }
         }
       }
-      // Striker batting position — matchup-only (matchupVsActive already false for
-      // women, so this never surfaces there without a gender check).
-      if (matchup) vsItems.push(leafSingle("strikerpos", "Batting position"));
+      // "vs opponent batting position" (decision 81B, owner 2026-08-27): the SAME
+      // state.positions control, but on the BOWLING board it filters the OPPONENT
+      // batter's position (the strikers faced), so it reads as a matchup axis and lives
+      // in this "Matchup (Vs)" grouping. Bowling-only + matchup-active (matchupVsActive
+      // is already false for women, so this never surfaces there without a gender check).
+      // On the batting board the same control is the subject's OWN position, offered as
+      // "Batting position" in Batting · Basic Stats above (a self attribute, not a Vs axis).
+      if (matchup && disc === "bowling") vsItems.push(leafSingle("strikerpos", "vs opponent batting position"));
       // Opponent-player head-to-head (T-1, owner decision 70): "subject X vs opponent
       // Y" (bowler_id when batting / batter_id when bowling). BALL-ENGINE ONLY —
       // flag-gated exactly like the Ball Ranges group (per-delivery ids are absent

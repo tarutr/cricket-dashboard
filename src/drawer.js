@@ -58,6 +58,7 @@ import {
 } from "./advanced.js";
 import {
   mountBattingPosition,
+  battingPositionFilterLabel,
   mountOpposition,
   mountTeam,
   mountEvent,
@@ -1228,9 +1229,15 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       if (t.key === "vs") continue;
       rowEls[t.key].hidden = !isPresent(t, s);
     }
-    // "Batting position" has its own static type label ("Batting position" from
-    // SINGLETON_TYPES) — no dynamic relabel needed. Present in plain batting and
-    // any matchup (position rework 2026-08-14).
+    // "Batting position" is ONE control with a DISCIPLINE-dependent name (decision 81B,
+    // owner 2026-08-27): on the batting board it is the subject's OWN position →
+    // "Batting position"; on the bowling board the SAME control filters the OPPONENT
+    // batter's position → "vs opponent batting position" (a matchup axis). Display-only
+    // relabel of the applied row's type label — the filter (state.positions →
+    // batting_position IN) is byte-identical on both boards.
+    if (typeLabelEls.strikerpos) {
+      typeLabelEls.strikerpos.textContent = battingPositionFilterLabel(s.discipline);
+    }
 
     renderVsEditor();
     renderMatchupLane();

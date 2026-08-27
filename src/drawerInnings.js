@@ -187,6 +187,15 @@ function positionsSummaryLabel(positions) {
   return `${sorted.length} selected`;
 }
 
+/** The batting-position control's discipline-dependent display NAME (decision 81B,
+ * owner 2026-08-27). ONE control (state.positions → `batting_position IN`): on the
+ * batting board it is the subject's OWN position → "Batting position"; on the bowling
+ * board the SAME control filters the OPPONENT batter's position → "vs opponent batting
+ * position" (a matchup axis). Display-only — the query is identical on both boards. */
+export function battingPositionFilterLabel(discipline) {
+  return discipline === "bowling" ? "vs opponent batting position" : "Batting position";
+}
+
 /**
  * Mount the "Batting position" multi-select (state.positions). `embedded`
  * suppresses the outer filter-label (the condition row already names it).
@@ -195,7 +204,7 @@ function positionsSummaryLabel(positions) {
 export function mountBattingPosition(container, store, onChange, { embedded = false } = {}) {
   container.innerHTML = `
     <div class="filter-group filter-group--positions" data-role="positions-group">
-      ${embedded ? "" : `<span class="filter-label">Batting position</span>`}
+      ${embedded ? "" : `<span class="filter-label" data-role="positions-label">Batting position</span>`}
       <div class="dropdown" data-role="positions-dropdown">
         <button type="button" class="select dropdown__toggle" data-role="positions-toggle" aria-haspopup="true" aria-expanded="false">Any position</button>
         <div class="dropdown__panel" data-role="positions-panel" hidden>
@@ -215,6 +224,7 @@ export function mountBattingPosition(container, store, onChange, { embedded = fa
 
   const els = {
     group: container.querySelector('[data-role="positions-group"]'),
+    label: container.querySelector('[data-role="positions-label"]'),
     toggle: container.querySelector('[data-role="positions-toggle"]'),
     panel: container.querySelector('[data-role="positions-panel"]'),
     list: container.querySelector('[data-role="positions-list"]'),
@@ -253,6 +263,10 @@ export function mountBattingPosition(container, store, onChange, { embedded = fa
       return;
     }
     els.toggle.disabled = false;
+    // Discipline-dependent NAME (decision 81B): "Batting position" (batting) /
+    // "vs opponent batting position" (bowling). Only the non-embedded mount carries
+    // this label span; the leaderboard mounts embedded (the condition row names it).
+    if (els.label) els.label.textContent = battingPositionFilterLabel(state.discipline);
     updateToggleLabel();
     const selected = new Set(state.positions);
     els.list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
