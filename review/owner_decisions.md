@@ -1277,23 +1277,3 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       confirmed) · vs a specific opponent (new; frontend-only — filters on the bowler/batter id already present,
       no pipeline column). NOT vs bowling arm, NOT vs playing role, NOT vs batting position.
 
-81. **MATCHUP AXES — COMBINABLE (ALWAYS ALL) + LANE MEMBERSHIP (owner, 2026-08-27):**
-    - **Matchup opponent axes are COMBINABLE and always AND (ALL), never ANY.** Different opponent DIMENSIONS
-      combine (e.g. vs Spin AND vs PotMs AND — with scope — vs Australia). SAME-dimension values are mutually
-      exclusive (never vs Spin AND vs Pace; never vs Australia AND vs India). So each axis holds ONE value;
-      multiple axes AND together; matchup is never OR. This is the "one composite opponent" of decision 75/80.
-    - **Engine implication (numbers-sensitive):** today buildMatchupQuery applies ONE bucket clause
-      (state.matchupVs = a single {dim,value}; table.js ~416-418). Combinable requires extending it to apply a
-      SET of bucket clauses AND-ed together, and state.matchupVs → a composite (axis→value map). ADDITIVE /
-      byte-identical when zero or one axis is active; the anchors (SA Yadav vs Spin 38/454/140.99; Bumrah vs RHB
-      27/177/9) are the single-axis cases and must stay exact. Full numbers ritual + independent DuckDB for any
-      combined case. Build in a FRESH session (this one ran long).
-    - **vs a specific opponent player → belongs IN the Matchup lane** (it IS an opponent axis). Migrate it out of
-      the leaderboard Scope palette when wired (atomic — never double-offered, never unreachable). Naming a
-      specific opponent fixes that player's attributes, so it is effectively exclusive with the attribute axes.
-    - **Batting position (strikerpos) is a SELF attribute** (the striker's OWN position), NOT an opponent
-      attribute — conceptually a Player/Scope filter, not a "define the opponent" axis, though it stacks with a
-      Vs bucket. It sits under the Scope "Matchup (Vs)" heading today (Chunk-5 placement). PLACEMENT — owner to
-      confirm: KEEP it a Scope/Player filter (orchestrator recommendation — it describes you, not the opponent),
-      or ALSO surface it in the Matchup lane as a "my position vs this opponent" qualifier. Not an opponent axis
-      either way.
