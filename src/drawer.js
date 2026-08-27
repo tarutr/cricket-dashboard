@@ -244,8 +244,18 @@ const SINGLETON_TYPES = [
 // an AND/OR-able condition; it always ANDs with scope, decision 47a.)
 const PLAYER_LANE_SINGLETONS = new Set(["role", "hand", "bowling", "bowlingHand", "potm_yn"]);
 const MATCHUP_LANE_SINGLETONS = new Set(["vs"]);
-const singletonLane = (key) =>
-  MATCHUP_LANE_SINGLETONS.has(key) ? "matchup" : PLAYER_LANE_SINGLETONS.has(key) ? "player" : "scope";
+// "strikerpos" (Batting position) is the one DISCIPLINE-AWARE lane (owner ruling,
+// chip-lane fix 2026-08-27): on the batting board it's offered under "Player
+// Filters" (paletteGroups.js), so its applied chip must land there too; on the
+// bowling board it's offered under "Scope Filters ▸ Matchup (Vs)" as "vs opponent
+// batting position" and must stay in Scope. Every other singleton's lane is
+// static (unaffected). `discipline` defaults to "batting" so the very first,
+// pre-store-read caller (the skeleton HTML build below, before any state exists)
+// resolves the same way the default state does.
+const singletonLane = (key, discipline = "batting") => {
+  if (key === "strikerpos") return discipline === "batting" ? "player" : "scope";
+  return MATCHUP_LANE_SINGLETONS.has(key) ? "matchup" : PLAYER_LANE_SINGLETONS.has(key) ? "player" : "scope";
+};
 
 // (The "metrics DELETED from the + Add condition picker" list — decision 68 —
 // moved into src/paletteGroups.js with the taxonomy builder itself: T-F3,
@@ -335,8 +345,16 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
           <button type="button" class="icon-btn cond-row__remove" data-remove="${t.key}" title="Remove condition">&times;</button>
         </div>
       </div>`;
+  // Built once, before the popup has ever been opened — reads the store's
+  // discipline at MOUNT time only (defaults to "batting", state.js's default —
+  // see initialState). This decides which lane container each row's HTML lands
+  // in on the page's very first render; syncSingletonRows()'s relocateStrikerposRow
+  // below re-parents the strikerpos row live on every subsequent discipline switch,
+  // since a fresh skeleton is never rebuilt.
   const laneSingletonsHTML = (lane) =>
-    SINGLETON_TYPES.filter((t) => singletonLane(t.key) === lane).map(singletonRowHTML).join("");
+    SINGLETON_TYPES.filter((t) => singletonLane(t.key, store.get().discipline) === lane)
+      .map(singletonRowHTML)
+      .join("");
 
   // Chunk 5 · Phase 2 · Wave D — the builder is now TWO lane blocks: "Player
   // Filters" and "Scope Filters", each headed by an ALWAYS-VISIBLE "Match all /
@@ -445,6 +463,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const matchupAxisPickEl = advancedHost.querySelector('[data-role="matchup-axis-pick"]');
   const matchupClearEl = advancedHost.querySelector('.opponent-panel__clear');
   const numericEl = advancedHost.querySelector('[data-role="numeric-rows"]');
+  // Lane list containers (chip-lane fix, 2026-08-27) — needed to physically
+  // re-parent the strikerpos row between lanes when its discipline-aware lane
+  // (singletonLane) changes; see relocateStrikerposRow below.
+  const playerRowsListEl = advancedHost.querySelector('[data-role="player-rows"]');
+  const scopeRowsListEl = advancedHost.querySelector('[data-role="scope-rows"]');
+  const fieldingDimRowsEl = advancedHost.querySelector('[data-role="fielding-dim-rows"]');
 
   // ── Lane Match-all / Match-any toggles (Chunk 5 · Phase 2 · Wave D) ──────────
   // One per lane, ALWAYS visible (the spec bans the old hidden-until-2-conditions
@@ -1217,9 +1241,43 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     },
   });
 
+  // Re-parent the strikerpos ("Batting position") applied row into whichever lane
+  // container singletonLane("strikerpos", discipline) currently resolves to (chip-
+  // lane fix, 2026-08-27 — owner ruling: the applied chip must live under the SAME
+  // lane it's offered under — Player Filters on the batting board, Scope Filters
+  // on the bowling board). Every other singleton's DOM parent is fixed at skeleton-
+  // build time and never moves; this is the one exception. Finds the correct
+  // insertion point from SINGLETON_TYPES' own order (the array's documented
+  // applied-row order) by walking forward for the next singleton key that is
+  // ALREADY a child of the target container and inserting before it, falling back
+  // to each container's known trailing element (numeric-rows for Player Filters;
+  // fielding-dim-rows for Scope Filters) when strikerpos would be the last row.
+  // A no-op (no DOM write) when the row is already parented correctly, which is
+  // the common case — this runs on every sync, not only on a discipline change.
+  function relocateStrikerposRow(discipline) {
+    const row = rowEls.strikerpos;
+    if (!row || !playerRowsListEl || !scopeRowsListEl) return;
+    const lane = singletonLane("strikerpos", discipline);
+    const container = lane === "player" ? playerRowsListEl : scopeRowsListEl;
+    if (row.parentElement === container) return;
+    const idx = SINGLETON_TYPES.findIndex((t) => t.key === "strikerpos");
+    let anchor = null;
+    for (let i = idx + 1; i < SINGLETON_TYPES.length; i++) {
+      const el = rowEls[SINGLETON_TYPES[i].key];
+      if (el && el.parentElement === container) {
+        anchor = el;
+        break;
+      }
+    }
+    if (!anchor) anchor = container === playerRowsListEl ? numericEl : fieldingDimRowsEl;
+    if (anchor) container.insertBefore(row, anchor);
+    else container.appendChild(row);
+  }
+
   // ── Singleton rows: show/hide + editor sync ─────────────────────────────────
   function syncSingletonRows() {
     const s = store.get();
+    relocateStrikerposRow(s.discipline);
     for (const t of SINGLETON_TYPES) {
       // "vs" is NOT a generic show-until-present row any more — it lives in the
       // always-present Matchup lane (decision 80), whose "define the opponent" panel
