@@ -162,6 +162,19 @@ export function hasActiveProfileFilter(profile) {
   );
 }
 
+/** WAY A (decision 83) — the SINGLE group operator ("AND" | "OR") derived from a
+ * `filterMatch` object. `group` is authoritative (setFilterGroupOp keeps scope/player
+ * mirrored to it); the lane fallback covers any pre-`group` state object (a change from
+ * before this field existed) — OR iff either legacy lane is "OR". Default AND. Read by
+ * buildQuery to choose the byte-identical AND path vs the additive Way-A OR path. */
+export function filterGroupOp(filterMatch) {
+  if (!filterMatch) return "AND";
+  if (filterMatch.group === "OR") return "OR";
+  if (filterMatch.group === "AND") return "AND";
+  // Legacy state with no `group` field: derive from the two lanes.
+  return filterMatch.scope === "OR" || filterMatch.player === "OR" ? "OR" : "AND";
+}
+
 // SQL single-quote escaper (Batch 2 review: the ONE export — every module
 // that builds a SQL string literal imports this rather than redefining it).
 export function escSql(s) {
@@ -1050,17 +1063,20 @@ export function createInitialState(maxMonth) {
                    // mode, through ONE shared exemption helper (filters.js whereWithPinExemption /
                    // gateWithPinExemption) so the two builders can never diverge; the pill is live
                    // (not greyed) in Vs mode too.
-    // Lane match-mode (Chunk 5 Phase 2 — the OR engine). Per FILTER LANE, "AND" =
-    // "Match all" (every active filter must hold), "OR" = "Match any" (spec §1/§2:
-    // OR WITHIN a dropdown lane, AND ACROSS lanes; default "Match all"). Wave A
-    // wires the SCOPE lane only — filterMatch.scope drives whereWithLanes in
-    // buildQuery/buildMatchupQuery; filterMatch.player is reserved for Wave B's
-    // WHERE→HAVING lowering. DEFAULT = both "AND": the byte-identity guard in
-    // table.js runs today's exact whereWithPinExemption path when BOTH are "AND",
-    // so every anchor is byte-identical by construction. No UI sets this yet (the
-    // always-visible toggle is Wave D); it is a query-shaping field, so it IS part
-    // of serializeQueryState (a change re-lights Search + busts the render cache).
-    filterMatch: { player: "AND", scope: "AND" },
+    // Filter match-mode. WAY A (decision 83): ONE group operator over ALL Player +
+    // Scope conditions — "AND" = "Match all" (every active condition must hold), "OR" =
+    // "Match any" (an existence-qualifier group whose numbers WIDEN to the core scope,
+    // Fork 1). The single source of truth is `group`; `scope`/`player` are LEGACY MIRROR
+    // fields kept EQUAL to `group` (invariant: group === OR-of-lanes) so the not-yet-
+    // migrated readers (buildMatchupQuery / graph charts.js / pills.js / the interim
+    // drawer's two toggles) keep working unchanged until Task 2b/2c migrate them to
+    // `group`. setFilterGroupOp (advanced.js) is the single setter; the legacy setLaneOp
+    // keeps the mirror consistent. buildQuery derives the op via filterGroupOp() below.
+    // DEFAULT = all "AND": the byte-identity guard in table.js runs today's exact
+    // whereWithPinExemption path when the group op is AND, so every anchor is byte-
+    // identical by construction. It is a query-shaping field, so it IS part of
+    // serializeQueryState (a change re-lights Search + busts the render cache).
+    filterMatch: { player: "AND", scope: "AND", group: "AND" },
     search: "",
     // E1a: `sort` keeps {key, dir} (key = metric key — read by the SACRED
     // buildMatchupQuery and the graph, so it MUST stay a metric key), and gains

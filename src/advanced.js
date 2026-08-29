@@ -153,16 +153,30 @@ export function setGroupOp(store, gi, op) {
   store.set({ advanced: { ...advanced, groups } });
 }
 
-/** Chunk 5 · Phase 2 · Wave D — set a filter LANE's match mode (the always-visible
- * "Match all / Match any" toggle each of the Player / Scope dropdowns now carries).
- * `lane` = "player" | "scope"; `op` = "AND" (Match all — the default) | "OR"
- * (Match any) — UPPERCASE, the exact tokens the OR engine (table.js whereWithLanes /
- * the buildQuery HAVING assembly) already tests with `=== "OR"`. This writes the SAME
- * state.filterMatch field Waves A–E wired up; nothing here touches a query builder, and
- * at the default "AND"/"AND" the engine takes its byte-identical branch (numbers sacred). */
+/** WAY A (decision 83) — set the SINGLE group operator over ALL Player + Scope
+ * conditions. `op` = "AND" (Match all — default) | "OR" (Match any) — UPPERCASE, the
+ * tokens table.js's filterGroupOp compares. Writes `group` AND keeps the legacy
+ * `scope`/`player` mirror fields equal to it (the single-operator invariant, so the
+ * not-yet-migrated readers — buildMatchupQuery / graph / pills / the interim drawer —
+ * see a consistent value). This is the setter the Task-2c single toggle binds to.
+ * NOTE: distinct from advanced.js's own setGroupOp above, which sets a NUMERIC block
+ * group's per-group operator (advanced.groups[gi].op) — an unrelated concern. */
+export function setFilterGroupOp(store, op) {
+  store.set({ filterMatch: { group: op, scope: op, player: op } });
+}
+
+/** LEGACY (pre-Way-A) — set ONE filter lane's match mode. Retained ONLY so the interim
+ * leaderboard-popup drawer's two per-lane "Match all / Match any" toggles keep working
+ * until Task 2c replaces them with the single Way-A operator (bound to setFilterGroupOp).
+ * `lane` = "player" | "scope"; `op` = "AND" | "OR". It also RECOMPUTES the Way-A `group`
+ * field (= OR-of-lanes) so the single-operator invariant holds no matter which setter
+ * wrote last, and buildQuery's Way-A OR still fires from an old toggle. At the default
+ * all-"AND" the engine takes its byte-identical branch (numbers sacred). */
 export function setLaneOp(store, lane, op) {
-  const filterMatch = store.get().filterMatch || { player: "AND", scope: "AND" };
-  store.set({ filterMatch: { ...filterMatch, [lane]: op } });
+  const filterMatch = store.get().filterMatch || { player: "AND", scope: "AND", group: "AND" };
+  const next = { ...filterMatch, [lane]: op };
+  next.group = next.scope === "OR" || next.player === "OR" ? "OR" : "AND";
+  store.set({ filterMatch: next });
 }
 
 // ── Metric grouping for the "+ Add condition" dropdown (task 1B-2 / ROUND 3) ──

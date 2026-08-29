@@ -855,6 +855,54 @@ export function whereWithLanes(clauses, { idColumn, pins, scopeOp, playerOp } = 
   return parts.join(" AND ");
 }
 
+// ── Way-A single-group "Match any" (OR) compiler (decision 83) ────────────────
+// The Way-A operator is ONE toggle over ALL Player + Scope conditions, and its OR
+// mode is CROSS-LEVEL: it ORs conditions that under AND live at different query
+// levels (row WHERE / player semi-join / aggregate HAVING). It cannot reuse the old
+// per-lane whereWithLanes scope-OR (a window UNION), because a window union is
+// undefined once a non-window condition (profile / numeric / PotM) joins the OR.
+// So the ONE coherent reading (design §3.2, owner-adopted Fork 1) is: under OR every
+// group condition becomes a PLAYER-LEVEL boolean over the CORE-scope aggregate, OR'd
+// post-aggregation, and the displayed numbers WIDEN to the core scope.
+//
+// These two helpers implement exactly that, reusing the SAME tagged clause list
+// buildScopeClausesTagged/whereWithPinExemption take and the EXACT clause `.sql`
+// strings the AND path builds, so an OR predicate can never drift from its AND form.
+// The AND path is untouched (whereWithLanes/whereWithPinExemption above).
+
+/** The core-scope-only WHERE the Way-A OR path uses (and that buildQuery's OR branch
+ * builds its scope-bearing CTEs with — Fork 3). Keeps ONLY the always-AND clauses
+ * (category "core" + untagged, e.g. the name search) and DROPS every category "scope"
+ * / "player" clause, then pin-wraps EXACTLY as whereWithPinExemption does (so the
+ * search + pins behave identically to the AND path). The dropped group clauses reappear
+ * as post-aggregation disjuncts via groupOrCompile below. */
+export function coreScopeWhere(clauses, idColumn, pins) {
+  const alwaysAnd = asTaggedClauses(clauses).filter((c) => c.category === "core" || c.category === undefined);
+  return whereWithPinExemption(alwaysAnd, idColumn, pins);
+}
+
+/** Compile a tagged clause list for the Way-A single-group "Match any" (OR).
+ * Returns `{ whereSql, havingDisjuncts }`:
+ *   • whereSql        — coreScopeWhere(...) (core + always-AND + pin-wrap only).
+ *   • havingDisjuncts — one post-aggregation predicate per DROPPED group clause,
+ *       reusing the EXACT clause `.sql`:
+ *         - category "scope"  (a row window-restrictor P) → `COUNT(*) FILTER (WHERE P) >= 1`
+ *           (the existence test "has ≥1 innings satisfying P"; verified live on DuckDB).
+ *         - category "player" (the profile semi-join, on the GROUP-BY key)   → `<P>` as-is.
+ * The caller appends its own post-aggregation disjuncts (PotM Y/N gate, numeric block),
+ * `.filter(Boolean)`s, OR-joins, and pin-exempts the whole thing via gateWithPinExemption.
+ * (`bypassable` needs no handling here: the group profile clause was pin-bypassable under
+ * AND, and the whole OR HAVING is pin-exempted, so a pin floats in exactly as before.) */
+export function groupOrCompile(clauses, { idColumn, pins } = {}) {
+  const tagged = asTaggedClauses(clauses);
+  const whereSql = coreScopeWhere(tagged, idColumn, pins);
+  const groupClauses = tagged.filter((c) => c.category === "scope" || c.category === "player");
+  const havingDisjuncts = groupClauses.map((c) =>
+    c.category === "player" ? c.sql : `COUNT(*) FILTER (WHERE ${c.sql}) >= 1`
+  );
+  return { whereSql, havingDisjuncts };
+}
+
 /** Wrap a post-aggregation gate (buildQuery's HAVING, or buildMatchupQuery's
  * step-3 existence/stat-condition gate) so pinned players are exempt from it:
  * `(gateSql) OR idColumn IN (pins)`. Returns `gateSql` unchanged when there are

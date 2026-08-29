@@ -44,6 +44,10 @@ import {
   whereWithPinExemption,
   whereWithLanes,
   gateWithPinExemption,
+  // Way A (decision 83) — the single-group "Match any" (OR) compiler + its core-scope-only
+  // WHERE (used by buildQuery's OR branch and the scope-bearing CTEs it builds under OR).
+  coreScopeWhere,
+  groupOrCompile,
   buildMatchContextClauses,
   matchContextJoinSql,
   matchContextSubselectSql,
@@ -76,6 +80,10 @@ import {
   // disjunct under player-lane "Match any" (WHERE→HAVING lowering) so the OR form can
   // never drift from the AND (WHERE) form.
   profileSemiJoinSql,
+  // Way A (decision 83): the single group operator ("AND" | "OR") derived from
+  // state.filterMatch, and the profile-active test used for the Fork-4 empty-OR ruling.
+  filterGroupOp,
+  hasActiveProfileFilter,
   escSql as esc,
   // E1a column slots: keys ⇄ slots helpers (the store holds Slot[]; the SACRED
   // builders + dirty key see keys; load() dedups to DISTINCT keys).
@@ -1082,7 +1090,18 @@ export function buildFieldingExtraSliceClauses(state) {
  * the pin-exempt remainder. There is no HAVING on either of these CTEs to re-emit a
  * lowered profile clause into.
  */
-function fieldingScopeWhere(state, { fldClauses, sliceClauses, pins }) {
+function fieldingScopeWhere(state, { fldClauses, sliceClauses, pins, coreScopeOnly = false }) {
+  // Way A (decision 83): buildQuery's OR branch builds fielding_cte core-scope-only so the
+  // fielding column values WIDEN to the core scope (Fork 3). The intrinsic metric-definition
+  // clauses (the "substitute IS NOT TRUE" eligibility guard + the fielding SLICE clauses)
+  // are NOT scope narrowing, so they stay always-AND exactly as the default AND path below;
+  // only the who/which-match scope (fldClauses' scope/player tags) is dropped, via
+  // coreScopeWhere. Default false ⇒ every other caller (fielding board, graph, pop-up,
+  // buildQuery's AND path) is byte-identical.
+  if (coreScopeOnly) {
+    const fldScopeSql = coreScopeWhere(fldClauses, "fielder_id", pins);
+    return [fldScopeSql, "substitute IS NOT TRUE", ...sliceClauses].join(" AND ");
+  }
   const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
   if (filterMatch.scope !== "OR") {
     const fldScopeSql = whereWithPinExemption(fldClauses, "fielder_id", pins);
@@ -1135,6 +1154,9 @@ export function buildFieldingCteSql(state, composedFieldingCols = [], opts = {})
     fldClauses,
     sliceClauses: fieldingSliceClauses,
     pins,
+    // Way A (decision 83): buildQuery's OR branch passes coreScopeOnly (Fork 3). All other
+    // callers (fielding board, graph, pop-up) pass no opts ⇒ byte-identical.
+    coreScopeOnly: Boolean(opts && opts.coreScopeOnly),
   });
   // Base per-fielder tally columns (SACRED — byte-identical output). The four
   // lines carry NO trailing comma; the array is comma-joined below so appending
@@ -1288,39 +1310,38 @@ function laneScope(clauses, state, { idColumn, playerOp } = {}) {
   });
 }
 
-// ── Stage-3 Phase 4 — Match-any pill lane classification (display-only, decision
-// 77.3) ───────────────────────────────────────────────────────────────────────
-// When a lane's "Match any" toggle is on, pills.js's applied-pill row must show
-// which pills are actually being OR'd together and which ALWAYS apply regardless
-// (owner-approved mock, Option C, condensed to one line). This function is the
-// single read-only mapping from a pill's KEY (pills.js's own vocabulary) onto the
-// SAME "scope"/"player" category tags whereWithLanes/laneScope already compile
-// into SQL above — it duplicates no query logic, builds no SQL, and is never
-// called by any query path; pills.js calls it purely to choose which pills to
-// visually group.
+// ── Way-A applied-pill classification (display-only, decision 83) ──────────────
+// WAY A collapses the two per-lane "Match all / Match any" toggles into ONE group
+// operator over ALL Player + Scope conditions. So the applied-pill row's split is now
+// TWO-WAY: pills that FOLD INTO THE GROUP OR when the operator is "Match any" vs pills
+// that ALWAYS APPLY regardless. This function is the single read-only mapping from a
+// pill's KEY (pills.js's own vocabulary) onto that split — it duplicates no query logic,
+// builds no SQL, and is never called by any query path; the applied-pill renderer calls
+// it purely to choose which pills to visually group.
 //
-//   "scope"  — folds into the scope-lane OR when filterMatch.scope === "OR":
-//              Team / Opposition / Innings Number / Event / Venue / City /
-//              Season / Batting position (all tagged category "scope" in
-//              buildScopeClausesTagged, filters.js) + Result / Toss result /
-//              Toss decision / Stage / Result condition (each its own
-//              alwaysClause(…, "scope") at the buildMatchContextClauses call
-//              sites above) + every fielding-dim pill (fieldingScopeWhere above
-//              tags the fielding slice clauses "scope" the same way).
-//   "player" — folds into the player-lane OR when filterMatch.player === "OR":
-//              the player-profile pills (role / batting hand / bowling style /
-//              bowling arm — the ONE profile semi-join, tagged category "player"
-//              in buildScopeClausesTagged), lowered to a HAVING disjunct by the
-//              table.js callers under player-OR.
-//   null     — NEVER folds into either lane's OR, regardless of filterMatch:
-//              the delivery-window pills (Phase / Over range / Ball range /
-//              Player balls) and the opponent-player "vs {name}" matchup pill
-//              are baked into the ball VIEW itself before any WHERE is built
-//              (db.js/deliveryWindow.js, db.js/opponentFilter.js) — decision
-//              77.3's two named "always applies" exceptions (Ball Ranges +
-//              matchup Vs). The free-text name search, the PotM Y/N gate, and
-//              the numeric stat-condition pills are untagged/HAVING-gated and
-//              also never fold into either lane's OR, so they classify here too.
+//   "group" — FOLDS INTO the single group OR when the operator is "Match any". The
+//             union of the old "scope" + "player" sets, i.e. every OR-able condition
+//             (decision 83 Fork 2): the scope which-values — Team / Opposition / Innings
+//             Number / Event / Venue / City / Season / Batting position (tagged category
+//             "scope" in buildScopeClausesTagged) + Result / Toss result / Toss decision /
+//             Stage / Result condition (each alwaysClause(…, "scope")) + every fielding-dim
+//             pill — AND the player-profile pills (role / batting hand / bowling style /
+//             bowling arm — the profile semi-join, tagged category "player").
+//   null    — ALWAYS APPLIES, never folds into the group OR (decision 83 Fork 2):
+//             the delivery-window pills (Phase / Over range / Ball range / Player balls)
+//             and the opponent-player "vs {name}" matchup pill (baked into the ball VIEW
+//             before any WHERE — db.js/deliveryWindow.js, db.js/opponentFilter.js), plus
+//             the free-text name search, the PotM Y/N gate, and the numeric stat-condition
+//             pills (all untagged/HAVING-gated). These are the always-AND set.
+//
+// OUTPUT CONTRACT for the Task-2c UI worker: `pillMatchAnyLane(key)` returns
+//   "group" → render this pill INSIDE the group card / OR bracket when the operator is
+//             "Match any" (it is an OR participant); it always-ANDs when the operator is
+//             "Match all".
+//   null   → render this pill OUTSIDE the group, in the always-applies row/panel, for
+//             BOTH operator values (it never participates in the OR).
+// It is display-only — it has NO SQL effect (the SQL comes from groupOrCompile /
+// buildQuery's OR branch, keyed off the category tags, not off this function).
 export function pillMatchAnyLane(key) {
   if (
     key.startsWith("team:") ||
@@ -1336,11 +1357,11 @@ export function pillMatchAnyLane(key) {
     key === "mc_toss_decision" ||
     key === "mc_stage" ||
     key === "mc_result_condition" ||
-    key.startsWith("fld_")
+    key.startsWith("fld_") ||
+    key.startsWith("profile:")
   ) {
-    return "scope";
+    return "group";
   }
-  if (key.startsWith("profile:")) return "player";
   return null;
 }
 
@@ -1353,7 +1374,7 @@ export function pillMatchAnyLane(key) {
  * matches never diverge on scope. Extracted verbatim from buildQuery; buildQuery
  * output stays byte-identical (verified).
  */
-export function buildPomCteSql(state) {
+export function buildPomCteSql(state, { coreScopeOnly = false } = {}) {
   const pomClauses = buildScopeClausesTagged(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
   // Stage-3 Phase 2.3 (owner-ruled, audit7 ruling 3): the ADDITIVE match-selecting
   // clauses so the PotM count OBEYS the board's OWN top-level filters (opposition +
@@ -1368,7 +1389,14 @@ export function buildPomCteSql(state) {
   }
   // Chunk 5 Phase 2 Wave E — lane-consistent scope (see laneScope): this PotM count
   // tracks the MAIN query's Match all/any union, consistent with the main stats.
-  const pomWhereSql = laneScope(pomClauses, state, { idColumn: "player_id" });
+  // Way A (decision 83): buildQuery's OR branch passes coreScopeOnly so the PotM count
+  // WIDENS to the core scope (Fork 3 — the scope conditions become existence-qualifiers
+  // in the main HAVING, so they must NOT narrow this divisor). Default false ⇒ every
+  // other caller (AND path, fielding board, graph, pop-up) is byte-identical.
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  const pomWhereSql = coreScopeOnly
+    ? coreScopeWhere(pomClauses, "player_id", pins)
+    : laneScope(pomClauses, state, { idColumn: "player_id" });
   return [
     "pom_cte AS (",
     "  SELECT player_id AS pom_player_id, SUM(player_of_match) AS player_of_match",
@@ -1436,7 +1464,7 @@ export function buildProfileCteSql() {
  * construction. Built ONLY when a Result column/condition is present (buildQuery's
  * wantsResult gate); with none, buildQuery emits byte-identical SQL.
  */
-export function buildResultCteSql(state) {
+export function buildResultCteSql(state, { coreScopeOnly = false } = {}) {
   const resClauses = buildScopeClausesTagged(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
   // Stage-3 Phase 2.3 (owner-ruled, audit7 ruling 3): the ADDITIVE match-selecting
   // clauses so the Won/Lost/Tied/No-result/Toss-Won counts OBEY the board's OWN
@@ -1450,8 +1478,12 @@ export function buildResultCteSql(state) {
   }
   // Chunk 5 Phase 2 Wave E — lane-consistent scope (see laneScope, same rationale as
   // buildPomCteSql): these Match-Result counts track the same union of surviving
-  // players as the main stats.
-  const resWhereSql = laneScope(resClauses, state, { idColumn: "player_id" });
+  // players as the main stats. Way A (decision 83): under coreScopeOnly the Won/Lost/…
+  // column values WIDEN to the core scope (Fork 3). Default false ⇒ byte-identical.
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  const resWhereSql = coreScopeOnly
+    ? coreScopeWhere(resClauses, "player_id", pins)
+    : laneScope(resClauses, state, { idColumn: "player_id" });
   return [
     "result_cte AS (",
     "  SELECT player_id AS res_player_id,",
@@ -1673,7 +1705,7 @@ export function buildBoardDivisorMatchClauses(state) {
  * as the Matches source; with no match-selecting filter active the emitted SQL is
  * BYTE-IDENTICAL to before Phase 2 (the helper returns []).
  */
-export function buildPmatchCteSql(state, { playerOp } = {}) {
+export function buildPmatchCteSql(state, { playerOp, coreScopeOnly = false } = {}) {
   const pmClauses = buildScopeClausesTagged(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
   // Phase 2.1 (owner-ruled): the ADDITIVE match-selecting clauses. Tagged "scope" so
   // laneScope's OR path picks them up; empty when no match-selecting filter is active
@@ -1689,7 +1721,13 @@ export function buildPmatchCteSql(state, { playerOp } = {}) {
   // board callers pass playerOp:"AND" — that board keeps profile an always-AND shortlister
   // in fielding_cte (Wave C; its player-OR is the outer count gate, not a profile disjunct),
   // so its Matches denominator must keep profile AND to match the tallies it divides.
-  const pmWhereSql = laneScope(pmClauses, state, { idColumn: "player_id", playerOp });
+  // Way A (decision 83): buildQuery's OR branch passes coreScopeOnly so the per-match
+  // denominator WIDENS to the core scope (Fork 3), matching the widened tallies. Default
+  // false ⇒ every other caller (AND path, fielding board, graph, pop-up) byte-identical.
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  const pmWhereSql = coreScopeOnly
+    ? coreScopeWhere(pmClauses, "player_id", pins)
+    : laneScope(pmClauses, state, { idColumn: "player_id", playerOp });
   return [
     "pmatch_cte AS (",
     "  SELECT player_id AS pm_player_id, COUNT(DISTINCT match_id) AS match_count",
@@ -1730,7 +1768,7 @@ export function buildPmatchCteSql(state, { playerOp } = {}) {
  * Built ONLY when a cross-discipline column is requested, so with none the emitted
  * SQL is byte-identical to today (the identical inert-guarantee fielding/PoM carry).
  */
-export function buildCrossDisciplineCteSql(state, discipline, crossCols) {
+export function buildCrossDisciplineCteSql(state, discipline, crossCols, { coreScopeOnly = false } = {}) {
   const other = OTHER_DISCIPLINE[discipline];
   const otherView = VIEW_FOR_DISCIPLINE[other];
   const otherIdCol = ID_COL[other];
@@ -1749,8 +1787,13 @@ export function buildCrossDisciplineCteSql(state, discipline, crossCols) {
   // Chunk 5 Phase 2 Wave E — lane-consistent scope (see laneScope, same rationale as
   // buildPomCteSql), keyed to the OTHER discipline's id column (otherIdCol) so a
   // cross-discipline column tracks the same Match all/any union as the main table,
-  // over the OTHER discipline's own rows.
-  const scopeSql = laneScope(clauses, state, { idColumn: otherIdCol });
+  // over the OTHER discipline's own rows. Way A (decision 83): under coreScopeOnly the
+  // cross-discipline column values WIDEN to the core scope (Fork 3). Default false ⇒
+  // byte-identical for every other caller.
+  const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
+  const scopeSql = coreScopeOnly
+    ? coreScopeWhere(clauses, otherIdCol, pins)
+    : laneScope(clauses, state, { idColumn: otherIdCol });
   const selectCols = [`${otherIdCol} AS xd_player_id`];
   for (const m of crossCols) {
     selectCols.push(`${m.sqlExpression} AS xd_${m.baseKey}`);
@@ -2300,26 +2343,23 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // buildMatchupQuery calls the SAME helper (Wave 4b, decision 47a), so plain and
   // Vs pin-handling can never diverge.
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
-  // Chunk 5 Phase 2 Wave A/B — byte-identity guard. When BOTH lanes are "Match all"
-  // (the default), run today's EXACT whereWithPinExemption line → byte-identical by
-  // construction. A scope-lane "Match any" (Wave A) or a player-lane "Match any"
-  // (Wave B) takes the whereWithLanes branch: scope-OR builds the scope disjunction;
-  // player-OR DROPS the profile semi-join from the WHERE (it is re-emitted as a HAVING
-  // disjunct below — WHERE→HAVING lowering). With both AND the branch is unreachable.
-  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
-  const whereSql =
-    filterMatch.scope === "AND" && filterMatch.player === "AND"
-      ? whereWithPinExemption(whereClauses, idCol, pins)
-      : whereWithLanes(whereClauses, {
-          idColumn: idCol,
-          pins,
-          scopeOp: filterMatch.scope,
-          playerOp: filterMatch.player,
-        });
+  // WAY A (decision 83) — the ONE group operator over all Player + Scope conditions.
+  // groupOp === "AND" (the default) runs today's EXACT whereWithPinExemption line →
+  // byte-identical by construction (every anchor unmoved). groupOp === "OR" takes the
+  // additive Way-A OR branch: the WHERE keeps ONLY the always-AND clauses (core scope +
+  // name search + pin-wrap), and EVERY group condition (scope which-values / profile)
+  // leaves the WHERE to reappear as a post-aggregation existence disjunct in the HAVING
+  // (built from groupOrCompile's havingDisjuncts below). See §3 of the Task-1 design.
+  const filterMatch = state.filterMatch || { player: "AND", scope: "AND", group: "AND" };
+  const groupOp = filterGroupOp(filterMatch);
+  const orCompiled = groupOp === "OR" ? groupOrCompile(whereClauses, { idColumn: idCol, pins }) : null;
+  const whereSql = orCompiled ? orCompiled.whereSql : whereWithPinExemption(whereClauses, idCol, pins);
   // T-2b-i: AND the per-innings slice predicate in. It defines WHAT is counted
   // (like a phase/fielding slice), NOT which players are shortlisted, so it
   // ALWAYS-APPLIES — sits OUTSIDE the pin exemption (a pinned player is still
   // measured over their sliced innings). Byte-identical when inningsWhere is null.
+  // Under OR it is one of the always-AND restrictors (decision 83 Fork 2), applied here
+  // exactly as under AND.
   const finalWhereSql = inningsWhere ? `(${whereSql}) AND (${inningsWhere})` : whereSql;
 
   // Fielding subquery (fielding rebuild): pre-aggregate the EVENT-GRAIN `fielding`
@@ -2348,7 +2388,10 @@ export function buildQuery(state, visibleColumns, opts = {}) {
     // column shown this filter yields the same array as before and the emitted CTE is
     // byte-identical.
     const composedFieldingCols = fieldingEventCols.filter((m) => m && (m.isComposedFielding || m.isFieldingSet));
-    fieldingCteSql = buildFieldingCteSql(state, composedFieldingCols);
+    // Way A (decision 83): under OR the fielding column values WIDEN to the core scope
+    // (Fork 3) — the scope conditions become existence-qualifiers in the main HAVING, so
+    // they must not narrow this CTE. coreScopeOnly false on the AND path ⇒ byte-identical.
+    fieldingCteSql = buildFieldingCteSql(state, composedFieldingCols, { coreScopeOnly: groupOp === "OR" });
   }
 
   // Impact subquery (player_of_match): a whole-match award, so it stays on
@@ -2357,20 +2400,20 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // pin-exempt), so PoM and matches never diverge on scope. Built by
   // the shared buildPomCteSql() helper (same output as the former inline block).
   let pomCteSql = null;
-  if (wantsPom) pomCteSql = buildPomCteSql(state);
+  if (wantsPom) pomCteSql = buildPomCteSql(state, { coreScopeOnly: groupOp === "OR" });
 
   // Result subquery (Wave B): per-player match-outcome counts over player_matches +
   // a 1:1 matches join, built by buildResultCteSql (same scope options + inert
   // guarantee as pom_cte). Only built when a Result column/condition is present.
   let resultCteSql = null;
-  if (wantsResult) resultCteSql = buildResultCteSql(state);
+  if (wantsResult) resultCteSql = buildResultCteSql(state, { coreScopeOnly: groupOp === "OR" });
 
   // Per-match denominator subquery (Wave C): per-player match count over
   // player_matches, built by buildPmatchCteSql (same scope options + inert
   // guarantee as pom_cte). Only built when a per-match fielding column/condition is
   // present.
   let pmatchCteSql = null;
-  if (wantsPmatch) pmatchCteSql = buildPmatchCteSql(state);
+  if (wantsPmatch) pmatchCteSql = buildPmatchCteSql(state, { coreScopeOnly: groupOp === "OR" });
 
   // Profile attribute subquery (Wave D — D1): a per-player attribute lookup over
   // `profiles` (built by buildProfileCteSql, no scope — see its doc). Only built
@@ -2384,7 +2427,7 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // buildCrossDisciplineCteSql). Only built when a cross-discipline column is
   // visible; with none, `sql` is byte-identical to before this wave.
   let crossCteSql = null;
-  if (wantsCross) crossCteSql = buildCrossDisciplineCteSql(state, discipline, crossCols);
+  if (wantsCross) crossCteSql = buildCrossDisciplineCteSql(state, discipline, crossCols, { coreScopeOnly: groupOp === "OR" });
 
   // decision 44c: the BASE query applies NO minimum-innings gate — a player
   // appears if they have any qualifying innings row (equivalent to min 1). The
@@ -2401,19 +2444,32 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // rows") — idCol is the raw GROUP BY column (not the `id` alias), always
   // valid to reference directly in HAVING.
   let havingSql;
-  if (filterMatch.player === "OR") {
-    // Chunk 5 Phase 2 Wave B — player-lane "Match any". The three player-lane BLOCKS
-    // OR together: the profile semi-join (LOWERED from the WHERE — suppressed there by
-    // whereWithLanes' playerOp, re-emitted here referencing idCol, a GROUP-BY key so
-    // legal in HAVING, reused VERBATIM so it can't drift from its WHERE form), the
-    // PotM(Y/N) gate, and the numeric stat block (`advHaving`, used AS-IS — it keeps
-    // its own internal +Add-group / per-group AND-OR structure, owner ruling Q1). Each
-    // block is a disjunct ONLY when active (null blocks dropped), so a single active
-    // block reads exactly like the AND path. Pin-exempt exactly like the AND HAVING.
-    const disjuncts = [profileSemiJoinSql(state, idCol), potmYNHaving, advHaving]
+  if (groupOp === "OR") {
+    // WAY A (decision 83) — the single group "Match any" (OR). Every group condition
+    // becomes a post-aggregation disjunct OR'd together: the scope which-values as
+    // existence tests `COUNT(*) FILTER (WHERE P) >= 1` + the profile semi-join (both from
+    // orCompiled.havingDisjuncts, which reuse the EXACT clause `.sql` the AND-path WHERE
+    // built, so an OR predicate can never drift from its AND form), the PotM(Y/N) gate,
+    // and the numeric stat block (`advHaving`, used AS-IS — it keeps its own internal
+    // +Add-group / per-group AND-OR structure, owner ruling Q1). Each block is a disjunct
+    // ONLY when active (null blocks dropped). Pin-exempt exactly like the AND HAVING.
+    const disjuncts = [...orCompiled.havingDisjuncts, potmYNHaving, advHaving]
       .filter(Boolean)
       .map((s) => `(${s})`);
-    havingSql = disjuncts.length === 0 ? null : gateWithPinExemption(disjuncts.join(" OR "), idCol, pins);
+    if (disjuncts.length > 0) {
+      havingSql = gateWithPinExemption(disjuncts.join(" OR "), idCol, pins);
+    } else if (hasActiveProfileFilter(state.profile) || activeGroups(state.advanced).length > 0) {
+      // Fork 4 (decision 83): an "Any" group built ONLY of conditions that CANNOT match
+      // (e.g. a profile filter on the Women view, where profileSemiJoinSql no-ops → the
+      // profile disjunct vanishes) returns NOTHING. Distinguished from "no group condition
+      // at all" (→ the core-scope baseline below) by these state-level active checks. Still
+      // pin-exempt — a pinned player floats in regardless, exactly as everywhere else.
+      havingSql = gateWithPinExemption("1 = 0", idCol, pins);
+    } else {
+      // No group condition active at all → no HAVING (all core-scope players — equivalent
+      // to the AND baseline). Reachable only if the operator is OR with an empty group.
+      havingSql = null;
+    }
   } else {
     // Player-lane "Match all" (default) — today's EXACT HAVING: numeric block AND
     // PotM(Y/N), pin-exempt. Byte-identical by construction. (Under player-AND the
@@ -2445,10 +2501,18 @@ export function buildQuery(state, visibleColumns, opts = {}) {
   // with no Innings Number set, inningsNumberFilterActive() is false → the gate is
   // unchanged and every anchor stays byte-identical.
   const inningsLevel =
-    positionsFilterActive(state) ||
-    oppositionFilterActive(state) ||
-    inningsNumberFilterActive(state) ||
-    wantsMatchContext ||
+    // WAY A (decision 83, Fork 3): under OR these four are group-scope conditions that
+    // become existence-qualifiers (they no longer restrict the aggregation window), so
+    // "matches" WIDENS back to the whole-scope player_matches count (the matchesSql
+    // secondary below, built core-scope-only). Under AND (groupOp !== "OR") this reads
+    // EXACTLY as today — byte-identical. The delivery-window / per-innings-slice / ball
+    // restrictors below are always-AND (Fork 2), so they still force innings-level even
+    // under OR.
+    (groupOp !== "OR" &&
+      (positionsFilterActive(state) ||
+        oppositionFilterActive(state) ||
+        inningsNumberFilterActive(state) ||
+        wantsMatchContext)) ||
     // T-2b-i: a per-innings slice narrows to an innings SUBSET exactly like the
     // filters above, so a visible "matches" column must count DISTINCT match_id
     // over the SLICED innings (not the whole-scope player_matches count, which
@@ -2539,8 +2603,14 @@ export function buildQuery(state, visibleColumns, opts = {}) {
     }
     // Chunk 5 Phase 2 Wave E — lane-consistent scope (see laneScope, same rationale as
     // buildPomCteSql): the secondary "matches" query shares the main query's Match
-    // all/any union (lowered into the HAVING disjunct above under player-OR).
-    const pmWhereSql = laneScope(pmClauses, state, { idColumn: "player_id" });
+    // all/any union. Way A (decision 83, Fork 3): under OR the "matches" denominator
+    // WIDENS to the core scope (the scope conditions are existence-qualifiers in the main
+    // HAVING, not window restrictors), so it is built core-scope-only. Under AND this is
+    // byte-identical to today (laneScope delegates to whereWithPinExemption).
+    const pmWhereSql =
+      groupOp === "OR"
+        ? coreScopeWhere(pmClauses, "player_id", pins)
+        : laneScope(pmClauses, state, { idColumn: "player_id" });
     matchesSql = [
       `SELECT player_id AS id, COUNT(DISTINCT match_id) AS matches`,
       `FROM player_matches`,
