@@ -809,15 +809,35 @@ a { color: var(--color-accent); }
 .cond-builder__rows,
 .cond-builder__numeric { display: flex; flex-direction: column; gap: var(--space-3); }
 
-/* ── Chunk 5 · Phase 2 · Wave D: Player / Scope lane blocks ──────────────────
-   The condition builder is two lane sections — "Player Filters" and "Scope
-   Filters" — each headed by an ALWAYS-VISIBLE Match all|any toggle and holding one
-   merged applied-filter list. Presentation only; the toggle drives
-   state.filterMatch.<lane>, which the OR engine reads. */
+/* ── Way A (decision 83): ONE group card, ONE operator ──────────────────────
+   The condition builder is a SINGLE group card — one "Match all / Match any"
+   operator over all Player + Scope conditions, the two "+ Add condition" dropdowns
+   side-by-side in a row, and every added condition in ONE undifferentiated list
+   (the player-rows + scope-rows containers stacked with no divider). Presentation
+   only; the operator drives the single group op (filterGroupOp), which the OR engine
+   reads. The Matchup lane below stays a peer .cond-lane (Task 3 re-houses it). */
+.cond-group-one { display: flex; flex-direction: column; gap: var(--space-3); }
+.cond-group-one__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.cond-group-one__match-label { font-size: var(--text-sm2); color: var(--color-muted); }
+/* The two add dropdowns share a row on desktop (built to take a third — Matchup — in
+   Task 3); each takes an equal share. They stack on narrow screens. */
+.cond-group-one__addrow { display: flex; gap: var(--space-3); align-items: flex-start; }
+.cond-group-one__addrow > .cond-lane-bar { flex: 1 1 0; min-width: 0; }
+@media (max-width: 640px) { .cond-group-one__addrow { flex-direction: column; } }
+/* The merged condition list: the player-rows and scope-rows sub-lists flow as one
+   continuous list — same row gap throughout, no per-kind heading or divider. */
+.cond-group-one__list { display: flex; flex-direction: column; gap: var(--space-3); }
+
 .cond-lane { display: flex; flex-direction: column; gap: var(--space-3); }
-/* A hairline separates the second lane from the first (the two lanes AND together;
-   the rule reinforces "these are two independent groups"). */
-.cond-lane + .cond-lane {
+/* A hairline separates the Matchup lane from the group card above it (they AND
+   together; delivery-window/matchup live OUTSIDE the group, decision 83 Fork 2). */
+.cond-lane + .cond-lane,
+.cond-group-one + .cond-lane {
   padding-top: var(--space-4);
   border-top: 1px solid var(--color-line);
 }
@@ -924,6 +944,15 @@ a { color: var(--color-accent); }
      look). Width is set alongside .cols-chosen-row in the shared rule below. */
   font-size: 0.9rem;
 }
+
+/* Polish (Way A, decision 83): dim an "empty" condition row — one that is showing but
+   not yet narrowing the result (an unpicked categorical, a Result left on "All", a
+   numeric row with no value). A muted opacity cue only; the row stays fully
+   interactive and the query is untouched. The × remove button keeps full opacity so it
+   is never mistaken for disabled. */
+.cond-row--inert { opacity: 0.55; }
+.cond-row--inert .cond-row__remove,
+.cond-row--inert .icon-btn { opacity: 1; }
 
 /* The main line spans the full row so the remove × can sit hard right, matching the
    columns chosen-row (label grows, controls pinned right). */
@@ -4930,7 +4959,8 @@ body.is-col-resizing {
 }
 .cond-group__remove { margin-left: auto; }
 .cond-group__rows { display: flex; flex-direction: column; gap: var(--space-3); }
-.cond-group__add { display: flex; }
+/* (.cond-group__add removed — Way A lifted the per-group add trigger out of the
+   numeric group card into the group card's shared top add-row; see .cond-group-one__addrow.) */
 /* Chunk 5 · Phase 1: the two-dropdown "Player Filters | Scope Filters" bar inside a
    group card's add area. Mirrors the Columns section's dropdowns-in-a-row — the
    triggers themselves reuse the .cols-dd-trigger / .cols-dd-name / .cols-dd-caret

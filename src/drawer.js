@@ -41,6 +41,7 @@ import {
   matchupVsActive,
   opponentPlayerActive,
   effectiveNamespace,
+  filterGroupOp,
 } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { ballEngineEnabled } from "./config.js";
@@ -52,7 +53,7 @@ import {
   addConditionToGroup,
   removeGroup,
   setGroupOp,
-  setLaneOp,
+  setFilterGroupOp,
   removeConditionAt,
   isBowlingFiguresCondition,
 } from "./advanced.js";
@@ -356,48 +357,50 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       .map(singletonRowHTML)
       .join("");
 
-  // Chunk 5 · Phase 2 · Wave D — the builder is now TWO lane blocks: "Player
-  // Filters" and "Scope Filters", each headed by an ALWAYS-VISIBLE "Match all /
-  // Match any" toggle (data-role="lane-op") wired to state.filterMatch.<lane> and
-  // each holding ONE merged applied-filter list. The Player list holds the player
-  // singletons + the numeric metric GROUPS (each group KEEPS its own per-group
-  // Match-all/any toggle once it has ≥2 conditions — owner ruling Q1; the "+ Add
-  // group" nested-sub-group control was KILLED as non-functional, decision 76.6).
-  // The Scope list holds the scope singletons + (on the Fielding board) the fielding
-  // dim rows. The "+ Add condition" dropdowns still live inside each numeric group
-  // card (owner Q1's group-targeted add model, unchanged) — adding a scope filter
-  // from there routes its row into the Scope list here.
-  const laneHead = (lane, label) => `
-      <div class="cond-lane__head">
-        <span class="cond-lane__title">${label}</span>
-        <div class="cond-lane__match">
-          <span class="cond-lane__match-label">Match</span>
-          <div class="segmented segmented--small" data-role="lane-op" data-lane="${lane}">
-            <button type="button" class="segmented__btn" data-value="AND">All</button>
-            <button type="button" class="segmented__btn" data-value="OR">Any</button>
-          </div>
+  // Way A (decision 83) — ONE group card, ONE operator. The two per-lane "Match all /
+  // Match any" toggles (Player / Scope) collapse into a SINGLE group operator over ALL
+  // Player + Scope conditions (bound to setFilterGroupOp; read via filterGroupOp). The
+  // card shows every added condition as ONE undifferentiated list — no per-kind titles
+  // or gaps (owner: "they're all just filters once chosen"). The player-rows and
+  // scope-rows containers are KEPT (every singleton controller, relocateStrikerposRow
+  // and numericEl target them) but rendered adjacent inside one list, so they read as a
+  // single continuous list. The two "+ Add condition" dropdowns — "Player Filters" and
+  // "Scope Filters" — sit side-by-side in a row above the list (renderAddRow), built so
+  // Matchup can join as a third dropdown in Task 3 without rework. The numeric metric
+  // GROUP still KEEPS its own per-group Match-all/any toggle once it has ≥2 conditions
+  // (owner ruling Q1 — that toggle is the numeric block's own operator, setGroupOp,
+  // distinct from this single group operator). The Matchup lane stays where it is
+  // (Task 3 re-houses it) — always-ANDs, outside the group (decision 80 / Fork 2).
+  const groupOpHead = `
+      <div class="cond-group-one__head">
+        <span class="cond-group-one__match-label">Match</span>
+        <div class="segmented segmented--small" data-role="filter-group-op">
+          <button type="button" class="segmented__btn" data-value="AND">All</button>
+          <button type="button" class="segmented__btn" data-value="OR">Any</button>
         </div>
+        <span class="cond-group-one__match-label">of the conditions below</span>
       </div>`;
   advancedHost.innerHTML = `
     <div class="cond-builder">
-      <section class="cond-lane" data-lane="player">
-        ${laneHead("player", "Player Filters")}
-        <div class="cond-lane__list" data-role="player-rows">
-          ${laneSingletonsHTML("player")}
-          <div class="cond-builder__numeric" data-role="numeric-rows"></div>
+      <section class="cond-group-one" data-role="filter-group">
+        ${groupOpHead}
+        <div class="cond-group-one__addrow" data-role="add-row">
+          <div class="cond-lane-bar" data-role="player-add"></div>
+          <div class="cond-lane-bar" data-role="scope-add"></div>
         </div>
-      </section>
-      <section class="cond-lane" data-lane="scope">
-        ${laneHead("scope", "Scope Filters")}
-        <div class="cond-lane__add" data-role="scope-add"></div>
-        <div class="cond-lane__list" data-role="scope-rows">
-          ${laneSingletonsHTML("scope")}
-          <!-- Fielding board dim rows (3.2b2): one inline condition row per fielding dim
-               (Wicket type / Bowler style / Phase / …), shown only while the Fielding
-               discipline is active. Owned by the fielding-dim controller below. Kept in
-               the Scope list (they narrow WHICH wicket-events count); not lane-split in
-               this wave — that lives in fieldingDimsDrawer.js. -->
-          <div class="cond-builder__rows" data-role="fielding-dim-rows"></div>
+        <div class="cond-group-one__list">
+          <div class="cond-lane__list" data-role="player-rows">
+            ${laneSingletonsHTML("player")}
+            <div class="cond-builder__numeric" data-role="numeric-rows"></div>
+          </div>
+          <div class="cond-lane__list" data-role="scope-rows">
+            ${laneSingletonsHTML("scope")}
+            <!-- Fielding board dim rows (3.2b2): one inline condition row per fielding dim
+                 (Wicket type / Bowler style / Phase / …), shown only while the Fielding
+                 discipline is active. Owned by the fielding-dim controller below. Kept in
+                 the Scope list (they narrow WHICH wicket-events count). -->
+            <div class="cond-builder__rows" data-role="fielding-dim-rows"></div>
+          </div>
         </div>
       </section>
       <!-- ── Matchup lane (decision 80) ─────────────────────────────────────────
@@ -470,36 +473,31 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const scopeRowsListEl = advancedHost.querySelector('[data-role="scope-rows"]');
   const fieldingDimRowsEl = advancedHost.querySelector('[data-role="fielding-dim-rows"]');
 
-  // ── Lane Match-all / Match-any toggles (Chunk 5 · Phase 2 · Wave D) ──────────
-  // One per lane, ALWAYS visible (the spec bans the old hidden-until-2-conditions
-  // pattern). Each writes state.filterMatch.<lane> via setLaneOp and re-runs the
-  // search (onChange). At the default "AND"/"AND" the OR engine takes its
-  // byte-identical branch, so the anchors are untouched. syncLaneToggles reflects
-  // the current filterMatch back onto the segmented buttons (built once here — the
-  // toggles live in the stable skeleton, never rebuilt by renderNumeric).
-  const laneOpEls = {};
-  advancedHost.querySelectorAll('[data-role="lane-op"]').forEach((seg) => {
-    const lane = seg.dataset.lane;
-    laneOpEls[lane] = seg;
-    seg.querySelectorAll(".segmented__btn").forEach((btn) => {
+  // ── Single group operator (Way A, decision 83) ──────────────────────────────
+  // ONE "Match all / Match any" over ALL Player + Scope conditions, replacing the two
+  // per-lane toggles. ALWAYS visible (no hidden-until-2-conditions). Bound to
+  // setFilterGroupOp (which writes `group` and keeps the legacy scope/player mirror
+  // equal to it, so the not-yet-migrated readers stay consistent) and read back via
+  // filterGroupOp. At the default "AND" the OR engine takes its byte-identical branch,
+  // so the anchors are untouched. syncGroupOpToggle reflects the current op onto the
+  // segmented buttons (lives in the stable skeleton, never rebuilt by renderNumeric).
+  const filterGroupOpEl = advancedHost.querySelector('[data-role="filter-group-op"]');
+  if (filterGroupOpEl) {
+    filterGroupOpEl.querySelectorAll(".segmented__btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         if (btn.classList.contains("is-active")) return; // no-op re-click (keeps Search dirty-key honest)
-        setLaneOp(store, lane, btn.dataset.value);
-        syncLaneToggles();
+        setFilterGroupOp(store, btn.dataset.value);
+        syncGroupOpToggle();
         onChange();
       });
     });
-  });
-  function syncLaneToggles() {
-    const fm = store.get().filterMatch || { player: "AND", scope: "AND" };
-    for (const lane of ["player", "scope"]) {
-      const seg = laneOpEls[lane];
-      if (!seg) continue;
-      const op = fm[lane] === "OR" ? "OR" : "AND";
-      seg.querySelectorAll(".segmented__btn").forEach((btn) => {
-        btn.classList.toggle("is-active", btn.dataset.value === op);
-      });
-    }
+  }
+  function syncGroupOpToggle() {
+    if (!filterGroupOpEl) return;
+    const op = filterGroupOp(store.get().filterMatch) === "OR" ? "OR" : "AND";
+    filterGroupOpEl.querySelectorAll(".segmented__btn").forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.value === op);
+    });
   }
 
   // ── Data-driven filter availability (owner "remove the hardcode everywhere") ──
@@ -1029,7 +1027,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   function availabilityOnReady() {
     syncSingletonRows();
     renderNumeric(store.get(), true);
-    renderScopeAdd();
+    renderAddRow();
   }
 
   function isPresent(t, s) {
@@ -1275,6 +1273,30 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   }
 
   // ── Singleton rows: show/hide + editor sync ─────────────────────────────────
+  // Is a singleton row actually NARROWING the result right now? (vs merely present.)
+  // Mirrors the pills' `inert` test: the imported *FilterActive predicates for the
+  // sentinel-bearing filters (Result/Stage/PotM… default to a no-narrowing "All"/both),
+  // and hasValue for the rest (team/city/season/profile/window pieces have no inert
+  // sentinel — any value narrows). Drives the dim-empty-rows cue only; no query effect.
+  function isSingletonActive(key, s) {
+    switch (key) {
+      case "vs_opp": return opponentPlayerActive(s);
+      case "vs": return matchupVsActive(s);
+      case "inn_num": return inningsNumberFilterActive(s);
+      case "strikerpos": return positionsFilterActive(s);
+      case "opposition": return oppositionFilterActive(s);
+      case "event": return eventFilterActive(s);
+      case "venue": return venueFilterActive(s);
+      case "fld_pos": return fieldingPositionActive(s);
+      case "mc_result": return resultFilterActive(s);
+      case "mc_toss_result": return tossResultFilterActive(s);
+      case "mc_toss_decision": return tossDecisionFilterActive(s);
+      case "potm_yn": return potmYNFilterActive(s);
+      case "mc_stage": return stageFilterActive(s);
+      default: return hasValue(key, s);
+    }
+  }
+
   function syncSingletonRows() {
     const s = store.get();
     relocateStrikerposRow(s.discipline);
@@ -1285,7 +1307,13 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       // data-availability gate (renderMatchupLane), not isPresent. Skip it here so the
       // panel is never hidden merely because no Vs value is picked yet.
       if (t.key === "vs") continue;
-      rowEls[t.key].hidden = !isPresent(t, s);
+      const present = isPresent(t, s);
+      rowEls[t.key].hidden = !present;
+      // Polish (Way A): dim an added-but-inert row — one that is showing yet not
+      // actually narrowing the result (an unpicked Opposition, a Result left on "All",
+      // a PotM Y/N with neither/both ticked). Display-only opacity cue; the query is
+      // untouched. isSingletonActive mirrors the pills' own "inert" test.
+      rowEls[t.key].classList.toggle("cond-row--inert", present && !isSingletonActive(t.key, s));
     }
     // "Batting position" is ONE control with a DISCIPLINE-dependent name (decision 81B,
     // owner 2026-08-27): on the batting board it is the subject's OWN position →
@@ -1360,6 +1388,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
 
   function conditionRowHTML(cond, gi, ci, ns, formats) {
     const hasError = showErrors && conditionHasError(cond);
+    // Polish (Way A): dim a numeric row with no value yet (an "empty" condition),
+    // UNLESS it is already flagged with its red validation error (error emphasis wins).
+    // Kept live by the value-input handler in wireNumeric so a filled row un-dims
+    // without a rebuild. Display-only.
+    const isInert = conditionHasError(cond) && !hasError;
     // Best Bowling (Wave A2 item 2): a COMPOUND "≥ [W] wickets for ≤ [R] runs"
     // condition — two labelled boxes (W→v1, R→v2) with NO operator select (the
     // comparison is implicit: at least W wickets conceding at most R runs in a
@@ -1410,7 +1443,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     const rawLabel = metricLabel(cond.metricKey, ns, formats);
     const typeLabel = paramMeta ? rawLabel.replace(/\s*≥\s*N\s*$/, "") : rawLabel;
     return `
-      <div class="cond-row cond-row--metric ${hasError ? "cond-row--error" : ""}" data-gi="${gi}" data-ci="${ci}">
+      <div class="cond-row cond-row--metric ${hasError ? "cond-row--error" : ""}${isInert ? " cond-row--inert" : ""}" data-gi="${gi}" data-ci="${ci}">
         <div class="cond-row__line">
           <div class="cond-row__main">
             <span class="cond-row__type">${escHtml(typeLabel)}</span>
@@ -1442,28 +1475,26 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       : "";
     const head = showOp || removeBtn ? `<div class="cond-group__head">${opControl}${removeBtn}</div>` : "";
     const rows = g.conds.map((c, ci) => conditionRowHTML(c, gi, ci, ns, s.formats)).join("");
-    // Chunk 5 · Phase 2 · Wave D: the numeric group card carries ONLY the "Player
-    // Filters" add dropdown now (metrics + player singletons, targeted at THIS
-    // group). The "Scope Filters" dropdown moved OUT to the Scope lane's own header
-    // (renderScopeAdd) — scope filters are singletons (no group target), so putting
-    // their add control in the Scope lane, above the Scope list, reads far cleaner
-    // than the Phase-1 two-dropdown-per-group bar. Same shared palette + trigger
-    // look; the bar still sits ABOVE the group's rows, mirroring columns.
-    const laneBar = laneTriggerHTML("player", gi * 2, s);
+    // Way A (decision 83): both "+ Add condition" dropdowns now live in the group
+    // card's top add-row (renderAddRow), side-by-side — the Player Filters trigger no
+    // longer sits inside each numeric group card. Only group 0 ever exists ("+ Add
+    // group" was killed, decision 76.6), so the top Player trigger (encodedGi 0)
+    // targets the one group directly. The card keeps its per-group Match-all/any
+    // toggle (setGroupOp — the numeric block's OWN operator, distinct from the single
+    // group operator above) when it has ≥2 conditions, plus its rows.
     return `
       <div class="cond-group${multi ? " is-multi" : ""}" data-gi="${gi}">
         ${head}
-        <div class="cond-group__add"><div class="cond-lane-bar">${laneBar}</div></div>
         <div class="cond-group__rows">${rows}</div>
       </div>`;
   }
 
-  // Chunk 5 · Phase 2 · Wave D: build ONE lane add-dropdown trigger (the columns-
-  // section trigger look). `encodedGi` = groupIndex*2 + laneParity (0 = player,
-  // 1 = scope) — the same encoding the shared palette's buildGroups decodes. Used by
-  // the per-group Player trigger (groupCardHTML) and the Scope lane's header trigger
-  // (renderScopeAdd). A lane with no offered filters renders disabled (never, in
-  // practice — Player always has stat metrics, Scope always has Match Details).
+  // Build ONE lane add-dropdown trigger (the columns-section trigger look).
+  // `encodedGi` = groupIndex*2 + laneParity (0 = player, 1 = scope) — the same
+  // encoding the shared palette's buildGroups decodes. Both triggers (Player Filters
+  // encodedGi 0 → group 0; Scope Filters encodedGi 1) are rendered by renderAddRow
+  // into the group card's top add-row. A lane with no offered filters renders disabled
+  // (never, in practice — Player always has stat metrics, Scope always has Match Details).
   function laneTriggerHTML(lane, encodedGi, s) {
     const gi = encodedGi >> 1;
     const label = lane === "player" ? "Player Filters" : "Scope Filters";
@@ -1480,17 +1511,25 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     });
   }
 
-  // Render + mount the Scope lane's header add-dropdown (mounted ONCE — it lives in
-  // the stable skeleton, outside numericEl, so renderNumeric never wipes it; the
-  // shared palette re-reads state on every open, so its offered/disabled leaves stay
-  // fresh without a rebuild). laneParity 1 = scope; groupIndex is irrelevant for
-  // scope (all scope filters are singletons, added via gi-agnostic pickSingleton).
-  function renderScopeAdd() {
-    const host = advancedHost.querySelector('[data-role="scope-add"]');
-    if (!host) return;
+  // Render + mount BOTH "+ Add condition" dropdowns into the group card's top add-row
+  // (mounted here — the hosts live in the stable skeleton, outside numericEl, so
+  // renderNumeric never wipes them; the shared palette re-reads state on every open, so
+  // their offered/disabled leaves stay fresh without a rebuild). Player Filters =
+  // encodedGi 0 (group 0 — the only group; "+ Add group" was killed, 76.6); Scope
+  // Filters = encodedGi 1 (groupIndex irrelevant — all scope filters are singletons,
+  // added via the gi-agnostic pickSingleton). The two hosts ARE the `.cond-lane-bar`
+  // wrappers, laid out side-by-side by the add-row (a third dropdown — Matchup, Task 3
+  // — drops into the same row without rework).
+  function renderAddRow() {
     palette.closeCurrent();
-    host.innerHTML = `<div class="cond-lane-bar">${laneTriggerHTML("scope", 1, store.get())}</div>`;
-    host.querySelectorAll('[data-role="add-palette"]').forEach((el) => palette.mountAddPalette(el));
+    const s = store.get();
+    const playerHost = advancedHost.querySelector('[data-role="player-add"]');
+    const scopeHost = advancedHost.querySelector('[data-role="scope-add"]');
+    if (playerHost) playerHost.innerHTML = laneTriggerHTML("player", 0, s);
+    if (scopeHost) scopeHost.innerHTML = laneTriggerHTML("scope", 1, s);
+    advancedHost
+      .querySelectorAll('[data-role="add-row"] [data-role="add-palette"]')
+      .forEach((el) => palette.mountAddPalette(el));
   }
 
   function renderNumeric(s, force = false) {
@@ -1575,6 +1614,8 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
             const msg = rowEl.querySelector('[data-role="cond-error"]');
             if (msg) msg.remove();
           }
+          // Live-update the dim-empty cue in step with the value (same no-rebuild path).
+          rowEl.classList.toggle("cond-row--inert", conditionHasError(cond) && !showErrors);
         });
         input.addEventListener("change", () => onChange());
       });
@@ -1628,10 +1669,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // re-probes only when gender changes), so the offered filter set is settled by
     // the time the user opens the "+ Add condition" palette.
     availability.ensureLoaded(s, availabilityOnReady);
-    syncLaneToggles();
+    syncGroupOpToggle();
     syncSingletonRows();
     renderNumeric(s);
-    renderScopeAdd();
+    renderAddRow();
     syncKeepColumns();
     syncEmptyNotice();
   }

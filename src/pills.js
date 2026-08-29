@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, cityFilterActive, seasonFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
+import { positionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, cityFilterActive, seasonFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, filterGroupOp, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel, composedParamPrefixForBase, paramAppliedLabel } from "./metrics.js";
@@ -597,21 +597,18 @@ export function mountPills(
       return `<span class="${cls}"${p.title ? ` title="${esc(p.title)}"` : ""}>${esc(p.label)} <button type="button" class="${btnCls}" data-idx="${i}" aria-label="${aria}">${glyph}</button></span>`;
     };
 
-    // Stage-3 Phase 4 (decision 77.3, Option C condensed to one line): while a lane's
-    // "Match any" is on, split the row into the pills actually being OR'd together
-    // (pillMatchAnyLane matches the ACTIVE lane) vs the ones that always apply
-    // regardless (Ball Ranges / matchup Vs / everything else pillMatchAnyLane can
-    // never fold into an OR). Only bothers grouping when BOTH sides are non-empty —
-    // a lane with nothing OR-eligible currently applied has nothing to distinguish,
+    // Way A (decision 83, Option C condensed to one line): while the single group
+    // operator is "Match any" (OR), split the row into the pills actually being OR'd
+    // together (pillMatchAnyLane(key) === "group") vs the ones that always apply
+    // regardless (delivery-window / matchup Vs / name search / everything else
+    // pillMatchAnyLane returns null for). Only bothers grouping when BOTH sides are
+    // non-empty — nothing OR-eligible currently applied has nothing to distinguish,
     // so it falls through to the plain row below, byte-identical to today. Under
-    // Match-all (both lanes AND) this whole branch is unreachable (matchAnyActive is
-    // false), so the plain row is emitted exactly as before this task.
-    const filterMatch = s.filterMatch || { player: "AND", scope: "AND" };
-    const matchAnyActive = filterMatch.scope === "OR" || filterMatch.player === "OR";
-    const isOrParticipant = (p) => {
-      const lane = pillMatchAnyLane(p.key);
-      return (lane === "scope" && filterMatch.scope === "OR") || (lane === "player" && filterMatch.player === "OR");
-    };
+    // "Match all" (group op AND) this whole branch is unreachable (matchAnyActive is
+    // false), so the plain row is emitted exactly as before Way A. Consumes the 2a
+    // pillMatchAnyLane "group"|null contract verbatim (no hardcoded key sets here).
+    const matchAnyActive = filterGroupOp(s.filterMatch) === "OR";
+    const isOrParticipant = (p) => matchAnyActive && pillMatchAnyLane(p.key) === "group";
     const indexed = display.map((p, i) => ({ p, i }));
     const anyOfIdx = matchAnyActive ? indexed.filter(({ p }) => isOrParticipant(p)) : [];
     const alwaysIdx = matchAnyActive ? indexed.filter(({ p }) => !isOrParticipant(p)) : [];

@@ -1357,12 +1357,15 @@ function laneScope(clauses, state, { idColumn, playerOp } = {}) {
 //             Stage / Result condition (each alwaysClause(…, "scope")) + every fielding-dim
 //             pill — AND the player-profile pills (role / batting hand / bowling style /
 //             bowling arm — the profile semi-join, tagged category "player").
+//             bowling arm) — AND the PotM (Y/N) gate + the numeric stat conditions
+//             (potmYNHaving / advHaving / advWhere, which the OR disjunction includes;
+//             decision 83 Fork 2). [PotM/numeric added post-2a — see the code + 2c finding.]
 //   null    — ALWAYS APPLIES, never folds into the group OR (decision 83 Fork 2):
 //             the delivery-window pills (Phase / Over range / Ball range / Player balls)
 //             and the opponent-player "vs {name}" matchup pill (baked into the ball VIEW
-//             before any WHERE — db.js/deliveryWindow.js, db.js/opponentFilter.js), plus
-//             the free-text name search, the PotM Y/N gate, and the numeric stat-condition
-//             pills (all untagged/HAVING-gated). These are the always-AND set.
+//             before any WHERE — db.js/deliveryWindow.js, db.js/opponentFilter.js) plus
+//             the free-text name search (a bypassable shortlister). These are the
+//             always-AND set.
 //
 // OUTPUT CONTRACT for the Task-2c UI worker: `pillMatchAnyLane(key)` returns
 //   "group" → render this pill INSIDE the group card / OR bracket when the operator is
@@ -1388,7 +1391,13 @@ export function pillMatchAnyLane(key) {
     key === "mc_stage" ||
     key === "mc_result_condition" ||
     key.startsWith("fld_") ||
-    key.startsWith("profile:")
+    key.startsWith("profile:") ||
+    // Fixed post-2a (2c finding): PotM (Y/N) + numeric stat conditions ARE group members
+    // (decision 83 Fork 2) — buildQuery's OR branch ORs potmYNHaving + advHaving into the
+    // disjunction, and buildMatchupQuery ORs advWhere; the classifier must agree so the UI
+    // labels them "matching any" (inside the group), not "always applies". Display-only.
+    key === "potm_yn" ||
+    key.startsWith("cond:")
   ) {
     return "group";
   }
