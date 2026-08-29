@@ -346,31 +346,34 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
           <button type="button" class="icon-btn cond-row__remove" data-remove="${t.key}" title="Remove condition">&times;</button>
         </div>
       </div>`;
-  // Built once, before the popup has ever been opened — reads the store's
-  // discipline at MOUNT time only (defaults to "batting", state.js's default —
-  // see initialState). This decides which lane container each row's HTML lands
-  // in on the page's very first render; syncSingletonRows()'s relocateStrikerposRow
-  // below re-parents the strikerpos row live on every subsequent discipline switch,
-  // since a fresh skeleton is never rebuilt.
-  const laneSingletonsHTML = (lane) =>
-    SINGLETON_TYPES.filter((t) => singletonLane(t.key, store.get().discipline) === lane)
+  // Built once, before the popup has ever been opened. Way A review fix (decision
+  // 83, 2026-08-29): every added condition renders as ONE continuous list in the
+  // order the user ADDED them (syncCondOrder below), NOT split into Player then Scope
+  // blocks — so a SINGLE container holds every singleton row, and the numeric + fielding
+  // -dim blocks join it as their own ordered slots. "vs" is excluded here — it lives in
+  // the separate Matchup lane <section> below (singletonLane("vs")==="matchup").
+  const listSingletonsHTML = () =>
+    SINGLETON_TYPES.filter((t) => singletonLane(t.key) !== "matchup")
       .map(singletonRowHTML)
       .join("");
 
   // Way A (decision 83) — ONE group card, ONE operator. The two per-lane "Match all /
   // Match any" toggles (Player / Scope) collapse into a SINGLE group operator over ALL
-  // Player + Scope conditions (bound to setFilterGroupOp; read via filterGroupOp). The
-  // card shows every added condition as ONE undifferentiated list — no per-kind titles
-  // or gaps (owner: "they're all just filters once chosen"). The player-rows and
-  // scope-rows containers are KEPT (every singleton controller, relocateStrikerposRow
-  // and numericEl target them) but rendered adjacent inside one list, so they read as a
-  // single continuous list. The two "+ Add condition" dropdowns — "Player Filters" and
-  // "Scope Filters" — sit side-by-side in a row above the list (renderAddRow), built so
-  // Matchup can join as a third dropdown in Task 3 without rework. The numeric metric
-  // GROUP still KEEPS its own per-group Match-all/any toggle once it has ≥2 conditions
-  // (owner ruling Q1 — that toggle is the numeric block's own operator, setGroupOp,
-  // distinct from this single group operator). The Matchup lane stays where it is
-  // (Task 3 re-houses it) — always-ANDs, outside the group (decision 80 / Fork 2).
+  // Player + Scope conditions (bound to setFilterGroupOp; read via filterGroupOp). Review
+  // fix (2026-08-29): the card shows every added condition as ONE undifferentiated list in
+  // the order the user ADDED them — no Player/Scope split, per-kind title, or gap (owner:
+  // "if I choose a player scope then a filter scope then a player scope, it needs to show
+  // in that order without gaps"). A SINGLE `cond-rows` container holds every singleton row,
+  // plus the numeric block and the fielding-dim block as their own slots; syncCondOrder
+  // re-appends the present slots in activation order (every singleton controller and
+  // numericEl still target their rows by data-role, so the merge is DOM-only, machinery
+  // intact). The two "+ Add condition" dropdowns — "Player Filters" and "Scope Filters" —
+  // sit side-by-side in a row ABOVE the Match-all/any line and the list (renderAddRow),
+  // built so Matchup can join as a third dropdown in Task 3 without rework. The numeric
+  // metric GROUP still KEEPS its own per-group Match-all/any toggle once it has ≥2
+  // conditions (owner ruling Q1 — that toggle is the numeric block's own operator,
+  // setGroupOp, distinct from this single group operator). The Matchup lane stays where it
+  // is (Task 3 re-houses it) — always-ANDs, outside the group (decision 80 / Fork 2).
   const groupOpHead = `
       <div class="cond-group-one__head">
         <span class="cond-group-one__match-label">Match</span>
@@ -383,24 +386,25 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   advancedHost.innerHTML = `
     <div class="cond-builder">
       <section class="cond-group-one" data-role="filter-group">
-        ${groupOpHead}
         <div class="cond-group-one__addrow" data-role="add-row">
           <div class="cond-lane-bar" data-role="player-add"></div>
           <div class="cond-lane-bar" data-role="scope-add"></div>
         </div>
-        <div class="cond-group-one__list">
-          <div class="cond-lane__list" data-role="player-rows">
-            ${laneSingletonsHTML("player")}
-            <div class="cond-builder__numeric" data-role="numeric-rows"></div>
-          </div>
-          <div class="cond-lane__list" data-role="scope-rows">
-            ${laneSingletonsHTML("scope")}
-            <!-- Fielding board dim rows (3.2b2): one inline condition row per fielding dim
-                 (Wicket type / Bowler style / Phase / …), shown only while the Fielding
-                 discipline is active. Owned by the fielding-dim controller below. Kept in
-                 the Scope list (they narrow WHICH wicket-events count). -->
-            <div class="cond-builder__rows" data-role="fielding-dim-rows"></div>
-          </div>
+        ${groupOpHead}
+        <!-- Way A review fix (decision 83, 2026-08-29): ONE undifferentiated condition
+             list — every added condition (Player + Scope singletons, the numeric block,
+             and the fielding-dim block) is a direct child here, rendered in the order the
+             user added them (syncCondOrder), with NO Player/Scope split, heading, or gap.
+             The numeric + fielding-dim blocks start hidden and stay hidden while empty so a
+             visible-but-empty flex child never leaves a stray gap. -->
+        <div class="cond-group-one__list" data-role="cond-rows">
+          ${listSingletonsHTML()}
+          <div class="cond-builder__numeric" data-role="numeric-rows" hidden></div>
+          <!-- Fielding board dim rows (3.2b2): one inline condition row per fielding dim
+               (Wicket type / Bowler style / Phase / …), shown only while the Fielding
+               discipline is active. Owned by the fielding-dim controller below (they narrow
+               WHICH wicket-events count). Positioned as one ordered slot by syncCondOrder. -->
+          <div class="cond-builder__rows" data-role="fielding-dim-rows" hidden></div>
         </div>
       </section>
       <!-- ── Matchup lane (decision 80) ─────────────────────────────────────────
@@ -466,11 +470,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const matchupAxisPickEl = advancedHost.querySelector('[data-role="matchup-axis-pick"]');
   const matchupClearEl = advancedHost.querySelector('.opponent-panel__clear');
   const numericEl = advancedHost.querySelector('[data-role="numeric-rows"]');
-  // Lane list containers (chip-lane fix, 2026-08-27) — needed to physically
-  // re-parent the strikerpos row between lanes when its discipline-aware lane
-  // (singletonLane) changes; see relocateStrikerposRow below.
-  const playerRowsListEl = advancedHost.querySelector('[data-role="player-rows"]');
-  const scopeRowsListEl = advancedHost.querySelector('[data-role="scope-rows"]');
+  // The single condition list (Way A review fix, decision 83) — every present slot
+  // (singleton rows, the numeric block, the fielding-dim block) is re-appended here in
+  // activation order by syncCondOrder below.
+  const condRowsListEl = advancedHost.querySelector('[data-role="cond-rows"]');
   const fieldingDimRowsEl = advancedHost.querySelector('[data-role="fielding-dim-rows"]');
 
   // ── Single group operator (Way A, decision 83) ──────────────────────────────
@@ -1239,37 +1242,63 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     },
   });
 
-  // Re-parent the strikerpos ("Batting position") applied row into whichever lane
-  // container singletonLane("strikerpos", discipline) currently resolves to (chip-
-  // lane fix, 2026-08-27 — owner ruling: the applied chip must live under the SAME
-  // lane it's offered under — Player Filters on the batting board, Scope Filters
-  // on the bowling board). Every other singleton's DOM parent is fixed at skeleton-
-  // build time and never moves; this is the one exception. Finds the correct
-  // insertion point from SINGLETON_TYPES' own order (the array's documented
-  // applied-row order) by walking forward for the next singleton key that is
-  // ALREADY a child of the target container and inserting before it, falling back
-  // to each container's known trailing element (numeric-rows for Player Filters;
-  // fielding-dim-rows for Scope Filters) when strikerpos would be the last row.
-  // A no-op (no DOM write) when the row is already parented correctly, which is
-  // the common case — this runs on every sync, not only on a discipline change.
-  function relocateStrikerposRow(discipline) {
-    const row = rowEls.strikerpos;
-    if (!row || !playerRowsListEl || !scopeRowsListEl) return;
-    const lane = singletonLane("strikerpos", discipline);
-    const container = lane === "player" ? playerRowsListEl : scopeRowsListEl;
-    if (row.parentElement === container) return;
-    const idx = SINGLETON_TYPES.findIndex((t) => t.key === "strikerpos");
-    let anchor = null;
-    for (let i = idx + 1; i < SINGLETON_TYPES.length; i++) {
-      const el = rowEls[SINGLETON_TYPES[i].key];
-      if (el && el.parentElement === container) {
-        anchor = el;
-        break;
-      }
+  // ── Insertion-order rendering (Way A review fix, decision 83, 2026-08-29) ─────
+  // The group's conditions render as ONE continuous list in the order the user ADDED
+  // them — NOT split into a Player block then a Scope block (owner: "if I choose a
+  // player scope then a filter scope then a player scope, it needs to show in that
+  // order without gaps"). Each SLOT — a singleton row, the numeric metric block, or the
+  // fielding-dim block — is stamped with an incrementing sequence the first time it
+  // becomes present; losing presence forgets it, so re-adding a condition appends it at
+  // the END. Display-only: this reorders DOM nodes and toggles `hidden`; it never touches
+  // state, the store, or any query (numbers sacred). The sequence map lives for the
+  // drawer's lifetime (mounted once), so order is stable across popup reopens; pre-existing
+  // (already-valued) conditions seed in SINGLETON_TYPES order (the documented applied-row
+  // order) on the first sync, since state records no add-order and we may not add one.
+  const NUMERIC_SLOT = "__numeric__";
+  const FIELDING_SLOT = "__fielding__";
+  const activationSeq = new Map();
+  let activationCounter = 0;
+  function noteActivation(slotKey, present) {
+    if (present) {
+      if (!activationSeq.has(slotKey)) activationSeq.set(slotKey, activationCounter++);
+    } else {
+      activationSeq.delete(slotKey);
     }
-    if (!anchor) anchor = container === playerRowsListEl ? numericEl : fieldingDimRowsEl;
-    if (anchor) container.insertBefore(row, anchor);
-    else container.appendChild(row);
+  }
+
+  // Re-append every PRESENT slot into the single list in activation order, and hide the
+  // numeric / fielding blocks while they hold no condition (a visible-but-empty flex child
+  // would otherwise add a stray gap; the synthetic empty group-0 card does NOT count as a
+  // numeric condition). Singleton rows' own hidden state is set by syncSingletonRows /
+  // fieldingDims.sync just before this runs — this only READS it. Numeric-block presence is
+  // the numeric slot's insertion anchor (owner Q1 keeps the numeric block's OWN internal
+  // Match-all/any toggle). Skips the DOM write when the present-child order already matches.
+  function syncCondOrder() {
+    if (!condRowsListEl) return;
+    const s = store.get();
+    const numericPresent = realGroups(s).some((g) => (g.conds || []).length > 0);
+    numericEl.hidden = !numericPresent;
+    const fieldingPresent = Boolean(fieldingDimRowsEl && fieldingDimRowsEl.querySelector('[data-fdim]:not([hidden])'));
+    if (fieldingDimRowsEl) fieldingDimRowsEl.hidden = !fieldingPresent;
+
+    const slots = [];
+    for (const t of SINGLETON_TYPES) {
+      if (singletonLane(t.key) === "matchup") continue; // "vs" lives in the separate Matchup lane
+      const el = rowEls[t.key];
+      const present = Boolean(el) && !el.hidden;
+      noteActivation(t.key, present);
+      if (present) slots.push([activationSeq.get(t.key), el]);
+    }
+    noteActivation(NUMERIC_SLOT, numericPresent);
+    if (numericPresent) slots.push([activationSeq.get(NUMERIC_SLOT), numericEl]);
+    noteActivation(FIELDING_SLOT, fieldingPresent);
+    if (fieldingPresent) slots.push([activationSeq.get(FIELDING_SLOT), fieldingDimRowsEl]);
+
+    slots.sort((a, b) => a[0] - b[0]);
+    const desired = slots.map(([, el]) => el);
+    const currentPresent = Array.from(condRowsListEl.children).filter((el) => !el.hidden);
+    const same = currentPresent.length === desired.length && currentPresent.every((el, i) => el === desired[i]);
+    if (!same) for (const el of desired) condRowsListEl.appendChild(el);
   }
 
   // ── Singleton rows: show/hide + editor sync ─────────────────────────────────
@@ -1299,7 +1328,6 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
 
   function syncSingletonRows() {
     const s = store.get();
-    relocateStrikerposRow(s.discipline);
     for (const t of SINGLETON_TYPES) {
       // "vs" is NOT a generic show-until-present row any more — it lives in the
       // always-present Matchup lane (decision 80), whose "define the opponent" panel
@@ -1348,6 +1376,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     opponentController.sync();
     fieldingDims.sync();
     renderProfileEditors();
+    // Re-order the single condition list by activation sequence (Way A review fix) —
+    // runs after every row's hidden state (incl. fieldingDims.sync above) is settled.
+    syncCondOrder();
   }
 
   // ── Numeric condition GROUPS (multi-group AND/OR — ROUND 3 task 7) ──────────
@@ -1548,6 +1579,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     palette.closeCurrent();
     numericEl.innerHTML = cards;
     wireNumeric();
+    // Place the numeric block as ONE ordered slot (and hide it while it holds no real
+    // condition) — pickMetric reaches here WITHOUT syncSingletonRows, so re-order here too.
+    syncCondOrder();
   }
 
   function wireNumeric() {

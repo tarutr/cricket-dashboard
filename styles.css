@@ -810,12 +810,14 @@ a { color: var(--color-accent); }
 .cond-builder__numeric { display: flex; flex-direction: column; gap: var(--space-3); }
 
 /* ── Way A (decision 83): ONE group card, ONE operator ──────────────────────
-   The condition builder is a SINGLE group card — one "Match all / Match any"
-   operator over all Player + Scope conditions, the two "+ Add condition" dropdowns
-   side-by-side in a row, and every added condition in ONE undifferentiated list
-   (the player-rows + scope-rows containers stacked with no divider). Presentation
-   only; the operator drives the single group op (filterGroupOp), which the OR engine
-   reads. The Matchup lane below stays a peer .cond-lane (Task 3 re-houses it). */
+   The condition builder is a SINGLE group card — the two "+ Add condition" dropdowns
+   side-by-side in a row, then one "Match all / Match any" operator over all Player +
+   Scope conditions, then every added condition in ONE undifferentiated list. Review
+   fix (2026-08-29): that list is a single container (.cond-group-one__list) whose rows
+   render in the order the user added them (drawer.js syncCondOrder) — no Player/Scope
+   split, heading, or divider. Presentation only; the operator drives the single group op
+   (filterGroupOp), which the OR engine reads. The Matchup lane below stays a peer
+   .cond-lane (Task 3 re-houses it). */
 .cond-group-one { display: flex; flex-direction: column; gap: var(--space-3); }
 .cond-group-one__head {
   display: flex;
@@ -829,8 +831,10 @@ a { color: var(--color-accent); }
 .cond-group-one__addrow { display: flex; gap: var(--space-3); align-items: flex-start; }
 .cond-group-one__addrow > .cond-lane-bar { flex: 1 1 0; min-width: 0; }
 @media (max-width: 640px) { .cond-group-one__addrow { flex-direction: column; } }
-/* The merged condition list: the player-rows and scope-rows sub-lists flow as one
-   continuous list — same row gap throughout, no per-kind heading or divider. */
+/* The merged condition list: every present slot (singleton rows, the numeric block, the
+   fielding-dim block) is a direct child here and flows as one continuous list — same row
+   gap throughout, no per-kind heading or divider. Empty numeric/fielding blocks are hidden
+   by syncCondOrder so a zero-height flex child never leaves a stray gap. */
 .cond-group-one__list { display: flex; flex-direction: column; gap: var(--space-3); }
 
 .cond-lane { display: flex; flex-direction: column; gap: var(--space-3); }
