@@ -18,7 +18,7 @@
 import { positionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, cityFilterActive, seasonFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, filterGroupOp, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
-import { metricsFor, getMetric, metricDisplayLabel, composedParamPrefixForBase, paramAppliedLabel } from "./metrics.js";
+import { metricsFor, getMetric, metricDisplayLabel, composedParamPrefixForBase, paramAppliedLabel, bowlingStyleDisplayLabel } from "./metrics.js";
 import { escHtml as esc } from "./html.js";
 import { DIMS as FIELDING_DIMS } from "./fieldingDims.js";
 // Stage-3 Phase 4 (decision 77.3): read-only pill→lane classifier — table.js's own
@@ -84,7 +84,9 @@ function fieldingDimPillLabel(dim, fld, state) {
     // a pill; data-driven dims store the display string AS the value (comment
     // above), so this check must come before that generic fallback.
     if (v === STAGE_NONE) return STAGE_NONE_LABEL;
-    if (!dim.options) return String(v);
+    // Cutover S1: a data-driven dim with a displayLabel (bowler_style) title-cases its
+    // pill label; the stored value (state.fielding.bowlerStyles) is untouched.
+    if (!dim.options) return dim.displayLabel ? dim.displayLabel(v) : String(v);
     const opt = dim.options({ formats: state.formats || [] }).find((o) => String(o.value) === String(v));
     return opt ? String(opt.label) : String(v);
   };
@@ -295,16 +297,19 @@ export function mountPills(
     // so no pill even if a stale value somehow lingered in state.
     if (s.gender !== "female" && hasActiveProfileFilter(s.profile)) {
       const p = s.profile;
-      const profilePill = (field, value) => ({
+      // `display` (optional) decouples the pill LABEL from the restore VALUE — the
+      // Bowling Style pill title-cases its label (cutover S1) while remove/restore keep
+      // the RAW profiles.bowling_type value, so re-applying the pill re-filters correctly.
+      const profilePill = (field, value, display) => ({
         key: `profile:${field}`,
-        label: value,
+        label: display != null ? display : value,
         remove: () => store.set({ profile: { ...store.get().profile, [field]: null } }),
         restore: () => store.set({ profile: { ...store.get().profile, [field]: value } }),
       });
       if (p.roleGroup) pills.push(profilePill("roleGroup", p.roleGroup));
       if (p.roleSub) pills.push(profilePill("roleSub", p.roleSub));
       if (p.battingHand) pills.push(profilePill("battingHand", p.battingHand));
-      if (p.bowlingType) pills.push(profilePill("bowlingType", p.bowlingType));
+      if (p.bowlingType) pills.push(profilePill("bowlingType", p.bowlingType, bowlingStyleDisplayLabel(p.bowlingType)));
       if (p.bowlingArm) pills.push(profilePill("bowlingArm", p.bowlingArm));
       // The "Historic team" (Ever played for) pill is gone — owner 1B-2 removed
       // the Current/Historic distinction; profile.teams is no longer set by any

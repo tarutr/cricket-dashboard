@@ -3244,7 +3244,7 @@ export const PROFILE_COLUMN_SPECS = [
   { key: "attr_role_group", field: "role_group", label: "Playing Role", disciplines: ["batting", "bowling"] },
   { key: "attr_role_subgroup", field: "role_subgroup", label: "Detailed Role", disciplines: ["batting", "bowling"] },
   { key: "attr_batting_style", field: "batting_style", label: "Batting Hand", disciplines: ["batting"] },
-  { key: "attr_bowling_type", field: "bowling_type", label: "Bowling Style", disciplines: ["batting", "bowling"] },
+  { key: "attr_bowling_type", field: "bowling_type", label: "Bowling Style", disciplines: ["batting", "bowling"], displayTransform: "bowlingStyle" },
   { key: "attr_bowling_arm", field: "bowling_arm", label: "Bowling Hand", disciplines: ["batting", "bowling"] },
 ];
 const _PROFILE_SPEC_BY_KEY = new Map(PROFILE_COLUMN_SPECS.map((s) => [s.key, s]));
@@ -3287,6 +3287,9 @@ function resolveProfileColumnMetric(key, discipline) {
     kind: "attribute",
     zeroIsData: false,
     isPhaseMetric: null,
+    // Cutover S1: Bowling Style cells title-case the raw value for DISPLAY ONLY
+    // (formatValue applies it); the underlying profiles.bowling_type is unchanged.
+    displayTransform: spec.displayTransform || null,
     columnTitle: `${spec.label} — from the player profile (blank where no profile exists)`,
   };
 }
@@ -5805,10 +5808,12 @@ function _fcDimResolve(dim, value) {
     // GROUP (pace/spin) → the new fielding bowling_group column; DETAIL → the new
     // bowling_type column. Values are hardcoded from the owner vocabulary (no user
     // free-text), so no escaping surface; a `''` guard is kept for hygiene.
+    // The pred uses the RAW style literal (numbers sacred); only label/short are
+    // title-cased for display (cutover S1 — bowlingStyleDisplayLabel).
     const grp = _FC_BSTYLE_GROUP.get(value);
-    if (grp) return { pred: `bowling_group = '${grp}'`, label: grp, short: grp };
+    if (grp) return { pred: `bowling_group = '${grp}'`, label: bowlingStyleDisplayLabel(grp), short: bowlingStyleDisplayLabel(grp) };
     const det = _FC_BSTYLE_DETAIL.get(value);
-    if (det) return { pred: `bowling_type = '${det.replace(/'/g, "''")}'`, label: det, short: det };
+    if (det) return { pred: `bowling_type = '${det.replace(/'/g, "''")}'`, label: bowlingStyleDisplayLabel(det), short: bowlingStyleDisplayLabel(det) };
     return null;
   }
   if (dim === "over") {
@@ -6005,7 +6010,7 @@ const FIELDING_SET_SPECS = [
   { key: "fld_event_set",        label: "Event",                       col: "event_name",           title: "Events played in across the filtered rows" },
   { key: "fld_venue_set",        label: "Venue",                       col: "venue",                title: "Venues played at across the filtered rows" },
   { key: "fld_city_set",         label: "City",                        col: "city",                 title: "Cities played in across the filtered rows" },
-  { key: "fld_bowler_style_set", label: "Bowler Style",                col: "bowler_style",         title: "Bowler styles behind the fielder's dismissals in the filtered rows" },
+  { key: "fld_bowler_style_set", label: "Bowler Style",                col: "bowler_style",         title: "Bowler styles behind the fielder's dismissals in the filtered rows", displayTransform: "bowlingStyle" },
   { key: "fld_out_position_set", label: "Dismissed Batter's Position", col: "out_batting_position", title: "Dismissed batters' positions in the filtered rows" },
   { key: "fld_out_hand_set",     label: "Dismissed Batter Hand",       col: "out_hand",             title: "Dismissed batters' handedness in the filtered rows" },
   // Group A (Phase 1.2, 2026-08-25) — Innings number / Over: raw event-grain columns
@@ -6193,6 +6198,10 @@ export function resolveFieldingSetMetric(key, discipline) {
     kind: "attribute",
     zeroIsData: false,
     isPhaseMetric: null,
+    // Cutover S1: the Bowler Style list column title-cases each raw style for
+    // DISPLAY ONLY (formatValue applies it); the list expression / DISTINCT values
+    // over fielding.bowler_style are unchanged.
+    displayTransform: spec.displayTransform || null,
     columnTitle: spec.title,
   };
 }
@@ -6257,18 +6266,41 @@ export function metricInputStep(metric) {
 }
 
 /**
+ * Title-case a bowling-style RAW value for DISPLAY ONLY (owner ruling, cutover S1).
+ * Capitalises every space-separated word AND both parts of any hyphenated compound,
+ * leaving the remainder of each part untouched:
+ *   "Slow left-arm orthodox" → "Slow Left-Arm Orthodox"
+ *   "Left-arm wrist-spin"    → "Left-Arm Wrist-Spin"
+ *   "Off-spin" → "Off-Spin"     "Leg-spin"    → "Leg-Spin"
+ *   "Fast-medium" → "Fast-Medium"   "Medium-fast" → "Medium-Fast"
+ *   single words ("Fast" / "Medium" / "Pace" / "Spin") unchanged.
+ * The RAW value (SQL literal / match key / preselect / pill key / option `value:`)
+ * is NEVER derived from this — callers pass the raw value in and use the return
+ * PURELY as label text (the same display/value decoupling the dismissal "run out"→
+ * "Run Out" label uses). Non-string / empty inputs pass through unchanged; this is
+ * only ever called on bowling styles, so parenthetical sentinels ("(unmapped)" /
+ * "…(unspecified)") never reach it.
+ */
+export function bowlingStyleDisplayLabel(raw) {
+  if (typeof raw !== "string" || raw === "") return raw;
+  return raw.replace(/[A-Za-z]+/g, (w) => w.charAt(0).toUpperCase() + w.slice(1));
+}
+
+/**
  * Display label for a matchup bucket value (bowling_type / bowling_group /
  * batting_hand from matchup_batting / matchup_bowling). Callers must exclude
  * '(unmapped)' rows themselves (decision 21) — this function should never see
  * that value. Decision 24: bare-slow bowlers surface as the bare group name
  * 'Spin'/'Pace' in the fine (bowling_type) view, and read as "…(unspecified)"
- * there; every other value (specific styles, batting_hand) passes through
- * verbatim.
+ * there; every other value is a specific bowling style — title-cased for display
+ * via bowlingStyleDisplayLabel (cutover S1). matchupBucketLabel is only ever called
+ * on the fine bowling `type` dim (every caller handles the `hand`/`group` dims
+ * separately), so the transform never touches a batting_hand value.
  */
 export function matchupBucketLabel(bucket) {
   if (bucket === "Spin") return "Spin (unspecified)";
   if (bucket === "Pace") return "Pace (unspecified)";
-  return bucket;
+  return bowlingStyleDisplayLabel(bucket);
 }
 
 /**

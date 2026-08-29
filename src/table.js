@@ -12,6 +12,7 @@ import {
   getMetric,
   hasMetricData,
   matchupBucketLabel,
+  bowlingStyleDisplayLabel,
   paramExistenceHaving,
   resolveColumnMetric,
   isParamComposedColumnKey,
@@ -2753,10 +2754,18 @@ function widestNameColWidthPx(names) {
 /** Shared display formatter for metric values ("—" for no-data per §8.1). Also used by the player page. */
 export function formatValue(metric, value) {
   if (!hasMetricData(metric, value)) return "—"; // em dash
+  // Cutover S1: Bowling-style DISPLAY transform (title-case) — applied ONLY to the
+  // columns flagged displayTransform:"bowlingStyle" (attr_bowling_type profile column,
+  // fld_bowler_style_set list column). The stored/queried value is unchanged; only the
+  // printed label is title-cased. Non-bowling columns take the raw path below.
+  const styleLabel = metric && metric.displayTransform === "bowlingStyle" ? bowlingStyleDisplayLabel : null;
   // Chunk 1B: "list" columns (B. Pos.) render the flattened JS array (db.js
   // normalizeValue) comma-joined, e.g. [3,4,5] → "3, 4, 5".
-  if (metric.format === "list") return Array.isArray(value) ? value.join(", ") : String(value);
-  if (metric.format === "str") return String(value);
+  if (metric.format === "list") {
+    const arr = Array.isArray(value) ? value : [value];
+    return (styleLabel ? arr.map((v) => styleLabel(String(v))) : arr).join(", ");
+  }
+  if (metric.format === "str") return styleLabel ? styleLabel(String(value)) : String(value);
   const n = Number(value);
   switch (metric.format) {
     case "int":

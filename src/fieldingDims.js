@@ -24,7 +24,7 @@ import {
   TOSS_DECISION_OPTIONS,
   inningsNumberOptions,
 } from "./state.js";
-import { INNINGS_NUMBER_FILTER } from "./metrics.js";
+import { INNINGS_NUMBER_FILTER, bowlingStyleDisplayLabel } from "./metrics.js";
 
 // Wicket-type (kind) vocabulary — the EXACT literals fielding_events.kind stores
 // (buildFieldingSliceClauses emits `kind IN (…)`); the sacred buildFieldingCteSql
@@ -56,7 +56,10 @@ export const DIMS = [
     options: () => FIELDING_POSITIONS.map((n) => ({ value: n, label: `Position ${n}` })) },
   { key: "hand",         field: "hands",         group: "Dismissal", label: "Dismissed Batter Hand", control: "checklist", source: "fielding", column: "out_hand" },
   { key: "batter",       field: "outBatters",    group: "Dismissal", label: "Specific Batter",   control: "player", nameField: "outBatterName", pickLabel: "Dismissed Batter" },
-  { key: "bowlerStyle",  field: "bowlerStyles",  group: "Bowler",    label: "Bowler Style",      control: "checklist", source: "fielding", column: "bowler_style" },
+  // displayLabel (cutover S1): title-case the raw bowler_style value for the option/
+  // pill LABEL only. The option `value:` and state.fielding.bowlerStyles stay the RAW
+  // string, so the `bowler_style IN (…)` filter is byte-identical.
+  { key: "bowlerStyle",  field: "bowlerStyles",  group: "Bowler",    label: "Bowler Style",      control: "checklist", source: "fielding", column: "bowler_style", displayLabel: bowlingStyleDisplayLabel },
   { key: "bowler",       field: "bowlers",       group: "Bowler",    label: "Specific Bowler",   control: "player", nameField: "bowlerName", pickLabel: "Bowler" },
   { key: "phase",        field: "phases",        group: "Delivery",  label: "Phase",             control: "checklist", options: () => FIELDING_PHASE_OPTIONS },
   { key: "overs",        field: null,            group: "Delivery",  label: "Over Range",        control: "overrange" },

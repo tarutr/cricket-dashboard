@@ -78,6 +78,8 @@ import {
   makeComposedFieldingKey, parseComposedFieldingKey,
   // Wave D — D1: the player-profile attribute columns' offerable specs per discipline.
   profileColumnSpecs,
+  // Cutover S1: title-case bowling-style DISPLAY labels (Bowler Style composer menu).
+  bowlingStyleDisplayLabel,
   // Standalone TEAM composer (2026-08-14): pool + key scheme + the session registry
   // that keeps a picked Team column alive across a Search-prune (metrics.js).
   composedTeamPool, makeComposedTeamKey, parseComposedTeamKey, registerComposedTeamKeys,
@@ -1682,7 +1684,7 @@ export function createColumnsPicker({
       const mk = (token) => makeComposedFieldingKey(sel, dim, token, false);
       if (dim === "phase") return FC_PHASE_VALUES.map((v) => ({ label: v.label, key: mk(v.token), rare: false }));
       if (dim === "hand") return FC_HAND_VALUES.map((v) => ({ label: v.label, key: mk(v.token), rare: false }));
-      if (dim === "bstyle") return FC_BSTYLE_VALUES.map((v) => ({ label: v.label, key: mk(v.token), rare: false }));
+      if (dim === "bstyle") return FC_BSTYLE_VALUES.map((v) => ({ label: bowlingStyleDisplayLabel(v.label), key: mk(v.token), rare: false }));
       if (dim === "inns") return fcInningsTokens(formats).map((t) => ({ label: FC_INNINGS_LABEL[t], key: mk(t), rare: false }));
       return [];
     }

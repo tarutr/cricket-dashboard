@@ -129,7 +129,9 @@ export function createFieldingDimsController({ host, store, onChange, requestRer
           const orderedVals = dim.reverse ? [...rawVals].reverse() : rawVals;
           const named = dim.canonical
             ? [...new Set(rawVals.map((v) => canonicalStage(v)))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((v) => ({ value: v, label: v }))
-            : orderedVals.map((v) => ({ value: v, label: String(v) }));
+            // Cutover S1: bowler_style dim carries a displayLabel transform (title-case)
+            // for the LABEL only — value stays RAW (checkbox data-val / state / filter).
+            : orderedVals.map((v) => ({ value: v, label: dim.displayLabel ? dim.displayLabel(v) : String(v) }));
           // The STAGE_NONE sentinel (state.js — SAME token/label the batting/bowling
           // Stage filter uses) is appended ONLY when the scope actually holds
           // stage-less matches — an option that can only return zero rows is not a
@@ -200,7 +202,9 @@ export function createFieldingDimsController({ host, store, onChange, requestRer
       if (!vals.length) { toggle.textContent = "Any"; return; }
       if (vals.length === 1) {
         const opt = optionsFor(dim).find((o) => String(o.value) === String(vals[0]));
-        toggle.textContent = opt ? String(opt.label) : String(vals[0]);
+        // Fallback (option not yet loaded): still title-case a bowler_style value via
+        // the dim's displayLabel — never a raw-value leak into the summary.
+        toggle.textContent = opt ? String(opt.label) : dim.displayLabel ? dim.displayLabel(vals[0]) : String(vals[0]);
         return;
       }
       toggle.textContent = `${vals.length} selected`;

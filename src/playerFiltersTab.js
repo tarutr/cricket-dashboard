@@ -70,7 +70,7 @@ import {
   // (fieldingMatchesNarrowed / buildFldMatchesCteSql) is retired here — no longer imported.
   buildPmatchCteSql,
 } from "./table.js";
-import { getMetric, resolveColumnMetric, metricDisplayLabel, matchupBucketLabel, DISMISSAL_KINDS, parseComposedFieldingKey, makeComposedFieldingKey } from "./metrics.js";
+import { getMetric, resolveColumnMetric, metricDisplayLabel, matchupBucketLabel, bowlingStyleDisplayLabel, DISMISSAL_KINDS, parseComposedFieldingKey, makeComposedFieldingKey } from "./metrics.js";
 import {
   createInitialState,
   emptyAdvancedBlock,
@@ -448,7 +448,7 @@ function describeFieldingRow(f) {
   list(f.positions, "Batting Position");
   list(f.hands, "Batting Hand");
   if (Array.isArray(f.outBatters) && f.outBatters.length) out.push(`Batter: ${f.outBatterName || f.outBatters[0]}`);
-  list(f.bowlerStyles, "Bowler Style");
+  list(f.bowlerStyles, "Bowler Style", bowlingStyleDisplayLabel); // cutover S1: title-case display; values untouched
   if (Array.isArray(f.bowlers) && f.bowlers.length) out.push(`Bowler: ${f.bowlerName || f.bowlers[0]}`);
   list(f.phases, "Phase", (p) => PHASE_LABEL[p] || p);
   if (Number.isFinite(Number(f.overFrom)) || Number.isFinite(Number(f.overTo))) {

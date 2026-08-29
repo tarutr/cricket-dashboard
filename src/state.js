@@ -30,6 +30,7 @@
 import {
   metricsFor,
   matchupBucketLabel,
+  bowlingStyleDisplayLabel,
   getMetric,
   metricDisplayLabel,
   INNINGS_NUMBER_FILTER,
@@ -271,7 +272,9 @@ function profileScopeTokens(state) {
   if (p.roleGroup) tokens.push(p.roleGroup);
   if (p.roleSub) tokens.push(p.roleSub);
   if (p.battingHand) tokens.push(p.battingHand);
-  if (p.bowlingType) tokens.push(p.bowlingType);
+  // Cutover S1: subtitle token title-cases the bowling style for display; p.bowlingType
+  // (the raw profiles.bowling_type used by buildQuery) is unchanged.
+  if (p.bowlingType) tokens.push(bowlingStyleDisplayLabel(p.bowlingType));
   if (p.bowlingArm) tokens.push(p.bowlingArm);
   if (p.teams && p.teams.length) {
     // "Historic team" mode (owner decision 46) — mirrors the pill's "Ever played for: …".

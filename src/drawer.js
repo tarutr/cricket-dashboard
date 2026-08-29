@@ -45,7 +45,7 @@ import {
 } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { ballEngineEnabled } from "./config.js";
-import { getMetric, matchupBucketLabel, metricDisplayLabel, metricInputStep } from "./metrics.js";
+import { getMetric, matchupBucketLabel, bowlingStyleDisplayLabel, metricDisplayLabel, metricInputStep } from "./metrics.js";
 import {
   OPERATORS,
   activeConditionCount,
@@ -772,7 +772,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     }
     handSel.setOptions(toOptions(profileOptions.battingHands));
     handSel.setValue(p.battingHand);
-    bowlingSel.setOptions(toOptions(profileOptions.bowlingTypes));
+    // Cutover S1: the Bowling Style filter options display title-case (value stays the
+    // RAW profiles.bowling_type — setProfile/setValue below round-trip the raw string,
+    // so buildQuery's `bowling_type = '…'` literal is unchanged). Bowling-scoped only —
+    // the shared `toOptions` (role/hand) is untouched.
+    bowlingSel.setOptions((profileOptions.bowlingTypes || []).map((v) => ({ value: v, label: bowlingStyleDisplayLabel(v) })));
     bowlingSel.setValue(p.bowlingType);
     bowlingHandSel.setOptions(toOptions(profileOptions.bowlingHands));
     bowlingHandSel.setValue(p.bowlingArm);

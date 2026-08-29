@@ -198,7 +198,9 @@ export function openFieldingRowEditor(hostDoc, deps) {
           const orderedVals = dim.reverse ? [...rawVals].reverse() : rawVals;
           dimOptions[dim.key] = dim.canonical
             ? [...new Set(rawVals.map((v) => canonicalStage(v)))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((v) => ({ value: v, label: v }))
-            : orderedVals.map((v) => ({ value: v, label: String(v) }));
+            // Cutover S1: bowler_style dim carries a displayLabel transform (title-case)
+            // for the LABEL only — value stays RAW (checkbox data-val / state / filter).
+            : orderedVals.map((v) => ({ value: v, label: dim.displayLabel ? dim.displayLabel(v) : String(v) }));
           rebuildPalette(); // the offered set / an open control's options may have changed
           if (activeDims.has(dim.key)) renderConditions();
         })
