@@ -646,10 +646,10 @@ export function battingGridHTML(state, coreNorm, extra) {
   // Progressive Scoring stacked top-to-bottom; RIGHT = Vs opposition, now
   // showing every opponent, uncapped (owner task #20 — the popup scrolls
   // freely). Matchups (below, outside this grid) is unchanged.
-  const leftColHTML = `${sectionOrUnsupported("By batting position", extra.positions, positionsTableHTML)}
+  const leftColHTML = `${sectionOrUnsupported("By Batting Position", extra.positions, positionsTableHTML)}
     ${sectionHTML("Wicket Type", howOutBody)}
     ${sectionHTML("Progressive Scoring", progressionBody)}`;
-  const rightColHTML = sectionOrUnsupported("Vs opposition", extra.opposition, (rows) =>
+  const rightColHTML = sectionOrUnsupported("Vs Opposition", extra.opposition, (rows) =>
     oppositionSectionHTML("batting", rows)
   );
   const bodyHTML = `<div class="player-page__two-col">
@@ -683,7 +683,7 @@ export function bowlingGridHTML(state, core, extra) {
   // list is no longer trimmed).
   const twoColA = `<div class="player-page__two-col">
     <div class="player-page__col">${sectionHTML("Wicket Types", wicketTypesHTML(core))}</div>
-    <div class="player-page__col">${sectionOrUnsupported("Vs opposition", extra.opposition, (rows) =>
+    <div class="player-page__col">${sectionOrUnsupported("Vs Opposition", extra.opposition, (rows) =>
       oppositionSectionHTML("bowling", rows)
     )}</div>
   </div>`;

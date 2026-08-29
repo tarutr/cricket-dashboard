@@ -572,15 +572,15 @@ export const RESULT_OPTIONS = [
   { value: "lost", label: "Lost" },
   { value: "drawn", label: "Drawn" },
   { value: "tied", label: "Tied" },
-  { value: "no_result", label: "No result" },
+  { value: "no_result", label: "No Result" },
 ];
 export const TOSS_RESULT_OPTIONS = [
-  { value: "won", label: "Won toss" },
-  { value: "lost", label: "Lost toss" },
+  { value: "won", label: "Won Toss" },
+  { value: "lost", label: "Lost Toss" },
 ];
 export const TOSS_DECISION_OPTIONS = [
-  { value: "bat", label: "Chose to bat" },
-  { value: "field", label: "Chose to field" },
+  { value: "bat", label: "Chose to Bat" },
+  { value: "field", label: "Chose to Field" },
 ];
 // PotM (Y/N) filter options (Wave D — TASK B): a binary Yes/No over the player's
 // PotM award count in scope (Yes = won ≥1, No = 0). Mirrors the categorical toss
