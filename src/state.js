@@ -2473,15 +2473,24 @@ export function createStore(initial) {
     // opposition/positions tokens. The "(unspecified)" relabel (decision 24)
     // applies ONLY to the fine bowling_type buckets — coarse "vs Spin" means
     // ALL spin and must read plainly. The hand dim reads as plain English.
+    // Decision 81A + 83 Fork 2: state.matchupVs is now a COMBINABLE map — several
+    // opponent axes AND-ed (e.g. "vs Spin" + "vs Players of the Match"). Iterate the
+    // normalised axes (matchupVsAxes) and emit one token per APPLICABLE axis
+    // (matchupAxisApplicable), so a stale axis carried over from the other board stays
+    // inert here instead of printing "vs undefined". Byte-identical at ≤1 axis.
     if (s.view === "table" && matchupVsActive(s)) {
-      const mv = s.matchupVs;
-      if (mv.dim === "hand") {
-        // R4-C naming (locked): no "-handers" wording, even mid-sentence.
-        parts.push(mv.value === "Left-hand bat" ? "vs left-hand batters" : "vs right-hand batters");
-      } else if (mv.dim === "type") {
-        parts.push(`vs ${matchupBucketLabel(mv.value)}`);
-      } else {
-        parts.push(`vs ${mv.value}`);
+      for (const ax of matchupVsAxes(s.matchupVs)) {
+        if (!matchupAxisApplicable(ax.dim, s)) continue;
+        if (ax.dim === "hand") {
+          // R4-C naming (locked): no "-handers" wording, even mid-sentence.
+          parts.push(ax.value === "Left-hand bat" ? "vs left-hand batters" : "vs right-hand batters");
+        } else if (ax.dim === "type") {
+          parts.push(`vs ${matchupBucketLabel(ax.value)}`);
+        } else if (ax.dim === "potm") {
+          parts.push("vs Players of the Match");
+        } else {
+          parts.push(`vs ${ax.value}`); // group bucket (Pace / Spin)
+        }
       }
     }
 

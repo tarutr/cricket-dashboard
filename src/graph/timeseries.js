@@ -48,7 +48,7 @@ import { getMetric } from "../metrics.js";
 import { buildScopeClauses } from "../filters.js";
 import { query } from "../db.js";
 import { neededViewColumns } from "../ballColumns.js";
-import { escSql, matchupVsActive, effectiveNamespace, eligibleMetrics } from "../state.js";
+import { escSql, matchupVsActive, matchupVsAxes, effectiveNamespace, eligibleMetrics } from "../state.js";
 
 // Per-namespace column maps. table.js does not export its equivalents and this
 // module must not modify other files, so they are duplicated here (kept
@@ -428,9 +428,17 @@ function scopeFor(ns, state, playerIds, { forVsBowling = false } = {}) {
   // bowling_type, group → bowling_group). Numerically identical to buildMatchup-
   // Query's per-aggregate FILTER for these no-coverage-column queries.
   if (!forVsBowling && matchupVsActive(state) && (ns === "matchup_batting" || ns === "matchup_bowling")) {
-    const mv = state.matchupVs;
-    const bucketCol = mv.dim === "hand" ? "batting_hand" : mv.dim === "type" ? "bowling_type" : "bowling_group";
-    whereClauses.push(`${bucketCol} = '${escSql(mv.value)}'`);
+    // Composite matchupVs (decision 81A + 83 Fork 2): read the STYLE/HAND axis for this
+    // namespace via matchupVsAxes (was a direct `.dim`/`.value` read that emitted
+    // 'undefined' once the map went composite). Correctness fix only — the vs-PotMs axis
+    // is NOT reproduced here (graph-side potm support is deferred); when no style/hand
+    // axis is set (e.g. only potm), this emits no bucket clause, exactly as before.
+    const styleDims = ns === "matchup_bowling" ? ["hand"] : ["group", "type"];
+    const styleAxis = matchupVsAxes(state.matchupVs).find((a) => styleDims.includes(a.dim));
+    if (styleAxis) {
+      const bucketCol = styleAxis.dim === "hand" ? "batting_hand" : styleAxis.dim === "type" ? "bowling_type" : "bowling_group";
+      whereClauses.push(`${bucketCol} = '${escSql(styleAxis.value)}'`);
+    }
   }
 
   const ids = Array.isArray(playerIds) ? playerIds.filter((x) => x != null) : [];

@@ -3603,17 +3603,28 @@ export function mountTable(
     }
 
     // Bonded "Vs" control (R3.2, item 6): a fixed "Vs" prefix + a value select.
-    // Changing it sets state.matchupVs (PENDING) — synced with the popup's Vs
-    // condition via the shared store. buildMatchupQuery is untouched.
+    // Owner ruling (decision 83 Fork 2, 2026-08-29): this stays a QUICK Pace/Spin
+    // shortcut that edits ONLY the bowling-style / batting-hand axis of the composite
+    // state.matchupVs map — it NEVER overwrites the whole map, so any other axis the
+    // Matchup dropdown rows added (vs PotMs, etc.) is PRESERVED. buildMatchupQuery is
+    // untouched (it reads matchupVsAxes either way; numbers sacred).
     if (vsSelectEl) {
       vsSelectEl.addEventListener("change", () => {
         const raw = vsSelectEl.value;
-        if (!raw) {
-          store.set({ matchupVs: null });
-        } else {
+        // Rebuild the composite map from the current axes, drop the style/hand axes
+        // (mutually exclusive with each other), then set the picked one. Preserves
+        // every non-style axis (potm, …).
+        const map = {};
+        for (const ax of matchupVsAxes(store.get().matchupVs)) map[ax.dim] = ax.value;
+        delete map.group;
+        delete map.type;
+        delete map.hand;
+        if (raw) {
           const idx = raw.indexOf(":");
-          store.set({ matchupVs: { dim: raw.slice(0, idx), value: raw.slice(idx + 1) } });
+          map[raw.slice(0, idx)] = raw.slice(idx + 1);
         }
+        const keys = Object.keys(map);
+        store.set({ matchupVs: keys.length ? map : null });
         syncToolbar();
       });
     }
@@ -3908,7 +3919,12 @@ export function mountTable(
   /** The "Vs" select's <option> markup for the current discipline. Value encodes
    * "dim:value" (e.g. "type:Off-spin"); "" means Everyone (no matchup filter). */
   function matchupVsOptionsHTML(state, bowlingTypes) {
-    const current = matchupVsActive(state) ? `${state.matchupVs.dim}:${state.matchupVs.value}` : "";
+    // Reflect ONLY the style/hand axis of the composite matchupVs map (owner: the
+    // toolbar Vs is a quick Pace/Spin shortcut) — other axes (potm) are managed in the
+    // Matchup dropdown rows and simply aren't shown here.
+    const styleDims = state.discipline === "batting" ? ["group", "type"] : ["hand"];
+    const styleAxis = matchupVsAxes(state.matchupVs).find((a) => styleDims.includes(a.dim));
+    const current = styleAxis ? `${styleAxis.dim}:${styleAxis.value}` : "";
     const opt = (value, label) =>
       `<option value="${escAttr(value)}" ${value === current ? "selected" : ""}>${escHtml(label)}</option>`;
 

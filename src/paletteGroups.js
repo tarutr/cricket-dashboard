@@ -151,7 +151,13 @@ const GROUP_DEFAULT_LANE = {
   "Batting · Detailed Stats": "player",
   "Bowling · Detailed Stats": "player",
   "Ball Ranges": "scope",
-  "Matchup (Vs)": "scope",
+  // Matchup (Vs) is its OWN third lane on the leaderboard now (decision 83 Fork 2,
+  // 2026-08-29) — the "+ Add ▸ Matchup" dropdown, peer to Player / Scope. Every item
+  // in this group (vs Bowling Style / vs Batting Hand / vs Opponent Batting Position /
+  // vs Opponent Player / vs PotMs) routes there, so it is REMOVED from the Scope
+  // dropdown (no double-offer). Un-laned callers (the player pop-up) ignore lanes, so
+  // their "Matchup (Vs)" group is byte-untouched.
+  "Matchup (Vs)": "matchup",
   "Fielding Stats": "player", // wicket-type COUNT family = Player; fld_pos tagged Scope per-item
   // fielding board groups
   "Fielder Profile": "player", // Matches = Player; Team tagged Scope per-item
@@ -170,9 +176,12 @@ const PLAYER_LANE_SECTIONS = [
   "Fielding Stats",
 ];
 const SCOPE_LANE_SECTIONS = [
-  "Match Details", "Match", "Ball Ranges", "Matchup (Vs)",
+  "Match Details", "Match", "Ball Ranges",
   "Bowler Details", "Dismissed Batter", "Fielding Stats",
 ];
+// The Matchup lane (decision 83 Fork 2) — its single section is the "Matchup (Vs)"
+// group, re-laned above. Leaderboard-only; the pop-up passes no lane.
+const MATCHUP_LANE_SECTIONS = ["Matchup (Vs)"];
 // Attach a lane (and optional re-home section) to an item; null-safe so it can wrap a
 // builder that returned null (e.g. a popup-withheld singleton).
 const withLane = (item, laneVal, section) =>
@@ -253,7 +262,8 @@ export function createPaletteGroupsBuilder(deps) {
           bySection.get(sec).push(it);
         }
       }
-      const order = lane === "player" ? PLAYER_LANE_SECTIONS : SCOPE_LANE_SECTIONS;
+      const order =
+        lane === "player" ? PLAYER_LANE_SECTIONS : lane === "matchup" ? MATCHUP_LANE_SECTIONS : SCOPE_LANE_SECTIONS;
       return order.filter((name) => bySection.has(name)).map((name) => ({ name, items: bySection.get(name) }));
     };
     const excludeLeaf = (key) => surface === "popup" && POPUP_EXCLUDED_PLAYER_PROFILE_LEAVES.has(key);
@@ -726,10 +736,14 @@ export function createPaletteGroupsBuilder(deps) {
     // these two there).
     {
       const vsItems = [];
-      if (surface === "popup") {
-        if (disc === "batting") {
-          // vs bowling style — offered iff mapped bowling styles exist in scope.
-          if (isFilterAvailable("vsBowlingStyle", s)) {
+      // vs Bowling Style (batting) / vs Batting Hand (bowling) — the profile-backed
+      // opponent style/hand axis of state.matchupVs. Offered iff the mapped data exists
+      // in scope (men today; women when their profiles land).
+      if (disc === "batting") {
+        if (isFilterAvailable("vsBowlingStyle", s)) {
+          if (surface === "popup") {
+            // Pop-up (T-2e Option A): a ▸ family whose variants pre-pick the row's
+            // matchupVs draft — UNCHANGED.
             const vsTypes = getVsBowlingTypes() || [];
             vsItems.push(matchupVsFamily("vs Bowling Style", [
               ["Pace", preselectMatchupVs("group", "Pace")],
@@ -742,10 +756,16 @@ export function createPaletteGroupsBuilder(deps) {
             // so this branch's caller-side guard won't re-fire. Skipped when the family
             // isn't offered (popup non-empty row), so a matchup/slice row fires no load.
             if (popupMatchupOffered) ensureVsBowlingTypesLoaded();
+          } else {
+            // Leaderboard (decision 83 Fork 2): a flat leaf that REVEALS the Matchup-lane
+            // "vs" row, whose INLINE style menu (drawer.js vsSel) picks Pace/Spin/fine
+            // type and writes the group|type axis of the composite state.matchupVs.
+            vsItems.push(leafSingle("vs", "vs Bowling Style"));
           }
-        } else {
-          // vs batting hand — offered iff mapped batting hands exist in scope.
-          if (isFilterAvailable("vsBattingHand", s)) {
+        }
+      } else {
+        if (isFilterAvailable("vsBattingHand", s)) {
+          if (surface === "popup") {
             // R4-C naming (locked): the leaf LABEL reads "Right-hand batter" /
             // "Left-hand batter" — the preselect's stored bucket VALUE ("Right-hand
             // bat" / "Left-hand bat") is data, untouched.
@@ -753,6 +773,9 @@ export function createPaletteGroupsBuilder(deps) {
               ["Right-Hand Batter", preselectMatchupVs("hand", "Right-hand bat")],
               ["Left-Hand Batter", preselectMatchupVs("hand", "Left-hand bat")],
             ]));
+          } else {
+            // Leaderboard: reveal the "vs" row (inline Right-Hand/Left-Hand menu).
+            vsItems.push(leafSingle("vs", "vs Batting Hand"));
           }
         }
       }
@@ -776,6 +799,16 @@ export function createPaletteGroupsBuilder(deps) {
       // buildMatchupQuery), so it is withheld on a matchup-Vs row (popupSliceOffered
       // is false there) — it belongs to the per-innings-slice side of the exclusivity.
       if (ballOn && (surface !== "popup" || popupSliceOffered)) vsItems.push(leafSingle("vs_opp", "vs Opponent Player"));
+      // vs PotMs (decision 81 + 83 Fork 2): the cross-board `potm` axis of the composite
+      // matchupVs — restrict the opponents to those who won that match's Player-of-the-
+      // Match award. A VALUELESS standalone leaf: picking it sets the potm axis (drawer's
+      // pickSingleton("vs_potm")), so it needs no ▸ variants. BALL-ENGINE ONLY (the
+      // reconstructed vs_potm column exists only there) + offered iff the board's matchup
+      // data exists (men today). Leaderboard-only — the pop-up keeps its own per-innings
+      // PotM (Y/N) slice; this axis is not offered there.
+      if (surface !== "popup" && ballOn && isFilterAvailable(disc === "batting" ? "vsBowlingStyle" : "vsBattingHand", s)) {
+        vsItems.push({ kind: "leaf", label: "vs PotMs", disabled: singlePresent("vs_potm"), run: () => pickSingleton("vs_potm") });
+      }
       // No "men only" note (owner 2026-08-03): the men-only limitation on the profile-backed
       // entries is TEMPORARY — women's data arrives in the player-registry backlog phase, so this
       // group goes cross-gender soon; a "men only" label would just mislead in the meantime.

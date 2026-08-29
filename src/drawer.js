@@ -39,6 +39,7 @@ import {
   stageFilterActive,
   resultConditionFilterActive,
   matchupVsActive,
+  matchupVsAxes,
   opponentPlayerActive,
   effectiveNamespace,
   filterGroupOp,
@@ -151,6 +152,12 @@ const SINGLETON_TYPES = [
   // not gender — Group 3); for today's data that means men-only (matchup coverage
   // is ~0% for women, so the profile-backed Vs source is absent there).
   { key: "vs", label: "Matchup (Vs)", group: "Basic" },
+  // "vs PotMs" (decision 81 + 83 Fork 2): the cross-board vs-Player-of-the-Match axis
+  // of the composite state.matchupVs (dim `potm`, bucket value "1"). A VALUELESS Matchup-
+  // lane row — adding it IS the filter (pickSingleton sets the potm axis); no editor.
+  // BALL-ENGINE ONLY (`ballOnly` — the reconstructed vs_potm column exists only there),
+  // offered iff the board's matchup data exists (data-driven; men today).
+  { key: "vs_potm", label: "vs PotMs", group: "Basic", ballOnly: true },
   { key: "team", label: "Team", group: "Player" },
   { key: "opposition", label: "Opposition", group: "Player" },
   { key: "hand", label: "Batting Hand", group: "Player" },
@@ -244,17 +251,21 @@ const SINGLETON_TYPES = [
 // (The matchup lane has NO Match all/any toggle — a matchup Vs is a single mode, not
 // an AND/OR-able condition; it always ANDs with scope, decision 47a.)
 const PLAYER_LANE_SINGLETONS = new Set(["role", "hand", "bowling", "bowlingHand", "potm_yn"]);
-const MATCHUP_LANE_SINGLETONS = new Set(["vs"]);
+// The Matchup lane (decision 83 Fork 2, 2026-08-29): the "define the opponent" rows,
+// added from the third "+ Add ▸ Matchup" dropdown and rendered OUTSIDE the Player+Scope
+// group card, always-AND. `vs` = the style/hand axis; `vs_potm` = the PotMs axis; `vs_opp`
+// = the opponent-player head-to-head (moved here from Scope). `strikerpos` joins on the
+// bowling board only (see singletonLane).
+const MATCHUP_LANE_SINGLETONS = new Set(["vs", "vs_potm", "vs_opp"]);
 // "strikerpos" (Batting position) is the one DISCIPLINE-AWARE lane (owner ruling,
-// chip-lane fix 2026-08-27): on the batting board it's offered under "Player
-// Filters" (paletteGroups.js), so its applied chip must land there too; on the
-// bowling board it's offered under "Scope Filters ▸ Matchup (Vs)" as "vs opponent
-// batting position" and must stay in Scope. Every other singleton's lane is
-// static (unaffected). `discipline` defaults to "batting" so the very first,
-// pre-store-read caller (the skeleton HTML build below, before any state exists)
-// resolves the same way the default state does.
+// chip-lane fix 2026-08-27; extended decision 83 Fork 2): on the batting board it's the
+// subject's OWN position → "Player Filters"; on the bowling board it filters the OPPONENT
+// batter's position → "vs Opponent Batting Position", a MATCHUP axis, so it lands in the
+// Matchup lane there. Every other singleton's lane is static (unaffected). `discipline`
+// defaults to "batting" so the very first, pre-store-read caller (the skeleton HTML build
+// below, before any state exists) resolves the same way the default state does.
 const singletonLane = (key, discipline = "batting") => {
-  if (key === "strikerpos") return discipline === "batting" ? "player" : "scope";
+  if (key === "strikerpos") return discipline === "batting" ? "player" : "matchup";
   return MATCHUP_LANE_SINGLETONS.has(key) ? "matchup" : PLAYER_LANE_SINGLETONS.has(key) ? "player" : "scope";
 };
 
@@ -350,12 +361,13 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   // 83, 2026-08-29): every added condition renders as ONE continuous list in the
   // order the user ADDED them (syncCondOrder below), NOT split into Player then Scope
   // blocks — so a SINGLE container holds every singleton row, and the numeric + fielding
-  // -dim blocks join it as their own ordered slots. "vs" is excluded here — it lives in
-  // the separate Matchup lane <section> below (singletonLane("vs")==="matchup").
-  const listSingletonsHTML = () =>
-    SINGLETON_TYPES.filter((t) => singletonLane(t.key) !== "matchup")
-      .map(singletonRowHTML)
-      .join("");
+  // -dim blocks join it as their own ordered slots. The Matchup-lane rows (vs / vs_potm /
+  // vs_opp, + strikerpos on bowling) get their skeleton HERE too; syncMatchupRows then
+  // RE-PARENTS the present ones into the separate Matchup <section> below (a row's editor
+  // host moves with it, so nothing is re-mounted). Building them here keeps a SINGLE
+  // build site + a single remove-wiring loop, and lets strikerpos live in this list on
+  // the batting board (Player lane) and the Matchup lane on the bowling board.
+  const listSingletonsHTML = () => SINGLETON_TYPES.map(singletonRowHTML).join("");
 
   // Way A (decision 83) — ONE group card, ONE operator. The two per-lane "Match all /
   // Match any" toggles (Player / Scope) collapse into a SINGLE group operator over ALL
@@ -389,6 +401,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
         <div class="cond-group-one__addrow" data-role="add-row">
           <div class="cond-lane-bar" data-role="player-add"></div>
           <div class="cond-lane-bar" data-role="scope-add"></div>
+          <!-- Matchup "+ Add" dropdown (decision 83 Fork 2) — the THIRD dropdown, so the
+               row reads Player | Scope | Matchup. Its picks add rows to the separate Matchup
+               <section> below (NOT this group card). Hidden entirely when the board has no
+               matchup data to offer (renderAddRow). -->
+          <div class="cond-lane-bar" data-role="matchup-add"></div>
         </div>
         ${groupOpHead}
         <!-- Way A review fix (decision 83, 2026-08-29): ONE undifferentiated condition
@@ -407,49 +424,24 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
           <div class="cond-builder__rows" data-role="fielding-dim-rows" hidden></div>
         </div>
       </section>
-      <!-- ── Matchup lane (decision 80) ─────────────────────────────────────────
-           A THIRD lane, peer to Player Filters / Scope Filters — the HOME for
-           "define the opponent" (decision 77.4 collapsed / progressive-disclosure,
-           mock Set 3 Layout B). It reuses the SAME state.matchupVs / buildMatchupQuery
-           mechanism the (untouched) results-toolbar Vs <select> writes; both stay in
-           sync through the shared store (main.js store.subscribe → drawer.sync).
-           The "vs" singleton's editor/remove wiring lives HERE now (data-cond="vs",
-           data-role="editor-vs", data-remove="vs") instead of a generic Scope row —
-           renderMatchupLane() drives the lane's visibility (data-driven — shown iff
-           the board's matchup data exists), the discipline-swapped subtitle + axis
-           label, and the collapsed axis's inline current pick. The single axis today
-           is vs bowling style (batting) / vs batting hand (bowling); vs PotMs and vs a
-           specific opponent slot in later as sibling <details> axes (see the SEAM). -->
+      <!-- ── Matchup lane (decision 83 Fork 2, 2026-08-29) ────────────────────────
+           A THIRD lane, peer to Player Filters / Scope Filters, added from the
+           "+ Add ▸ Matchup" dropdown in the add-row above. Each picked axis becomes a
+           CONDITION ROW here (same visual/interaction as a Player/Scope row) with its
+           inline value control — vs Bowling Style / vs Batting Hand (the 'vs' row's
+           style/hand menu), vs Opponent Batting Position (strikerpos), vs Opponent Player
+           (vs_opp), and vs PotMs (a valueless row). All axes AND (decision 47a/81A) and
+           carry NO Match-all/any toggle — the group card's operator governs Player/Scope
+           only. The rows' skeletons are built in the group card's list above and
+           RE-PARENTED here by syncMatchupRows (their editors move with them). The section
+           hides when it holds no rows (renderMatchupSection). state.matchupVs stays the
+           SAME state the (migrated) results-toolbar Vs <select> writes — kept in sync via
+           the shared store; buildMatchupQuery is untouched (numbers sacred). -->
       <section class="cond-lane cond-lane--matchup" data-lane="matchup" hidden>
         <div class="cond-lane__head">
           <span class="cond-lane__title">Matchup</span>
         </div>
-        <div class="cond-lane__list">
-          <div class="opponent-panel" data-cond="vs">
-            <p class="opponent-panel__subtitle" data-role="matchup-subtitle"></p>
-            <details class="opponent-axis" open>
-              <summary>
-                <span class="opponent-axis__name" data-role="matchup-axis-label">Bowling Style</span>
-                <span class="opponent-axis__pick" data-role="matchup-axis-pick">Anyone</span>
-              </summary>
-              <div class="opponent-axis__body">
-                <div data-role="editor-vs"></div>
-              </div>
-            </details>
-            <!-- SEAM (decision 80): the two follow-on axes slot in HERE as sibling
-                 <details class="opponent-axis"> blocks, each collapsed by default —
-                 · vs PotMs (BOTH boards; needs the pipeline vs_potm column, coming
-                   after a data re-run — M2b), and
-                 · vs a specific opponent (frontend-only — filters on the bowler/batter
-                   id already present). Each writes state.matchupVs (a new dim/value)
-                   and reflects through renderMatchupLane below. Availability is
-                   data-driven (a filter/axis appears iff its data exists), matching the
-                   style/hand gate here, so they land WITHOUT reworking this lane. -->
-            <div class="opponent-panel__footer">
-              <button type="button" class="btn btn--ghost opponent-panel__clear" data-remove="vs" hidden>Clear opponent</button>
-            </div>
-          </div>
-        </div>
+        <div class="cond-lane__list" data-role="matchup-rows"></div>
       </section>
     </div>`;
 
@@ -461,14 +453,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     typeLabelEls[t.key] = advancedHost.querySelector(`[data-role="type-label-${t.key}"]`);
     editorHosts[t.key] = advancedHost.querySelector(`[data-role="editor-${t.key}"]`);
   }
-  // Matchup lane (decision 80) refs — the third lane's own chrome (the vs picker
-  // itself is editorHosts.vs, mounted below like every singleton editor). Cached
-  // once; renderMatchupLane() drives their content on every sync.
+  // Matchup lane (decision 83 Fork 2) refs — the third lane's section + its rows list.
+  // The rows themselves are singleton skeletons re-parented in by syncMatchupRows;
+  // renderMatchupSection() toggles the section's visibility.
   const matchupLaneEl = advancedHost.querySelector('[data-lane="matchup"]');
-  const matchupSubtitleEl = advancedHost.querySelector('[data-role="matchup-subtitle"]');
-  const matchupAxisLabelEl = advancedHost.querySelector('[data-role="matchup-axis-label"]');
-  const matchupAxisPickEl = advancedHost.querySelector('[data-role="matchup-axis-pick"]');
-  const matchupClearEl = advancedHost.querySelector('.opponent-panel__clear');
+  const matchupRowsListEl = advancedHost.querySelector('[data-role="matchup-rows"]');
   const numericEl = advancedHost.querySelector('[data-role="numeric-rows"]');
   // The single condition list (Way A review fix, decision 83) — every present slot
   // (singleton rows, the numeric block, the fielding-dim block) is re-appended here in
@@ -624,25 +613,69 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   // (src/table.js) stays a native <select> (owner ruling — keep the toolbar tight);
   // only this drawer copy (and the player pop-up's) move to the shared searchable-
   // panel component, the same migration the five profile pickers already did.
+  // ── Composite matchupVs helpers (decision 81A + 83 Fork 2) ───────────────────
+  // state.matchupVs is a COMBINABLE map — several opponent axes AND-ed ({group|type|
+  // hand|potm: value}). These writers normalise the current value (via matchupVsAxes,
+  // which accepts the legacy single object AND the map) into a plain {dim: value} map,
+  // mutate ONE axis, and write the map back (null when empty). Each writer preserves
+  // every OTHER axis, so the Matchup rows and the (migrated) toolbar Vs never clobber
+  // one another. buildMatchupQuery reads the same matchupVsAxes, so numbers are sacred.
+  // The STYLE dims for the current board (group/type on batting; hand on bowling) are
+  // mutually exclusive with each other — the single vsSel picks exactly one.
+  const STYLE_DIMS_BY_DISC = { batting: ["group", "type"], bowling: ["hand"] };
+  const matchupVsMap = (s) => {
+    const map = {};
+    for (const ax of matchupVsAxes(s.matchupVs)) map[ax.dim] = ax.value;
+    return map;
+  };
+  const writeMatchupVsMap = (map) => {
+    const keys = Object.keys(map);
+    store.set({ matchupVs: keys.length ? { ...map } : null });
+  };
+  // Set the ONE style/hand axis for the current board, dropping the others (they are
+  // mutually exclusive) and preserving non-style axes (potm). value ""/null clears it.
+  function setMatchupStyleAxis(dim, value) {
+    const map = matchupVsMap(store.get());
+    delete map.group;
+    delete map.type;
+    delete map.hand;
+    if (value != null && value !== "") map[dim] = value;
+    writeMatchupVsMap(map);
+  }
+  // Remove the named dims (preserving the rest) — the Matchup rows' clear/remove path.
+  function removeMatchupDims(dims) {
+    const map = matchupVsMap(store.get());
+    for (const d of dims) delete map[d];
+    writeMatchupVsMap(map);
+  }
+  // Set a single axis (preserving the rest) — used to turn ON the valueless potm axis.
+  function setMatchupAxis(dim, value) {
+    const map = matchupVsMap(store.get());
+    if (value == null || value === "") delete map[dim];
+    else map[dim] = value;
+    writeMatchupVsMap(map);
+  }
+  // Is a STYLE/HAND axis set for the current board? (potm alone does NOT count — it has
+  // its own row.) Drives the "vs" row's presence + inert cue.
+  const matchupStyleAxisSet = (s) =>
+    matchupVsAxes(s.matchupVs).some((ax) => (STYLE_DIMS_BY_DISC[s.discipline] || []).includes(ax.dim));
+  const matchupPotmAxisSet = (s) => matchupVsAxes(s.matchupVs).some((ax) => ax.dim === "potm");
+
   const vsSel = mountSearchSelect(editorHosts.vs, {
     searchable: false,
     portal: true,
     ariaLabel: "Matchup opponent",
-    // "Any city"-style cue (Phase 5): match matchupPickLabel()'s "Anyone" for this
-    // exact same no-value state, shown right next to this control in the axis
-    // summary (was "Everyone" here — the one inconsistent placeholder found in an
-    // owned file; display-only, no state/query change).
+    // "Anyone" cue for the no-value state (matches the leaf's title-case naming).
     placeholder: "Anyone",
     allowEmptyLabel: "Anyone",
     onChange: (val) => {
-      // Same value encoding as the old <select> ("dim:value", or null/"" for
-      // Everyone) — writes the IDENTICAL state.matchupVs shape so the toolbar
-      // select and buildMatchupQuery see no difference.
+      // The inline style/hand menu edits ONLY this board's style axis of the composite
+      // matchupVs, preserving any potm axis. "" (Anyone) clears just the style axis.
       if (!val) {
-        store.set({ matchupVs: null });
+        setMatchupStyleAxis(null, null);
       } else {
         const i = val.indexOf(":");
-        store.set({ matchupVs: { dim: val.slice(0, i), value: val.slice(i + 1) } });
+        setMatchupStyleAxis(val.slice(0, i), val.slice(i + 1));
       }
       onChange();
     },
@@ -688,11 +721,14 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     if (s.discipline === "batting" && !vsBowlingTypes) {
       loadVsBowlingTypes().then(() => renderVsEditor());
     }
-    const current = matchupVsActive(s) ? `${s.matchupVs.dim}:${s.matchupVs.value}` : null;
-    // Same option SET and ORDER as the old <select> — "Everyone" (via
-    // allowEmptyLabel, above) leads, then Pace/Spin, then the fine bowling
-    // types for batting; just the two hand buckets for bowling. Group labels
-    // reproduce the old <optgroup>s as the panel's own group headers.
+    // Reflect ONLY the style/hand axis of the composite matchupVs (potm is a separate
+    // row) — via matchupVsAxes, never a direct `.dim`/`.value` read.
+    const styleDims = STYLE_DIMS_BY_DISC[s.discipline] || [];
+    const styleAxis = matchupVsAxes(s.matchupVs).find((ax) => styleDims.includes(ax.dim));
+    const current = styleAxis ? `${styleAxis.dim}:${styleAxis.value}` : null;
+    // Same option SET and ORDER as the old <select> — "Anyone" (via allowEmptyLabel,
+    // above) leads, then Pace/Spin, then the fine bowling types for batting; just the
+    // two hand buckets for bowling. Group labels reproduce the old <optgroup>s.
     let opts;
     if (s.discipline === "batting") {
       opts = [
@@ -713,45 +749,20 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     vsSel.setValue(current);
   }
 
-  // ── Matchup lane chrome (decision 80) ────────────────────────────────────────
-  // Drives the third lane's visibility + the "define the opponent" panel text. The
-  // pickable control is the SAME vsSel (renderVsEditor above) — this only paints the
-  // lane frame: show the lane iff the current board's matchup data exists (data-driven,
-  // never gender-hardcoded — same gate singletonDataAvailable("vs") uses; fielding has
-  // no matchup grain so the lane never shows there), swap the subtitle + axis label by
-  // discipline (batting → "vs bowling style" / bowling → "vs batting hand"), and reflect
-  // the current pick inline in the collapsed axis summary ("Anyone" until defined). No
-  // query path here — buildMatchupQuery is untouched (numbers sacred).
-  function matchupLaneAvailable(s) {
-    // Batting/bowling only; fielding is excluded (no matchup grain). Reuses the async,
-    // optimistic-until-loaded availability probe — availabilityOnReady re-syncs once it
-    // resolves, so women (no mapped matchup data) settle to "lane hidden".
-    return (s.discipline === "batting" || s.discipline === "bowling") && singletonDataAvailable("vs", s);
-  }
-  function matchupPickLabel(s) {
-    if (!matchupVsActive(s)) return "Anyone";
-    const { dim, value } = s.matchupVs;
-    if (dim === "hand") return value === "Left-hand bat" ? "Left-Hand Batter" : "Right-Hand Batter";
-    if (dim === "group") return value; // "Pace" / "Spin"
-    return matchupBucketLabel(value); // fine bowling type
-  }
-  function renderMatchupLane() {
+  // ── Matchup lane section (decision 83 Fork 2) ────────────────────────────────
+  // The Matchup <section> holds one condition row per added axis (re-parented in by
+  // syncMatchupRows). This only toggles the SECTION's visibility: show it iff ≥1 Matchup
+  // row is present, hide it otherwise (an empty section would leave a stray title/gap —
+  // mirrors how the numeric block hides while empty). The "+ Add ▸ Matchup" dropdown
+  // itself lives in the group card's add-row (renderAddRow), so the entry point stays
+  // available even while this section is hidden. No query path (numbers sacred).
+  function renderMatchupSection() {
     if (!matchupLaneEl) return;
     const s = store.get();
-    matchupLaneEl.hidden = !matchupLaneAvailable(s);
-    // Batting board = the bowlers you faced (vs bowling style); bowling board = the
-    // batters you bowled to (vs batting hand). Fielding never reaches here (lane hidden).
-    if (matchupSubtitleEl) {
-      matchupSubtitleEl.textContent =
-        s.discipline === "bowling" ? "The batters you bowled to." : "The bowlers you faced.";
-    }
-    if (matchupAxisLabelEl) {
-      matchupAxisLabelEl.textContent = s.discipline === "bowling" ? "Batting Hand" : "Bowling Style";
-    }
-    if (matchupAxisPickEl) matchupAxisPickEl.textContent = matchupPickLabel(s);
-    // "Clear opponent" only when an opponent is actually defined (matchupVsActive) —
-    // it is the vs singleton's remove-×, wired in the SINGLETON_TYPES remove loop.
-    if (matchupClearEl) matchupClearEl.hidden = !matchupVsActive(s);
+    const hasRow = SINGLETON_TYPES.some(
+      (t) => singletonLane(t.key, s.discipline) === "matchup" && rowEls[t.key] && !rowEls[t.key].hidden
+    );
+    matchupLaneEl.hidden = !hasRow;
   }
 
   // Push the current option lists + values into the mounted panels (setOptions
@@ -959,7 +970,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       // Bowling hand (owner #8): mirrors "bowling" — no discipline gate (a
       // player's bowling arm is meaningful whichever discipline you're viewing).
       case "bowlingHand": return Boolean(s.profile.bowlingArm);
-      case "vs": return matchupVsActive(s); // present iff a Vs bucket applies to the current discipline
+      // The "vs" row is the STYLE/HAND axis only (present iff a group/type/hand axis is
+      // set for this board); the potm axis has its OWN row (vs_potm), so it must NOT keep
+      // the style row alive. matchupStyleAxisSet reads via matchupVsAxes (composite-safe).
+      case "vs": return matchupStyleAxisSet(s);
+      case "vs_potm": return matchupPotmAxisSet(s); // present iff the potm axis is set
       // "Batting position" (state.positions): present when it has a value.
       // isPresent additionally gates strikerpos on (plain batting OR matchup), so
       // it never shows in plain bowling and never merely because a Vs bucket was
@@ -1022,6 +1037,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "bowling": return availability.isAvailable("profileBowling", s);
       case "bowlingHand": return availability.isAvailable("profileBowlingArm", s);
       case "vs":
+      // vs PotMs is CROSS-BOARD (the reconstructed vs_potm column exists on both matchup
+      // views), so it rides the same per-board matchup-data gate as "vs": available iff
+      // the board's matchup source exists (men today; women when their profiles land).
+      case "vs_potm":
         return availability.isAvailable(s.discipline === "batting" ? "vsBowlingStyle" : "vsBattingHand", s);
       case "strikerpos":
         // Batting position (position rework 2026-08-14): plain batting always carries
@@ -1082,7 +1101,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "hand": setProfile({ battingHand: null }); break;
       case "bowling": setProfile({ bowlingType: null }); break;
       case "bowlingHand": setProfile({ bowlingArm: null }); break;
-      case "vs": store.set({ matchupVs: null }); break;
+      // Removing the "vs" row clears ONLY the style/hand axis (group/type/hand) — a potm
+      // axis (its own vs_potm row) survives. vs_potm clears only the potm axis.
+      case "vs": removeMatchupDims(["group", "type", "hand"]); break;
+      case "vs_potm": removeMatchupDims(["potm"]); break;
       case "inn_num": store.set({ inningsNumber: [] }); break;
       case "strikerpos": store.set({ positions: [] }); break;
       case "team": store.set({ teams: [] }); break;
@@ -1162,6 +1184,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       if (Object.keys(patch).length) store.set(patch);
     } else if (key === "mc_stage") {
       if ((store.get().stage || []).length === 0) store.set({ stage: ["all"] });
+    } else if (key === "vs_potm") {
+      // "vs PotMs" is a VALUELESS row — adding it IS the filter. Turn ON the potm axis
+      // of the composite matchupVs (preserving any style/hand axis already picked).
+      setMatchupAxis("potm", "1");
     }
     if (preselect) preselect();
     syncSingletonRows();
@@ -1236,16 +1262,18 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   // so "only one open at a time" holds across both dropdowns and every group card.
   // `gi` is overloaded here — columns uses it as the "which dropdown" axis, but the
   // filter drawer needs it as the numeric GROUP index (pickMetric's target). So the
-  // skeleton's data-gi ENCODES both: `encodedGi = groupIndex*2 + laneParity`
-  // (0 = player, 1 = scope). buildGroups decodes and hands buildPaletteGroups the
-  // REAL groupIndex (so pickMetric targets the right group) plus the resolved lane.
-  // `palette.closeCurrent()` closes whichever is open before a rebuild (a portaled-
-  // open panel would otherwise orphan on <body>).
-  const LANE_BY_PARITY = ["player", "scope"];
+  // skeleton's data-gi ENCODES both: `encodedGi = groupIndex*4 + laneIndex`
+  // (0 = player, 1 = scope, 2 = matchup — decision 83 Fork 2's third dropdown).
+  // buildGroups decodes and hands buildPaletteGroups the REAL groupIndex (so pickMetric
+  // targets the right group) plus the resolved lane. Only group 0 exists on the
+  // leaderboard, so groupIndex is always 0 in practice; the *4 base keeps room for the
+  // three lanes. `palette.closeCurrent()` closes whichever is open before a rebuild (a
+  // portaled-open panel would otherwise orphan on <body>).
+  const LANE_BY_INDEX = ["player", "scope", "matchup"];
   const palette = createAddPalette({
     buildGroups: (encodedGi) => {
-      const groupIndex = encodedGi >> 1;
-      const lane = LANE_BY_PARITY[encodedGi & 1];
+      const groupIndex = encodedGi >> 2;
+      const lane = LANE_BY_INDEX[encodedGi & 3];
       return buildPaletteGroups(store.get(), groupIndex, { surface: "leaderboard", lane });
     },
   });
@@ -1291,7 +1319,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
 
     const slots = [];
     for (const t of SINGLETON_TYPES) {
-      if (singletonLane(t.key) === "matchup") continue; // "vs" lives in the separate Matchup lane
+      // Matchup-lane rows (by CURRENT discipline — strikerpos is Player on batting but
+      // Matchup on bowling) are placed by syncMatchupRows, not here.
+      if (singletonLane(t.key, s.discipline) === "matchup") continue;
       const el = rowEls[t.key];
       const present = Boolean(el) && !el.hidden;
       noteActivation(t.key, present);
@@ -1309,6 +1339,31 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     if (!same) for (const el of desired) condRowsListEl.appendChild(el);
   }
 
+  // ── Matchup lane rows (decision 83 Fork 2) ───────────────────────────────────
+  // Re-parent the PRESENT Matchup-lane singleton rows (vs / vs_potm / vs_opp, + strikerpos
+  // on the bowling board) into the Matchup section's own list, in activation order — the
+  // exact syncCondOrder pattern, but targeting matchupRowsListEl. Because a DOM node has
+  // one parent, appending a row here MOVES it out of the group card's list (and back, when
+  // its lane flips on a discipline switch — syncCondOrder re-appends it there). The rows'
+  // editors ride along (they are children), so nothing is re-mounted. Display-only.
+  function syncMatchupRows() {
+    if (!matchupRowsListEl) return;
+    const s = store.get();
+    const rows = [];
+    for (const t of SINGLETON_TYPES) {
+      if (singletonLane(t.key, s.discipline) !== "matchup") continue;
+      const el = rowEls[t.key];
+      const present = Boolean(el) && !el.hidden;
+      noteActivation(t.key, present);
+      if (present) rows.push([activationSeq.get(t.key), el]);
+    }
+    rows.sort((a, b) => a[0] - b[0]);
+    const desired = rows.map(([, el]) => el);
+    const currentPresent = Array.from(matchupRowsListEl.children).filter((el) => !el.hidden);
+    const same = currentPresent.length === desired.length && currentPresent.every((el, i) => el === desired[i]);
+    if (!same) for (const el of desired) matchupRowsListEl.appendChild(el);
+  }
+
   // ── Singleton rows: show/hide + editor sync ─────────────────────────────────
   // Is a singleton row actually NARROWING the result right now? (vs merely present.)
   // Mirrors the pills' `inert` test: the imported *FilterActive predicates for the
@@ -1318,7 +1373,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   function isSingletonActive(key, s) {
     switch (key) {
       case "vs_opp": return opponentPlayerActive(s);
-      case "vs": return matchupVsActive(s);
+      // "vs" is narrowing iff a style/hand axis is actually picked (the menu off "Anyone");
+      // vs_potm is narrowing whenever present (adding it sets the potm axis).
+      case "vs": return matchupStyleAxisSet(s);
+      case "vs_potm": return matchupPotmAxisSet(s);
       case "inn_num": return inningsNumberFilterActive(s);
       case "strikerpos": return positionsFilterActive(s);
       case "opposition": return oppositionFilterActive(s);
@@ -1337,12 +1395,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   function syncSingletonRows() {
     const s = store.get();
     for (const t of SINGLETON_TYPES) {
-      // "vs" is NOT a generic show-until-present row any more — it lives in the
-      // always-present Matchup lane (decision 80), whose "define the opponent" panel
-      // reads "Anyone" until an opponent is defined. Its visibility follows the lane's
-      // data-availability gate (renderMatchupLane), not isPresent. Skip it here so the
-      // panel is never hidden merely because no Vs value is picked yet.
-      if (t.key === "vs") continue;
+      // "vs" is now a normal presence-driven condition row (decision 83 Fork 2 — the
+      // Matchup lane holds condition rows, not an always-visible panel), so it is no
+      // longer skipped here; its presence follows isPresent like every other row.
       const present = isPresent(t, s);
       rowEls[t.key].hidden = !present;
       // Polish (Way A): dim an added-but-inert row — one that is showing yet not
@@ -1354,15 +1409,19 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // "Batting position" is ONE control with a DISCIPLINE-dependent name (decision 81B,
     // owner 2026-08-27): on the batting board it is the subject's OWN position →
     // "Batting position"; on the bowling board the SAME control filters the OPPONENT
-    // batter's position → "vs opponent batting position" (a matchup axis). Display-only
+    // batter's position → "vs Opponent Batting Position" (a matchup axis). Display-only
     // relabel of the applied row's type label — the filter (state.positions →
     // batting_position IN) is byte-identical on both boards.
     if (typeLabelEls.strikerpos) {
       typeLabelEls.strikerpos.textContent = battingPositionFilterLabel(s.discipline);
     }
+    // The "vs" row's label swaps by board too: batting = "vs Bowling Style" (the bowlers
+    // faced), bowling = "vs Batting Hand" (the batters bowled to). Display-only.
+    if (typeLabelEls.vs) {
+      typeLabelEls.vs.textContent = s.discipline === "bowling" ? "vs Batting Hand" : "vs Bowling Style";
+    }
 
     renderVsEditor();
-    renderMatchupLane();
     battingPositionController.sync();
     teamController.sync();
     oppositionController.sync();
@@ -1386,7 +1445,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     renderProfileEditors();
     // Re-order the single condition list by activation sequence (Way A review fix) —
     // runs after every row's hidden state (incl. fieldingDims.sync above) is settled.
+    // syncCondOrder places the Player/Scope rows; syncMatchupRows re-parents the present
+    // Matchup rows into their own section; renderMatchupSection toggles that section's
+    // visibility. Order matters: the row hidden-states above must be settled first.
     syncCondOrder();
+    syncMatchupRows();
+    renderMatchupSection();
   }
 
   // ── Numeric condition GROUPS (multi-group AND/OR — ROUND 3 task 7) ──────────
@@ -1529,14 +1593,15 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   }
 
   // Build ONE lane add-dropdown trigger (the columns-section trigger look).
-  // `encodedGi` = groupIndex*2 + laneParity (0 = player, 1 = scope) — the same
-  // encoding the shared palette's buildGroups decodes. Both triggers (Player Filters
-  // encodedGi 0 → group 0; Scope Filters encodedGi 1) are rendered by renderAddRow
-  // into the group card's top add-row. A lane with no offered filters renders disabled
-  // (never, in practice — Player always has stat metrics, Scope always has Match Details).
+  // `encodedGi` = groupIndex*4 + laneIndex (0 = player, 1 = scope, 2 = matchup) — the
+  // same encoding the shared palette's buildGroups decodes. The three triggers are
+  // rendered by renderAddRow into the group card's top add-row. Player/Scope are never
+  // empty in practice (Player always has stat metrics, Scope always has Match Details);
+  // Matchup CAN be empty (women / flag-off with no matchup data) — renderAddRow hides it
+  // then rather than showing a disabled trigger.
   function laneTriggerHTML(lane, encodedGi, s) {
-    const gi = encodedGi >> 1;
-    const label = lane === "player" ? "Player Filters" : "Scope Filters";
+    const gi = encodedGi >> 2;
+    const label = lane === "player" ? "Player Filters" : lane === "scope" ? "Scope Filters" : "Matchup";
     const empty = buildPaletteGroups(s, gi, { surface: "leaderboard", lane }).length === 0;
     return paletteSkeletonHTML(encodedGi, {
       ctlClass: "addctl cols-dd-ctl",
@@ -1564,8 +1629,17 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     const s = store.get();
     const playerHost = advancedHost.querySelector('[data-role="player-add"]');
     const scopeHost = advancedHost.querySelector('[data-role="scope-add"]');
+    const matchupHost = advancedHost.querySelector('[data-role="matchup-add"]');
     if (playerHost) playerHost.innerHTML = laneTriggerHTML("player", 0, s);
     if (scopeHost) scopeHost.innerHTML = laneTriggerHTML("scope", 1, s);
+    // Matchup (decision 83 Fork 2): the THIRD dropdown (encodedGi 2). HIDDEN when it has
+    // no offerings (women / flag-off with no matchup data) — unlike Player/Scope which
+    // always offer something, an empty Matchup dropdown reads as clutter, so we render no
+    // trigger at all there rather than a disabled one.
+    if (matchupHost) {
+      const matchupEmpty = buildPaletteGroups(s, 0, { surface: "leaderboard", lane: "matchup" }).length === 0;
+      matchupHost.innerHTML = matchupEmpty ? "" : laneTriggerHTML("matchup", 2, s);
+    }
     advancedHost
       .querySelectorAll('[data-role="add-row"] [data-role="add-palette"]')
       .forEach((el) => palette.mountAddPalette(el));

@@ -871,54 +871,14 @@ a { color: var(--color-accent); }
   .cond-lane__match { margin-left: 0; }
 }
 
-/* ── Matchup lane (decision 80) — the "define the opponent" panel ──────────────
-   The third lane's body is a compact stacked panel (NOT the floating popover the
-   mock drew — it lives inline in the popup like the other lanes). One collapsed
-   <details> axis per opponent attribute (progressive disclosure, decision 77.4 /
-   mock Set 3 Layout B); today just vs bowling style (batting) / vs batting hand
-   (bowling). The axis body hosts the shared vsSel picker (mountSearchSelect). */
-.opponent-panel { display: flex; flex-direction: column; gap: var(--space-2); align-self: stretch; }
-.opponent-panel__subtitle {
-  font-size: var(--text-sm2);
-  color: var(--color-muted);
-  margin: 0;
-}
-/* Each axis = a hairline card with a click-to-expand summary. The summary shows the
-   axis name (left) and its current pick inline (right, muted — reads "Anyone" until
-   an opponent is defined), plus a rotating ▾/▴ affordance. */
-.opponent-axis {
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-sm, 4px);
-  overflow: hidden;
-}
-.opponent-axis + .opponent-axis { margin-top: var(--space-2); }
-.opponent-axis > summary {
-  padding: var(--space-2) var(--space-3);
-  cursor: pointer;
-  list-style: none;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  background: var(--color-panel, var(--color-bg-raised));
-  font-size: 0.9rem;
-}
-.opponent-axis > summary::-webkit-details-marker { display: none; }
-.opponent-axis > summary::after {
-  content: "▾";
-  color: var(--color-muted);
-  font-size: 0.75em;
-  margin-left: auto;
-}
-.opponent-axis[open] > summary::after { content: "▴"; }
-.opponent-axis__name { font-weight: 600; color: var(--color-fg); }
-.opponent-axis__pick { font-weight: 400; font-size: var(--text-sm2); color: var(--color-muted); }
-.opponent-axis__body { padding: var(--space-3); }
-.opponent-axis__body .search-select { width: auto; }
-.opponent-axis__body .search-select__toggle { min-width: 9rem; }
-.opponent-panel__footer { display: flex; }
-/* "Clear opponent" is the vs singleton's remove control — small, ghosted, only shown
-   while an opponent is defined (renderMatchupLane toggles [hidden]). */
-.opponent-panel__clear { font-size: var(--text-sm2); }
+/* ── Matchup lane (decision 83 Fork 2) — condition rows, not a panel ───────────
+   The Matchup lane now holds ordinary condition ROWS (the same .cond-row markup as the
+   Player/Scope lanes), added from the "+ Add ▸ Matchup" dropdown and re-parented in by
+   syncMatchupRows. No bespoke chrome is needed — the rows inherit .cond-row / .cond-lane
+   / .cond-lane__list styling above. (The old always-visible "opponent-panel" /
+   "opponent-axis" progressive-disclosure panel — decision 80 — was retired here; its
+   CSS is gone with it.) The `vs` row's inline style/hand menu is a plain .search-select
+   in .cond-row__value, so it needs no matchup-specific rule. */
 
 /* R5 Wave 1a (item 8): applied-condition rows are sized to their CONTENT, not
    stretched to the popup width. align-items:flex-start stops the column from
