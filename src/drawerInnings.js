@@ -181,7 +181,7 @@ const DEAD_PICK_NOTE = "no matches with your current filters";
  * count ("4 selected") so the toggle never grows past a short phrase.
  */
 function positionsSummaryLabel(positions) {
-  if (!positions || positions.length === 0) return "Any position";
+  if (!positions || positions.length === 0) return "Any Position";
   const sorted = [...positions].sort((a, b) => a - b);
   if (sorted.length <= 3) return sorted.join(", ");
   return `${sorted.length} selected`;
@@ -193,7 +193,7 @@ function positionsSummaryLabel(positions) {
  * board the SAME control filters the OPPONENT batter's position → "vs opponent batting
  * position" (a matchup axis). Display-only — the query is identical on both boards. */
 export function battingPositionFilterLabel(discipline) {
-  return discipline === "bowling" ? "vs opponent batting position" : "Batting position";
+  return discipline === "bowling" ? "vs Opponent Batting Position" : "Batting Position";
 }
 
 /**
@@ -204,9 +204,9 @@ export function battingPositionFilterLabel(discipline) {
 export function mountBattingPosition(container, store, onChange, { embedded = false } = {}) {
   container.innerHTML = `
     <div class="filter-group filter-group--positions" data-role="positions-group">
-      ${embedded ? "" : `<span class="filter-label" data-role="positions-label">Batting position</span>`}
+      ${embedded ? "" : `<span class="filter-label" data-role="positions-label">Batting Position</span>`}
       <div class="dropdown" data-role="positions-dropdown">
-        <button type="button" class="select dropdown__toggle" data-role="positions-toggle" aria-haspopup="true" aria-expanded="false">Any position</button>
+        <button type="button" class="select dropdown__toggle" data-role="positions-toggle" aria-haspopup="true" aria-expanded="false">Any Position</button>
         <div class="dropdown__panel" data-role="positions-panel" hidden>
           <div class="dropdown__list" data-role="positions-list">
             ${POSITIONS.map(
@@ -391,13 +391,13 @@ export function mountFieldingPosition(container, store, onChange, opts = {}) {
   return mountFieldingSlicePicker(container, store, onChange, {
     field: "positions",
     options: FIELDING_POSITIONS.map((p) => ({ value: p, label: String(p) })),
-    anyLabel: "Any position",
+    anyLabel: "Any Position",
     summaryFn: (vals) => {
-      if (!vals || vals.length === 0) return "Any position";
+      if (!vals || vals.length === 0) return "Any Position";
       const sorted = [...vals].sort((a, b) => a - b);
       return sorted.length <= 3 ? sorted.join(", ") : `${sorted.length} selected`;
     },
-    label: "Dismissed batter's position",
+    label: "Dismissed Batter's Position",
     ...opts,
   });
 }
@@ -766,13 +766,13 @@ export function mountResult(container, store, onChange, opts = {}) {
 /** Toss result filter (state.tossResult) — Won toss / Lost toss. */
 export function mountTossResult(container, store, onChange, opts = {}) {
   return mountTokenMultiSelect(container, store, onChange, {
-    field: "tossResult", options: TOSS_RESULT_OPTIONS, anyLabel: "Any toss result", label: "Toss result", ...opts,
+    field: "tossResult", options: TOSS_RESULT_OPTIONS, anyLabel: "Any Toss Result", label: "Toss Result", ...opts,
   });
 }
 /** Toss decision filter (state.tossDecision) — Chose to bat / field. */
 export function mountTossDecision(container, store, onChange, opts = {}) {
   return mountTokenMultiSelect(container, store, onChange, {
-    field: "tossDecision", options: TOSS_DECISION_OPTIONS, anyLabel: "Any toss decision", label: "Toss decision", ...opts,
+    field: "tossDecision", options: TOSS_DECISION_OPTIONS, anyLabel: "Any Toss Decision", label: "Toss Decision", ...opts,
   });
 }
 /** PotM (Y/N) filter (state.potmYN; Wave D — TASK B) — Won a Player of the Match /
@@ -781,7 +781,7 @@ export function mountTossDecision(container, store, onChange, opts = {}) {
  * selection into a HAVING gate on pom_cte (both/neither is a no-op). */
 export function mountPotmYN(container, store, onChange, opts = {}) {
   return mountTokenMultiSelect(container, store, onChange, {
-    field: "potmYN", options: POTM_YN_OPTIONS, anyLabel: "Any PotM status", label: "PotM (Y/N)", ...opts,
+    field: "potmYN", options: POTM_YN_OPTIONS, anyLabel: "Any PotM Status", label: "PotM (Y/N)", ...opts,
   });
 }
 // ── Innings Number picker (state.inningsNumber; filter-rejig Wave R2c) ─────────
@@ -804,7 +804,7 @@ export function mountInningsNumber(container, store, onChange, { embedded = fals
     <div class="filter-group filter-group--positions" data-role="innum-group">
       ${embedded ? "" : `<span class="filter-label">Innings Number</span>`}
       <div class="dropdown" data-role="innum-dropdown">
-        <button type="button" class="select dropdown__toggle" data-role="innum-toggle" aria-haspopup="true" aria-expanded="false">Any innings</button>
+        <button type="button" class="select dropdown__toggle" data-role="innum-toggle" aria-haspopup="true" aria-expanded="false">Any Innings</button>
         <div class="dropdown__panel" data-role="innum-panel" hidden>
           <div class="dropdown__list" data-role="innum-list"></div>
         </div>
@@ -828,7 +828,7 @@ export function mountInningsNumber(container, store, onChange, { embedded = fals
     const picked = [...get()].sort((a, b) => a - b);
     els.toggle.textContent =
       picked.length === 0
-        ? "Any innings"
+        ? "Any Innings"
         : picked.length === 1
         ? inningsNumberLabel(picked[0])
         : `${picked.length} selected`;
@@ -1028,7 +1028,7 @@ export function mountStage(container, store, onChange, { embedded = false, onOpt
     // hasn't loaded, or holds no knockout round, it snaps back to "All" rather
     // than leaving an empty selection.
     quick: {
-      label: "Knockout games",
+      label: "Knockout Games",
       onClick: ({ setValues }) => setValues((namedOptions || []).filter(isKnockoutStage)),
     },
     // Hide only when there is genuinely nothing to SHOW: nothing to choose AND
@@ -1666,7 +1666,7 @@ export function mountTeam(container, store, onChange, { onOptionsLoaded = null }
       const s = store.get(); // A9: scope the Team list to the full Search Conditions
       return searchTeams("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s, role: "teams" });
     },
-    emptyLabel: "Any team",
+    emptyLabel: "Any Team",
     singular: "team",
     plural: "teams",
     ariaLabel: "Played for team",
@@ -2057,7 +2057,7 @@ export function mountEvent(container, store, onChange, { onOptionsLoaded = null 
         const s = store.get(); // A9: scope the Event list to the full Search Conditions
         return searchEvents("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s });
       },
-      emptyLabel: "Any event",
+      emptyLabel: "Any Event",
       singular: "event",
       plural: "events",
       ariaLabel: "Event",
@@ -2095,7 +2095,7 @@ export function mountVenue(container, store, onChange, { onOptionsLoaded = null 
       const s = store.get(); // A9: scope the Venue list to the full Search Conditions
       return searchVenues("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s });
     },
-    emptyLabel: "Any venue",
+    emptyLabel: "Any Venue",
     singular: "venue",
     plural: "venues",
     ariaLabel: "Venue",
@@ -2118,7 +2118,7 @@ export function mountCity(container, store, onChange, { onOptionsLoaded = null }
       const s = store.get(); // scope the City list to the full Search Conditions
       return searchCities("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s });
     },
-    emptyLabel: "Any city",
+    emptyLabel: "Any City",
     singular: "city",
     plural: "cities",
     ariaLabel: "City",
@@ -2143,7 +2143,7 @@ export function mountSeason(container, store, onChange, { onOptionsLoaded = null
       const s = store.get(); // scope the Season list to the full Search Conditions
       return searchSeasons("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s });
     },
-    emptyLabel: "Any season",
+    emptyLabel: "Any Season",
     singular: "season",
     plural: "seasons",
     ariaLabel: "Season",
@@ -2179,7 +2179,7 @@ export function mountOpposition(container, store, onChange, { embedded = false, 
       const s = store.get(); // A9: scope the Opposition list to the full Search Conditions
       return searchTeams("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s, role: "opposition" });
     },
-    emptyLabel: "Any opposition",
+    emptyLabel: "Any Opposition",
     singular: "opponent",
     plural: "opponents",
     ariaLabel: "Against opposition",

@@ -31,9 +31,9 @@ import { INNINGS_NUMBER_FILTER } from "./metrics.js";
 // uses the same four literals for its tallies. Display-only labels here.
 export const WICKET_TYPE_OPTIONS = [
   { value: "caught", label: "Caught" },
-  { value: "caught and bowled", label: "Caught & bowled" },
+  { value: "caught and bowled", label: "Caught & Bowled" },
   { value: "stumped", label: "Stumped" },
-  { value: "run out", label: "Run out" },
+  { value: "run out", label: "Run Out" },
 ];
 
 // Match-outcome tokens the fielding mctx honors (buildMatchContextClauses) — the
@@ -51,16 +51,16 @@ export const CHECKLIST_FILTER_THRESHOLD = 12;
 // checklists (positions / innings) whose values coerce to ints. `stored` on innings
 // means the checklist VALUE is the 0-based stored innings_number (display via label).
 export const DIMS = [
-  { key: "kind",         field: "kinds",         group: "Dismissal", label: "Wicket type",       control: "checklist", options: () => WICKET_TYPE_OPTIONS },
-  { key: "position",     field: "positions",     group: "Dismissal", label: "Dismissed batter's position",  control: "checklist", numeric: true,
+  { key: "kind",         field: "kinds",         group: "Dismissal", label: "Wicket Type",       control: "checklist", options: () => WICKET_TYPE_OPTIONS },
+  { key: "position",     field: "positions",     group: "Dismissal", label: "Dismissed Batter's Position",  control: "checklist", numeric: true,
     options: () => FIELDING_POSITIONS.map((n) => ({ value: n, label: `Position ${n}` })) },
-  { key: "hand",         field: "hands",         group: "Dismissal", label: "Dismissed batter hand", control: "checklist", source: "fielding", column: "out_hand" },
-  { key: "batter",       field: "outBatters",    group: "Dismissal", label: "Specific batter",   control: "player", nameField: "outBatterName", pickLabel: "Dismissed batter" },
-  { key: "bowlerStyle",  field: "bowlerStyles",  group: "Bowler",    label: "Bowler style",      control: "checklist", source: "fielding", column: "bowler_style" },
-  { key: "bowler",       field: "bowlers",       group: "Bowler",    label: "Specific bowler",   control: "player", nameField: "bowlerName", pickLabel: "Bowler" },
+  { key: "hand",         field: "hands",         group: "Dismissal", label: "Dismissed Batter Hand", control: "checklist", source: "fielding", column: "out_hand" },
+  { key: "batter",       field: "outBatters",    group: "Dismissal", label: "Specific Batter",   control: "player", nameField: "outBatterName", pickLabel: "Dismissed Batter" },
+  { key: "bowlerStyle",  field: "bowlerStyles",  group: "Bowler",    label: "Bowler Style",      control: "checklist", source: "fielding", column: "bowler_style" },
+  { key: "bowler",       field: "bowlers",       group: "Bowler",    label: "Specific Bowler",   control: "player", nameField: "bowlerName", pickLabel: "Bowler" },
   { key: "phase",        field: "phases",        group: "Delivery",  label: "Phase",             control: "checklist", options: () => FIELDING_PHASE_OPTIONS },
-  { key: "overs",        field: null,            group: "Delivery",  label: "Over range",        control: "overrange" },
-  { key: "innings",      field: "inningsNumbers", group: "Delivery", label: "Innings number",    control: "checklist", numeric: true, stored: true,
+  { key: "overs",        field: null,            group: "Delivery",  label: "Over Range",        control: "overrange" },
+  { key: "innings",      field: "inningsNumbers", group: "Delivery", label: "Innings Number",    control: "checklist", numeric: true, stored: true,
     options: (ctx) => inningsNumberOptions(ctx.formats).map((o) => ({ value: INNINGS_NUMBER_FILTER.toStored(o.value), label: o.label })) },
   { key: "city",         field: "cities",        group: "Match",     label: "City",              control: "checklist", source: "fielding", column: "city" },
   // reverse: true — loadDimOptions returns ascending (ORDER BY 1); Season reads
@@ -70,9 +70,9 @@ export const DIMS = [
   // season string beginning with its 4-digit start year (all of them).
   { key: "season",       field: "seasons",       group: "Match",     label: "Season",            control: "checklist", source: "matches", column: "season", reverse: true },
   { key: "stage",        field: "stage",         group: "Match",     label: "Stage",             control: "checklist", source: "matches", column: "event_stage", canonical: true },
-  { key: "result",       field: "result",        group: "Match",     label: "Match result",      control: "checklist", options: () => RESULT_OUTCOME_OPTIONS },
-  { key: "tossResult",   field: "tossResult",    group: "Match",     label: "Toss result",       control: "checklist", options: () => TOSS_RESULT_OPTIONS },
-  { key: "tossDecision", field: "tossDecision",  group: "Match",     label: "Toss decision",     control: "checklist", options: () => TOSS_DECISION_OPTIONS },
+  { key: "result",       field: "result",        group: "Match",     label: "Match Result",      control: "checklist", options: () => RESULT_OUTCOME_OPTIONS },
+  { key: "tossResult",   field: "tossResult",    group: "Match",     label: "Toss Result",       control: "checklist", options: () => TOSS_RESULT_OPTIONS },
+  { key: "tossDecision", field: "tossDecision",  group: "Match",     label: "Toss Decision",     control: "checklist", options: () => TOSS_DECISION_OPTIONS },
 ];
 export const DIM_BY_KEY = new Map(DIMS.map((d) => [d.key, d]));
 

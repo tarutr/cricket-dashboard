@@ -1601,11 +1601,11 @@ const FIELDING_METRIC_SPECS = [
   // Caught & bowled" can filter on c&b alone. Reads the new fielding_cte.
   // caught_and_bowled column (buildFieldingCteSql), projected with MAX() like its
   // three siblings. Additive: no existing catch/stumping/run-out number changes.
-  { key: "caught_and_bowled", label: "Caught & bowled", shortLabel: "F. C&B", section: "fielding",
+  { key: "caught_and_bowled", label: "Caught & Bowled", shortLabel: "F. C&B", section: "fielding",
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.caught_and_bowled)" },
   { key: "stumpings", label: "Stumpings", shortLabel: "F. Stumping", section: "fielding",
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.stumpings)" },
-  { key: "run_outs", label: "Run outs", shortLabel: "F. Run out", section: "fielding",
+  { key: "run_outs", label: "Run Outs", shortLabel: "F. Run out", section: "fielding",
     source: "fielding_events", sqlExpression: "MAX(fielding_cte.run_outs)" },
   { key: "dismissals_effected", label: "Fielding Dismissals", shortLabel: "F. Wkts", section: "fielding",
     source: "fielding_events",
@@ -3241,11 +3241,11 @@ export function resolveColumnMetric(key, ns) {
 // unqualified scope-clause column can never bind to it (the same collision-safe
 // prefixing xdisc_cte's xd_ / fielding_cte's fld_ use).
 export const PROFILE_COLUMN_SPECS = [
-  { key: "attr_role_group", field: "role_group", label: "Playing role", disciplines: ["batting", "bowling"] },
-  { key: "attr_role_subgroup", field: "role_subgroup", label: "Detailed role", disciplines: ["batting", "bowling"] },
-  { key: "attr_batting_style", field: "batting_style", label: "Batting hand", disciplines: ["batting"] },
-  { key: "attr_bowling_type", field: "bowling_type", label: "Bowling style", disciplines: ["batting", "bowling"] },
-  { key: "attr_bowling_arm", field: "bowling_arm", label: "Bowling hand", disciplines: ["batting", "bowling"] },
+  { key: "attr_role_group", field: "role_group", label: "Playing Role", disciplines: ["batting", "bowling"] },
+  { key: "attr_role_subgroup", field: "role_subgroup", label: "Detailed Role", disciplines: ["batting", "bowling"] },
+  { key: "attr_batting_style", field: "batting_style", label: "Batting Hand", disciplines: ["batting"] },
+  { key: "attr_bowling_type", field: "bowling_type", label: "Bowling Style", disciplines: ["batting", "bowling"] },
+  { key: "attr_bowling_arm", field: "bowling_arm", label: "Bowling Hand", disciplines: ["batting", "bowling"] },
 ];
 const _PROFILE_SPEC_BY_KEY = new Map(PROFILE_COLUMN_SPECS.map((s) => [s.key, s]));
 
@@ -4186,7 +4186,7 @@ const SCOPE_SET_SPECS = [
   },
   {
     key: TOSS_DECISION_SET_KEY,
-    label: "Toss decision",
+    label: "Toss Decision",
     shortLabel: "Toss dec.",
     title: "Toss decisions in the filtered rows",
     // matches.toss_decision mapped to TOSS_DECISION_OPTIONS' own labels ("Chose to bat" /
@@ -5711,9 +5711,9 @@ const _FC_PER_MATCH = "_per_match";
 // change above, so the base tally column and its breakdown slices agree.
 const _FC_TALLIES = new Map([
   ["catches",    { pred: "kind IN ('caught', 'caught and bowled')", label: "Catches", short: "F. Catch" }],
-  ["cab",        { pred: "kind = 'caught and bowled'", label: "Caught & bowled", short: "F. C&B" }],
+  ["cab",        { pred: "kind = 'caught and bowled'", label: "Caught & Bowled", short: "F. C&B" }],
   ["stumpings",  { pred: "kind = 'stumped'", label: "Stumpings", short: "F. Stumping" }],
-  ["runouts",    { pred: "kind = 'run out'", label: "Run outs", short: "F. Run out" }],
+  ["runouts",    { pred: "kind = 'run out'", label: "Run Outs", short: "F. Run out" }],
   ["dismissals", { pred: "kind IN ('caught', 'caught and bowled', 'stumped', 'run out')", label: "Fielding Dismissals", short: "F. Wkts" }],
 ]);
 
@@ -6005,9 +6005,9 @@ const FIELDING_SET_SPECS = [
   { key: "fld_event_set",        label: "Event",                       col: "event_name",           title: "Events played in across the filtered rows" },
   { key: "fld_venue_set",        label: "Venue",                       col: "venue",                title: "Venues played at across the filtered rows" },
   { key: "fld_city_set",         label: "City",                        col: "city",                 title: "Cities played in across the filtered rows" },
-  { key: "fld_bowler_style_set", label: "Bowler style",                col: "bowler_style",         title: "Bowler styles behind the fielder's dismissals in the filtered rows" },
-  { key: "fld_out_position_set", label: "Dismissed batter's position", col: "out_batting_position", title: "Dismissed batters' positions in the filtered rows" },
-  { key: "fld_out_hand_set",     label: "Dismissed batter hand",       col: "out_hand",             title: "Dismissed batters' handedness in the filtered rows" },
+  { key: "fld_bowler_style_set", label: "Bowler Style",                col: "bowler_style",         title: "Bowler styles behind the fielder's dismissals in the filtered rows" },
+  { key: "fld_out_position_set", label: "Dismissed Batter's Position", col: "out_batting_position", title: "Dismissed batters' positions in the filtered rows" },
+  { key: "fld_out_hand_set",     label: "Dismissed Batter Hand",       col: "out_hand",             title: "Dismissed batters' handedness in the filtered rows" },
   // Group A (Phase 1.2, 2026-08-25) — Innings number / Over: raw event-grain columns
   // on the fielding view (innings_number / over_number), both 0-based STORED. `col`
   // is the display-numbering EXPRESSION (+1), the same convention the Over range
@@ -6016,7 +6016,7 @@ const FIELDING_SET_SPECS = [
   // prints matches what the Innings Number / Over range FILTER controls show, not
   // the raw 0-based storage. No join, no NULL handling (innings_number/over_number
   // are never NULL — always derived from an actual delivery).
-  { key: "fld_innings_set",      label: "Innings number",              col: "(innings_number + 1)", title: "Innings numbers present in the filtered rows" },
+  { key: "fld_innings_set",      label: "Innings Number",              col: "(innings_number + 1)", title: "Innings numbers present in the filtered rows" },
   { key: "fld_over_set",         label: "Over",                        col: "(over_number + 1)",    title: "Overs present in the filtered rows" },
   // Phase (Phase 1.2) — raw fielding-view column too (no join), but needs a label
   // translation + a NULL fold (Test/MDM has no phase concept), so it uses the
@@ -6028,9 +6028,9 @@ const FIELDING_SET_SPECS = [
   // decision maps to the filter's labels → each carries a `derived` builder (below).
   { key: "fld_season_set",         label: "Season",        col: "fld_mctx.season",     title: "Seasons present in the filtered rows", mctx: true },
   { key: "fld_stage_set",          label: "Stage",         derived: "stage",           title: "Stages present in the filtered rows", mctx: true },
-  { key: "fld_result_set",         label: "Match result",  derived: "result",          title: "Match results (from the fielder's team's perspective) in the filtered rows", mctx: true },
-  { key: "fld_toss_result_set",    label: "Toss result",   derived: "tossResult",      title: "Toss results (from the fielder's team's perspective) in the filtered rows", mctx: true },
-  { key: "fld_toss_decision_set",  label: "Toss decision", derived: "tossDecision",    title: "Toss decisions in the filtered rows", mctx: true },
+  { key: "fld_result_set",         label: "Match Result",  derived: "result",          title: "Match results (from the fielder's team's perspective) in the filtered rows", mctx: true },
+  { key: "fld_toss_result_set",    label: "Toss Result",   derived: "tossResult",      title: "Toss results (from the fielder's team's perspective) in the filtered rows", mctx: true },
+  { key: "fld_toss_decision_set",  label: "Toss Decision", derived: "tossDecision",    title: "Toss decisions in the filtered rows", mctx: true },
 ];
 export const FIELDING_SET_KEYS = FIELDING_SET_SPECS.map((s) => s.key);
 const _FIELDING_SET_BY_KEY = new Map(FIELDING_SET_SPECS.map((s) => [s.key, s]));

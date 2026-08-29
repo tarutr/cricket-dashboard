@@ -428,10 +428,10 @@ export function createPaletteGroupsBuilder(deps) {
       // gate (table.js); the metric resolves under the "batting" catalogue like its siblings.
       pushGroup("Wicket Types", [
         tallyLeaf("catches", "Catches"),
-        tallyLeaf("caught_and_bowled", "Caught & bowled"),
+        tallyLeaf("caught_and_bowled", "Caught & Bowled"),
         tallyLeaf("stumpings", "Stumpings"),
-        tallyLeaf("run_outs", "Run outs"),
-        tallyLeaf("dismissals_effected", "Total dismissals"),
+        tallyLeaf("run_outs", "Run Outs"),
+        tallyLeaf("dismissals_effected", "Total Dismissals"),
       ]);
       // 5 ── Bowler Details (was "Bowler") ───────────────────────────────────────
       pushGroup("Bowler Details", [dimLeaf("bowlerStyle"), dimLeaf("bowler")]);
@@ -443,7 +443,7 @@ export function createPaletteGroupsBuilder(deps) {
       // Batter-role fielding dim (owner ruling 2026-08-16: "doesn't work here") has
       // been deleted outright (cleanup Item F5) — fieldingDims.js no longer defines it.
       pushGroup("Dismissed Batter", [
-        leafSingle("fld_pos", "Dismissed batter's position"),
+        leafSingle("fld_pos", "Dismissed Batter's Position"),
         dimLeaf("hand"),
         dimLeaf("batter"),
       ]);
@@ -457,13 +457,13 @@ export function createPaletteGroupsBuilder(deps) {
       // Data-driven (owner 2026-08-03): each profile leaf is offered iff its
       // profile data exists for the current scope (men → yes, women today → no,
       // future women's data → auto-shown) — replaces the old `!women` gate.
-      isFilterAvailable("profileRole", s) && !excludeLeaf("role") ? leafSingle("role", "Playing role") : null,
-      isFilterAvailable("profileHand", s) && disc === "batting" && !excludeLeaf("hand") ? leafSingle("hand", "Batting hand") : null,
-      isFilterAvailable("profileBowling", s) && !excludeLeaf("bowling") ? leafSingle("bowling", "Bowling style") : null,
+      isFilterAvailable("profileRole", s) && !excludeLeaf("role") ? leafSingle("role", "Playing Role") : null,
+      isFilterAvailable("profileHand", s) && disc === "batting" && !excludeLeaf("hand") ? leafSingle("hand", "Batting Hand") : null,
+      isFilterAvailable("profileBowling", s) && !excludeLeaf("bowling") ? leafSingle("bowling", "Bowling Style") : null,
       // Bowling hand (owner #8): dedicated `bowling_arm` profile column
       // ("Right"/"Left"). Mirrors Bowling style exactly — same group, same
       // single-select panel, same data-driven availability, same popup exclusion.
-      isFilterAvailable("profileBowlingArm", s) && !excludeLeaf("bowlingHand") ? leafSingle("bowlingHand", "Bowling hand") : null,
+      isFilterAvailable("profileBowlingArm", s) && !excludeLeaf("bowlingHand") ? leafSingle("bowlingHand", "Bowling Hand") : null,
       // PotM Count (R2b): the filterable count of Player-of-the-Match awards
       // (metrics.js `potm_count`), in the Player Profile group. The
       // old `player_of_match` (Impact section) is no longer offered as a filter.
@@ -543,14 +543,14 @@ export function createPaletteGroupsBuilder(deps) {
         // + editor throughout — the query (batting_position IN) is byte-identical either way.
         // leafSingle self-withholds on the popup surface (strikerpos ∉ POPUP_SCOPE_SINGLETON_KEYS),
         // so the pop-up keeps its own per-innings `batting_position` slice below — no collision.
-        leafSingle("strikerpos", "Batting position"),
+        leafSingle("strikerpos", "Batting Position"),
         // T-2e (owner 2026-08-03): Batting position — a batting-only, per-innings LIST
         // slice on the plain `batting` view's `batting_position` (compiles to
         // `batting_position IN (…)` via inningsWhere). Popup-only + withheld on a
         // matchup-Vs row (a per-innings slice). Bowling's "batting position" is the
         // matchup striker-position path, so it is NOT offered on the bowling tab.
         surface === "popup" && !popupMatchupLocked && disc === "batting"
-          ? { kind: "leaf", label: "Batting position", metricKey: "batting_position", run: () => pickMetric(gi, "batting_position") }
+          ? { kind: "leaf", label: "Batting Position", metricKey: "batting_position", run: () => pickMetric(gi, "batting_position") }
           : null,
         leafMetric("runs", "Runs"),
         leafMetric("balls_faced", "Balls Faced"),
@@ -731,7 +731,7 @@ export function createPaletteGroupsBuilder(deps) {
           // vs bowling style — offered iff mapped bowling styles exist in scope.
           if (isFilterAvailable("vsBowlingStyle", s)) {
             const vsTypes = getVsBowlingTypes() || [];
-            vsItems.push(matchupVsFamily("vs bowling style", [
+            vsItems.push(matchupVsFamily("vs Bowling Style", [
               ["Pace", preselectMatchupVs("group", "Pace")],
               ["Spin", preselectMatchupVs("group", "Spin")],
               ...vsTypes.map((t) => [matchupBucketLabel(t), preselectMatchupVs("type", t)]),
@@ -749,9 +749,9 @@ export function createPaletteGroupsBuilder(deps) {
             // R4-C naming (locked): the leaf LABEL reads "Right-hand batter" /
             // "Left-hand batter" — the preselect's stored bucket VALUE ("Right-hand
             // bat" / "Left-hand bat") is data, untouched.
-            vsItems.push(matchupVsFamily("vs batting hand", [
-              ["Right-hand batter", preselectMatchupVs("hand", "Right-hand bat")],
-              ["Left-hand batter", preselectMatchupVs("hand", "Left-hand bat")],
+            vsItems.push(matchupVsFamily("vs Batting Hand", [
+              ["Right-Hand Batter", preselectMatchupVs("hand", "Right-hand bat")],
+              ["Left-Hand Batter", preselectMatchupVs("hand", "Left-hand bat")],
             ]));
           }
         }
@@ -763,7 +763,7 @@ export function createPaletteGroupsBuilder(deps) {
       // is already false for women, so this never surfaces there without a gender check).
       // On the batting board the same control is the subject's OWN position, offered as
       // "Batting position" in Batting · Basic Stats above (a self attribute, not a Vs axis).
-      if (matchup && disc === "bowling") vsItems.push(leafSingle("strikerpos", "vs opponent batting position"));
+      if (matchup && disc === "bowling") vsItems.push(leafSingle("strikerpos", "vs Opponent Batting Position"));
       // Opponent-player head-to-head (T-1, owner decision 70): "subject X vs opponent
       // Y" (bowler_id when batting / batter_id when bowling). BALL-ENGINE ONLY —
       // flag-gated exactly like the Ball Ranges group (per-delivery ids are absent
@@ -775,7 +775,7 @@ export function createPaletteGroupsBuilder(deps) {
       // T-2e: vs_opp is a ball predicate (threaded to db.query, IGNORED by
       // buildMatchupQuery), so it is withheld on a matchup-Vs row (popupSliceOffered
       // is false there) — it belongs to the per-innings-slice side of the exclusivity.
-      if (ballOn && (surface !== "popup" || popupSliceOffered)) vsItems.push(leafSingle("vs_opp", "vs opponent player"));
+      if (ballOn && (surface !== "popup" || popupSliceOffered)) vsItems.push(leafSingle("vs_opp", "vs Opponent Player"));
       // No "men only" note (owner 2026-08-03): the men-only limitation on the profile-backed
       // entries is TEMPORARY — women's data arrives in the player-registry backlog phase, so this
       // group goes cross-gender soon; a "men only" label would just mislead in the meantime.
@@ -812,9 +812,9 @@ export function createPaletteGroupsBuilder(deps) {
         // bowled → at least → 3") exactly like the other kinds. `catches` (the Caught
         // leaf) STILL includes c&b — unchanged — so Caught ≥ N and Caught & bowled ≥ N
         // measure the documented, distinct things.
-        const cbowled = leafMetric("caught_and_bowled", "Caught & bowled");
+        const cbowled = leafMetric("caught_and_bowled", "Caught & Bowled");
         if (cbowled) variants.push(cbowled);
-        const runout = leafMetric("run_outs", "Run out");
+        const runout = leafMetric("run_outs", "Run Out");
         if (runout) variants.push(runout);
         const stumped = leafMetric("stumpings", "Stumped");
         if (stumped) variants.push(stumped);
@@ -826,7 +826,7 @@ export function createPaletteGroupsBuilder(deps) {
         // Chunk 5: Dismissed batter's position is SCOPE — stays under the "Fielding
         // Stats" section header but routes to the Scope dropdown when laned.
         withLane(
-          singleFamily("Dismissed batter's position", "fld_pos", FIELDING_POSITIONS.map((n) => [`Position ${n}`, preselectFielding("positions", n)])),
+          singleFamily("Dismissed Batter's Position", "fld_pos", FIELDING_POSITIONS.map((n) => [`Position ${n}`, preselectFielding("positions", n)])),
           "scope"
         ),
       ]);

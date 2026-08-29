@@ -259,15 +259,15 @@ const DISMISSAL_ROW_LABEL = {
   out_caught: "Caught",
   out_bowled: "Bowled",
   out_lbw: "LBW",
-  out_run_out: "Run out",
+  out_run_out: "Run Out",
   out_stumped: "Stumped",
   out_caught_and_bowled: "Caught & Bowled",
-  out_hit_wicket: "Hit wicket",
-  out_retired_out: "Retired out",
-  out_obstructing_the_field: "Obstructing the field",
-  out_handled_the_ball: "Handled the ball",
-  out_timed_out: "Timed out",
-  out_hit_the_ball_twice: "Hit the ball twice",
+  out_hit_wicket: "Hit Wicket",
+  out_retired_out: "Retired Out",
+  out_obstructing_the_field: "Obstructing the Field",
+  out_handled_the_ball: "Handled the Ball",
+  out_timed_out: "Timed Out",
+  out_hit_the_ball_twice: "Hit the Ball Twice",
 };
 
 // ── Wicket Type composer row layout (columns content rework D3) ──────────────
@@ -291,7 +291,7 @@ const BOWLING_WICKET_TYPE_ROWS = [
   { token: "caught", rowLabel: "Caught" },
   { token: "caught_and_bowled", rowLabel: "Caught & Bowled" },
   { token: "stumped", rowLabel: "Stumped" },
-  { token: "hit_wicket", rowLabel: "Hit wicket" },
+  { token: "hit_wicket", rowLabel: "Hit Wicket" },
 ];
 
 /** One dismissal-kind row: a single checkbox standing for EITHER the count or
@@ -657,7 +657,7 @@ export function createColumnsPicker({
           ${realKinds.map((d) => dismissalRowHTML(d, visible)).join("")}
         </div>
         <details class="columns-popover__disclosure">
-          <summary><span class="columns-popover__disclosure-arrow">▸</span> Rare dismissals</summary>
+          <summary><span class="columns-popover__disclosure-arrow">▸</span> Rare Dismissals</summary>
           <div class="columns-popover__list">
             ${rareKinds.map((d) => dismissalRowHTML(d, visible)).join("")}
           </div>
@@ -701,7 +701,7 @@ export function createColumnsPicker({
         ...base,
         key: makeCrossKey(other, base.key),
       }));
-      const crossLabel = `${other === "bowling" ? "Bowling" : "Batting"} (other discipline)`;
+      const crossLabel = `${other === "bowling" ? "Bowling" : "Batting"} (Other Discipline)`;
       crossHTML = sectionHTML(crossLabel, crossRows, formats, visible);
     }
 
@@ -1475,9 +1475,9 @@ export function createColumnsPicker({
   // display vocab.)
   const FC_TALLY_OPTIONS = [
     { value: "catches", label: "Catches" },
-    { value: "cab", label: "Caught & bowled" },
+    { value: "cab", label: "Caught & Bowled" },
     { value: "stumpings", label: "Stumpings" },
-    { value: "runouts", label: "Run outs" },
+    { value: "runouts", label: "Run Outs" },
     { value: "dismissals", label: "Fielding Dismissals" },
   ];
   // Finite dimension value tokens + labels (mirror metrics.js _FC_PHASE / _FC_HAND /
@@ -1858,7 +1858,7 @@ export function createColumnsPicker({
         `<option value="${escHtml(r.key)}"${r.key === selectedKey ? " selected" : ""}>${escHtml(r.label)}</option>`;
       const common = rows.filter((r) => !r.rare);
       const rare = rows.filter((r) => r.rare);
-      const rareHTML = rare.length ? `<optgroup label="Rare dismissals">${rare.map(opt).join("")}</optgroup>` : "";
+      const rareHTML = rare.length ? `<optgroup label="Rare Dismissals">${rare.map(opt).join("")}</optgroup>` : "";
       return {
         html: `<select class="select cols-compose-editor__dim" data-role="compose-dim-select" aria-label="Dimension value">${common
           .map(opt)
@@ -1873,7 +1873,7 @@ export function createColumnsPicker({
       const rare = rows.filter((r) => r.rare);
       const rareOpen = rare.some((r) => ticks.has(r.key));
       const rareHTML = rare.length
-        ? `<details class="columns-popover__disclosure"${rareOpen ? " open" : ""}><summary><span class="columns-popover__disclosure-arrow">▸</span> Rare dismissals</summary><div class="columns-popover__list">${rare.map(inp).join("")}</div></details>`
+        ? `<details class="columns-popover__disclosure"${rareOpen ? " open" : ""}><summary><span class="columns-popover__disclosure-arrow">▸</span> Rare Dismissals</summary><div class="columns-popover__list">${rare.map(inp).join("")}</div></details>`
         : "";
       return { html: `<div class="columns-popover__list">${common.map(inp).join("")}</div>${rareHTML}`, empty: false };
     }
@@ -2228,16 +2228,16 @@ export function createColumnsPicker({
           { type: "plain", key: "fld_city_set", label: "City" },
           { type: "plain", key: "fld_season_set", label: "Season" },
           { type: "plain", key: "fld_stage_set", label: "Stage" },
-          { type: "plain", key: "fld_result_set", label: "Match result" },
-          { type: "plain", key: "fld_toss_result_set", label: "Toss result" },
-          { type: "plain", key: "fld_toss_decision_set", label: "Toss decision" },
+          { type: "plain", key: "fld_result_set", label: "Match Result" },
+          { type: "plain", key: "fld_toss_result_set", label: "Toss Result" },
+          { type: "plain", key: "fld_toss_decision_set", label: "Toss Decision" },
         ]
       : [];
     const fieldingDismissalSetItems = fieldingSetLeaderboard
       ? [
-          { type: "plain", key: "fld_bowler_style_set", label: "Bowler style" },
-          { type: "plain", key: "fld_out_position_set", label: "Dismissed batter's position" },
-          { type: "plain", key: "fld_out_hand_set", label: "Dismissed batter hand" },
+          { type: "plain", key: "fld_bowler_style_set", label: "Bowler Style" },
+          { type: "plain", key: "fld_out_position_set", label: "Dismissed Batter's Position" },
+          { type: "plain", key: "fld_out_hand_set", label: "Dismissed Batter Hand" },
         ]
       : [];
     // Phase 1.2 (2026-08-25): the fielding board's three Ball Ranges list columns
@@ -2249,7 +2249,7 @@ export function createColumnsPicker({
       ? [
           { type: "plain", key: "fld_phase_set", label: "Phase" },
           { type: "plain", key: "fld_over_set", label: "Over" },
-          { type: "plain", key: "fld_innings_set", label: "Innings number" },
+          { type: "plain", key: "fld_innings_set", label: "Innings Number" },
         ]
       : [];
     // Stage-3 Phase 1.1 (2026-08-25): the batting/bowling boards' Fielding Stats section
@@ -2261,7 +2261,7 @@ export function createColumnsPicker({
     // fieldingDismissalSetItems already). Same key, same semantics, one definition.
     const plainBoardFieldingSetItems =
       isPlainNs && !fieldingMode && !ownDisciplineOnly
-        ? [{ type: "plain", key: "fld_out_position_set", label: "Dismissed batter's position" }]
+        ? [{ type: "plain", key: "fld_out_position_set", label: "Dismissed Batter's Position" }]
         : [];
     const fieldingSections = [
       ...section("Fielding Stats", [...plainItems(fielding), ...fieldingDismissalSetItems, ...fieldingDeliverySetItems, ...plainBoardFieldingSetItems]),
@@ -2299,7 +2299,7 @@ export function createColumnsPicker({
           { type: "plain", key: CITY_SET_KEY, label: "City" },
           { type: "plain", key: SEASON_SET_KEY, label: "Season" },
           { type: "plain", key: STAGE_SET_KEY, label: "Stage" },
-          { type: "plain", key: TOSS_DECISION_SET_KEY, label: "Toss decision" },
+          { type: "plain", key: TOSS_DECISION_SET_KEY, label: "Toss Decision" },
           { type: "plain", key: RESULT_CONDITION_SET_KEY, label: "Result Condition" },
         ]
       : [];

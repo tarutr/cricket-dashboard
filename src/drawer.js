@@ -138,7 +138,7 @@ const SINGLETON_TYPES = [
   // Player balls apply in every format. They lead the array so their applied rows
   // render first among the singleton rows, grouped under the "Delivery" optgroup.
   { key: "win_phase", label: "Phase", group: "Delivery", ballOnly: true },
-  { key: "win_overs", label: "Over range", group: "Delivery", ballOnly: true },
+  { key: "win_overs", label: "Over Range", group: "Delivery", ballOnly: true },
   { key: "win_balls", label: "Team Ball Range", group: "Delivery", ballOnly: true },
   { key: "win_player", label: "Batter/Bowler Ball Range", group: "Delivery", ballOnly: true },
   // "Matchup (Vs)" (R3.2; relabelled Wave A1 item 1; R5-A #5 moved it to the
@@ -153,11 +153,11 @@ const SINGLETON_TYPES = [
   { key: "vs", label: "Matchup (Vs)", group: "Basic" },
   { key: "team", label: "Team", group: "Player" },
   { key: "opposition", label: "Opposition", group: "Player" },
-  { key: "hand", label: "Batting hand", group: "Player" },
-  { key: "bowling", label: "Bowling style", group: "Player" },
+  { key: "hand", label: "Batting Hand", group: "Player" },
+  { key: "bowling", label: "Bowling Style", group: "Player" },
   // Bowling hand (owner #8, columns rejig wave C): dedicated `bowling_arm`
   // profile column ("Right"/"Left"). Mirrors the "bowling" row exactly.
-  { key: "bowlingHand", label: "Bowling hand", group: "Player" },
+  { key: "bowlingHand", label: "Bowling Hand", group: "Player" },
   { key: "role", label: "Role", group: "Player" },
   // PotM (Y/N) (Wave D — TASK B): a fixed Yes/No categorical singleton (state.potmYN)
   // — "Won a Player of the Match" vs "Never Player of the Match" in scope. Sits in the
@@ -176,7 +176,7 @@ const SINGLETON_TYPES = [
   // anchor. Its OWN addable "+ Add condition" entry, offered in PLAIN batting AND any
   // matchup (isPresent gates it on discipline batting OR matchupVsActive); hidden in
   // plain bowling, whose view has no batting_position column.
-  { key: "strikerpos", label: "Batting position", group: "Basic" },
+  { key: "strikerpos", label: "Batting Position", group: "Basic" },
   // Opponent-player head-to-head (pop-up Tab-2 T-1, owner decision 70): "subject X
   // vs opponent Y" — restricts the counted balls to those against ONE opponent
   // (subject batting ⇒ bowler_id = Y; subject bowling ⇒ batter_id = Y). BALL-ENGINE
@@ -187,7 +187,7 @@ const SINGLETON_TYPES = [
   // it works for both genders (matching the Ball Ranges group's gender-agnostic
   // gate). Its palette leaf lives in the Matchup (Vs) group; its editor is the
   // reused player-search (drawerInnings.js mountOpponentPlayer).
-  { key: "vs_opp", label: "vs opponent player", group: "Basic", ballOnly: true },
+  { key: "vs_opp", label: "vs Opponent Player", group: "Basic", ballOnly: true },
   { key: "event", label: "Event", group: "Match" },
   // Stage (tournament round) moved OUT of the "Match context" group into "Match",
   // directly under Event and above Venue (owner, polish item 3) — it is a property
@@ -210,7 +210,7 @@ const SINGLETON_TYPES = [
   // isPresent gates them on !matchupVsActive. Not menOnly — fielding works for
   // both genders. They sit in the "Fielding" dropdown optgroup, alongside the
   // fielding metric conditions.
-  { key: "fld_pos", label: "Dismissed batter's position", group: "Fielding" },
+  { key: "fld_pos", label: "Dismissed Batter's Position", group: "Fielding" },
   // Match-context singletons (Wave 6): categorical WHERE filters keyed off the
   // MATCH's context. Both genders; work in batting, bowling AND matchup views
   // (no matchup gate), so — unlike the fielding slices — isPresent has no Vs
@@ -220,8 +220,8 @@ const SINGLETON_TYPES = [
   // the Result Condition sub-picker NESTED inside Result (state.resultCondition,
   // FIX B / polish item 4). Stage has moved up into the "Match" group (see above).
   { key: "mc_result", label: "Match Result", group: "Match context" },
-  { key: "mc_toss_result", label: "Toss result", group: "Match context" },
-  { key: "mc_toss_decision", label: "Toss decision", group: "Match context" },
+  { key: "mc_toss_result", label: "Toss Result", group: "Match context" },
+  { key: "mc_toss_decision", label: "Toss Decision", group: "Match context" },
 ];
 
 // (The old per-group option-ORDER arrays — PLAYER_ADD_ORDER / MATCH_ADD_ORDER /
@@ -429,7 +429,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
             <p class="opponent-panel__subtitle" data-role="matchup-subtitle"></p>
             <details class="opponent-axis" open>
               <summary>
-                <span class="opponent-axis__name" data-role="matchup-axis-label">Bowling style</span>
+                <span class="opponent-axis__name" data-role="matchup-axis-label">Bowling Style</span>
                 <span class="opponent-axis__pick" data-role="matchup-axis-pick">Anyone</span>
               </summary>
               <div class="opponent-axis__body">
@@ -553,9 +553,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const roleGroupSel = mountSearchSelect(roleGroupHost, {
     searchable: false,
     portal: true,
-    ariaLabel: "Playing role",
-    placeholder: "Any role",
-    allowEmptyLabel: "Any role",
+    ariaLabel: "Playing Role",
+    placeholder: "Any Role",
+    allowEmptyLabel: "Any Role",
     onChange: (val) => {
       setProfile({ roleGroup: val || null, roleSub: null });
       renderProfileEditors();
@@ -566,7 +566,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const roleSubSel = mountSearchSelect(roleSubHost, {
     searchable: false,
     portal: true,
-    ariaLabel: "Detailed role",
+    ariaLabel: "Detailed Role",
     placeholder: "Any",
     allowEmptyLabel: "Any",
     onChange: (val) => {
@@ -578,7 +578,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const handSel = mountSearchSelect(handHost, {
     searchable: false,
     portal: true,
-    ariaLabel: "Batting hand",
+    ariaLabel: "Batting Hand",
     placeholder: "Any",
     allowEmptyLabel: "Any",
     onChange: (val) => {
@@ -590,7 +590,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const bowlingSel = mountSearchSelect(bowlingHost, {
     searchable: false,
     portal: true,
-    ariaLabel: "Bowling style",
+    ariaLabel: "Bowling Style",
     placeholder: "Any",
     allowEmptyLabel: "Any",
     onChange: (val) => {
@@ -602,7 +602,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   const bowlingHandSel = mountSearchSelect(bowlingHandHost, {
     searchable: false,
     portal: true,
-    ariaLabel: "Bowling hand",
+    ariaLabel: "Bowling Hand",
     placeholder: "Any",
     allowEmptyLabel: "Any",
     onChange: (val) => {
@@ -705,8 +705,8 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
         // R4-C naming (locked): "Right-hand batter" / "Left-hand batter" — never
         // "Right-handers"/"Left-handers". These describe the opponent BATTER's hand
         // (this branch is the bowling-discipline Vs editor).
-        { value: "hand:Right-hand bat", label: "Right-hand batter" },
-        { value: "hand:Left-hand bat", label: "Left-hand batter" },
+        { value: "hand:Right-hand bat", label: "Right-Hand Batter" },
+        { value: "hand:Left-hand bat", label: "Left-Hand Batter" },
       ];
     }
     vsSel.setOptions(opts);
@@ -731,7 +731,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   function matchupPickLabel(s) {
     if (!matchupVsActive(s)) return "Anyone";
     const { dim, value } = s.matchupVs;
-    if (dim === "hand") return value === "Left-hand bat" ? "Left-hand batter" : "Right-hand batter";
+    if (dim === "hand") return value === "Left-hand bat" ? "Left-Hand Batter" : "Right-Hand Batter";
     if (dim === "group") return value; // "Pace" / "Spin"
     return matchupBucketLabel(value); // fine bowling type
   }
@@ -746,7 +746,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
         s.discipline === "bowling" ? "The batters you bowled to." : "The bowlers you faced.";
     }
     if (matchupAxisLabelEl) {
-      matchupAxisLabelEl.textContent = s.discipline === "bowling" ? "Batting hand" : "Bowling style";
+      matchupAxisLabelEl.textContent = s.discipline === "bowling" ? "Batting Hand" : "Bowling Style";
     }
     if (matchupAxisPickEl) matchupAxisPickEl.textContent = matchupPickLabel(s);
     // "Clear opponent" only when an opponent is actually defined (matchupVsActive) —
