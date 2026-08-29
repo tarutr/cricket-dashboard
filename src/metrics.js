@@ -821,7 +821,7 @@ export const DISMISSAL_KINDS = [
   { kind: "caught", key: "out_caught", label: "Caught", short: "Ct" },
   { kind: "bowled", key: "out_bowled", label: "Bowled", short: "Bwd" },
   { kind: "lbw", key: "out_lbw", label: "LBW", short: "LBW" },
-  { kind: "run out", key: "out_run_out", label: "Run out", short: "RO" },
+  { kind: "run out", key: "out_run_out", label: "Run Out", short: "RO" },
   { kind: "stumped", key: "out_stumped", label: "Stumped", short: "St" },
   { kind: "caught and bowled", key: "out_caught_and_bowled", label: "Caught & Bowled", short: "C&B" },
   { kind: "hit wicket", key: "out_hit_wicket", label: "Hit Wicket", short: "HW" },
