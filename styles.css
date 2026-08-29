@@ -1238,20 +1238,32 @@ a { color: var(--color-accent); }
   flex-direction: column;
 }
 
+/* #9 (Phase 5, "option D" — owner-approved mock: .orchestrator/subsection-mock.html):
+   subsections are told apart by a thin rule + extra breathing room above the name,
+   NOT a bold/tinted heading — the quietest of the four mocked treatments. The name
+   itself keeps its existing small muted-uppercase look (unchanged); only the
+   rule + margin are new. The FIRST group in a list gets neither (nothing to
+   separate it from) — mirrors the mock's ".sect:first-of-type .hd" carve-out. */
 .palette__group-header {
   font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--color-muted);
   font-weight: 600;
-  padding: var(--space-3) var(--space-1) var(--space-1);
+  border-top: 1px solid var(--color-line);
+  padding: var(--space-4) var(--space-1) var(--space-1);
+  margin-top: var(--space-2);
 }
-.palette__group:first-child .palette__group-header { padding-top: var(--space-1); }
+.palette__group:first-child .palette__group-header {
+  border-top: none;
+  margin-top: 0;
+  padding-top: var(--space-1);
+}
 .palette__group-note { text-transform: none; letter-spacing: 0; font-weight: 400; font-style: italic; }
 /* Columns-popup rework Wave A (#26): a group built with an empty name (the
    flattened Match dropdown) renders no visible sub-heading — collapses the
-   header bar instead of showing an empty gap. */
-.palette__group-header:empty { display: none; padding: 0; }
+   header bar (rule included) instead of showing an empty gap. */
+.palette__group-header:empty { display: none; padding: 0; border-top: none; margin-top: 0; }
 
 .palette__row,
 .palette__variant-row {
@@ -2634,6 +2646,56 @@ body.is-col-resizing {
 }
 .cols-param-row__noun { font-weight: 600; font-size: 0.9rem; flex: 0 0 auto; }
 .cols-param-row__remove { margin-left: auto; }
+
+/* #8 (Phase 5): the six-dot drag handle on a chosen/param row. Same muted →
+   brighten-on-hover language as .col-edit-btn; the dots are a classic 6-shadow
+   single-div trick (one 2px dot + 5 box-shadow copies), not an image/font glyph.
+   Mouse/pen grab cursor only — the row list still relies on plain touch-scroll to
+   move at ~380px (§8), so touch never starts a drag (wireRowDrag gates on
+   e.pointerType); the handle keeps a normal cursor there instead of a misleading
+   grab affordance. */
+.col-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 1.5em;
+  min-width: 1.5em;
+  background: none;
+  border: none;
+  padding: var(--space-1);
+  color: var(--color-muted);
+  opacity: 0.55;
+  border-radius: var(--radius-sm, 4px);
+  cursor: grab;
+}
+.col-drag-handle:hover { opacity: 1; color: var(--color-fg); background: var(--color-panel); }
+.col-drag-handle:active { cursor: grabbing; }
+.col-drag-handle__dots {
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow:
+    0 -5px 0 0 currentColor,
+    0 5px 0 0 currentColor,
+    6px 0 0 0 currentColor,
+    6px -5px 0 0 currentColor,
+    6px 5px 0 0 currentColor;
+}
+@media (hover: none) {
+  /* Touch devices never start a drag (mouse/pen-only gate) — the grab cursor and
+     hover brighten are desktop-only affordances; on touch the handle would just
+     look like an inert button, so mute it further rather than promise a gesture
+     that never fires. Display-only; it stays present (never hidden) so a
+     mouse/trackpad-on-touchscreen device (Chrome OS, some tablets+mice) keeps it. */
+  .col-drag-handle { opacity: 0.3; cursor: default; }
+}
+/* The row actually being dragged (live preview, table.js's own .data-table__th--
+   dragging language mirrored here) — everything else keeps reflowing around it. */
+.cols-chosen-row--dragging,
+.cols-param-row--dragging { opacity: 0.4; }
+body.is-row-dragging { cursor: grabbing; user-select: none; }
 
 /* Edit pencil on a composer-made standalone row (Phase/Ball/Innings/Runs-by-Source/
    Wicket-Type) — re-opens that column's compose editor in place. Same muted →

@@ -628,8 +628,12 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     searchable: false,
     portal: true,
     ariaLabel: "Matchup opponent",
-    placeholder: "Everyone",
-    allowEmptyLabel: "Everyone",
+    // "Any city"-style cue (Phase 5): match matchupPickLabel()'s "Anyone" for this
+    // exact same no-value state, shown right next to this control in the axis
+    // summary (was "Everyone" here — the one inconsistent placeholder found in an
+    // owned file; display-only, no state/query change).
+    placeholder: "Anyone",
+    allowEmptyLabel: "Anyone",
     onChange: (val) => {
       // Same value encoding as the old <select> ("dim:value", or null/"" for
       // Everyone) — writes the IDENTICAL state.matchupVs shape so the toolbar

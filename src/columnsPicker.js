@@ -1074,6 +1074,110 @@ export function createColumnsPicker({
     });
   }
 
+  /** #8 (Phase 5): the chosen/param rows' own vertical slot ORDER — never the query.
+   * Mirrors table.js's header wireColumnDrag mechanics (mouse/pen pointer drag, a live
+   * DOM preview while dragging, a single commit on drop) but vertical (a row list, not
+   * header cells) and reordering the SAME slot array every other mutation in this file
+   * already owns via getSlots()/applySlots() — see this file's own header note on
+   * "column drag-to-reorder... uses the same [get/set] contract". The query is built
+   * from a dedup'd column-KEY set (columnKeysFor), never slot order, so nothing here
+   * can move a number. Only rows carrying a real slot id get a handle (chosenColumnRowHTML
+   * / paramRowHTML) — a row mid-edit-in-place (composeEditorHTML) or a not-yet-a-column
+   * pending param row (pendingParamRowHTML) render with NO handle, so a drag can never
+   * disturb either; at most one editor is ever open, so "the slot being edited" is never
+   * more than one anchor to skip over. */
+  function draggableChosenRows(listEl, exceptEl) {
+    return [...listEl.querySelectorAll(":scope > .cols-chosen-row[data-slot-id], :scope > .cols-param-row[data-slot-id]")].filter(
+      (el) => el !== exceptEl
+    );
+  }
+
+  /** Commit the chosen-rows list's CURRENT on-screen order back into the real slot
+   * array, then rerenderInline() to rebuild from that committed order (mirrors
+   * table.js's onUp -> reorderColumns + renderLoaded). A slot with no rendered row
+   * right now (the one mid-edit, if any) keeps its ORIGINAL position; only the rows
+   * actually visible in the drag keep their (possibly reordered) relative order. */
+  function commitChosenReorder(listEl) {
+    const domOrder = [...listEl.querySelectorAll(":scope > .cols-chosen-row[data-slot-id], :scope > .cols-param-row[data-slot-id]")].map(
+      (el) => el.dataset.slotId
+    );
+    const domSet = new Set(domOrder);
+    const slots = (getSlots() || []).slice();
+    const queue = domOrder.map((id) => slots.find((s) => s.id === id)).filter(Boolean);
+    let qi = 0;
+    const next = slots.map((s) => (domSet.has(s.id) ? queue[qi++] : s));
+    applySlots(next);
+    rerenderInline();
+  }
+
+  function wireRowDrag(handle, rowEl, listEl) {
+    let startY = null;
+    let dragging = false;
+    let appliedOverId; // slot id the dragged row currently sits BEFORE, or null = end of list
+
+    function moveRowDom(overId) {
+      const others = draggableChosenRows(listEl, rowEl);
+      const targetEl = overId ? others.find((el) => el.dataset.slotId === overId) : null;
+      if (targetEl) targetEl.before(rowEl);
+      else listEl.appendChild(rowEl);
+    }
+
+    function onMove(e) {
+      if (startY === null) return;
+      if (!dragging && Math.abs(e.clientY - startY) > 4) {
+        dragging = true;
+        rowEl.classList.add("cols-chosen-row--dragging", "cols-param-row--dragging");
+        document.body.classList.add("is-row-dragging");
+      }
+      if (!dragging) return;
+      const others = draggableChosenRows(listEl, rowEl);
+      let insertBeforeEl = null;
+      for (const el of others) {
+        const rect = el.getBoundingClientRect();
+        if (e.clientY < rect.top + rect.height / 2) { insertBeforeEl = el; break; }
+      }
+      const overId = insertBeforeEl ? insertBeforeEl.dataset.slotId : null;
+      if (overId !== appliedOverId) {
+        moveRowDom(overId);
+        appliedOverId = overId;
+      }
+    }
+
+    function onUp() {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      rowEl.classList.remove("cols-chosen-row--dragging", "cols-param-row--dragging");
+      document.body.classList.remove("is-row-dragging");
+      if (dragging) commitChosenReorder(listEl); // rerenderInline() rebuilds + rewires everything
+      startY = null;
+      dragging = false;
+      appliedOverId = undefined;
+    }
+
+    handle.addEventListener("pointerdown", (e) => {
+      // Mouse/pen only (table.js's wireColumnDrag touch policy, mirrored): a touch
+      // pointerdown falls through to native scrolling of the popup body, no drag.
+      if (e.pointerType !== "mouse" && e.pointerType !== "pen") return;
+      if (e.button !== 0) return;
+      startY = e.clientY;
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+    });
+  }
+
+  /** Wire every rendered chosen/param row's drag handle. No-op when the host hasn't
+   * supplied the slot contract (getSlots/applySlots) — there is no slot order to drag
+   * without it (today both callers, table.js and playerFiltersTab.js, supply it). */
+  function wireChosenReorder(rootEl) {
+    if (!getSlots || !applySlots) return;
+    const listEl = rootEl.querySelector('[data-role="cols-chosen"]');
+    if (!listEl) return;
+    listEl.querySelectorAll(".col-drag-handle[data-drag-slot]").forEach((handleEl) => {
+      const rowEl = handleEl.closest(".cols-chosen-row, .cols-param-row");
+      if (rowEl) wireRowDrag(handleEl, rowEl, listEl);
+    });
+  }
+
   /** E1b: re-sync the per-copy Sort-by + Highlight indicators from the live host
    * state WITHOUT rebuilding — called from syncInline so an EXTERNAL sort change
    * (e.g. a table-header click while the popup is open) or a highlight repaint keeps
@@ -1638,6 +1742,15 @@ export function createColumnsPicker({
 
   // ── Chosen rows ─────────────────────────────────────────────────────────────
 
+  /** #8 (Phase 5): the six-dot drag handle on a chosen/param row — the affordance
+   * for the vertical reorder wired by wireRowDrag below. Purely a grab target
+   * (the dots are CSS, not a glyph) sat first in the row so it reads as the
+   * row's own leading edge, mirroring the sort/highlight/duplicate/× icon-button
+   * language already used by the rest of this row. */
+  function dragHandleHTML(slotId, label) {
+    return `<button type="button" class="col-drag-handle" data-drag-slot="${escHtml(slotId)}" title="Drag to reorder" aria-label="Drag to reorder ${escHtml(label)}"><span class="col-drag-handle__dots" aria-hidden="true"></span></button>`;
+  }
+
   /** One chosen-column row (R4-A: every column type shares this uniform row): the
    * column's label + its count/% toggle · sort · highlight · duplicate · × (E1b controls,
    * keyed by the slot id). `editKind` = the composer kind for a composer-made column
@@ -1654,6 +1767,7 @@ export function createColumnsPicker({
       ? `<button type="button" class="col-edit-btn" data-edit-slot="${slot.id}" title="Edit this column" aria-label="Edit this column">${EDIT_GLYPH}</button>`
       : "";
     return `<div class="cols-chosen-row" data-slot-id="${slot.id}">
+      ${dragHandleHTML(slot.id, label)}
       <span class="cols-chosen-row__label" title="${escHtml(label)}">${escHtml(label)}</span>
       ${editBtn}
       ${instanceControlsMarkup(slot, pair)}
@@ -1678,6 +1792,7 @@ export function createColumnsPicker({
       (o) => `<option value="${o.key}"${o.key === opKey ? " selected" : ""}>${escHtml(o.label)}</option>`
     ).join("");
     return `<div class="cols-param-row" data-slot-id="${slot.id}" data-param-prefix="${desc.prefix}" data-param-min="${desc.min}"${cross ? ` data-param-cross="${escHtml(cross)}"` : ""}>
+      ${dragHandleHTML(slot.id, desc.noun)}
       <span class="cols-param-row__noun">${escHtml(desc.noun)}</span>
       <select class="select cols-param__op" data-role="param-op" aria-label="${escHtml(desc.noun)} operator">${opts}</select>
       <input type="number" class="input cols-param__val" data-role="param-v1" value="${v1}" min="${desc.min}" step="${desc.step}" aria-label="${escHtml(desc.noun)} value" />
@@ -2767,6 +2882,7 @@ export function createColumnsPicker({
     wireMultiInstance(container);
     wireComposeEditor(container);
     wireParamRows(container);
+    wireChosenReorder(container);
   }
 
   /** Build + mount the four floating discipline palettes into `container` (one shared

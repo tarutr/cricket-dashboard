@@ -1666,7 +1666,7 @@ export function mountTeam(container, store, onChange, { onOptionsLoaded = null }
       const s = store.get(); // A9: scope the Team list to the full Search Conditions
       return searchTeams("", gender, teamType, s.formats, s.dateFrom, s.dateTo, { sel: s, role: "teams" });
     },
-    emptyLabel: "All teams",
+    emptyLabel: "Any team",
     singular: "team",
     plural: "teams",
     ariaLabel: "Played for team",
