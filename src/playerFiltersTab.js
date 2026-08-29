@@ -427,7 +427,7 @@ const FIELDING_COLUMN_KEYS = ["catches", "stumpings", "run_outs", "caught_and_bo
 // matchup; a fielding row instead carries state.fielding.* dims + the four scope
 // singletons. describeFieldingRow lists one token per applied fielding dim; the
 // scope singletons reuse describeRowSingletons (Team / Opposition / Event / Venue).
-const WICKET_TYPE_LABEL = { caught: "Caught", "caught and bowled": "Caught & bowled", stumped: "Stumped", "run out": "Run out" };
+const WICKET_TYPE_LABEL = { caught: "Caught", "caught and bowled": "Caught & Bowled", stumped: "Stumped", "run out": "Run Out" };
 const _optLabelMap = (opts) => Object.fromEntries((opts || []).map((o) => [o.value, o.label]));
 const PHASE_LABEL = _optLabelMap(FIELDING_PHASE_OPTIONS);
 const RESULT_LABEL = _optLabelMap(RESULT_OPTIONS);
@@ -444,11 +444,11 @@ function describeFieldingRow(f) {
     const labels = mapLabel ? arr.map(mapLabel) : arr.map(String);
     out.push(labels.length <= 3 ? `${prefix}: ${labels.join(", ")}` : `${prefix}: ${labels.length}`);
   };
-  list(f.kinds, "Wicket type", (k) => WICKET_TYPE_LABEL[k] || k);
-  list(f.positions, "Batting position");
-  list(f.hands, "Batting hand");
+  list(f.kinds, "Wicket Type", (k) => WICKET_TYPE_LABEL[k] || k);
+  list(f.positions, "Batting Position");
+  list(f.hands, "Batting Hand");
   if (Array.isArray(f.outBatters) && f.outBatters.length) out.push(`Batter: ${f.outBatterName || f.outBatters[0]}`);
-  list(f.bowlerStyles, "Bowler style");
+  list(f.bowlerStyles, "Bowler Style");
   if (Array.isArray(f.bowlers) && f.bowlers.length) out.push(`Bowler: ${f.bowlerName || f.bowlers[0]}`);
   list(f.phases, "Phase", (p) => PHASE_LABEL[p] || p);
   if (Number.isFinite(Number(f.overFrom)) || Number.isFinite(Number(f.overTo))) {
@@ -714,7 +714,7 @@ const PENCIL_GLYPH =
 /** Friendly, operator-token-stripped base name for a condition's metric. */
 function conditionBaseName(cond, discipline, formats) {
   if (cond.metricKey === POTM_METRIC_KEY) return "PotM";
-  if (cond.metricKey === BATTING_POSITION_KEY) return "Batting position";
+  if (cond.metricKey === BATTING_POSITION_KEY) return "Batting Position";
   const metric = getMetric(cond.metricKey, discipline) || getMetric(cond.metricKey);
   if (!metric) return cond.metricKey;
   // Threshold metrics carry a "≥ N" token in their label — strip it so a slice

@@ -1230,7 +1230,7 @@ export const COLUMN_PRESET_DEFS = {
     },
     {
       key: "wicket_types",
-      label: "Wicket types",
+      label: "Wicket Types",
       // Columns content rework D3: seed the COMPOSED wicket-type COUNT keys (byte-
       // identical SQL to the retiring wkt_<kind> — the equivalence gate), so the preset
       // agrees with the Wicket Type composer (rows CHECKED at count, no duplicate). The

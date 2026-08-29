@@ -91,7 +91,7 @@ function fieldingDimPillLabel(dim, fld, state) {
   if (dim.key === "phase") return `${vals.map(optLabel).join(" + ")} overs`;
   if (dim.key === "tossResult" || dim.key === "tossDecision") return vals.map(optLabel).join(", ");
   if (dim.key === "innings") return `Innings: ${vals.map(optLabel).join(", ")}`;
-  if (dim.key === "result") return `Match result: ${vals.map(optLabel).join(", ")}`;
+  if (dim.key === "result") return `Match Result: ${vals.map(optLabel).join(", ")}`;
   const labels = vals.map(optLabel);
   return labels.length <= 2 ? `${dim.label}: ${labels.join(", ")}` : `${dim.label}: ${labels.length} picked`;
 }

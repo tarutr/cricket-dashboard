@@ -682,7 +682,7 @@ export function bowlingGridHTML(state, core, extra) {
   // reason (owner task #20 — the popup scrolls freely, so a long opponent
   // list is no longer trimmed).
   const twoColA = `<div class="player-page__two-col">
-    <div class="player-page__col">${sectionHTML("Wicket types", wicketTypesHTML(core))}</div>
+    <div class="player-page__col">${sectionHTML("Wicket Types", wicketTypesHTML(core))}</div>
     <div class="player-page__col">${sectionOrUnsupported("Vs opposition", extra.opposition, (rows) =>
       oppositionSectionHTML("bowling", rows)
     )}</div>

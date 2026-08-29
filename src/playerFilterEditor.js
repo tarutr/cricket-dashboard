@@ -464,8 +464,8 @@ export function openFilterRowEditor(hostDoc, deps) {
     return [
       // R4-C naming (locked): "Right-hand batter" / "Left-hand batter" — never
       // "Right-handers"/"Left-handers".
-      { value: "hand:Right-hand bat", label: "Right-hand batter" },
-      { value: "hand:Left-hand bat", label: "Left-hand batter" },
+      { value: "hand:Right-hand bat", label: "Right-Hand Batter" },
+      { value: "hand:Left-hand bat", label: "Left-Hand Batter" },
     ];
   }
   function matchupVsRowHTML() {
