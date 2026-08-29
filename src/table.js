@@ -2792,7 +2792,97 @@ export function formatValue(metric, value) {
  * reload, which the brief doesn't require). Never read by any query path —
  * pure presentation state, like highlightedColumns/nameExpanded nearby. */
 const columnWidths = new Map();
+// Absolute last-resort floor — only reached if minHeaderWidthPx's measurement
+// ever comes back 0/NaN (e.g. called before the probe can lay out). Every real
+// column's computed per-column minimum (below) comes out well above this.
 const MIN_COL_WIDTH_PX = 48;
+
+// ── Per-column header minimum width (owner-reported defect, Stage-3 P5) ────
+// The resize drag used to clamp every column to the SAME fixed MIN_COL_WIDTH_PX
+// (48px), set before decision 82 added the inline sort caret + the top-right
+// highlight icon to every header. At 48px a long label's text now runs under
+// the caret and the icon. The owner's fix: the minimum is PER COLUMN — each
+// header's own label text + the caret + the icon + the resize handle + the
+// header's own horizontal padding, so a short label ("RO") can still shrink
+// further than a long one ("NB Runs Con. %").
+//
+// Rather than re-deriving those reserved widths as separate JS constants
+// (which would silently drift from styles.css), an offscreen probe `<th>`
+// carries the SAME classes a real metric header does — `has-hi` (whose
+// --hi-reserve padding is the icon/handle/gap reservation on both sides),
+// `is-sortable`, the label span, and an ALWAYS-PRESENT sort-caret span (a
+// column not currently sorted could become the sort column at any time
+// without a fresh resize, so the minimum must already hold room for the
+// caret even at rest) — so the probe's natural (auto table-layout) width
+// already IS the true per-column minimum; no separate icon/handle arithmetic
+// to keep in sync with CSS. Cached by label text, since a column's label
+// never changes, so the forced-reflow measurement runs once per distinct
+// label rather than once per render/row.
+let headerMeasureProbe = null; // { table, th, label } — built once, reused
+const headerMinWidthCache = new Map(); // label text -> measured min px
+
+function ensureHeaderMeasureProbe() {
+  if (headerMeasureProbe) return headerMeasureProbe;
+  const table = document.createElement("table");
+  table.className = "data-table";
+  table.setAttribute("aria-hidden", "true");
+  table.style.position = "absolute";
+  table.style.visibility = "hidden";
+  table.style.left = "-9999px";
+  table.style.top = "0";
+  table.style.tableLayout = "auto";
+  const thead = document.createElement("thead");
+  const tr = document.createElement("tr");
+  const th = document.createElement("th");
+  th.className = "data-table__th data-table__th--draggable is-sortable has-hi";
+  th.setAttribute("scope", "col");
+  const label = document.createElement("span");
+  label.className = "data-table__th-label";
+  const sortInd = document.createElement("span");
+  sortInd.className = "data-table__th-sortind";
+  sortInd.setAttribute("aria-hidden", "true");
+  sortInd.textContent = "▲"; // reserve the caret's room even when at rest — see doc comment above
+  th.appendChild(label);
+  th.appendChild(sortInd);
+  tr.appendChild(th);
+  thead.appendChild(tr);
+  table.appendChild(thead);
+  document.body.appendChild(table);
+  headerMeasureProbe = { table, th, label };
+  return headerMeasureProbe;
+}
+
+/** The minimum width (px) a metric column's header can shrink to without its
+ * label overlapping the sort caret or the corner highlight icon — see the
+ * doc comment above. `label` is the column's rendered shortLabel text. */
+function minHeaderWidthPx(label) {
+  const text = label || "";
+  const cached = headerMinWidthCache.get(text);
+  if (cached != null) return cached;
+  const { th, label: labelEl } = ensureHeaderMeasureProbe();
+  labelEl.textContent = text;
+  const w = Math.ceil(th.getBoundingClientRect().width) || MIN_COL_WIDTH_PX;
+  headerMinWidthCache.set(text, w);
+  return w;
+}
+
+/** Read `columnWidths`, correcting a previously-stored width up to this
+ * column's own per-column minimum (minHeaderWidthPx) — covers a width that
+ * was dragged/stored BEFORE this fix, or before decision 82's caret/icon,
+ * so it renders correctly without a fresh drag. Written back into
+ * `columnWidths` so headerCellHTML and dataCellHTML (called for the same
+ * column in the same render — thead is built before tbody, see renderLoaded)
+ * agree on one corrected value instead of each re-deriving it. */
+function clampedStoredWidth(metric, widthKey) {
+  const stored = columnWidths.get(widthKey);
+  if (stored == null) return null;
+  const minPx = minHeaderWidthPx(metric.shortLabel);
+  if (stored < minPx) {
+    columnWidths.set(widthKey, minPx);
+    return minPx;
+  }
+  return stored;
+}
 
 /** Render one metric's `<td>`. Sample-based muting (decision 44c) was removed
  * (Batch B1 Wave 5, owner decision): every value — however thin its backing
@@ -2821,7 +2911,11 @@ function dataCellHTML(metric, row, isHighlighted = false, slotId = null) {
   // the column back wide even after the user narrowed the header. --resized
   // (styles.css) clips overflow with an ellipsis instead of re-widening.
   const widthKey = slotId != null ? slotId : metric.key;
-  const storedWidth = columnWidths.get(widthKey);
+  // clampedStoredWidth (per-column header-minimum fix): corrects a width
+  // stored too narrow (dragged before this fix, or before decision 82's
+  // caret/icon) up to this column's own minimum, so a td never renders
+  // narrower than its header can legally be.
+  const storedWidth = clampedStoredWidth(metric, widthKey);
   const widthStyle = storedWidth
     ? ` style="width:${storedWidth}px;min-width:${storedWidth}px;max-width:${storedWidth}px;"`
     : "";
@@ -3749,7 +3843,11 @@ export function mountTable(
     // user already dragged this slot to, from the module-level columnWidths
     // store, so it survives this render (and every future one) unchanged.
     const widthKey = slotId != null ? slotId : metric.key;
-    const storedWidth = columnWidths.get(widthKey);
+    // clampedStoredWidth (per-column header-minimum fix, owner-reported defect):
+    // corrects a width stored too narrow — dragged before this fix, or before
+    // decision 82 added the caret/icon the old fixed 48px min predates — up to
+    // this column's own label-based minimum, on every render.
+    const storedWidth = clampedStoredWidth(metric, widthKey);
     const widthStyle = storedWidth
       ? ` style="width:${storedWidth}px;min-width:${storedWidth}px;max-width:${storedWidth}px;"`
       : "";
@@ -4345,12 +4443,19 @@ export function mountTable(
     const key = th.dataset.key;
     const widthKey = slotId != null ? slotId : key;
     const cellSel = slotId ? `[data-slot-id="${slotId}"]` : `[data-key="${key}"]`;
+    // Per-column drag-resize floor (owner-reported defect fix): this column's
+    // OWN label text decides how far it can shrink, not one shared fixed
+    // value — see minHeaderWidthPx's doc comment. Read once per wire-up (this
+    // is rebound on every renderLoaded, same as the rest of this function) off
+    // the label span already sitting in the just-rendered th.
+    const labelEl = th.querySelector(".data-table__th-label");
+    const minPx = minHeaderWidthPx(labelEl ? labelEl.textContent : "");
     let startX = null;
     let startWidth = null;
     let resizing = false;
 
     function applyWidth(px) {
-      const w = Math.max(MIN_COL_WIDTH_PX, Math.round(px));
+      const w = Math.max(minPx, Math.round(px));
       columnWidths.set(widthKey, w);
       th.style.width = `${w}px`;
       th.style.minWidth = `${w}px`;
