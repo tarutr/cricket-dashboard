@@ -443,8 +443,16 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // this reproduces the former string byte-for-byte, so every ≤1-axis query is
   // byte-identical. `bucketClause` threads UNCHANGED into the per-aggregate
   // FILTER (WHERE …) below and the peak CTE's peakWhere.
-  const BUCKET_COL_BY_DIM = { hand: "batting_hand", type: "bowling_type", group: "bowling_group" };
-  const boardDims = discipline === "batting" ? ["group", "type"] : ["hand"];
+  // The `potm` dim (decision 81, ball-engine-gated) is the vs-PotMs axis — the
+  // opponent on the delivery won that match's Player-of-the-Match. Unlike the
+  // style dims it is CROSS-BOARD (the reconstructed `vs_potm` column exists on
+  // BOTH matchup views), so it is a board dim on batting AND bowling; its bucket
+  // column is `vs_potm` and its axis value is the string "1", so the generic
+  // clause below emits `vs_potm = '1'` — AND-joined with any style axis, exactly
+  // like the others. (Flag-off the parquet lacks vs_potm, so the axis is only
+  // reachable under ?engine=ball.)
+  const BUCKET_COL_BY_DIM = { hand: "batting_hand", type: "bowling_type", group: "bowling_group", potm: "vs_potm" };
+  const boardDims = discipline === "batting" ? ["group", "type", "potm"] : ["hand", "potm"];
   const bucketAxes = matchupVsAxes(state.matchupVs).filter((a) => boardDims.includes(a.dim));
   const bucketClause = bucketAxes.map((a) => `${BUCKET_COL_BY_DIM[a.dim]} = '${esc(a.value)}'`).join(" AND ");
 

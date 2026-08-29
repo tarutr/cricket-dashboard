@@ -342,8 +342,11 @@ export function positionsFilterActive(state) {
 // Canonical dimension order for the composite matchup opponent filter (decision
 // 81A) — fixes the order axes are emitted in so the generated SQL is
 // deterministic. AND is commutative, so the order is a byte-stability choice
-// only.
-const MATCHUP_VS_DIMS = ["group", "type", "hand"];
+// only. `potm` (decision 81, ball-engine-gated) is the vs-PotMs axis — the
+// opponent won that match's Player-of-the-Match; it is CROSS-BOARD (the
+// reconstructed `vs_potm` column exists on both matchup views) and combines with
+// a style axis, so it is last in the order.
+const MATCHUP_VS_DIMS = ["group", "type", "hand", "potm"];
 
 /**
  * Normalise `state.matchupVs` into an array of active `{ dim, value }` opponent
@@ -395,6 +398,16 @@ export function matchupVsAxes(matchupVs) {
 function matchupAxisApplicable(dim, state) {
   if (dim === "hand") return state.discipline === "bowling" && dataAvailBool(state, "matchupBowling");
   if (dim === "group" || dim === "type") return state.discipline === "batting" && dataAvailBool(state, "matchupBatting");
+  // vs-PotMs (decision 81) is CROSS-BOARD: the reconstructed `vs_potm` column
+  // exists on BOTH matchup views, so the axis applies on whichever board's matchup
+  // data is present (batting → matchup_batting; bowling → matchup_bowling). It can
+  // stand alone ("vs any PotM opponent") or combine with a style axis.
+  if (dim === "potm") {
+    return (
+      (state.discipline === "batting" && dataAvailBool(state, "matchupBatting")) ||
+      (state.discipline === "bowling" && dataAvailBool(state, "matchupBowling"))
+    );
+  }
   return false;
 }
 

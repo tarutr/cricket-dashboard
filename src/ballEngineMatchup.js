@@ -81,7 +81,7 @@
 // emitted when a team_rel_* column is needed). Both AND into the base ball WHERE
 // and read SOURCE columns, so neither needs a projection entry.
 
-import { DELIVERY_COLUMNS, sqlIdentifierTokens, viewColumnsFor, alwaysColumnsFor } from "./ballColumns.js";
+import { DELIVERY_COLUMNS, sqlIdentifierTokens, viewColumnsFor, alwaysColumnsFor, GRAIN_SPLIT_COLUMNS } from "./ballColumns.js";
 
 // ── SPEC §4.1 calc fragments (verbatim from ballEngine.js / SPEC §4.1) ───────
 // Bare column names resolve to the ball table; profiles shares none of them.
@@ -197,10 +197,32 @@ function assemble(discipline, files, scopePredicate, windowPredicate, playerPred
   const baseCols = DELIVERY_COLUMNS.filter((c) => toks.has(c));
   const proj = baseCols.map((c) => (c === "year" || c === "month" ? `b0."${c}" AS "${c}"` : `b0.${c}`));
 
+  // vs-PotMs axis (Cutover S1, decision 81). Added to the base ONLY when the mb/
+  // mbowl CTEs reference `vs_potm` (i.e. the query named it — the potm axis is on),
+  // so an ordinary reconstruction is byte-identical. The PotM source is the app's
+  // `player_matches` view (player_of_match 0/1 — buildPomCteSql's source); the
+  // DISTINCT (match, PotM winner) set is EXACTLY the export's
+  // `match_player_of_match WHERE player_id IS NOT NULL` (sql_player_matches builds
+  // player_of_match=1 from it), PK (match, player) → at most one row per opponent,
+  // so the LEFT JOIN never multiplies a ball. The join id is the OPPONENT id — the
+  // SAME `joinIdCol` the profile join uses (bowler_id for batting, batter_id for
+  // bowling) — so the identity join self-restricts to opposition PotMs (a same-team
+  // PotM is never that delivery's opponent). vs_potm is VARCHAR '1'/'0' so the
+  // bucketClause `vs_potm = '1'` is a clean string comparison, exactly like the
+  // other bucket dims (bowling_type/batting_hand); flag-off never reads it.
+  const needPotm = toks.has("vs_potm");
+  const potmSelect = needPotm
+    ? ",\n         CASE WHEN pomj.player_id IS NOT NULL THEN '1' ELSE '0' END AS vs_potm"
+    : "";
+  const potmJoin = needPotm
+    ? "\n    LEFT JOIN (SELECT DISTINCT match_id, player_id FROM player_matches WHERE player_of_match = 1) pomj" +
+      `\n           ON pomj.match_id = b0.match_id AND pomj.player_id = b0.${joinIdCol}`
+    : "";
+
   const base =
-    `b AS (\n    SELECT ${proj.join(", ")},\n         ${styleSelect}\n` +
+    `b AS (\n    SELECT ${proj.join(", ")},\n         ${styleSelect}${potmSelect}\n` +
     `    FROM ${sourceExpr(files)} b0\n` +
-    `    LEFT JOIN profiles pp ON pp.player_id = b0.${joinIdCol}\n` +
+    `    LEFT JOIN profiles pp ON pp.player_id = b0.${joinIdCol}${potmJoin}\n` +
     `    WHERE ${baseWhere(involvedCol, scopePredicate, windowPredicate, playerPredicate)})`;
 
   return `\nWITH ${base},\n${cteSql}\n${finalSql}`;
@@ -213,7 +235,11 @@ function assemble(discipline, files, scopePredicate, windowPredicate, playerPred
  */
 function wantedColumns(discipline, columns) {
   const vocab = viewColumnsFor(discipline);
-  if (!columns) return new Set(vocab);
+  // The full/default set is the EXPORT grain: exclude GRAIN-SPLITTING columns
+  // (vs_potm — decision 81) so a star-expansion reconstruction keeps the
+  // (…, bowling_type)/(…, batting_position) row set byte-identical. They are still
+  // emitted when EXPLICITLY named (the branch below), i.e. when the potm axis is on.
+  if (!columns) return new Set(vocab.filter((c) => !GRAIN_SPLIT_COLUMNS.has(c)));
   const want = new Set(alwaysColumnsFor(discipline));
   const known = new Set(vocab);
   for (const c of columns) if (known.has(c)) want.add(c);
@@ -289,6 +315,10 @@ function matchupBattingViewSql(files, scopePredicate, windowPredicate, playerPre
     batter_id: { sql: "mb.batter_id" },
     bowling_type: { sql: "mb.bowling_type" },
     bowling_group: { sql: "mb.bowling_group" },
+    // vs-PotMs axis (decision 81): a grouping key on the split grain (VARCHAR
+    // '1'/'0'), never an aggregate — no `mb:` dependency. Present in `mb` only
+    // when needPotm below adds it to the CTE's GROUP BY.
+    vs_potm: { sql: "mb.vs_potm" },
     batter_name: { sql: "mb.batter_name" },
     batting_team: { sql: "mb.batting_team" },
     bowling_team: { sql: "mb.bowling_team" },
@@ -370,10 +400,17 @@ function matchupBattingViewSql(files, scopePredicate, windowPredicate, playerPre
       )
     );
   }
+  // vs-PotMs axis (decision 81): when vs_potm is emitted, it is added to the mb
+  // GROUP BY so each (match,inn,batter,bowling_type) group splits into finer
+  // vs_potm='1'/'0' buckets — exactly the export's M2b grain change. Rolling the
+  // split back up (potm axis off ⇒ vs_potm not emitted ⇒ NOT in the GROUP BY)
+  // reproduces every pre-M2b column byte-identically. tta is LEFT at the old grain
+  // (mirrors the export: team_type_agg is not split by vs_potm).
+  const needPotm = has("vs_potm");
   const mbAgg = matchupBattingAggregates();
   const mbKeys = Object.keys(mbAgg).filter((k) => needMb.has(k));
   const mbBody =
-    `SELECT match_id, innings_number, batter_id, bowling_type,\n` +
+    `SELECT match_id, innings_number, batter_id, bowling_type,${needPotm ? " vs_potm," : ""}\n` +
     `                ANY_VALUE(bowling_group) bowling_group, ANY_VALUE(batter_name) batter_name,\n` +
     `                ANY_VALUE(batting_team) batting_team, ANY_VALUE(bowling_team) bowling_team,\n` +
     `                ANY_VALUE(match_type) match_type, ANY_VALUE(gender) gender,\n` +
@@ -382,7 +419,7 @@ function matchupBattingViewSql(files, scopePredicate, windowPredicate, playerPre
     (needPos ? `,\n                ANY_VALUE(batting_position) batting_position` : "") +
     (needHundred ? `,\n                MAX(CASE WHEN balls_per_over=5 THEN 1 ELSE 0 END) is_hundred` : "") +
     (mbKeys.length ? `,\n                ` + selectFrom(mbAgg, mbKeys).join(",\n                ") : "") +
-    `\n         FROM b GROUP BY match_id, innings_number, batter_id, bowling_type`;
+    `\n         FROM b GROUP BY match_id, innings_number, batter_id, bowling_type${needPotm ? ", vs_potm" : ""}`;
   ctes.push(cte("mb", mbBody));
 
   // ── final SELECT ──────────────────────────────────────────────────────────
@@ -457,6 +494,8 @@ function matchupBowlingViewSql(files, scopePredicate, windowPredicate, playerPre
     bowler_id: { sql: "mbowl.bowler_id" },
     batting_hand: { sql: "mbowl.batting_hand" },
     batting_position: { sql: "CAST(mbowl.batting_position AS BIGINT)" },
+    // vs-PotMs axis (decision 81): grouping key on the split grain (VARCHAR '1'/'0').
+    vs_potm: { sql: "mbowl.vs_potm" },
     bowler_name: { sql: "mbowl.bowler_name" },
     batting_team: { sql: "mbowl.batting_team" },
     bowling_team: { sql: "mbowl.bowling_team" },
@@ -524,17 +563,20 @@ function matchupBowlingViewSql(files, scopePredicate, windowPredicate, playerPre
       )
     );
   }
+  // vs-PotMs axis (decision 81): see matchupBattingViewSql — vs_potm splits the
+  // mbowl grain when emitted; thp is LEFT at the (…, batting_position) grain.
+  const needPotm = has("vs_potm");
   const mbAgg = matchupBowlingAggregates();
   const mbKeys = Object.keys(mbAgg).filter((k) => needMb.has(k));
   const mbowlBody =
-    `SELECT match_id, innings_number, bowler_id, batting_hand, batting_position,\n` +
+    `SELECT match_id, innings_number, bowler_id, batting_hand, batting_position,${needPotm ? " vs_potm," : ""}\n` +
     `                ANY_VALUE(bowler_name) bowler_name, ANY_VALUE(batting_team) batting_team,\n` +
     `                ANY_VALUE(bowling_team) bowling_team, ANY_VALUE(match_type) match_type,\n` +
     `                ANY_VALUE(gender) gender, ANY_VALUE(team_type) team_type,\n` +
     `                ANY_VALUE(match_date) match_date, ANY_VALUE(year) AS "year", ANY_VALUE(month) AS "month"` +
     (needHundred ? `,\n                MAX(CASE WHEN balls_per_over=5 THEN 1 ELSE 0 END) is_hundred` : "") +
     (mbKeys.length ? `,\n                ` + selectFrom(mbAgg, mbKeys).join(",\n                ") : "") +
-    `\n         FROM b GROUP BY match_id, innings_number, bowler_id, batting_hand, batting_position`;
+    `\n         FROM b GROUP BY match_id, innings_number, bowler_id, batting_hand, batting_position${needPotm ? ", vs_potm" : ""}`;
   ctes.push(cte("mbowl", mbowlBody));
 
   const selectList = emitted.map((col) => `${OUT[col].sql} AS ${quoteIdent(col)}`);

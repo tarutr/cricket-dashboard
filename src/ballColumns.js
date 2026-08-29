@@ -301,6 +301,14 @@ export const MATCHUP_BATTING_VIEW_COLUMNS = [
   "team_rel_dot_pct",
   "team_rel_bpb",
   "team_rel_nbsr",
+  // Cutover S1 (ball-engine-gated vs-PotMs axis, decision 81) — vs_potm = '1' iff
+  // the BOWLER on the delivery won Player-of-the-Match of that match, else '0'.
+  // Reconstruction-only (the R2 export parquet, rebuilt from main, lacks it),
+  // appended AFTER the export columns so the ALWAYS slice (0–14) is untouched.
+  // GRAIN-SPLITTING (see GRAIN_SPLIT_COLUMNS): emitted ONLY when the query names
+  // it (the potm axis is active), so an unrelated reconstruction keeps the export
+  // (…, bowling_type) grain byte-identical and reconciles cell-for-cell.
+  "vs_potm",
 ];
 
 /** matchup_bowling.parquet's column list, in export order. Grain: one row per
@@ -373,6 +381,11 @@ export const MATCHUP_BOWLING_VIEW_COLUMNS = [
   "team_rel_pbe",
   "team_rel_dot_pct",
   "team_rel_sr",
+  // Cutover S1 (ball-engine-gated vs-PotMs axis, decision 81) — vs_potm = '1' iff
+  // the BATTER on the delivery (the bowler's opponent) won Player-of-the-Match of
+  // that match, else '0'. Reconstruction-only, appended after the export columns;
+  // GRAIN-SPLITTING (see GRAIN_SPLIT_COLUMNS), emitted only when named.
+  "vs_potm",
 ];
 
 /** Keys + denormalised scope/context — ALWAYS emitted. For the matchup views
@@ -382,6 +395,18 @@ export const MATCHUP_BOWLING_VIEW_COLUMNS = [
  * outer query's WHERE reads (gender / match_type / team_type / match_date …). */
 export const MATCHUP_BATTING_ALWAYS_COLUMNS = MATCHUP_BATTING_VIEW_COLUMNS.slice(0, 14);
 export const MATCHUP_BOWLING_ALWAYS_COLUMNS = MATCHUP_BOWLING_VIEW_COLUMNS.slice(0, 14);
+
+// ── Grain-splitting reconstruction columns (Cutover S1, decision 81) ─────────
+// Columns that, when emitted, ADD a key to the matchup GROUP BY — so they change
+// the reconstruction ROW SET, unlike every other prunable column (which only adds
+// an aggregate at the fixed grain). They are therefore emitted ONLY when a query
+// NAMES them (the vs-PotMs axis is active): they are in the vocabulary above (so
+// neededViewColumns' token scan requests them on demand) but are DELIBERATELY
+// EXCLUDED from the null/full default set (ballEngineMatchup.js wantedColumns), so
+// a `SELECT *` / star-expansion reconstruction keeps the export
+// (…, bowling_type) / (…, batting_position) grain byte-identical — the module's
+// cell-for-cell reconciliation against the shipped parquet is untouched.
+export const GRAIN_SPLIT_COLUMNS = new Set(["vs_potm"]);
 
 // ── Player-local vs whole-innings split (Wave 2s2 FIX 1) ─────────────────────
 // A reconstructed innings column is "player-LOCAL" when its value depends only
