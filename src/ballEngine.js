@@ -314,6 +314,45 @@ function battingTeamAggregates() {
   };
 }
 
+/**
+ * Cutover S1 (ball-engine-gated which-values, Stage-3 Phase 8): the per-innings LIST
+ * aggregates behind the Ball-Ranges / vs-Opponent which-values leaderboard columns
+ * (metrics.js resolveWindowSetMetric). Each is a `list(DISTINCT …)` over the SAME base
+ * ball CTE `b` (already scope- AND window-narrowed), grouped by the player exactly like
+ * every export aggregate — so adding one is a pure extra aggregate over the unchanged
+ * GROUP BY (no new row, no moved number), emitted ONLY when its view column is requested.
+ *   • phase / over_number / team_ball are TEAM-clock ball columns (identical for both
+ *     disciplines); over_number is display-numbered (+1) here, mirroring fld_over_set.
+ *   • the PLAYER-clock forward ordinal is bat_ball (batting) / bowl_ball (bowling),
+ *     restricted to the discipline's own countable balls (FACED / LEGAL) so a non-faced /
+ *     non-legal ball's 0-ordinal never enters the list.
+ *   • the opponent NAME is the OPPOSITE role: bowler_name (batting) / batter_name (bowling).
+ * The Phase→label mapping stays in the query layer (metrics.js) so this data layer emits
+ * only raw pp/mid/death.
+ */
+function windowListAggregates(discipline) {
+  const pball = discipline === "bowling" ? "bowl_ball" : "bat_ball";
+  const pfilter = discipline === "bowling" ? LEGAL : FACED;
+  const opp = discipline === "bowling" ? "batter_name" : "bowler_name";
+  return {
+    w_phase_list_agg: "list(DISTINCT phase)",
+    w_over_list_agg: "list(DISTINCT over_number + 1)",
+    w_tball_list_agg: "list(DISTINCT team_ball)",
+    w_pball_list_agg: `list(DISTINCT ${pball}) FILTER (WHERE ${pfilter})`,
+    w_opp_list_agg: `list(DISTINCT ${opp})`,
+  };
+}
+
+/** The (output view column, `bat`/`bagg` aggregate alias) pairs for the window list
+ * columns — one shared list drives both reconstructions' OUT wiring. */
+const WINDOW_LIST_OUT = [
+  ["w_phase_list", "w_phase_list_agg"],
+  ["w_over_list", "w_over_list_agg"],
+  ["w_tball_list", "w_tball_list_agg"],
+  ["w_pball_list", "w_pball_list_agg"],
+  ["w_opp_list", "w_opp_list_agg"],
+];
+
 function battingViewSql(files, scopePredicate, windowPredicate, playerPredicate, columns) {
   const want = wantedColumns("batting", columns);
   const has = (c) => want.has(c);
@@ -401,6 +440,11 @@ function battingViewSql(files, scopePredicate, windowPredicate, playerPredicate,
     }
     OUT[`${ph}_dismissals`] = { sql: `CAST(COALESCE(disp.${ph}_dismissals,0) AS DOUBLE)`, dispT20: true };
     OUT[`odi_${ph}_dismissals`] = { sql: odi(`disp.odi_${ph}_dismissals`), dispODI: true };
+  }
+  // Cutover S1: window/opponent which-values LIST columns — a nullable `bat` aggregate
+  // (a zero-ball crease appearance has no `bat` row ⇒ NULL ⇒ formatValue "—").
+  for (const [col, agg] of WINDOW_LIST_OUT) {
+    OUT[col] = { sql: `bat.${agg}`, bat: [agg] };
   }
 
   // ── resolve dependencies ──────────────────────────────────────────────────
@@ -502,7 +546,7 @@ function battingViewSql(files, scopePredicate, windowPredicate, playerPredicate,
       )
     );
   }
-  const batAgg = battingAggregates();
+  const batAgg = { ...battingAggregates(), ...windowListAggregates("batting") };
   const batKeys = Object.keys(batAgg).filter((k) => needBat.has(k));
   const needBatCte = batKeys.length > 0;
   if (needBatCte) {
@@ -660,6 +704,11 @@ function bowlingViewSql(files, scopePredicate, windowPredicate, playerPredicate,
       OUT[`odi_${ph}_${kind}`] = { sql: odi(`bagg.odi_${ph}_${kind}`), bagg: [`odi_${ph}_${kind}`] };
     }
   }
+  // Cutover S1: window/opponent which-values LIST columns — a `bagg` aggregate (bagg is
+  // the bowling row set, so a present bowler always has one; NULL only for an absent join).
+  for (const [col, agg] of WINDOW_LIST_OUT) {
+    OUT[col] = { sql: `bagg.${agg}`, bagg: [agg] };
+  }
 
   const emitted = viewColumnsFor("bowling").filter(has);
   const needBagg = new Set();
@@ -769,7 +818,7 @@ function bowlingViewSql(files, scopePredicate, windowPredicate, playerPredicate,
   // `bagg` is the ROW SET (one row per match/innings/bowler with any ball) and
   // carries the context columns — always emitted, never pruned below its
   // ANY_VALUE context block.
-  const baggAgg = bowlingAggregates();
+  const baggAgg = { ...bowlingAggregates(), ...windowListAggregates("bowling") };
   const baggKeys = Object.keys(baggAgg).filter((k) => needBagg.has(k));
   const baggTail = [
     ...(needHundred ? ["MAX(CASE WHEN balls_per_over=5 THEN 1 ELSE 0 END) is_hundred"] : []),

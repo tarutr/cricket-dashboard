@@ -67,6 +67,9 @@ import {
   // Stage-3 Phase 1.1 (2026-08-25): the Stage / Toss-decision / Result-Condition
   // which-values column keys.
   STAGE_SET_KEY, TOSS_DECISION_SET_KEY, RESULT_CONDITION_SET_KEY,
+  // Cutover S1 (ball-engine-gated, Stage-3 Phase 8): the Ball-Ranges / vs-Opponent
+  // which-values column keys — offered ONLY under ballEngineEnabled() below.
+  WPHASE_SET_KEY, WOVER_SET_KEY, WTBALL_SET_KEY, WPBALL_SET_KEY, VSOPP_SET_KEY,
   // Columns content rework D3 (runs-by-source + wicket-type composers).
   composedRunSourceRows, makeComposedRunSourceKey, parseComposedRunSourceKey,
   makeComposedWicketTypeKey, parseComposedWicketTypeKey,
@@ -115,6 +118,9 @@ import { OPERATORS } from "./advanced.js";
 // as the filters' "+ Add condition" (portal + search + one-open-at-a-time), instead
 // of the old inline panels that reflowed the modal. No query path lives here.
 import { createAddPalette, paletteSkeletonHTML } from "./addPalette.js";
+// Cutover S1: gate the Ball-Ranges / vs-Opponent which-values column offering on the
+// ball engine (their view columns exist only under the reconstruction). Lazy + guarded.
+import { ballEngineEnabled } from "./config.js";
 
 // ── Per-column count/% (+ count/per-match) toggle (columns content rework Wave C) ─
 // Each COUNT key in COLUMN_TOGGLE_PAIRS renders as a SINGLE picker row (leaderboard
@@ -2183,6 +2189,23 @@ export function createColumnsPicker({
       bposInnIdx >= 0
         ? [...basicItems.slice(0, bposInnIdx + 1), ...bposItem, ...scopeSetItems, ...basicItems.slice(bposInnIdx + 1)]
         : [...basicItems, ...bposItem, ...scopeSetItems];
+    // Cutover S1 (ball-engine-gated, Stage-3 Phase 8): the Ball-Ranges / vs-Opponent
+    // which-values columns, offered as their OWN two sections in this discipline's
+    // dropdown — mirroring the filter palette's "Ball Ranges" + "Matchup (Vs)" groups.
+    // Leaderboard-only (!ownDisciplineOnly) + plain ns + engine on: their view columns
+    // exist only under the reconstruction, so flag-off / on the innings parquets they must
+    // not be offerable. The player-clock column reads bat_ball on batting / bowl_ball on
+    // bowling, hence the discipline-specific label.
+    const showWindowSets = isPlainNs && !ownDisciplineOnly && ballEngineEnabled();
+    const ballRangeSetItems = showWindowSets
+      ? [
+          { type: "plain", key: WPHASE_SET_KEY, label: "Phase" },
+          { type: "plain", key: WOVER_SET_KEY, label: "Over" },
+          { type: "plain", key: WTBALL_SET_KEY, label: "Team Ball" },
+          { type: "plain", key: WPBALL_SET_KEY, label: ns === "bowling" ? "Bowler Ball" : "Batter Ball" },
+        ]
+      : [];
+    const opponentSetItems = showWindowSets ? [{ type: "plain", key: VSOPP_SET_KEY, label: "Opponent" }] : [];
     const ownSections = [
       ...section("Basic Stats", basicWithBpos),
       ...section("Detailed Stats", plainItems(ownDetailed)),
@@ -2191,6 +2214,8 @@ export function createColumnsPicker({
       // the matchup Composers section below (no loose flat rows). Plain ns never had a
       // flat Dismissals section here (its Wicket Type composer owns them).
       ...section("Player Profile", profileItems),
+      ...section("Ball Ranges", ballRangeSetItems),
+      ...section("Matchup (Vs)", opponentSetItems),
       ...(composerItems.length ? [{ name: "Composers", items: composerItems }] : []),
       ...(matchupComposerItems.length ? [{ name: "Composers", items: matchupComposerItems }] : []),
     ];

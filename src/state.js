@@ -82,6 +82,16 @@ import {
   // position, the fld_pos singleton's column).
   matchOutcomeSetColumnKeys,
   plainBoardFieldingSetColumnKeys,
+  // Cutover S1 (ball-engine-gated, Stage-3 Phase 8): the Ball-Ranges / vs-Opponent
+  // which-values column keys — folded into eligibleColumnKeys ONLY under the engine, and
+  // auto-added by activeLeaderboardFilterSources when their delivery-window / opponent
+  // filter is active.
+  windowSetColumnKeys,
+  WPHASE_SET_KEY,
+  WOVER_SET_KEY,
+  WTBALL_SET_KEY,
+  WPBALL_SET_KEY,
+  VSOPP_SET_KEY,
   INNINGS_NUMBER_SET_KEY,
   TEAM_SET_KEY,
   OPPOSITION_SET_KEY,
@@ -123,6 +133,10 @@ import {
 } from "./metrics.js";
 import { isConditionComplete } from "./advanced.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
+// Cutover S1: the ball-engine flag gates the Ball-Ranges / vs-Opponent which-values
+// columns' eligibility (their view columns exist only under the reconstruction). Lazy +
+// guarded for non-browser contexts (config.js), so importing it here never throws.
+import { ballEngineEnabled } from "./config.js";
 
 /**
  * The three format buckets surfaced in the UI, and the match_type values each
@@ -1496,6 +1510,18 @@ export function eligibleColumnKeys(discipline, formats) {
   for (const key of plainBoardFieldingSetColumnKeys(discipline)) {
     keys.add(key);
   }
+  // Cutover S1 (ball-engine-gated, Stage-3 Phase 8): the Ball-Ranges / vs-Opponent
+  // which-values columns (wphase_set / wover_set / wtball_set / wpball_set / vsopp_set,
+  // both plain disciplines) — eligible ONLY while the ball engine is on, because their
+  // view columns exist only in the reconstruction. This one gate is load-bearing: it
+  // makes isLeaderboardColumnAddable reject them flag-off (so activeLeaderboardFilterSources'
+  // push() re-validation never auto-adds them, and the column prune drops any stale key),
+  // and it makes them addable/persistent flag-on. Byte-identical when off (the fold is skipped).
+  if (ballEngineEnabled()) {
+    for (const key of windowSetColumnKeys(discipline)) {
+      keys.add(key);
+    }
+  }
   // The seven standalone value×stat COMPOSERS — Team + Opposition + Stage (2026-08-14),
   // Event + Venue (Step 4, 2026-08-14), City + Season (2026-08-16): the picked composed
   // column keys (team__ / opp__ / stage__ / event__ / venue__ / city__ / season__
@@ -1896,6 +1922,26 @@ export function activeLeaderboardFilterSources(state) {
   // with separate column sets, and a shared tag would let one board's prune memory speak
   // for the other.
   if (fieldingPositionActive(state)) push("filter:fld_pos", ["fld_out_position_set"]);
+
+  // Cutover S1 (ball-engine-gated, Stage-3 Phase 8): the four delivery-window pieces
+  // (Ball Ranges — Phase / Over range / Team ball range / Batter-or-Bowler ball range)
+  // and the vs-Opponent-Player filter each auto-add their which-values column — THE RULE,
+  // extended to the ball-only filters that previously had no column (audit3 §(ii),
+  // gate-A DEFERRED). "Active" mirrors deliveryWindow.js's own per-piece presence
+  // (deliveryWindowTokens: phase = non-empty array; overs/balls/player = a truthy piece
+  // object) and opponentPlayerActive, so the column appears exactly when the predicate
+  // narrows. NO engine check here: push() re-validates via isLeaderboardColumnAddable →
+  // eligibleColumnKeys, whose window fold is itself engine-gated — so flag-off these drop
+  // silently and nothing is auto-added. Tags start with "filter:" so the remove-on-remove
+  // tidy (reconcile Q1a) drops the column when its filter clears.
+  const w = state.deliveryWindow;
+  if (w) {
+    if (Array.isArray(w.phase) && w.phase.length > 0) push("filter:win_phase", [WPHASE_SET_KEY]);
+    if (w.overs) push("filter:win_overs", [WOVER_SET_KEY]);
+    if (w.balls) push("filter:win_balls", [WTBALL_SET_KEY]);
+    if (w.player) push("filter:win_player", [WPBALL_SET_KEY]);
+  }
+  if (opponentPlayerActive(state)) push("filter:vs_opp", [VSOPP_SET_KEY]);
 
   // Player-attribute filters (men-only by DATA — profile is empty for women, so this
   // is data-driven, not gender-hardcoded). One column per active profile field.

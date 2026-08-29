@@ -3114,6 +3114,13 @@ export function getMetric(key, discipline) {
       // null for any other key. All three need the mctx join present (table.js's
       // wantsMctxColumn gate), same join the four above already light.
       resolveMatchOutcomeSetMetric(key, discipline) ??
+      // Cutover S1 (ball-engine-gated, Stage-3 Phase 8): the Ball-Ranges / vs-Opponent
+      // which-values columns (wphase_set / wover_set / wtball_set / wpball_set / vsopp_set,
+      // both plain disciplines) — one list column per delivery-window piece + the opponent
+      // filter, reading the ball-reconstructed views' per-innings list columns. null for
+      // any other key. The ENGINE gate is at the offer/addability sites (state.js /
+      // columnsPicker), not here, so this resolver is engine-independent like every sibling.
+      resolveWindowSetMetric(key, discipline) ??
       // Wave D — D1: player-profile attribute columns (attr_<field>), virtual text
       // metrics projected out of the profile_cte join (buildQuery). null for any
       // non-attr key / wrong discipline, so every other caller is unchanged.
@@ -4341,6 +4348,103 @@ export function resolveMatchOutcomeSetMetric(key, discipline) {
  * auto-added column survives a re-render. */
 export function matchOutcomeSetColumnKeys(discipline) {
   return discipline === "batting" || discipline === "bowling" ? MATCH_OUTCOME_SET_KEYS.slice() : [];
+}
+
+// ── Ball-Ranges / vs-Opponent-Player "which values" columns (Stage-3 Phase 8,
+//    ball-engine-gated — cutover S1) ──────────────────────────────────────────
+// The batting/bowling analogue of the fielding board's fld_phase_set / fld_over_set
+// (FIELDING_SET_SPECS below): one list(DISTINCT …) which-values column per
+// DELIVERY-WINDOW piece (Phase / Over range / Team ball range / Batter-or-Bowler ball
+// range) and per vs-Opponent-Player filter, auto-appearing with its filter (state.js
+// activeLeaderboardFilterSources) exactly like team_set / inn_set. BALL-ENGINE ONLY —
+// they read per-DELIVERY fields (phase / over_number / team_ball / bat_ball|bowl_ball /
+// the opponent's name) that survive only on the ball-RECONSTRUCTED batting/bowling views
+// (src/ballEngine.js emits a per-innings LIST column for each, gated so the reconstruction
+// SQL is byte-identical when the column is absent). The innings parquets have no such
+// column, so offering/addability is gated on ballEngineEnabled() by the callers (state.js
+// eligibleColumnKeys / columnsPicker.js); the metric itself always resolves (getMetric /
+// resolveColumnMetric stay engine-independent), and buildQuery projects it through the
+// ordinary inningsMetrics loop ONLY when it is a visible column (additive — Rule 1).
+//
+// SHAPE: the reconstruction column is a per-innings VARCHAR[]/INT[] (the distinct in-window
+// values in THAT innings); the player-level aggregate FLATTENS + de-duplicates + sorts
+// across the player's innings — the SAME list-of-lists idiom Result Condition
+// (resultConditionFacetsSql) uses. No sortExpression (a "list" column, like the fielding
+// *_set family); kind "attribute" so it never drives the auto-sort. Numeric display
+// adjustments (+1 for over_number) are baked into the reconstruction list (mirroring
+// fld_over_set's "(over_number + 1)"); Phase labels map from the raw pp/mid/death via
+// list_transform over FIELDING_PHASE_OPTIONS — the SAME vocabulary fld_phase_set and the
+// Phase FILTER use. The player-clock column (WPBALL) reads bat_ball on the batting view
+// and bowl_ball on the bowling view (the reconstruction emits the discipline-correct
+// forward ordinal into the same w_pball_list column); its label differs by discipline.
+export const WPHASE_SET_KEY = "wphase_set";
+export const WOVER_SET_KEY = "wover_set";
+export const WTBALL_SET_KEY = "wtball_set";
+export const WPBALL_SET_KEY = "wpball_set";
+export const VSOPP_SET_KEY = "vsopp_set";
+export const WINDOW_SET_KEYS = [WPHASE_SET_KEY, WOVER_SET_KEY, WTBALL_SET_KEY, WPBALL_SET_KEY, VSOPP_SET_KEY];
+
+/** Map each raw phase element (pp/mid/death) of a list to its label, built from the SAME
+ * FIELDING_PHASE_OPTIONS the fielding Phase list column + the Phase FILTER use. Read
+ * lazily at call time, like derivedSetExpr's phase branch (state.js↔metrics.js cycle). */
+function windowPhaseListTransform(listExpr) {
+  const sq = (s) => String(s).replace(/'/g, "''");
+  const whens = FIELDING_PHASE_OPTIONS.map((o) => `WHEN x = '${sq(o.value)}' THEN '${sq(o.label)}'`).join(" ");
+  return `list_transform(${listExpr}, x -> CASE ${whens} ELSE x END)`;
+}
+
+// Each spec: the reconstruction VIEW column it reads (present on BOTH batting and bowling
+// reconstructions) + its label(s). `label`/`short` may be a {batting,bowling} pair for the
+// discipline-specific player-clock column; `phase` true adds the label list_transform.
+const WINDOW_SET_SPECS = [
+  { key: WPHASE_SET_KEY, col: "w_phase_list", label: "Phase", short: "Phase", phase: true,
+    title: "Phases present in the filtered rows" },
+  { key: WOVER_SET_KEY, col: "w_over_list", label: "Over", short: "Over",
+    title: "Overs present in the filtered rows" },
+  { key: WTBALL_SET_KEY, col: "w_tball_list", label: "Team Ball", short: "Team Ball",
+    title: "Team-innings ball numbers present in the filtered rows" },
+  { key: WPBALL_SET_KEY, col: "w_pball_list",
+    label: { batting: "Batter Ball", bowling: "Bowler Ball" },
+    short: { batting: "Batter Ball", bowling: "Bowler Ball" },
+    title: "The player's own faced/bowled ball numbers present in the filtered rows" },
+  { key: VSOPP_SET_KEY, col: "w_opp_list", label: "Opponent", short: "Opp.",
+    title: "Opponent players faced in the filtered rows" },
+];
+const _WINDOW_SET_BY_KEY = new Map(WINDOW_SET_SPECS.map((s) => [s.key, s]));
+
+/** Resolve a Ball-Ranges / vs-Opponent which-values key to its VIRTUAL list metric (both
+ * plain disciplines), or null. Chained into getMetric. Always resolves (the ENGINE gate
+ * lives at the offer/addability sites, not here) — so getMetric stays engine-independent.
+ * null for any other key / a matchup discipline, so every other caller is unchanged. */
+export function resolveWindowSetMetric(key, discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return null;
+  const spec = _WINDOW_SET_BY_KEY.get(key);
+  if (!spec) return null;
+  const flat = `list_sort(list_distinct(flatten(list(${spec.col}))))`;
+  const label = typeof spec.label === "string" ? spec.label : spec.label[discipline];
+  const short = typeof spec.short === "string" ? spec.short : spec.short[discipline];
+  return {
+    key: spec.key,
+    label,
+    shortLabel: short,
+    discipline,
+    source: "innings",
+    sqlExpression: spec.phase ? windowPhaseListTransform(flat) : flat,
+    higherIsBetter: false,
+    format: "list",
+    kind: "attribute",
+    zeroIsData: false,
+    isPhaseMetric: null,
+    columnTitle: spec.title,
+  };
+}
+
+/** Every Ball-Ranges / vs-Opponent which-values key offerable for `discipline` (both
+ * plain disciplines) — folded into eligibleColumnKeys ONLY under ballEngineEnabled()
+ * (state.js), so a chosen / auto-added column survives a re-render while the engine is on
+ * and is pruned when it is off (its view column exists only under the reconstruction). */
+export function windowSetColumnKeys(discipline) {
+  return discipline === "batting" || discipline === "bowling" ? WINDOW_SET_KEYS.slice() : [];
 }
 
 // ── Composer FAMILY FACTORY (code cleanup item B, 2026-08-24) ──────────────────

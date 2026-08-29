@@ -111,6 +111,19 @@ export const BATTING_VIEW_COLUMNS = [
   "team_rel_dot_pct",
   "team_rel_bpb",
   "team_rel_nbsr",
+  // Cutover S1 (ball-engine-gated which-values, Stage-3 Phase 8) — per-innings LIST
+  // columns feeding the Ball-Ranges / vs-Opponent which-values leaderboard columns
+  // (metrics.js resolveWindowSetMetric). NOT in the export parquet — reconstruction-only,
+  // appended AFTER the export columns so *_ALWAYS_COLUMNS (slice 0–12) is untouched and
+  // they are emitted ONLY when the query names them (neededViewColumns token-scan), so
+  // an unrelated query's reconstruction is byte-identical. Player-LOCAL (each reads only
+  // this batter's own striker deliveries), so deliberately NOT added to the whole-innings
+  // list. w_pball_list carries bat_ball here (bowl_ball on the bowling view).
+  "w_phase_list",
+  "w_over_list",
+  "w_tball_list",
+  "w_pball_list",
+  "w_opp_list",
 ];
 
 /** bowling_innings.parquet's column list, in export order. */
@@ -186,6 +199,15 @@ export const BOWLING_VIEW_COLUMNS = [
   "longest_spell_balls",
   "best_spell_wkts",
   "best_spell_runs",
+  // Cutover S1 (ball-engine-gated which-values, Stage-3 Phase 8) — the bowling mirror of
+  // the batting per-innings LIST columns above (reconstruction-only, appended after the
+  // export columns; ALWAYS slice untouched; emitted only when named). w_pball_list carries
+  // bowl_ball here; w_opp_list carries the BATTERS this bowler faced.
+  "w_phase_list",
+  "w_over_list",
+  "w_tball_list",
+  "w_pball_list",
+  "w_opp_list",
 ];
 
 /** Keys + denormalised scope/context — ALWAYS emitted, whatever the query asks
