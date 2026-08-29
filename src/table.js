@@ -48,6 +48,10 @@ import {
   // WHERE (used by buildQuery's OR branch and the scope-bearing CTEs it builds under OR).
   coreScopeWhere,
   groupOrCompile,
+  // Way A (decision 83) — the MATCHUP sibling of groupOrCompile: buildMatchupQuery's
+  // multi-step aggregate needs the scope existence tests as step-1 `COUNT(*) FILTER(...)`
+  // columns (surfaced to the final WHERE), not a plain HAVING (design §5.2).
+  matchupGroupOrCompile,
   buildMatchContextClauses,
   matchContextJoinSql,
   matchContextSubselectSql,
@@ -580,22 +584,34 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // so pins keep it automatically. With no pins this is byte-identical to the
   // former `whereClauses.join(" AND ")`.
   const pins = (state.pinnedPlayers || []).filter((p) => p && p.id);
-  // Chunk 5 Phase 2 Wave A/B — byte-identity guard. When BOTH lanes are "Match all"
-  // (the default), run today's EXACT whereWithPinExemption line → byte-identical by
-  // construction. A scope-lane "Match any" (Wave A) or a player-lane "Match any"
-  // (Wave B) takes the whereWithLanes branch: scope-OR builds the scope disjunction;
-  // player-OR DROPS the profile semi-join from the WHERE (it is re-emitted as a step-3
-  // disjunct below — WHERE→HAVING lowering). With both AND the branch is unreachable.
-  const filterMatch = state.filterMatch || { player: "AND", scope: "AND" };
-  const whereSql =
-    filterMatch.scope === "AND" && filterMatch.player === "AND"
-      ? whereWithPinExemption(whereClauses, idCol, pins)
-      : whereWithLanes(whereClauses, {
-          idColumn: idCol,
-          pins,
-          scopeOp: filterMatch.scope,
-          playerOp: filterMatch.player,
-        });
+  // WAY A (decision 83) — the ONE group operator over all Player + Scope conditions.
+  // groupOp === "AND" (the default) runs today's EXACT whereWithPinExemption line →
+  // byte-identical by construction (the two matchup anchors unmoved). groupOp === "OR"
+  // takes the additive Way-A OR branch: the step-1 `agg` WHERE keeps ONLY the always-AND
+  // clauses (core scope + name search + pin-wrap, via matchupGroupOrCompile → coreScopeWhere),
+  // and every group condition (scope which-values / profile) LEAVES the WHERE. Because the
+  // aggregate is a multi-step CTE, a scope condition CANNOT drop into a HAVING (design §5.2):
+  // it becomes a `COUNT(*) FILTER (WHERE P) >= 1` boolean COLUMN in step-1 `agg` (appended
+  // just below), surfaced through `windowed` to the step-3 final WHERE. The matchup bucket
+  // stays a per-aggregate FILTER + the always-AND inningsGate (Fork 2), so the numbers are
+  // over core ∩ bucket — the direct mirror of buildQuery's numbers widening to core scope.
+  // (whereWithLanes' OLD per-lane window-union OR is retired here: the only two reachable
+  // states are group=AND → whereWithPinExemption and group=OR → the Way-A existence model.)
+  const filterMatch = state.filterMatch || { player: "AND", scope: "AND", group: "AND" };
+  const groupOp = filterGroupOp(filterMatch);
+  const orCompiled = groupOp === "OR" ? matchupGroupOrCompile(whereClauses, { idColumn: idCol, pins }) : null;
+  const whereSql = orCompiled ? orCompiled.whereSql : whereWithPinExemption(whereClauses, idCol, pins);
+  // Step-1 existence columns (OR only): one `COUNT(*) FILTER (WHERE P) >= 1 AS __exist_N` per
+  // category-"scope" clause, appended to the `agg` SELECT (built above) and referenced by name
+  // in the step-3 disjunction below. The FILTER runs over the core-scope `agg` scan (whereSql),
+  // so the existence universe is the CORE scope — identical to buildQuery's existence disjuncts.
+  // Gated OR-only ⇒ the AND `agg` SELECT is byte-identical (no extra columns).
+  const existenceAliases = orCompiled ? orCompiled.existenceAggExprs.map((_, i) => `__exist_${i}`) : [];
+  if (orCompiled) {
+    orCompiled.existenceAggExprs.forEach((expr, i) => {
+      aggSelectParts.push(`${expr} AS ${existenceAliases[i]}`);
+    });
+  }
 
   const aggSql = [
     `SELECT ${aggSelectParts.join(", ")}`,
@@ -612,6 +628,9 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     if (m.sortExpression) passThroughCols.push(`${m.key}__sort`);
   }
   for (const { alias } of extraAggColumns) passThroughCols.push(alias);
+  // Way A OR: surface the step-1 existence booleans (__exist_N) to `windowed` so the
+  // step-3 final WHERE can reference them. [] under AND ⇒ byte-identical pass-through.
+  for (const a of existenceAliases) passThroughCols.push(a);
   // Window every coverage/composition partial into its cross-name-variant total
   // for the id (SUM is additive — re-summing the partials reconstructs the
   // id-only totals). The composition partials join the same PARTITION BY id.
@@ -664,25 +683,36 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     }
     return condAliasMap.get(cond);
   });
-  // Chunk 5 Phase 2 Wave B — player-lane "Match any". Matchup's two player-lane
-  // members are the profile semi-join (lowered from the step-1 WHERE above; suppressed
-  // there by whereWithLanes' playerOp) and the numeric stat block (`advWhere`); there
-  // is no PotM(Y/N) term in matchup mode. Under player-OR they OR together. The
-  // semi-join runs over `windowed`, where the id column is projected as `id`, so it
-  // references `id` (a legal post-aggregation membership test, all-or-nothing per
-  // player). Each block is a disjunct ONLY when active, so a single active block reads
-  // exactly like the AND path; the bucket-existence gate (`>= 1`) still ALWAYS applies
-  // (it is query-grain, not a player-lane filter). player-AND keeps today's EXACT line
-  // → byte-identical.
-  if (filterMatch.player === "OR") {
-    const disjuncts = [profileSemiJoinSql(state, "id"), advWhere].filter(Boolean).map((s) => `(${s})`);
-    // Wrap the WHOLE disjunction in an outer paren before it is AND-ed with the
-    // bucket-existence gate (`inningsGateAlias >= 1`): SQL binds AND tighter than
-    // OR, so without this the gate would attach to only the FIRST disjunct
-    // (`(gate AND profile) OR numeric`) — wrong. With the paren it reads
-    // `gate AND (profile OR numeric)`, matching the player-lane "Match any" intent.
-    if (disjuncts.length) finalWhereParts.push(`(${disjuncts.join(" OR ")})`);
+  // WAY A (decision 83) — the single group "Match any" (OR). Every group condition becomes
+  // a post-aggregation disjunct OR'd together: the scope which-values as step-1 existence
+  // booleans (existenceAliases, columns of `windowed`), the profile semi-join (matchup's only
+  // player-lane member — retargeted to the step-3 projected `id`, since `batter_id`/`bowler_id`
+  // are not visible in this subquery), and the numeric stat block (`advWhere`, AS-IS — it keeps
+  // its own internal +Add-group / per-group AND-OR structure, owner ruling Q1). There is no
+  // PotM(Y/N) term in matchup mode. Each block is a disjunct ONLY when active (null blocks
+  // dropped). The whole disjunction is wrapped in an outer paren before it is AND-ed with the
+  // bucket-existence gate (`inningsGateAlias >= 1`): SQL binds AND tighter than OR, so the paren
+  // keeps the gate from attaching to only the first disjunct. The gate STILL ALWAYS applies
+  // (Fork 2 — the matchup bucket is not an OR participant, so a row must still have >= 1
+  // vs-bucket innings). Pin-exempt exactly like the AND path.
+  if (groupOp === "OR") {
+    const disjuncts = [...existenceAliases, profileSemiJoinSql(state, "id"), advWhere]
+      .filter(Boolean)
+      .map((s) => `(${s})`);
+    if (disjuncts.length > 0) {
+      finalWhereParts.push(`(${disjuncts.join(" OR ")})`);
+    } else if (hasActiveProfileFilter(state.profile) || activeGroups(state.advanced).length > 0) {
+      // Fork 4 (decision 83): an "Any" group built ONLY of conditions that CANNOT match (e.g.
+      // a profile filter on the Women view, where profileSemiJoinSql no-ops → the profile
+      // disjunct vanishes) returns NOTHING — AND `1 = 0` into the always-AND inningsGate.
+      // Distinguished from "no group condition at all" (→ only the inningsGate, the matchup
+      // baseline) by these state-level active checks. Still pin-exempt.
+      finalWhereParts.push("1 = 0");
+    }
+    // else: no active group condition → only the inningsGate applies (baseline vs-bucket rows).
   } else if (advWhere) {
+    // group=AND (default): today's EXACT step-3 — the numeric block AND'd with the gate,
+    // pin-exempt. Byte-identical by construction (profile stays a step-1 WHERE semi-join).
     finalWhereParts.push(advWhere);
   }
   // Pinned players (Wave 4b, decision 47a): exempt from the step-3 gate too, so a

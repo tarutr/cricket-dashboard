@@ -903,6 +903,37 @@ export function groupOrCompile(clauses, { idColumn, pins } = {}) {
   return { whereSql, havingDisjuncts };
 }
 
+/** Way-A single-group "Match any" (OR) for buildMatchupQuery's MULTI-STEP aggregate
+ * (decision 83; design §5.2). buildQuery is a single GROUP BY, so groupOrCompile's
+ * existence disjuncts drop straight into a HAVING. buildMatchupQuery aggregates in
+ * STAGES (agg → windowed → final), so a scope existence test CANNOT sit in a HAVING —
+ * it must be a `COUNT(*) FILTER (WHERE P) >= 1` BOOLEAN COLUMN computed inside step-1
+ * `agg` (at the GROUP BY id,name grain — the SAME row grain buildQuery's HAVING runs at)
+ * and surfaced through `windowed` to the final WHERE. This returns the pieces for that
+ * assembly, reusing the SAME core-scope WHERE (coreScopeWhere) and the EXACT clause `.sql`
+ * groupOrCompile/buildQuery use, so matchup OR can never drift from plain OR:
+ *   • whereSql          — coreScopeWhere(...) for step-1 `agg` (core + always-AND + pin-wrap).
+ *   • existenceAggExprs  — one `COUNT(*) FILTER (WHERE P) >= 1` per category-"scope" clause,
+ *       to be aliased as a step-1 column (`<expr> AS __exist_N`) and referenced in step 3.
+ *       IDENTICAL form to groupOrCompile's scope disjuncts: the agg scan is core-scope here
+ *       too (whereSql), so the existence universe is the CORE SCOPE — the faithful mirror of
+ *       buildQuery. The matchup BUCKET is NOT intersected in (it stays a per-aggregate FILTER
+ *       + the always-AND inningsGate, Fork 2); the bucket-vs-existence interaction is the
+ *       mechanical mirror of buildQuery, not a fresh product choice.
+ * The category-"player" (profile) disjunct and the numeric block are deliberately NOT
+ * returned: the caller re-emits profile via profileSemiJoinSql(state,"id") — retargeted to
+ * step-3's PROJECTED `id` column (the pre-Way-A player-OR path already did exactly this,
+ * because `batter_id`/`bowler_id` are not visible in the step-3 subquery) — and advWhere
+ * as-is, OR-joining them with these existence columns in the final WHERE. */
+export function matchupGroupOrCompile(clauses, { idColumn, pins } = {}) {
+  const tagged = asTaggedClauses(clauses);
+  const whereSql = coreScopeWhere(tagged, idColumn, pins);
+  const existenceAggExprs = tagged
+    .filter((c) => c.category === "scope")
+    .map((c) => `COUNT(*) FILTER (WHERE ${c.sql}) >= 1`);
+  return { whereSql, existenceAggExprs };
+}
+
 /** Wrap a post-aggregation gate (buildQuery's HAVING, or buildMatchupQuery's
  * step-3 existence/stat-condition gate) so pinned players are exempt from it:
  * `(gateSql) OR idColumn IN (pins)`. Returns `gateSql` unchanged when there are
