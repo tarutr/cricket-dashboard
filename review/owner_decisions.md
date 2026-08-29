@@ -1321,3 +1321,25 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       owner: the 8px icon is a small MOBILE tap target (the old arrow's 40px mobile expansion was removed) — a
       product call the owner has not yet made; the Columns-panel 🖍️ remains the touch path.
 
+83. **WAY-A FILTERS — the AND/OR group engine rulings (owner, 2026-08-27; Task-1 forks of the Way-A filters plan;
+    SUPERSEDES the naive Phase-5 filter-layout list).** The owner chose **Way A** for the filters rework. Mental
+    model (owner-validated): Player = who you are · Scope = which matches · Matchup = who you faced (decision 75).
+    The point of the filters is the **AND/OR division** (Add Group). Multiple groups (Add Group, 76.6) stays PARKED
+    for launch → **ONE group + one operator** for launch, built so a 2nd group is a natural add later. Task-1
+    (engine design) forks, all ruled:
+    - **(Fork 1) ADOPTED — existence-qualifier OR that WIDENS.** Under "Any" (OR), each condition means "has ≥1
+      such innings" (an existence-qualifier), and the displayed numbers **widen to the full/core scope**
+      (Men / T20 / International / dates) — they are NOT narrowed to only the matching innings. As a consequence
+      (Fork 3), PotM / fielding / result column values also widen under OR. The **AND case stays BYTE-IDENTICAL to
+      today**.
+    - **(Fork 2) RULED — what lives inside vs outside the group.** Delivery-window and matchup conditions live
+      **OUTSIDE** the group, in their own always-AND rows/panel. The group holds only the OR-able conditions:
+      scope which-values, profile, PotM (Y/N), and numeric stat conditions.
+    - **(Fork 4) RULED — an all-ineffective "Any" returns NOTHING.** An "Any" group built only of conditions that
+      cannot match (e.g. profile-only conditions on the Women view) returns no rows.
+    - Build model (Task 2, awaiting owner "go"): OR logic gated behind `groupOp === "OR"` so the AND path is
+      untouched/byte-identical; OR = existence disjuncts in HAVING, WHERE keeps only core scope + always-AND
+      (delivery-window/matchup/search) + pin-wrap; shared filters.js disjunction helper reused by both buildQuery
+      and buildMatchupQuery. Task 3: Matchup becomes its own (third) dropdown (decision 75), always ANDs
+      (decision 47a). Anchors must hold; independent DuckDB verifies the OR case.
+
