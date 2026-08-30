@@ -1343,3 +1343,24 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       and buildMatchupQuery. Task 3: Matchup becomes its own (third) dropdown (decision 75), always ANDs
       (decision 47a). Anchors must hold; independent DuckDB verifies the OR case.
 
+
+## 2026-08-30 — decision 84: cutover program + Task-3 rulings (owner)
+84. **CUTOVER (Phase 7/8) + TASK-3 rulings.** Plan = `.orchestrator/cutover-plan.md`; resume = `.orchestrator/HANDOFF-cutover-step2.md`.
+    - **Cutover = a SINGLE staged cut, data-first:** merge ball-layer→main with the engine default OFF (new UI on old
+      data, backward-compatible) → owner triggers the "Data pipeline" (manual dispatch) → verify new parquets on R2 →
+      flip `ballEngineEnabled()` in config.js ON (1-line) + deploy → verify anchors on prod → retire the unused old
+      parquets. Rollback = revert the 1-line flip. STEP 1 (finish the branch) is complete; STEP 2 (batched flag-on
+      verification pass) is next.
+    - **Task 3 — Matchup is its own THIRD dropdown** (Player | Scope | Matchup): each opponent axis is a FILTER ROW
+      with an inline value control, exactly like Player/Scope condition rows (owner's framing — this dissolved the
+      "floating vs inline panel" question). Matchup rows ALWAYS-AND and sit OUTSIDE the group card; the Match all/any
+      operator never touches them (47a / 83 Fork 2). vs-options removed from the Scope dropdown.
+    - **Toolbar Vs** (the quick "vs Everyone/Pace/Spin" control) STAYS, as a quick bowling-style shortcut: it edits
+      ONLY the style axis and PRESERVES any other matchup axes added in the dropdown.
+    - **vs PotMs** is selectable STANDALONE ("vs any Player-of-the-Match opponent"). `vs_potm` = "the OPPONENT faced
+      (bowler for batting / batter for bowling) won PotM that match" — mirrors export_parquet.py. It is a matchup-MODE
+      axis (gate-A EXEMPT, no per-row column, like vs Bowling Style / vs Batting Hand).
+    - **Cut scope:** the bowling-style display transform is IN the cut (title-case the values for display, raw values
+      kept); the GRAPH overhaul is a SEPARATE track (deferred, not gating the flip).
+    - **OOM** characterised = NOT a production risk (only a bare `SELECT *` on the matchup views OOMs; every app matchup
+      query names columns + prunes). The realistic max-scope×max-columns corner is the STEP-2 stress test.
