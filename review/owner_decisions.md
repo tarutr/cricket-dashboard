@@ -310,15 +310,12 @@ change requires a new owner decision recorded here. Dates are decision dates.
     dismissal attribution (bowler-credited kinds only) and the
     "Spin (unspecified)" bare-slow label are both approved against the live UI.
     Owner also flagged: the search box needing "Show results" reads as
-    confusing — batched to the design/polish pass. Follow-up owner request:
-    matchup mode gets a RESTRICTED column picker (choose among matchup-view
-    metrics only; Coverage column always present), plus the free extra
-    vs-style stats computable from existing matchup columns. Dismissal-KIND
+    confusing — batched to the design/polish pass. Dismissal-KIND
     and PHASE breakdowns per style are acknowledged as possible but require a
     pipeline/data-layer extension (new columns in the matchup parquets) —
     offered to the owner as an optional future gated piece, not yet scheduled.
 
-36. **Matchup data extension + restricted picker — BUILT, DEPLOYED, VERIFIED
+36. **Matchup data extension — BUILT, DEPLOYED, VERIFIED
     (2026-07-09, owner: "Add everything you can… build an alternate script to
     test first").** Pipeline: matchup_batting +18 columns (six dis_* dismissal
     kinds partitioning `dismissals`; T20 + ODI phase runs/balls per style),
@@ -330,11 +327,7 @@ change requires a new owner decision recorded here. Dates are decision dates.
     old columns byte-identical), then six permanent reconciliation gates were
     added to run_gates. The export change was cherry-picked to main (additive
     data, decision-22 precedent — live site unaffected) and a green pipeline
-    run published the extended parquets to R2. Frontend: matchup mode's fixed
-    columns replaced by a RESTRICTED PICKER (matchup-only vocabulary, Basic/
-    Dismissals/Phase sections, phase gated by format, Coverage always fixed)
-    plus free stats (4s/6s/BPB/BPD vs style; boundary counts + wickets-per-
-    innings vs hand). Verified exact vs R2 in-browser: SA Yadav vs Spin —
+    run published the extended parquets to R2. Verified exact vs R2 in-browser: SA Yadav vs Spin —
     caught 4 + stumped 3 = 7 dismissals, death SR 200.00, PP SR 143.64;
     JJ Bumrah vs right-handers — caught 13, bowled 13, PP econ 6.18, PP
     wkts 8. Branch `d4-r3-matchups` (frontend) + main (pipeline).
