@@ -1275,13 +1275,18 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
 81. **MATCHUP AXES COMBINABILITY + BATTING POSITION — RULINGS (owner, 2026-08-27):**
     - **(A) Combinability — matchup opponent filters are always ALL (AND), never ANY.** Different opponent
       DIMENSIONS combine; SAME-dimension values are mutually exclusive. Confirmed model:
+      _(REFINED PER-AXIS SINCE: the "never ANY / same-dimension mutually exclusive" blanket now permits
+      OR-within-ONE-dimension multi-select on the bowling-style + batting-hand axes (decision 86, built) and on
+      the opponent-player axis (decision 88); the always-AND ACROSS different axes still holds.)_
       · vs bowling style (batting board) — one value; combines with vs PotMs + scope; not Spin AND Pace.
       · vs batting hand (bowling board) — one value; combines with vs PotMs + scope.
       · vs PotMs (yes) — combines with style / hand / opponent-position + scope.
       · vs opponent batting position (see B) — one range; combines with vs hand + vs PotMs + scope.
       · vs a specific opponent player — combines with SCOPE only; naming a player fixes that player's
         attributes, so it is effectively exclusive with the attribute axes; lives in the Matchup lane (migrate
-        vs_opp out of the Scope palette when wired).
+        vs_opp out of the Scope palette when wired). **SUPERSEDED re: cardinality by decision 88 (owner
+        2026-09-01): multi-select OR/union ("vs Kohli OR Root") is now allowed on this axis; the SCOPE-only /
+        attribute-exclusive combination rule above is UNCHANGED — only the "one value" constraint is lifted.**
       Engine (for the build, not itself a ruling): buildMatchupQuery is single-bucket today (state.matchupVs a
       single {dim,value}); combinable ⇒ a composite state + AND-ed bucket clauses, ADDITIVE / byte-identical at
       zero-or-one active axis; anchors sacred; full numbers ritual + independent DuckDB for combined cases.
@@ -1381,6 +1386,20 @@ SA Yadav 60·1,544·29.13·150.34; vs Spin 38/454/140.99; Bumrah vs RHB pos1-2 2
 87. **ALL FILTERS PER-DISCIPLINE (commit 280ed2e).** Batting, bowling and fielding each remember their **own**
     filter set; nothing carries across a discipline switch. Top-level **gender / format / date stay SHARED**, and
     **toolbar pins (Name:X rows) stay shared**. Extends decision 54 (which had made only a subset per-discipline)
-    toward all filters. Remaining exceptions still QUEUED (Wave 1, not yet built): the **batting-hand** matchup axis
-    (decision 54 had ruled it shared — Wave 1 supersedes that) and the **Match-all/Match-any** operator. State / UI
-    only; **query builders untouched**.
+    toward all filters. Remaining exceptions finished in **Wave 1 (BUILT, commit 27857d6)**: the **batting-hand**
+    matchup axis (decision 54 had ruled it shared — Wave 1 superseded decision 54's persistence clause) and the
+    **Match-all/Match-any** operator. State / UI only; **query builders untouched**.
+
+
+## 2026-09-01 — decision 88: opponent-player matchup axis = multi-select (owner)
+88. **OPPONENT-PLAYER MATCHUP AXIS = MULTI-SELECT OR/UNION (owner 2026-09-01; SUPERSEDES decision 81(A)'s
+    "one value / never ANY" for THIS axis; built in Wave 2).** The "vs a specific opponent player" axis now accepts
+    MULTIPLE opponents combined with OR/union — "vs Kohli OR Root" = the balls the subject faced against Kohli OR
+    Root. This mirrors decision 86's OR-within-ONE-dimension treatment already built for the bowling-style +
+    batting-hand axes; AND across opponents is meaningless (a ball has one bowler/batter), so OR is the only
+    sensible multi-value operation. UNCHANGED from 81(A): opponent-player still **combines with SCOPE only** and
+    stays effectively **exclusive with the attribute axes**; a SINGLE opponent stays **byte-identical**. Only the
+    "one value / never ANY" constraint is lifted for this axis. Build (Wave 2): `state.opponentPlayer` → array;
+    single-opponent path byte-identical; multi = OR disjunction in `opponentPlayerPredicate`; the `db.js`
+    query-cache key incorporates ALL selected ids; independent DuckDB verifies the OR case. The vs_opp → Matchup-lane
+    migration (81(A)) is SEPARATE (cutover / decision-84 Task-3), NOT part of this.
