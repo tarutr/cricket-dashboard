@@ -1403,3 +1403,14 @@ SA Yadav 60·1,544·29.13·150.34; vs Spin 38/454/140.99; Bumrah vs RHB pos1-2 2
     single-opponent path byte-identical; multi = OR disjunction in `opponentPlayerPredicate`; the `db.js`
     query-cache key incorporates ALL selected ids; independent DuckDB verifies the OR case. The vs_opp → Matchup-lane
     migration (81(A)) is SEPARATE (cutover / decision-84 Task-3), NOT part of this.
+
+
+## 2026-09-01 — decision 89: fielding Specific Batter/Bowler pickers = multi-select (owner)
+89. **FIELDING "SPECIFIC BATTER" / "SPECIFIC BOWLER" PICKERS = MULTI-SELECT (owner 2026-09-01; extends the
+    multi-select push beyond the three matchup axes).** While wiring opponent multi-select (88), the shared
+    player-search picker turned out to ALSO serve the fielding-board "Specific Batter" / "Specific Bowler"
+    catalogue filters. The owner ruled these become multi-select too — pick several batters/bowlers, OR/union
+    ("catches off Bumrah OR Chahal"). **UI-only:** the fielding query already unions the array
+    (`out_batter_id` / `bowler_id IN (…)` via `pushInList` in table.js) — so the picker merely writes the
+    already-array `fielding.outBatters` / `.bowlers`; a single pick stays **byte-identical**; the sacred fielding
+    CTE is untouched. Built in the Wave 2 UI pass (commit f45a51a; anchors 2,813 / fielding 2,345 held).
