@@ -748,11 +748,16 @@ function allConditionLabels(conditions, discipline, formats) {
 /** T-2e: the honest label for a row's matchup-Vs bucket (Option A). "type" (fine
  * bowling style) reads through matchupBucketLabel so bare Pace/Spin show as
  * "(unspecified)"; "group" (Pace/Spin) and "hand" (Right-/Left-hand bat) read
- * verbatim, matching the leaderboard's own Vs vocabulary. */
+ * verbatim, matching the leaderboard's own Vs vocabulary. `value` is a scalar for
+ * a single pick or an ARRAY for a multi-select union (2026-09 owner ruling,
+ * mirrors the leaderboard) — multiple values join with ", " (e.g. "vs Pace,
+ * Spin"); a single value renders byte-identically to before this change (a
+ * 1-element array's join equals the scalar). */
 function matchupVsLabel(matchupVs) {
   if (!matchupVs || !matchupVs.dim) return null;
-  if (matchupVs.dim === "type") return `vs ${matchupBucketLabel(matchupVs.value)}`;
-  return `vs ${matchupVs.value}`;
+  const values = Array.isArray(matchupVs.value) ? matchupVs.value : [matchupVs.value];
+  const labels = matchupVs.dim === "type" ? values.map(matchupBucketLabel) : values;
+  return `vs ${labels.join(", ")}`;
 }
 
 /** ALL of a row's filter labels — the matchup-Vs bucket (T-2e) THEN the per-innings

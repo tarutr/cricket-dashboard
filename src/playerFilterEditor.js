@@ -28,7 +28,7 @@ import { query } from "./db.js";
 import { orderBowlingTypes } from "./table.js";
 import { matchupBucketLabel, getMetric, metricInputStep } from "./metrics.js";
 import { escHtml, escAttr } from "./html.js";
-import { mountSearchSelect } from "./searchSelect.js";
+import { mountSearchMultiSelect } from "./searchSelect.js";
 
 // T-2e: the batting-position LIST slice + the matchup-Vs pick. Batting position ticks
 // order positions 1..12 (compiled to `batting_position IN (…)` by the tab's slice
@@ -49,31 +49,70 @@ const TEAM_TYPES = [
 const GI = 0; // single AND group per row in this wave (multiple conditions, AND)
 
 // ── R3 harmonisation: matchup-Vs picker → shared search-select PANEL ─────────
-// mountSearchSelect registers a document-level click listener that is only ever
-// removed by its own destroy() — fine for the drawer's profile pickers (mounted
-// once for the app's life) but NOT fine here: this editor's overlay/modal is
-// created and torn down on every open (playerFilterScope.js documents this exact
-// leak risk for its own scope-singleton controllers and solves it the same way).
-// So the widget is mounted ONCE, at module scope, and its host <div> is
-// re-parented into whichever modal is currently open; `matchupVsOnPick` is
-// rebound to the CURRENT open editor's setMatchupVs on every render, and cleared
-// on teardown. The widget itself is never destroyed — its one document listener
-// registers exactly once for the module's lifetime, matching the drawer.
+// mountSearchMultiSelect registers a document-level click listener that is only
+// ever removed by its own destroy() — fine for the drawer's profile pickers
+// (mounted once for the app's life) but NOT fine here: this editor's
+// overlay/modal is created and torn down on every open (playerFilterScope.js
+// documents this exact leak risk for its own scope-singleton controllers and
+// solves it the same way). So the widget is mounted ONCE, at module scope, and
+// its host <div> is re-parented into whichever modal is currently open;
+// `matchupVsOnPick` is rebound to the CURRENT open editor's setMatchupVs on
+// every render, and cleared on teardown. The widget itself is never destroyed —
+// its one document listener registers exactly once for the module's lifetime,
+// matching the drawer.
+//
+// 2026-09: multi-select (owner ruling) — mirrors the leaderboard drawer's own
+// Vs control (drawer.js ~648-717) exactly: options encode "dim:value", a
+// single-DIMENSION guard (isOptionDisabled) keeps ticks within ONE dimension
+// (group ⊻ type ⊻ hand) so several same-dimension values UNION ("vs Pace OR
+// Spin") but group×type can never AND into an empty set, and `summarize`
+// mirrors the drawer's label. onChange hands (dim, values[]) back to whichever
+// editor's setMatchupVs is currently bound — the query side is untouched:
+// matchupVsAxes/buildMatchupQuery already normalise a scalar-or-array value to
+// the same `col = 'v'` / `col IN (…)` SQL the drawer's multi-select produces.
 let matchupVsHost = null;
 let matchupVsSel = null;
 let matchupVsOnPick = null;
+const STYLE_VALUE_LABELS = {
+  Pace: "Pace",
+  Spin: "Spin",
+  "Right-hand bat": "Right-Hand Batter",
+  "Left-hand bat": "Left-Hand Batter",
+};
+const vsStyleDimOf = (encoded) => encoded.slice(0, encoded.indexOf(":"));
+const vsStyleValOf = (encoded) => encoded.slice(encoded.indexOf(":") + 1);
 function ensureMatchupVsMounted() {
   if (matchupVsSel) return;
   matchupVsHost = document.createElement("div");
-  matchupVsSel = mountSearchSelect(matchupVsHost, {
+  matchupVsSel = mountSearchMultiSelect(matchupVsHost, {
     searchable: false,
     portal: true, // the modal's .pfe__body scrolls (overflow-y:auto) — escape the clip
     ariaLabel: "Matchup opponent",
     placeholder: "Choose…",
-    onChange: (val) => {
-      if (!val || !matchupVsOnPick) return;
-      const i = val.indexOf(":");
-      if (i > 0) matchupVsOnPick(val.slice(0, i), val.slice(i + 1));
+    summarize: (count) => {
+      const vals = matchupVsSel ? matchupVsSel.getValues() : [];
+      if (vals.length === 1) {
+        const dim = vsStyleDimOf(vals[0]);
+        const val = vsStyleValOf(vals[0]);
+        return dim === "type" ? matchupBucketLabel(val) : STYLE_VALUE_LABELS[val] || val;
+      }
+      return `${count} selected`;
+    },
+    // Single-DIMENSION guard: once any value is ticked, disable every option whose
+    // dimension differs from it (group ⊻ type ⊻ hand). Same-dim ticks stay
+    // enabled → union. Identical logic to the drawer's own vsSel.
+    isOptionDisabled: (val, selected) => {
+      if (!selected || selected.size === 0) return false;
+      const d = vsStyleDimOf(val);
+      for (const s of selected) if (vsStyleDimOf(s) !== d) return true;
+      return false;
+    },
+    onChange: (encodedVals) => {
+      if (!matchupVsOnPick) return;
+      if (!encodedVals.length) { matchupVsOnPick(null, []); return; }
+      // All ticked values share ONE dim (guard above), so group→one dim + its values.
+      const dim = vsStyleDimOf(encodedVals[0]);
+      matchupVsOnPick(dim, encodedVals.map(vsStyleValOf));
     },
   });
 }
@@ -159,6 +198,8 @@ export function openFilterRowEditor(hostDoc, deps) {
     initialDeliveryWindow = null,
     initialOpponentPlayer = null,
     // T-2e: the row's matchup-Vs bucket ({dim,value}) for edit pre-fill, or null.
+    // value is a scalar for a single pick, an ARRAY for a multi-select union
+    // (2026-09) — both flow straight through to matchupVsAxes unchanged.
     initialMatchupVs = null,
   } = deps;
 
@@ -358,11 +399,24 @@ export function openFilterRowEditor(hostDoc, deps) {
     return draft.conditions.groups[GI];
   }
 
-  /** Set / change the row's matchup-Vs bucket (owner Option A). Clears any per-innings
-   * conditions (mutual exclusion — the palette prevents mixing, this is belt-and-
-   * braces so a legacy draft can't smuggle both). Re-render + relock the palette. */
+  /** Set / change the row's matchup-Vs bucket (owner Option A). `value` is either a
+   * SCALAR (a single palette-leaf pick, e.g. clicking "Vs Pace") or an ARRAY (the
+   * multi-select panel's current tick set — 2026-09 owner ruling: same-dimension
+   * values UNION). Collapsed to a scalar when exactly one value survives, so a
+   * single pick stores the SAME `{dim, value}` shape as before this change —
+   * matchupVsAxes/buildMatchupQuery already treat a scalar and a 1-element array
+   * identically, but keeping it scalar here means every other reader of
+   * `draft.matchupVs.value` (matchupVsOptions, the row label) needs no change for
+   * the single-value case. An empty result clears the bucket via removeMatchupVs.
+   * Clears any per-innings conditions (mutual exclusion — the palette prevents
+   * mixing, this is belt-and-braces so a legacy draft can't smuggle both).
+   * Re-render + relock the palette. */
   function setMatchupVs(dim, value) {
-    draft.matchupVs = { dim, value };
+    const values = Array.isArray(value)
+      ? value.filter((v) => v != null && v !== "")
+      : value != null && value !== "" ? [value] : [];
+    if (!dim || !values.length) { removeMatchupVs(); return; }
+    draft.matchupVs = { dim, value: values.length === 1 ? values[0] : values };
     group().conds.length = 0;
     renderConditions();
     refreshPaletteForLock();
@@ -454,9 +508,13 @@ export function openFilterRowEditor(hostDoc, deps) {
         { value: "group:Pace", label: "Pace", group: "Pace / spin" },
         { value: "group:Spin", label: "Spin", group: "Pace / spin" },
       ];
-      // Keep a fine "type:…" pick present even before the async list resolves.
-      if (draft.matchupVs && draft.matchupVs.dim === "type" && !types.includes(draft.matchupVs.value)) {
-        opts.push({ value: `type:${draft.matchupVs.value}`, label: matchupBucketLabel(draft.matchupVs.value), group: "Bowling type" });
+      // Keep every fine "type:…" pick present even before the async list resolves
+      // (draft.matchupVs.value is a scalar for one pick, an array for a union).
+      if (draft.matchupVs && draft.matchupVs.dim === "type") {
+        const picked = Array.isArray(draft.matchupVs.value) ? draft.matchupVs.value : [draft.matchupVs.value];
+        for (const v of picked) {
+          if (!types.includes(v)) opts.push({ value: `type:${v}`, label: matchupBucketLabel(v), group: "Bowling type" });
+        }
       }
       opts.push(...types.map((t) => ({ value: `type:${t}`, label: matchupBucketLabel(t), group: "Bowling type" })));
       return opts;
@@ -467,6 +525,15 @@ export function openFilterRowEditor(hostDoc, deps) {
       { value: "hand:Right-hand bat", label: "Right-Hand Batter" },
       { value: "hand:Left-hand bat", label: "Left-Hand Batter" },
     ];
+  }
+  /** The draft's current matchup-Vs bucket as "dim:value" encoded strings, for the
+   * multi-select widget's setValues (mirrors matchupVsOptions' scalar-or-array
+   * handling above). */
+  function matchupVsSelectedEncoded() {
+    if (!draft.matchupVs) return [];
+    const { dim, value } = draft.matchupVs;
+    const values = Array.isArray(value) ? value : [value];
+    return values.map((v) => `${dim}:${v}`);
   }
   function matchupVsRowHTML() {
     return `<div class="pfe-cond pfe-cond--matchupvs" data-role="matchupvs-row">
@@ -499,7 +566,7 @@ export function openFilterRowEditor(hostDoc, deps) {
       const mountEl = condsEl.querySelector('[data-role="matchupvs-mount"]');
       if (mountEl) mountEl.appendChild(matchupVsHost);
       matchupVsSel.setOptions(matchupVsOptions());
-      matchupVsSel.setValue(draft.matchupVs ? `${draft.matchupVs.dim}:${draft.matchupVs.value}` : null);
+      matchupVsSel.setValues(matchupVsSelectedEncoded());
     }
     const mvRm = condsEl.querySelector('[data-role="remove-matchupvs"]');
     if (mvRm) mvRm.addEventListener("click", removeMatchupVs);
