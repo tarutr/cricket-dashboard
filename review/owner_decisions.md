@@ -1359,3 +1359,28 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       kept); the GRAPH overhaul is a SEPARATE track (deferred, not gating the flip).
     - **OOM** characterised = NOT a production risk (only a bare `SELECT *` on the matchup views OOMs; every app matchup
       query names columns + prunes). The realistic max-scope×max-columns corner is the STEP-2 stress test.
+
+
+## 2026-09-01 — decisions 85–87: matchup/columns/per-discipline rework — round 1 built (owner)
+Built + verified on `ball-layer` (NOT pushed, NOT in production). Anchors held throughout (2,813 / Karanbir 2,454;
+SA Yadav 60·1,544·29.13·150.34; vs Spin 38/454/140.99; Bumrah vs RHB pos1-2 27/177/9; fielding 2,345).
+
+85. **PROFILE AVAILABILITY = has-profile / no-profile, NEVER gender (commit 6579c60).** The profile filters and
+    profile pills gate on **profile presence** (does this player have a profile record?), not on gender. They were
+    previously framed "men-only" because 0% of women players currently carry profiles; that framing was scrubbed
+    from code comments, SPEC, and the decision log. Behaviour is data-driven — a profile filter/pill appears iff
+    profile data exists for the current view, so it lights up automatically when women's profiles arrive. Display /
+    offer-gating only; **query builders byte-identical**.
+
+86. **MULTI-SELECT MATCHUP "Vs" — OR/union within ONE dimension (commit f5929b6).** The bowling-style and
+    batting-hand matchup "Vs" axes now accept **multiple values as an OR/union** (e.g. off-spin OR leg-spin;
+    Pace OR Spin). Mixing a **coarse** value (Pace/Spin) with a **fine** value (off-spin/leg-spin) in the same
+    selection is **intentionally blocked** — they are different granularities of the same axis. A **single-value**
+    selection is **byte-identical** to prior behaviour.
+
+87. **ALL FILTERS PER-DISCIPLINE (commit 280ed2e).** Batting, bowling and fielding each remember their **own**
+    filter set; nothing carries across a discipline switch. Top-level **gender / format / date stay SHARED**, and
+    **toolbar pins (Name:X rows) stay shared**. Extends decision 54 (which had made only a subset per-discipline)
+    toward all filters. Remaining exceptions still QUEUED (Wave 1, not yet built): the **batting-hand** matchup axis
+    (decision 54 had ruled it shared — Wave 1 supersedes that) and the **Match-all/Match-any** operator. State / UI
+    only; **query builders untouched**.
