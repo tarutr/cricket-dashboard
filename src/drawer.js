@@ -997,11 +997,13 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "role": return Boolean(s.profile.roleGroup);
       // Batting hand is a batting-only concept in the batting↔bowling sense (decision
       // 54): a player's batting hand isn't their bowling arm, so the row never shows
-      // while BOWLING is active, and the store clears profile.battingHand on every
-      // discipline change. The FIELDING board (3.2b2) also offers it as a PROFILE filter
-      // (the FIELDER's batting style narrows the fielder set via the fielder_id semi-join
-      // — owner: include it), so presence is allowed on fielding too. Bowling stays
-      // gated and the clear-on-change is untouched, so batting/bowling are byte-identical.
+      // while BOWLING is active. The FIELDING board (3.2b2) also offers it as a PROFILE
+      // filter (the FIELDER's batting style narrows the fielder set via the fielder_id
+      // semi-join — owner: include it), so presence is allowed on fielding too. Wave 1
+      // (owner build-go 2026-09) superseded decision 54's PERSISTENCE clause:
+      // profile.battingHand is now REMEMBERED per-discipline (batting keeps its own,
+      // fielding keeps its own) instead of cleared on every switch. Bowling stays gated
+      // (its own bundle never holds battingHand), so bowling remains byte-identical.
       case "hand": return (s.discipline === "batting" || s.discipline === "fielding") && Boolean(s.profile.battingHand);
       case "bowling": return Boolean(s.profile.bowlingType);
       // Bowling hand (owner #8): mirrors "bowling" — no discipline gate (a

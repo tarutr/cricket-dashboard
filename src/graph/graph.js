@@ -2884,6 +2884,12 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       potmYN: buf.potmYN,
       deliveryWindow: buf.deliveryWindow,
       opponentPlayer: buf.opponentPlayer,
+      // filterMatch (Wave 1, 2026-09): the Match-all/Match-any operator is now
+      // per-discipline, so — like every live per-discipline field above — it must be
+      // committed from the buffer here. Without it, a discipline switch made inside this
+      // popup would leave the LIVE filterMatch on the OTHER discipline's value and
+      // charts.js (line 189) would render the graph with a stale Match-all/any operator.
+      filterMatch: buf.filterMatch,
       filtersByDiscipline: buf.filtersByDiscipline,
     });
     // Keep the SHARED store coherent after scope edits, exactly as the Stats

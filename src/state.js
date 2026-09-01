@@ -21,6 +21,12 @@
 //   advancedByDiscipline: { batting: {op,groups}, bowling: {op,groups} },
 //     // the per-discipline archive; createStore.set swaps `advanced` <-> here on a
 //     // discipline change so conditions never leak batting<->bowling.
+//   filtersByDiscipline: { batting: {...}, bowling: {...}, fielding: {...} },
+//     // the archive for every OTHER per-discipline filter field (PER_DISCIPLINE_FILTER_FIELDS,
+//     // ~line 982), including `filterMatch` (the Match-all/Match-any operator) and
+//     // `profile` (whose `battingHand` is now remembered per-discipline like the rest,
+//     // owner build-go 2026-09 — see swapFiltersForDiscipline). batting / bowling /
+//     // fielding each remember their own complete filter set; nothing carries over.
 // }
 //
 // `formats` stores owner-facing bucket keys (see FORMAT_BUCKETS below), not raw
@@ -979,6 +985,9 @@ export function emptyAdvancedBlock() {
 // discipline change. Keep this list, emptyFilterBundle's keys, and createInitialState's
 // initial values for these fields in sync (all three are the same empty defaults today).
 // `advanced` is deliberately ABSENT here — it rides advancedByDiscipline instead.
+// `filterMatch` (the Match-all/Match-any operator, owner build-go 2026-09) is INCLUDED
+// here — each discipline now remembers its own ALL/ANY choice instead of sharing one
+// operator across all three; the AND default keeps every anchor byte-identical.
 export const PER_DISCIPLINE_FILTER_FIELDS = [
   "profile",
   "positions",
@@ -1000,6 +1009,7 @@ export const PER_DISCIPLINE_FILTER_FIELDS = [
   "opponentPlayer",
   "matchupVs",
   "teams",
+  "filterMatch",
 ];
 
 /**
@@ -1031,6 +1041,7 @@ export function emptyFilterBundle() {
     opponentPlayer: null,
     matchupVs: null,
     teams: [],
+    filterMatch: { player: "AND", scope: "AND", group: "AND" },
   };
 }
 
@@ -2464,7 +2475,7 @@ function formatsLabel(formats) {
  *     (PER_DISCIPLINE_FILTER_FIELDS): profile, positions, opposition, event,
  *     eventSeasons, venue, city, season, fielding, result, tossResult, tossDecision,
  *     potmYN, inningsNumber, stage, resultCondition, deliveryWindow, opponentPlayer,
- *     matchupVs, teams.
+ *     matchupVs, teams, filterMatch.
  * `state.advanced` and every live filter field keep their exact shapes, so every
  * reader (buildQuery / buildScopeClauses / conditionToHaving / drawer / pills /
  * describeScope / graph) is untouched — a bowling filter simply isn't in the live
@@ -2472,11 +2483,15 @@ function formatsLabel(formats) {
  * switching back restores it.
  *
  * Special cases folded into the general swap (were bespoke before):
- *   • profile — now FULLY per-discipline. Decision 54 ("batting hand must not leak
- *     into bowling") is satisfied structurally: bowling has its OWN profile, so a
- *     batting battingHand is archived with batting and is never present while bowling
- *     is active. It is now also REMEMBERED (restored on return to batting) — the
- *     owner's new "each discipline remembers its own set" intent.
+ *   • profile — now FULLY per-discipline, battingHand included. Decision 54's
+ *     "batting hand must not leak into bowling" half is satisfied structurally:
+ *     bowling has its OWN profile, so a batting battingHand is archived with
+ *     batting and is never present while bowling is active (the drawer's "hand"
+ *     row also stays gated to batting/fielding — see drawer.js's rowVisible). The
+ *     "cleared on every switch" HALF of decision 54 is superseded (owner build-go
+ *     2026-09, Wave 1): battingHand is now REMEMBERED per-discipline exactly like
+ *     every other profile field — batting keeps its own, fielding keeps its own,
+ *     each restored on return, with no cross-leak between them.
  *   • fielding.* — now per-discipline (fielding remembers its own), replacing the
  *     old blunt reset-on-fielding-transition. "Dismissed batter's position" (the
  *     fld_pos singleton → state.fielding.positions) offered on batting/bowling is
@@ -2484,6 +2499,10 @@ function formatsLabel(formats) {
  *     across boards.
  *   • matchupVs / opponentPlayer — batting/bowling only; fielding's bundle holds
  *     null, so they are never present on the fielding board.
+ *   • filterMatch — the Match-all/Match-any operator (Wave 1, owner build-go
+ *     2026-09) is now per-discipline too: each discipline remembers its own
+ *     ALL/ANY choice. emptyFilterBundle seeds it AND-default so a fresh/restored
+ *     bundle is never `undefined` (filterGroupOp needs a real object).
  */
 function swapFiltersForDiscipline(prev, next) {
   if (!prev || prev.discipline === next.discipline) return next;
@@ -2498,19 +2517,13 @@ function swapFiltersForDiscipline(prev, next) {
   // existed) from a fresh empty bundle, so a restore is always complete.
   const filtArchive = { ...(next.filtersByDiscipline || {}) };
   const outgoing = pluckFilterBundle(prev);
-  // decision 54: clear ONLY profile.battingHand on a discipline change (Round 6 #2).
-  // A player's batting hand isn't their bowling arm, so the owner ruled that it must
-  // NOT persist across a discipline switch ("more confusing than useful"). Under the
-  // new per-discipline model every OTHER profile field (and every other filter) IS
-  // remembered per-discipline; battingHand ALONE is dropped when leaving a discipline
-  // and so is never restored — matching the old behaviour (cleared on every switch,
-  // not remembered). NOTE (owner ruling needed): the brief lists battingHand among the
-  // profile fields to make per-discipline, which would REVERSE decision 54; preserving
-  // decision 54 here per CLAUDE.md Rule 2. To make battingHand remembered per-discipline
-  // like the rest instead, delete these three lines.
-  if (outgoing.profile && outgoing.profile.battingHand) {
-    outgoing.profile = { ...outgoing.profile, battingHand: null };
-  }
+  // Owner build-go (2026-09, Wave 1) supersedes decision 54's PERSISTENCE clause:
+  // profile.battingHand is no longer cleared here. It archives with the rest of
+  // `outgoing` and is restored on return, so batting/fielding each remember their
+  // own batting-hand filter across a discipline round-trip. Decision 54's OTHER
+  // half — no batting-hand filter while BOWLING is active — is untouched: bowling
+  // has its own profile bundle (drawer.js's "hand" row visibility is unchanged),
+  // so a batting-side battingHand still never appears on the bowling board.
   filtArchive[prev.discipline] = outgoing;
   const restoredBundle = { ...emptyFilterBundle(), ...(filtArchive[next.discipline] || {}) };
 
