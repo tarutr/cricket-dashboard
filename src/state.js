@@ -966,6 +966,82 @@ export function emptyAdvancedBlock() {
   return { op: "AND", groups: [] };
 }
 
+// ── Per-discipline FILTER archive (foundational state refactor, 2026-09) ───────
+// Owner-approved: EVERY filter is per-discipline. batting / bowling / fielding each
+// REMEMBER THEIR OWN complete filter set; a discipline change archives the outgoing
+// discipline's filters and restores the incoming one's, so NOTHING carries over
+// between disciplines (closing the cross-discipline leak — e.g. a Playing Role set
+// on batting silently narrowing the fielding count).
+//
+// This list is EVERY per-discipline filter field EXCEPT the numeric stat conditions
+// (`advanced`), which keep their own long-standing archive `advancedByDiscipline`
+// (decision 50). swapFiltersForDiscipline swaps BOTH archives in lock-step on a
+// discipline change. Keep this list, emptyFilterBundle's keys, and createInitialState's
+// initial values for these fields in sync (all three are the same empty defaults today).
+// `advanced` is deliberately ABSENT here — it rides advancedByDiscipline instead.
+export const PER_DISCIPLINE_FILTER_FIELDS = [
+  "profile",
+  "positions",
+  "opposition",
+  "event",
+  "eventSeasons",
+  "venue",
+  "city",
+  "season",
+  "fielding",
+  "result",
+  "tossResult",
+  "tossDecision",
+  "potmYN",
+  "inningsNumber",
+  "stage",
+  "resultCondition",
+  "deliveryWindow",
+  "opponentPlayer",
+  "matchupVs",
+  "teams",
+];
+
+/**
+ * A fresh, all-cleared bundle of the per-discipline filter fields. Used as
+ * createInitialState's per-discipline seed AND as the restore default for a
+ * discipline that has never been visited (so switching to it shows an empty
+ * filter set). Each value here MUST equal createInitialState's initial value for
+ * that field — they are the same empty defaults ([] / null / {} / emptyProfile()).
+ */
+export function emptyFilterBundle() {
+  return {
+    profile: emptyProfile(),
+    positions: [],
+    opposition: [],
+    event: [],
+    eventSeasons: {},
+    venue: [],
+    city: [],
+    season: [],
+    fielding: { positions: [], phases: [] },
+    result: [],
+    tossResult: [],
+    tossDecision: [],
+    potmYN: [],
+    inningsNumber: [],
+    stage: [],
+    resultCondition: [],
+    deliveryWindow: null,
+    opponentPlayer: null,
+    matchupVs: null,
+    teams: [],
+  };
+}
+
+/** Snapshot the per-discipline filter fields out of a state object — the values
+ * stashed into the archive when leaving a discipline (swapFiltersForDiscipline). */
+function pluckFilterBundle(state) {
+  const bundle = {};
+  for (const f of PER_DISCIPLINE_FILTER_FIELDS) bundle[f] = state[f];
+  return bundle;
+}
+
 /**
  * Build the initial state. `maxMonth` ("YYYY-MM") comes from the manifest's
  * max match_date once known; until then dateTo is null and the filter bar
@@ -1195,12 +1271,26 @@ export function createInitialState(maxMonth) {
     // buildQuery/conditionToHaving, the drawer, pills, describeScope, and the
     // graph's metricConditionKeys), while `advancedByDiscipline` archives the
     // other discipline's. createStore.set() swaps them on any discipline change
-    // (see swapAdvancedForDiscipline). Identity filters (profile/teams) are NOT
-    // here, so they persist across the toggle as the owner ruled (#15/decision 50)
-    // — except "batting hand", which swapAdvancedForDiscipline clears on every
-    // discipline change (decision 54, Round 6 #2).
+    // (see swapFiltersForDiscipline). The foundational refactor (2026-09) extended
+    // this SAME archive/restore pattern to EVERY OTHER filter field via
+    // `filtersByDiscipline` below — so profile/teams and the rest are now
+    // per-discipline too (decision 54's "batting hand must not leak into bowling"
+    // is satisfied structurally: bowling has its own profile). The two archives are
+    // swapped in lock-step.
     advanced: emptyAdvancedBlock(),
     advancedByDiscipline: { batting: emptyAdvancedBlock(), bowling: emptyAdvancedBlock() },
+    // Per-discipline archive for every OTHER filter field (PER_DISCIPLINE_FILTER_FIELDS
+    // above). swapFiltersForDiscipline stashes the outgoing discipline's fields here and
+    // restores the incoming one's, so batting / bowling / fielding each remember their OWN
+    // complete filter set and nothing carries over between disciplines. Seeded empty (init
+    // filters are empty); the active discipline's live filters are captured on the first
+    // switch-out. DISPLAY/PERSISTENCE-ONLY: never read by a query builder, never in
+    // serializeQueryState (so it never lights Search — the `discipline` field already does).
+    filtersByDiscipline: {
+      batting: emptyFilterBundle(),
+      bowling: emptyFilterBundle(),
+      fielding: emptyFilterBundle(),
+    },
   };
 }
 
@@ -2354,48 +2444,83 @@ function formatsLabel(formats) {
 }
 
 /**
- * R5-A #7 (decision 50): per-discipline numeric stat conditions. `state.advanced`
- * always mirrors the CURRENT discipline's conditions; `state.advancedByDiscipline`
- * archives BOTH. On a discipline change (from ANY caller — the leaderboard AND the
- * graph each mount their own discipline <select>, and both go through store.set),
- * stash the outgoing discipline's conditions and restore the incoming one's. This
- * keeps `state.advanced`'s shape ({ op, groups }) unchanged, so every reader
- * (buildQuery/conditionToHaving, drawer, pills, describeScope, graph
- * metricConditionKeys) works untouched — a bowling condition simply isn't in
- * `state.advanced` while batting is active, so it can never leak into the batting
- * query, and switching back restores it. Identity filters (profile/teams) live
- * elsewhere in state, so they persist across the toggle (owner ruling) — WITH
- * ONE CARVE-OUT (decision 54, Round 6 #2): "batting hand" does NOT persist. A
- * player's batting hand isn't their bowling arm, so the owner ruled persisting
- * it into bowling "is more confusing than useful." Every other identity filter
- * (role, bowling style, teams) is untouched and still persists.
+ * Per-discipline FILTER archive/restore (foundational state refactor 2026-09,
+ * owner-approved). Generalises the former per-discipline stat-condition swap
+ * (decision 50) to EVERY filter field: batting / bowling / fielding each REMEMBER
+ * THEIR OWN complete filter set, and a discipline change archives the outgoing
+ * discipline's filters and restores the incoming one's, so NOTHING carries over
+ * between disciplines — closing the cross-discipline leak (e.g. a Playing Role set
+ * on batting silently narrowing the fielding count) at the root.
+ *
+ * Runs inside createStore.set on every discipline change (the ONE store-side entry
+ * is filters.js's discipline <select>, shared by the leaderboard AND the graph
+ * filter bar; the graph's "Apply to graph" commit sets discipline + filters
+ * WHOLESALE and is bypassed via managesArchive — it carries both archives itself).
+ *
+ * TWO archives are kept in lock-step, both keyed by discipline:
+ *   • advancedByDiscipline — the long-standing numeric stat-condition archive
+ *     (decision 50), UNCHANGED so its gate + graph-buffer consumers keep working.
+ *   • filtersByDiscipline  — every OTHER per-discipline filter field
+ *     (PER_DISCIPLINE_FILTER_FIELDS): profile, positions, opposition, event,
+ *     eventSeasons, venue, city, season, fielding, result, tossResult, tossDecision,
+ *     potmYN, inningsNumber, stage, resultCondition, deliveryWindow, opponentPlayer,
+ *     matchupVs, teams.
+ * `state.advanced` and every live filter field keep their exact shapes, so every
+ * reader (buildQuery / buildScopeClauses / conditionToHaving / drawer / pills /
+ * describeScope / graph) is untouched — a bowling filter simply isn't in the live
+ * fields while batting is active, so it can never leak into the batting query, and
+ * switching back restores it.
+ *
+ * Special cases folded into the general swap (were bespoke before):
+ *   • profile — now FULLY per-discipline. Decision 54 ("batting hand must not leak
+ *     into bowling") is satisfied structurally: bowling has its OWN profile, so a
+ *     batting battingHand is archived with batting and is never present while bowling
+ *     is active. It is now also REMEMBERED (restored on return to batting) — the
+ *     owner's new "each discipline remembers its own set" intent.
+ *   • fielding.* — now per-discipline (fielding remembers its own), replacing the
+ *     old blunt reset-on-fielding-transition. "Dismissed batter's position" (the
+ *     fld_pos singleton → state.fielding.positions) offered on batting/bowling is
+ *     byte-identical PER BOARD (same field → same SQL); it simply no longer carries
+ *     across boards.
+ *   • matchupVs / opponentPlayer — batting/bowling only; fielding's bundle holds
+ *     null, so they are never present on the fielding board.
  */
-function swapAdvancedForDiscipline(prev, next) {
+function swapFiltersForDiscipline(prev, next) {
   if (!prev || prev.discipline === next.discipline) return next;
-  const archive = { ...(next.advancedByDiscipline || {}) };
-  archive[prev.discipline] = prev.advanced || emptyAdvancedBlock();
-  const restored = archive[next.discipline] || emptyAdvancedBlock();
-  // decision 54: clear ONLY profile.battingHand on a discipline change (either
-  // direction) — no other profile field is touched. buildScopeClauses/
-  // profileSemiJoinSql are untouched; this just means battingHand is never SET
-  // while the bowling discipline is active, so it can't leak into a bowling query.
-  const profile =
-    next.profile && next.profile.battingHand ? { ...next.profile, battingHand: null } : next.profile;
-  // Fielding-board dims (3.2b2): state.fielding.* holds the Fielding board's own filter
-  // rows (Wicket type / Batting hand / Bowler style / Phase / …). On any discipline
-  // change INTO or OUT of fielding, reset them — the leaderboard analogue of the player
-  // pop-up's "switching discipline clears your filter rows" — so a fielding filter can
-  // never silently leak onto a batting/bowling board's fielding column (or vice-versa).
-  // EXCEPT `positions`: the batting/bowling "+ Add condition" list ALSO offers "Dismissed
-  // batter's position" (the fld_pos singleton, byte-identical), so that one slot stays
-  // global exactly as before — clearing it would change batting/bowling behaviour.
-  let fielding = next.fielding;
-  if ((prev.discipline === "fielding" || next.discipline === "fielding") && next.fielding) {
-    const keptPositions = next.fielding.positions;
-    fielding =
-      Array.isArray(keptPositions) && keptPositions.length ? { positions: [...keptPositions] } : {};
+
+  // (1) Numeric stat conditions — the existing per-discipline archive (decision 50).
+  const advArchive = { ...(next.advancedByDiscipline || {}) };
+  advArchive[prev.discipline] = prev.advanced || emptyAdvancedBlock();
+  const restoredAdvanced = advArchive[next.discipline] || emptyAdvancedBlock();
+
+  // (2) Every other filter field — the new per-discipline archive. Backfill any
+  // field missing from a stored bundle (e.g. a bundle archived before a field
+  // existed) from a fresh empty bundle, so a restore is always complete.
+  const filtArchive = { ...(next.filtersByDiscipline || {}) };
+  const outgoing = pluckFilterBundle(prev);
+  // decision 54: clear ONLY profile.battingHand on a discipline change (Round 6 #2).
+  // A player's batting hand isn't their bowling arm, so the owner ruled that it must
+  // NOT persist across a discipline switch ("more confusing than useful"). Under the
+  // new per-discipline model every OTHER profile field (and every other filter) IS
+  // remembered per-discipline; battingHand ALONE is dropped when leaving a discipline
+  // and so is never restored — matching the old behaviour (cleared on every switch,
+  // not remembered). NOTE (owner ruling needed): the brief lists battingHand among the
+  // profile fields to make per-discipline, which would REVERSE decision 54; preserving
+  // decision 54 here per CLAUDE.md Rule 2. To make battingHand remembered per-discipline
+  // like the rest instead, delete these three lines.
+  if (outgoing.profile && outgoing.profile.battingHand) {
+    outgoing.profile = { ...outgoing.profile, battingHand: null };
   }
-  return { ...next, advanced: restored, advancedByDiscipline: archive, profile, fielding };
+  filtArchive[prev.discipline] = outgoing;
+  const restoredBundle = { ...emptyFilterBundle(), ...(filtArchive[next.discipline] || {}) };
+
+  return {
+    ...next,
+    ...restoredBundle,
+    advanced: restoredAdvanced,
+    advancedByDiscipline: advArchive,
+    filtersByDiscipline: filtArchive,
+  };
 }
 
 export function createStore(initial) {
@@ -2409,12 +2534,16 @@ export function createStore(initial) {
   function set(patch) {
     const prev = state;
     const next = typeof patch === "function" ? patch(prev) : { ...prev, ...patch };
-    // A caller that explicitly manages the archive (a full reset / clearAll passes
-    // advancedByDiscipline in the patch) is honoured verbatim — otherwise a
-    // discipline change triggers the per-discipline condition swap.
+    // A caller that explicitly manages the archive (a full reset / clearAll, or the
+    // graph's wholesale "Apply to graph" commit) passes advancedByDiscipline and/or
+    // filtersByDiscipline in the patch and is honoured verbatim — otherwise a
+    // discipline change triggers the per-discipline filter swap.
     const managesArchive =
-      patch && typeof patch !== "function" && Object.prototype.hasOwnProperty.call(patch, "advancedByDiscipline");
-    state = managesArchive ? next : swapAdvancedForDiscipline(prev, next);
+      patch &&
+      typeof patch !== "function" &&
+      (Object.prototype.hasOwnProperty.call(patch, "advancedByDiscipline") ||
+        Object.prototype.hasOwnProperty.call(patch, "filtersByDiscipline"));
+    state = managesArchive ? next : swapFiltersForDiscipline(prev, next);
     notify();
   }
 

@@ -2869,6 +2869,22 @@ export function mountGraph(container, statsStore, { hasStatsResults = () => fals
       matchupVs: buf.matchupVs,
       advanced: buf.advanced,
       advancedByDiscipline: buf.advancedByDiscipline,
+      // Per-discipline filters (foundational refactor 2026-09): this commit sets
+      // discipline + the live filter fields WHOLESALE and — because it carries an
+      // archive key — bypasses the store's per-discipline swap (managesArchive). So
+      // it must carry the NEW filter archive too (mirroring advancedByDiscipline
+      // above), AND the per-discipline live fields that were previously omitted here
+      // (city / season / potmYN / deliveryWindow / opponentPlayer). Without them, a
+      // discipline switch made inside this popup would leave those live fields on the
+      // OTHER discipline's values (a leak) and corrupt the archive on the next
+      // Stats-side switch. They are no-ops when the discipline is unchanged (buf.* then
+      // equals the shared store's own values).
+      city: buf.city,
+      season: buf.season,
+      potmYN: buf.potmYN,
+      deliveryWindow: buf.deliveryWindow,
+      opponentPlayer: buf.opponentPlayer,
+      filtersByDiscipline: buf.filtersByDiscipline,
     });
     // Keep the SHARED store coherent after scope edits, exactly as the Stats
     // side does: drop columns/conditions the new scope orphaned, and fall back
