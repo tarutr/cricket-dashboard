@@ -15,6 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
+import { opponentPlayerValues } from "./state.js";
 import { positionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, cityFilterActive, seasonFilterActive, seasonsForEvent, hasActiveProfileFilter, profileDataPresent, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, filterGroupOp, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
@@ -284,10 +285,17 @@ export function mountPills(
     // pill (no pill until Search commits it); its ×/+ soft-deletes on the LIVE
     // store and commits on the next Search. Only ever set on the ball engine.
     if (opponentPlayerActive(s)) {
-      const captured = { ...s.opponentPlayer };
+      // Multi-select union (decision 88): ONE removable pill listing every picked
+      // opponent ("vs Kohli, Root"); × clears the whole set, + restores it. The
+      // captured value keeps the applied shape (single object OR array) so restore
+      // is byte-identical.
+      const captured = Array.isArray(s.opponentPlayer)
+        ? s.opponentPlayer.map((o) => ({ ...o }))
+        : { ...s.opponentPlayer };
+      const names = opponentPlayerValues(s.opponentPlayer).map((o) => o.name || o.id);
       pills.push({
         key: "opponentPlayer",
-        label: `vs ${s.opponentPlayer.name || s.opponentPlayer.id}`,
+        label: `vs ${names.join(", ")}`,
         remove: () => store.set({ opponentPlayer: null }),
         restore: () => store.set({ opponentPlayer: captured }),
       });

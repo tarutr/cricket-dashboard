@@ -43,9 +43,42 @@ export const OPPONENT_ID_COL = {
   matchup_bowling: "batter_id",
 };
 
-/** True when an opponent spec carries no active pick (null/undefined or no id). */
+/**
+ * Normalise an opponent spec into an ordered, de-duplicated array of
+ * `{ id, name }` picks — the ONE place the two shapes state.opponentPlayer can
+ * hold are reconciled (decision 88, multi-select OR / union). Accepts BOTH:
+ *   • SCALAR object — a single pick `{ id, name }` (single-select; every
+ *     pre-multi caller, and the shape the drawer/popup picker still writes for a
+ *     lone opponent). `{ id:"x" }` → `[{ id:"x", name:"x" }]`.
+ *   • ARRAY — several picks, the multi-select union ("vs Kohli OR Root").
+ * null / undefined / `{ id:null }` / `[]` → `[]`. Ids are de-duped (first name
+ * wins) and empty ids dropped. Because a scalar and a one-element array both
+ * yield a SINGLE-pick array, `opponentPlayerPredicate` emits byte-identical
+ * `col = 'x'` SQL for either — the ≤1-pick invariant the no-opponent and
+ * single-opponent numbers depend on.
+ *
+ * @param {{id?:string,name?:string}|Array<{id?:string,name?:string}>|null|undefined} opp
+ * @returns {Array<{id:string,name:string}>}
+ */
+export function opponentPlayerValues(opp) {
+  const list = Array.isArray(opp) ? opp : opp != null ? [opp] : [];
+  const out = [];
+  const seen = new Set();
+  for (const o of list) {
+    if (!o) continue;
+    const id = o.id == null ? "" : String(o.id);
+    if (id === "" || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, name: o.name != null ? o.name : id });
+  }
+  return out;
+}
+
+/** True when an opponent spec carries no active pick (null/undefined, no id, or
+ * an empty array). Delegates to the shared normaliser so scalar and array shapes
+ * agree everywhere. */
 export function isEmptyOpponent(opp) {
-  return !opp || opp.id == null || opp.id === "";
+  return opponentPlayerValues(opp).length === 0;
 }
 
 /**
@@ -54,18 +87,27 @@ export function isEmptyOpponent(opp) {
  * no-opponent invariant, so db.js composes nothing and the reconstruction stays
  * byte-identical.
  *
- * The player id is a Cricsheet registry id sourced from the controlled
+ * The player id(s) are Cricsheet registry ids sourced from the controlled
  * player-search picker; single quotes are still escaped defensively (a registry
  * id never contains one, but the predicate must never be an injection surface).
  *
- * @param {{id:string,name?:string}|null} opp  the opponent spec — empty ⇒ "".
+ * ONE pick emits `col = 'x'` — BYTE-IDENTICAL to the pre-multi single-select, so
+ * the single-opponent number cannot move. TWO OR MORE emit `col IN ('x','y')`
+ * — the OR / union across those opponents. The ids are SORTED to a stable order
+ * first, so the same set of opponents always yields the same predicate TEXT —
+ * which is what db.js's materialisation cache key (engineSignature) hashes, so
+ * the cache stays deterministic for a given set regardless of pick order.
+ *
+ * @param {{id?:string,name?:string}|Array<{id?:string,name?:string}>|null} opp
  * @param {"batting"|"bowling"|"matchup_batting"|"matchup_bowling"} discipline
  * @returns {string} a SQL boolean predicate (e.g. `bowler_id = 'abc123'`), or "".
  */
 export function opponentPlayerPredicate(opp, discipline) {
-  if (isEmptyOpponent(opp)) return "";
+  const picks = opponentPlayerValues(opp);
+  if (picks.length === 0) return "";
   const col = OPPONENT_ID_COL[discipline];
   if (!col) throw new Error(`opponentFilter: unknown discipline "${discipline}"`);
-  const lit = String(opp.id).replace(/'/g, "''");
-  return `${col} = '${lit}'`;
+  const lits = picks.map((p) => String(p.id).replace(/'/g, "''")).sort();
+  if (lits.length === 1) return `${col} = '${lits[0]}'`;
+  return `${col} IN (${lits.map((v) => `'${v}'`).join(", ")})`;
 }

@@ -139,6 +139,11 @@ import {
 } from "./metrics.js";
 import { isConditionComplete } from "./advanced.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
+// Multi-select opponent (decision 88): the ONE normaliser (scalar-or-array →
+// de-duped {id,name}[]), re-exported so state / pills / describeScope all read the
+// two shapes state.opponentPlayer can hold identically.
+import { opponentPlayerValues } from "./opponentFilter.js";
+export { opponentPlayerValues };
 // Cutover S1: the ball-engine flag gates the Ball-Ranges / vs-Opponent which-values
 // columns' eligibility (their view columns exist only under the reconstruction). Lazy +
 // guarded for non-browser contexts (config.js), so importing it here never throws.
@@ -495,7 +500,7 @@ export function teamsFilterActive(state) {
  * extra flag gate is needed here — the pill / scope token / count all defer to it,
  * mirroring the delivery-window convention. */
 export function opponentPlayerActive(state) {
-  return Boolean(state.opponentPlayer && state.opponentPlayer.id);
+  return opponentPlayerValues(state.opponentPlayer).length > 0;
 }
 
 // ── Match filters: Event / Venue (Batch 1B, task 1B-1) ──────────────────────
@@ -2611,7 +2616,7 @@ export function createStore(initial) {
     // Opponent-player head-to-head (pop-up Tab-2 T-1, decision 70): the "vs whom"
     // scope — one token, matching its pill. Only ever set on the ball engine.
     if (opponentPlayerActive(s)) {
-      parts.push(`vs ${s.opponentPlayer.name || s.opponentPlayer.id}`);
+      parts.push(`vs ${opponentPlayerValues(s.opponentPlayer).map((o) => o.name || o.id).join(", ")}`);
     }
 
     if (s.teams && s.teams.length > 0) {

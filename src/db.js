@@ -11,7 +11,7 @@ import { buildInningsViewSql, DELIVERY_FILES } from "./ballEngine.js";
 import { buildMatchupViewSql } from "./ballEngineMatchup.js";
 import { neededViewColumns, coversColumns, unionColumns, columnsArePlayerLocal } from "./ballColumns.js";
 import { deliveryWindowPredicate } from "./deliveryWindow.js";
-import { opponentPlayerPredicate } from "./opponentFilter.js";
+import { opponentPlayerPredicate, opponentPlayerValues } from "./opponentFilter.js";
 
 // View name -> parquet file name.
 const VIEWS = {
@@ -118,7 +118,12 @@ const pendingEngineSpecs = new Map();
  * never a wrong number. */
 function specSignature(spec) {
   const w = (spec && spec.deliveryWindow) || null;
-  const oppId = (spec && spec.opponentPlayer && spec.opponentPlayer.id) || null;
+  // Multi-select (decision 88): fold EVERY opponent id — sorted + joined — into the
+  // signature, so two DIFFERENT opponent sets never collide the burst-fold slot.
+  // null when no opponent (byte-identical key to the pre-multi single-id path for a
+  // lone opponent). Look-ahead bookkeeping only — never enters a query.
+  const oppIds = opponentPlayerValues(spec && spec.opponentPlayer).map((p) => p.id).sort();
+  const oppId = oppIds.length ? oppIds.join(",") : null;
   return JSON.stringify({
     phase: (w && w.phase) || null,
     overs: (w && w.overs) || null,
