@@ -451,10 +451,24 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
   // clause below emits `vs_potm = '1'` — AND-joined with any style axis, exactly
   // like the others. (Flag-off the parquet lacks vs_potm, so the axis is only
   // reachable under ?engine=ball.)
+  // Multi-select union (2026-09): each axis now carries one OR MORE bucket values
+  // (matchupVsAxes → { dim, values[] }). A SINGLE value emits `col = 'v'` —
+  // BYTE-IDENTICAL to the pre-multi single-select, so the two matchup anchors
+  // (SA Yadav vs Spin, Bumrah vs RHB) cannot move. SEVERAL values emit
+  // `col IN ('a', 'b')` — the OR / union ("vs Pace OR Spin"): the batter's
+  // combined numbers over pace-OR-spin deliveries. Different dims still AND
+  // together (decision 81A) via the same `.join(" AND ")`.
   const BUCKET_COL_BY_DIM = { hand: "batting_hand", type: "bowling_type", group: "bowling_group", potm: "vs_potm" };
   const boardDims = discipline === "batting" ? ["group", "type", "potm"] : ["hand", "potm"];
   const bucketAxes = matchupVsAxes(state.matchupVs).filter((a) => boardDims.includes(a.dim));
-  const bucketClause = bucketAxes.map((a) => `${BUCKET_COL_BY_DIM[a.dim]} = '${esc(a.value)}'`).join(" AND ");
+  const bucketClause = bucketAxes
+    .map((a) => {
+      const col = BUCKET_COL_BY_DIM[a.dim];
+      return a.values.length === 1
+        ? `${col} = '${esc(a.values[0])}'`
+        : `${col} IN (${a.values.map((v) => `'${esc(v)}'`).join(", ")})`;
+    })
+    .join(" AND ");
 
   // Column alias registry for step 1 (`agg`): every ticked/extra metric key
   // gets its own alias (m.key). The min-innings gate and any active stat
@@ -3615,13 +3629,15 @@ export function mountTable(
         // (mutually exclusive with each other), then set the picked one. Preserves
         // every non-style axis (potm, …).
         const map = {};
-        for (const ax of matchupVsAxes(store.get().matchupVs)) map[ax.dim] = ax.value;
+        for (const ax of matchupVsAxes(store.get().matchupVs)) map[ax.dim] = ax.values;
         delete map.group;
         delete map.type;
         delete map.hand;
         if (raw) {
           const idx = raw.indexOf(":");
-          map[raw.slice(0, idx)] = raw.slice(idx + 1);
+          // Store as a one-element array — the toolbar is a single-VALUE shortcut,
+          // but the map now holds arrays (multi-select union) for every axis.
+          map[raw.slice(0, idx)] = [raw.slice(idx + 1)];
         }
         const keys = Object.keys(map);
         store.set({ matchupVs: keys.length ? map : null });
@@ -3924,7 +3940,12 @@ export function mountTable(
     // Matchup dropdown rows and simply aren't shown here.
     const styleDims = state.discipline === "batting" ? ["group", "type"] : ["hand"];
     const styleAxis = matchupVsAxes(state.matchupVs).find((a) => styleDims.includes(a.dim));
-    const current = styleAxis ? `${styleAxis.dim}:${styleAxis.value}` : "";
+    // The toolbar Vs is a single-axis, single-VALUE quick shortcut (owner ruling):
+    // it reflects the style/hand axis only when EXACTLY ONE value is picked. A
+    // multi-value union (set via the Matchup dropdown's multi-select) has no single
+    // <option> to show, so the toolbar falls back to "Everyone" while the real union
+    // stays fully active in the query, the pills, and the Matchup dropdown.
+    const current = styleAxis && styleAxis.values.length === 1 ? `${styleAxis.dim}:${styleAxis.values[0]}` : "";
     const opt = (value, label) =>
       `<option value="${escAttr(value)}" ${value === current ? "selected" : ""}>${escHtml(label)}</option>`;
 

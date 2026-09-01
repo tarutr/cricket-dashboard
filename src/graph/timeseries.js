@@ -437,7 +437,13 @@ function scopeFor(ns, state, playerIds, { forVsBowling = false } = {}) {
     const styleAxis = matchupVsAxes(state.matchupVs).find((a) => styleDims.includes(a.dim));
     if (styleAxis) {
       const bucketCol = styleAxis.dim === "hand" ? "batting_hand" : styleAxis.dim === "type" ? "bowling_type" : "bowling_group";
-      whereClauses.push(`${bucketCol} = '${escSql(styleAxis.value)}'`);
+      // Multi-select union: mirror buildMatchupQuery — `= 'v'` for a single value
+      // (byte-identical), `IN (...)` for a union.
+      whereClauses.push(
+        styleAxis.values.length === 1
+          ? `${bucketCol} = '${escSql(styleAxis.values[0])}'`
+          : `${bucketCol} IN (${styleAxis.values.map((v) => `'${escSql(v)}'`).join(", ")})`
+      );
     }
   }
 

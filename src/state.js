@@ -347,42 +347,67 @@ export function positionsFilterActive(state) {
 const MATCHUP_VS_DIMS = ["group", "type", "hand", "potm"];
 
 /**
- * Normalise `state.matchupVs` into an array of active `{ dim, value }` opponent
- * axes (decision 81A — combinable matchup opponent filter). The "Vs" mode can
- * now hold SEVERAL opponent conditions AND-ed together: different DIMENSIONS
- * combine, same-dimension values are mutually exclusive, and the join is ALWAYS
- * ALL / never ANY. Two shapes are accepted and both normalise here:
- *   • null / undefined              → []                (no axis)
- *   • legacy single { dim, value }  → [{ dim, value }]  (exactly ONE axis — the
- *        shape the current single-axis lane writer still emits; kept working
- *        byte-identically so nothing downstream changes at ≤1 axis)
- *   • composite map { group?, type?, hand? } (each value is the bucket string)
- *        → one { dim, value } per present, non-empty dim, in MATCHUP_VS_DIMS
- *        order. The map keying makes same-dimension exclusivity STRUCTURAL (one
- *        value per dim).
+ * Normalise `state.matchupVs` into an array of active `{ dim, values }` opponent
+ * axes (decision 81A — combinable matchup opponent filter; multi-select union
+ * added 2026-09). The "Vs" mode can hold SEVERAL opponent conditions AND-ed
+ * together: different DIMENSIONS combine (always ALL / never ANY), and within a
+ * dimension SEVERAL values now UNION (OR) — "vs Pace OR Spin". `values` is always
+ * an array of ≥1 non-empty strings. Two shapes are accepted and both normalise here:
+ *   • null / undefined              → []                    (no axis)
+ *   • legacy single { dim, value }  → [{ dim, values:[value] }]  (exactly ONE
+ *        axis, one value — the shape the pop-up matchup rows + the single-select
+ *        toolbar still emit; kept working byte-identically so nothing downstream
+ *        changes at ≤1 value)
+ *   • composite map { group?, type?, hand?, potm? } — each value is a bucket
+ *        STRING (single) or an ARRAY of bucket strings (multi-select union)
+ *        → one { dim, values } per present dim, in MATCHUP_VS_DIMS order. The map
+ *        keying keeps same-dimension values grouped under ONE axis.
  * The two shapes are told apart by whether a `dim` STRING key is present (only
- * the legacy single object has one).
+ * the legacy single object has one). `matchupAxisValues` (above) does the scalar-
+ * or-array → array normalisation, so a scalar and a one-element array are
+ * indistinguishable downstream (the byte-identical ≤1-value invariant).
  *
- * NOTE (cross-task): the composite WRITE path is Task C (drawer.js) and is not
- * built yet — today only the legacy single object is ever written, so every
- * existing direct reader of `state.matchupVs.dim`/`.value` (drawer/pills/graph/
- * timeseries/playerFilters + the describe token in this file) still sees the
- * single object and keeps working. When the composite writer lands, those
- * readers must move onto matchupVsAxes() too.
+ * Every reader of the axes uses `.values` (an array); buildMatchupQuery emits
+ * `col = 'v'` for a length-1 axis and `col IN ('a','b')` for a union.
  */
+/**
+ * Normalise ONE axis's stored value into an ordered, de-duplicated array of
+ * non-empty string values. Accepts BOTH shapes an axis value can take:
+ *   • SCALAR  — a single bucket string (the single-select toolbar, the pop-up
+ *     matchup rows, and every pre-multi caller). `"Spin"` → `["Spin"]`.
+ *   • ARRAY   — several bucket strings, the multi-select OR / union
+ *     ("vs Pace OR Spin"). `["Pace","Spin"]` → `["Pace","Spin"]`.
+ * A scalar and a one-element array both yield a SINGLE-value array, so
+ * buildMatchupQuery emits byte-identical `col = 'v'` SQL for either — the
+ * ≤1-value invariant the two matchup anchors depend on.
+ */
+function matchupAxisValues(raw) {
+  const list = Array.isArray(raw) ? raw : raw != null && raw !== "" ? [raw] : [];
+  const out = [];
+  const seen = new Set();
+  for (const v of list) {
+    if (v == null || v === "") continue;
+    const s = String(v);
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
 export function matchupVsAxes(matchupVs) {
   if (!matchupVs) return [];
-  // Legacy single object: a `dim` string names the one dimension.
+  // Legacy single object: a `dim` string names the one dimension (value SCALAR).
   if (typeof matchupVs.dim === "string") {
-    return matchupVs.value != null && matchupVs.value !== ""
-      ? [{ dim: matchupVs.dim, value: matchupVs.value }]
-      : [];
+    const values = matchupAxisValues(matchupVs.value);
+    return values.length ? [{ dim: matchupVs.dim, values }] : [];
   }
-  // Composite map keyed by dimension → one axis per present, non-empty value.
+  // Composite map keyed by dimension → one axis per present dim. Each value is a
+  // SCALAR (single) or an ARRAY (multi-select union), normalised to an array.
   const axes = [];
   for (const dim of MATCHUP_VS_DIMS) {
-    const value = matchupVs[dim];
-    if (value != null && value !== "") axes.push({ dim, value });
+    const values = matchupAxisValues(matchupVs[dim]);
+    if (values.length) axes.push({ dim, values });
   }
   return axes;
 }
@@ -2478,15 +2503,19 @@ export function createStore(initial) {
     if (s.view === "table" && matchupVsActive(s)) {
       for (const ax of matchupVsAxes(s.matchupVs)) {
         if (!matchupAxisApplicable(ax.dim, s)) continue;
+        // Multi-select union: several values within a dim read as a comma list —
+        // mirrors the Opposition token ("vs India, Australia"). A single value
+        // reads byte-identically to the pre-multi wording.
         if (ax.dim === "hand") {
           // R4-C naming (locked): no "-handers" wording, even mid-sentence.
-          parts.push(ax.value === "Left-hand bat" ? "vs left-hand batters" : "vs right-hand batters");
+          const names = ax.values.map((v) => (v === "Left-hand bat" ? "left-hand batters" : "right-hand batters"));
+          parts.push(`vs ${names.join(", ")}`);
         } else if (ax.dim === "type") {
-          parts.push(`vs ${matchupBucketLabel(ax.value)}`);
+          parts.push(`vs ${ax.values.map(matchupBucketLabel).join(", ")}`);
         } else if (ax.dim === "potm") {
           parts.push("vs Players of the Match");
         } else {
-          parts.push(`vs ${ax.value}`); // group bucket (Pace / Spin)
+          parts.push(`vs ${ax.values.join(", ")}`); // group bucket (Pace / Spin)
         }
       }
     }

@@ -81,7 +81,7 @@ import {
   mountOpponentPlayer,
   windowPhaseBallsAllowed,
 } from "./drawerInnings.js";
-import { mountSearchSelect } from "./searchSelect.js";
+import { mountSearchSelect, mountSearchMultiSelect } from "./searchSelect.js";
 import { createAddPalette, paletteSkeletonHTML } from "./addPalette.js";
 import { createPaletteGroupsBuilder } from "./paletteGroups.js";
 import { createFieldingDimsController } from "./fieldingDimsDrawer.js";
@@ -621,25 +621,37 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   // every OTHER axis, so the Matchup rows and the (migrated) toolbar Vs never clobber
   // one another. buildMatchupQuery reads the same matchupVsAxes, so numbers are sacred.
   // The STYLE dims for the current board (group/type on batting; hand on bowling) are
-  // mutually exclusive with each other — the single vsSel picks exactly one.
+  // mutually exclusive with each other — a bowling-style pick stays single-DIMENSION,
+  // but within that dimension several values now UNION (multi-select).
   const STYLE_DIMS_BY_DISC = { batting: ["group", "type"], bowling: ["hand"] };
+  // Display labels for the group/hand style values (the fine `type` values use
+  // matchupBucketLabel). Drives the multi-select toggle summary for a single pick.
+  const STYLE_VALUE_LABELS = {
+    Pace: "Pace",
+    Spin: "Spin",
+    "Right-hand bat": "Right-Hand Batter",
+    "Left-hand bat": "Left-Hand Batter",
+  };
   const matchupVsMap = (s) => {
     const map = {};
-    for (const ax of matchupVsAxes(s.matchupVs)) map[ax.dim] = ax.value;
+    for (const ax of matchupVsAxes(s.matchupVs)) map[ax.dim] = ax.values;
     return map;
   };
   const writeMatchupVsMap = (map) => {
     const keys = Object.keys(map);
     store.set({ matchupVs: keys.length ? { ...map } : null });
   };
-  // Set the ONE style/hand axis for the current board, dropping the others (they are
-  // mutually exclusive) and preserving non-style axes (potm). value ""/null clears it.
-  function setMatchupStyleAxis(dim, value) {
+  // Set the style/hand axis for the current board to a UNION of `values` under ONE
+  // dim (group | type | hand), dropping the other style dims (a bowling-style pick
+  // stays single-DIMENSION — see the isOptionDisabled guard on the picker) and
+  // preserving non-style axes (potm). An empty `values` clears the style axis.
+  function setMatchupStyleValues(dim, values) {
     const map = matchupVsMap(store.get());
     delete map.group;
     delete map.type;
     delete map.hand;
-    if (value != null && value !== "") map[dim] = value;
+    const vals = (values || []).filter((v) => v != null && v !== "");
+    if (dim && vals.length) map[dim] = vals;
     writeMatchupVsMap(map);
   }
   // Remove the named dims (preserving the rest) — the Matchup rows' clear/remove path.
@@ -661,21 +673,45 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     matchupVsAxes(s.matchupVs).some((ax) => (STYLE_DIMS_BY_DISC[s.discipline] || []).includes(ax.dim));
   const matchupPotmAxisSet = (s) => matchupVsAxes(s.matchupVs).some((ax) => ax.dim === "potm");
 
-  const vsSel = mountSearchSelect(editorHosts.vs, {
+  // The Vs style/hand picker is a MULTI-SELECT (2026-09) — mirrors the Opposition
+  // multi-select so several bucket values UNION ("vs Pace OR Spin"). Options encode
+  // "dim:value" (e.g. "group:Pace", "type:Off-spin"); onChange re-derives the axis.
+  // A bowling-style pick stays SINGLE-DIMENSION (coarse group XOR fine type) — the
+  // isOptionDisabled guard greys the other dimension's rows once one is ticked, so
+  // group + type can never AND into an empty set. buildMatchupQuery reads the same
+  // matchupVsAxes, so numbers are sacred.
+  const vsStyleDimOf = (encoded) => encoded.slice(0, encoded.indexOf(":"));
+  const vsStyleValOf = (encoded) => encoded.slice(encoded.indexOf(":") + 1);
+  const vsSel = mountSearchMultiSelect(editorHosts.vs, {
     searchable: false,
     portal: true,
     ariaLabel: "Matchup opponent",
     // "Anyone" cue for the no-value state (matches the leaf's title-case naming).
     placeholder: "Anyone",
-    allowEmptyLabel: "Anyone",
-    onChange: (val) => {
-      // The inline style/hand menu edits ONLY this board's style axis of the composite
-      // matchupVs, preserving any potm axis. "" (Anyone) clears just the style axis.
-      if (!val) {
-        setMatchupStyleAxis(null, null);
+    summarize: (count) => {
+      const vals = vsSel ? vsSel.getValues() : [];
+      if (vals.length === 1) {
+        const dim = vsStyleDimOf(vals[0]);
+        const val = vsStyleValOf(vals[0]);
+        return dim === "type" ? matchupBucketLabel(val) : STYLE_VALUE_LABELS[val] || val;
+      }
+      return `${count} selected`;
+    },
+    // Single-DIMENSION guard: once any value is ticked, disable every option whose
+    // dimension differs from it (group ⊻ type). Same-dim ticks stay enabled → union.
+    isOptionDisabled: (val, selected) => {
+      if (!selected || selected.size === 0) return false;
+      const d = vsStyleDimOf(val);
+      for (const s of selected) if (vsStyleDimOf(s) !== d) return true;
+      return false;
+    },
+    onChange: (encodedVals) => {
+      // All ticked values share ONE dim (guard above), so group→one dim + its values.
+      if (!encodedVals.length) {
+        setMatchupStyleValues(null, []);
       } else {
-        const i = val.indexOf(":");
-        setMatchupStyleAxis(val.slice(0, i), val.slice(i + 1));
+        const dim = vsStyleDimOf(encodedVals[0]);
+        setMatchupStyleValues(dim, encodedVals.map(vsStyleValOf));
       }
       onChange();
     },
@@ -722,10 +758,11 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       loadVsBowlingTypes().then(() => renderVsEditor());
     }
     // Reflect ONLY the style/hand axis of the composite matchupVs (potm is a separate
-    // row) — via matchupVsAxes, never a direct `.dim`/`.value` read.
+    // row) — via matchupVsAxes, never a direct `.dim`/`.value` read. Multi-select:
+    // the current selection is the axis's value LIST re-encoded as "dim:value".
     const styleDims = STYLE_DIMS_BY_DISC[s.discipline] || [];
     const styleAxis = matchupVsAxes(s.matchupVs).find((ax) => styleDims.includes(ax.dim));
-    const current = styleAxis ? `${styleAxis.dim}:${styleAxis.value}` : null;
+    const current = styleAxis ? styleAxis.values.map((v) => `${styleAxis.dim}:${v}`) : [];
     // Same option SET and ORDER as the old <select> — "Anyone" (via allowEmptyLabel,
     // above) leads, then Pace/Spin, then the fine bowling types for batting; just the
     // two hand buckets for bowling. Group labels reproduce the old <optgroup>s.
@@ -746,7 +783,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       ];
     }
     vsSel.setOptions(opts);
-    vsSel.setValue(current);
+    vsSel.setValues(current);
   }
 
   // ── Matchup lane section (decision 83 Fork 2) ────────────────────────────────
