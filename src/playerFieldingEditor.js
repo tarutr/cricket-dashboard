@@ -45,7 +45,7 @@ import { createAddPalette, paletteSkeletonHTML } from "./addPalette.js";
 import { mountOpponentPlayer } from "./drawerInnings.js";
 import { loadDimOptions } from "./dimOptions.js";
 import { canonicalStage } from "./canonicalNames.js";
-import { FORMAT_BUCKETS } from "./state.js";
+import { FORMAT_BUCKETS, opponentPlayerValues } from "./state.js";
 // The fielding dim catalogue + vocab now live in src/fieldingDims.js (ONE source of
 // truth, shared with the leaderboard's Fielding board menu). This editor's behaviour
 // is byte-unchanged — it just consumes the catalogue instead of defining it inline.
@@ -334,18 +334,23 @@ export function openFieldingRowEditor(hostDoc, deps) {
     const holder = document.createElement("div");
     body.appendChild(holder);
     // Reuse the T-1 omnisearch player picker (drawerInnings.mountOpponentPlayer) via a
-    // per-picker store adapter: its `opponentPlayer` slot ↔ this dim's single pick.
-    const current = { id: (draft.fielding[dim.field] || [])[0] || null, name: draft.fielding[dim.nameField] || null };
+    // per-picker store adapter. Multi-select (decision 88 extension — owner 2026-09-01):
+    // its `opponentPlayer` slot ↔ this dim's ids array (dim.field — the SACRED
+    // `col IN (…)` input) plus a PARALLEL names array (dim.nameField) so chips re-render
+    // with names. A lone pick keeps the one-element-array shape the query already
+    // unioned byte-identically.
     const pickerStore = {
-      get: () => ({ opponentPlayer: current.id ? { id: current.id, name: current.name } : null }),
+      get: () => {
+        const ids = draft.fielding[dim.field] || [];
+        const names = Array.isArray(draft.fielding[dim.nameField]) ? draft.fielding[dim.nameField] : [];
+        return { opponentPlayer: ids.map((id, i) => ({ id, name: names[i] || id })) };
+      },
       set: (patch) => {
-        const opp = patch.opponentPlayer;
-        if (opp && opp.id) {
-          current.id = opp.id; current.name = opp.name || opp.id;
-          draft.fielding[dim.field] = [opp.id];
-          draft.fielding[dim.nameField] = current.name;
+        const picks = opponentPlayerValues(patch.opponentPlayer);
+        if (picks.length) {
+          draft.fielding[dim.field] = picks.map((p) => p.id);
+          draft.fielding[dim.nameField] = picks.map((p) => p.name || p.id);
         } else {
-          current.id = null; current.name = null;
           delete draft.fielding[dim.field];
           delete draft.fielding[dim.nameField];
         }
@@ -353,7 +358,7 @@ export function openFieldingRowEditor(hostDoc, deps) {
       subscribe: () => () => {},
       describeScope: () => "",
     };
-    mountOpponentPlayer(holder, pickerStore, () => {}, { embedded: true });
+    mountOpponentPlayer(holder, pickerStore, () => {}, { embedded: true, multi: true });
   }
 
   function renderOverRange(body) {

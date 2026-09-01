@@ -908,7 +908,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   // like every singleton editor; its row is only ever visible/addable on the ball
   // engine (isPresent's ballOnly gate). Writes state.opponentPlayer; db.js turns
   // that into the base-CTE ball predicate on Search.
-  const opponentController = mountOpponentPlayer(editorHosts.vs_opp, store, onChange, { embedded: true });
+  const opponentController = mountOpponentPlayer(editorHosts.vs_opp, store, onChange, { embedded: true, multi: true });
 
   // ── Fielding board dim rows (3.2b2) ──────────────────────────────────────────
   // The full fielding dim set (every catalogue dim EXCEPT position — that stays on
@@ -993,7 +993,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       // Opponent-player (Tab-2 T-1): present when an opponent is picked. Gated on
       // the ball engine too (belt-and-suspenders — flag-OFF opponentPlayer is
       // always null and the row is ballOnly-hidden anyway).
-      case "vs_opp": return ballEngineEnabled() && Boolean(s.opponentPlayer && s.opponentPlayer.id);
+      case "vs_opp": return ballEngineEnabled() && opponentPlayerActive(s);
       case "role": return Boolean(s.profile.roleGroup);
       // Batting hand is a batting-only concept in the batting↔bowling sense (decision
       // 54): a player's batting hand isn't their bowling arm, so the row never shows

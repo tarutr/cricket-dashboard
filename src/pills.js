@@ -68,9 +68,11 @@ function fieldingDimPillLabel(dim, fld, state) {
     return from != null ? `overs ${from}+` : `overs up to ${to}`;
   }
   if (dim.control === "player") {
-    const id = (fld[dim.field] || [])[0];
-    if (!id) return null;
-    return `${dim.pickLabel}: ${fld[dim.nameField] || id}`;
+    const ids = fld[dim.field] || [];
+    if (!ids.length) return null;
+    const names = fld[dim.nameField];
+    const text = Array.isArray(names) ? ids.map((id, i) => names[i] || id).join(", ") : names || ids[0];
+    return `${dim.pickLabel}: ${text}`;
   }
   const vals = fld[dim.field];
   if (!Array.isArray(vals) || vals.length === 0) return null;

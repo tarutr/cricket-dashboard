@@ -63,6 +63,7 @@ import {
   POTM_YN_OPTIONS,
   inningsNumberOptions,
   inningsNumberLabel,
+  opponentPlayerValues,
 } from "./state.js";
 import { searchTeams, searchEvents, searchVenues, searchCities, searchSeasons, searchEventSeasons, searchStages } from "./playerData.js";
 import { withDeliveryWindowPiece } from "./deliveryWindow.js";
@@ -1385,7 +1386,7 @@ export function mountWindowPlayer(container, store, onChange, { embedded = false
  * leaf + row are ballOnly-gated in drawer.js). Writes state.opponentPlayer; db.js
  * turns that into the base-CTE ball predicate on Search (numbers-critical path).
  */
-export function mountOpponentPlayer(container, store, onChange, { embedded = false } = {}) {
+export function mountOpponentPlayer(container, store, onChange, { embedded = false, multi = false } = {}) {
   void embedded;
   container.innerHTML = `
     <div class="opp-picker" data-role="opp-picker">
@@ -1393,9 +1394,66 @@ export function mountOpponentPlayer(container, store, onChange, { embedded = fal
              aria-autocomplete="list" aria-expanded="false" autocomplete="off"
              placeholder="Search a player…" aria-label="Opponent player" />
       <div class="opp-picker__results" data-role="opp-results" role="listbox" aria-label="Opponent player search results" hidden></div>
+      ${multi ? `<div class="cols-fc-chips opp-picker__chips" data-role="opp-chips" hidden></div>` : ""}
     </div>`;
   const inputEl = container.querySelector('[data-role="opp-input"]');
   const resultsEl = container.querySelector('[data-role="opp-results"]');
+
+  // ── MULTI mode (decision 88 — opponent OR/union; fielding Specific Batter/Bowler) ──
+  // Picking a player APPENDS a removable chip; each chip's × removes that one pick; the
+  // control reads/writes an ARRAY (state.opponentPlayer, or the fielding adapter's
+  // ids+names arrays). opponentPlayerValues normalises + de-dupes both shapes, so a lone
+  // pick stays byte-identical to the single-select path. Chips reuse the shared
+  // .cols-fc-chip visual convention (no new CSS). The input is cleared after each pick —
+  // the chips carry the selection — and sync() only ever re-renders chips, so a state
+  // change can never clobber a search term the user is mid-typing.
+  if (multi) {
+    const chipsEl = container.querySelector('[data-role="opp-chips"]');
+    const renderChips = () => {
+      const picks = opponentPlayerValues(store.get().opponentPlayer);
+      if (!picks.length) {
+        chipsEl.hidden = true;
+        chipsEl.innerHTML = "";
+        return;
+      }
+      chipsEl.hidden = false;
+      chipsEl.innerHTML = picks
+        .map(
+          (p) =>
+            `<span class="cols-fc-chip"><span class="cols-fc-chip__label">${escHtml(p.name || p.id)}</span>` +
+            `<button type="button" class="cols-fc-chip__x" data-opp-remove="${escAttr(p.id)}" title="Remove" aria-label="Remove ${escAttr(p.name || p.id)}">✕</button></span>`
+        )
+        .join("");
+      chipsEl.querySelectorAll("[data-opp-remove]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const rid = btn.dataset.oppRemove;
+          const next = opponentPlayerValues(store.get().opponentPlayer).filter((p) => p.id !== rid);
+          store.set({ opponentPlayer: next.length ? next : null });
+          onChange();
+          renderChips();
+        });
+      });
+    };
+    mountOmnisearch(inputEl, resultsEl, {
+      showFilterAction: false, // picker mode — no "Filter the table" action row
+      onOpenPlayer: (id, name) => {
+        const pid = id == null ? "" : String(id);
+        if (!pid) return;
+        const cur = opponentPlayerValues(store.get().opponentPlayer);
+        if (!cur.some((p) => p.id === pid)) {
+          store.set({ opponentPlayer: [...cur, { id: pid, name: name || pid }] });
+          onChange();
+        }
+        inputEl.value = ""; // ready for the next pick (chips carry the picks)
+        renderChips();
+      },
+    });
+    const syncMulti = () => renderChips();
+    syncMulti();
+    return { sync: syncMulti };
+  }
+
+  // ── SINGLE mode (default OFF — unchanged single-overwrite; every pre-multi caller) ──
   // Tracks the last id we WROTE to the input, so a state change (sync) refreshes
   // the box without clobbering a live search the user is typing.
   let lastWrittenId = null;

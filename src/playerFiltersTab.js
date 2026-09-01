@@ -447,9 +447,9 @@ function describeFieldingRow(f) {
   list(f.kinds, "Wicket Type", (k) => WICKET_TYPE_LABEL[k] || k);
   list(f.positions, "Batting Position");
   list(f.hands, "Batting Hand");
-  if (Array.isArray(f.outBatters) && f.outBatters.length) out.push(`Batter: ${f.outBatterName || f.outBatters[0]}`);
+  if (Array.isArray(f.outBatters) && f.outBatters.length) out.push(`Batter: ${Array.isArray(f.outBatterName) ? f.outBatters.map((id, i) => f.outBatterName[i] || id).join(", ") : f.outBatterName || f.outBatters[0]}`);
   list(f.bowlerStyles, "Bowler Style", bowlingStyleDisplayLabel); // cutover S1: title-case display; values untouched
-  if (Array.isArray(f.bowlers) && f.bowlers.length) out.push(`Bowler: ${f.bowlerName || f.bowlers[0]}`);
+  if (Array.isArray(f.bowlers) && f.bowlers.length) out.push(`Bowler: ${Array.isArray(f.bowlerName) ? f.bowlers.map((id, i) => f.bowlerName[i] || id).join(", ") : f.bowlerName || f.bowlers[0]}`);
   list(f.phases, "Phase", (p) => PHASE_LABEL[p] || p);
   if (Number.isFinite(Number(f.overFrom)) || Number.isFinite(Number(f.overTo))) {
     const from = Number.isFinite(Number(f.overFrom)) ? Number(f.overFrom) + 1 : "…";

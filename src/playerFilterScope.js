@@ -68,6 +68,7 @@ import {
   tossDecisionFilterActive,
   inningsNumberFilterActive,
   opponentPlayerActive,
+  opponentPlayerValues,
   inningsNumberLabel,
   RESULT_OPTIONS,
   RESULT_ALL,
@@ -173,8 +174,8 @@ const SINGLETON_DEFS = [
   },
   {
     key: "vs_opp", label: "vs opponent player",
-    mount: (h, st, oc) => mountOpponentPlayer(h, st, oc, { embedded: true }),
-    active: (s) => Boolean(s.opponentPlayer && s.opponentPlayer.id),
+    mount: (h, st, oc) => mountOpponentPlayer(h, st, oc, { embedded: true, multi: true }),
+    active: (s) => opponentPlayerActive(s),
     clear: (st) => st.set({ opponentPlayer: null }),
   },
   {
@@ -231,7 +232,7 @@ export function describeRowSingletons(singletons, deliveryWindow, opponentPlayer
   const labelOf = (vals, opts) => (vals || []).map((v) => opts.find((o) => o.value === v)?.label || v);
   // The tab never runs matchup, so the delivery-window namespace is just the discipline.
   for (const tok of deliveryWindowTokens(s.deliveryWindow, discipline)) out.push(tok.label);
-  if (opponentPlayerActive(s)) out.push(`vs ${s.opponentPlayer.name || s.opponentPlayer.id}`);
+  if (opponentPlayerActive(s)) out.push(`vs ${opponentPlayerValues(s.opponentPlayer).map((o) => o.name || o.id).join(", ")}`);
   if ((s.teams || []).length) out.push(s.teams.length <= 3 ? `Team: ${s.teams.join(", ")}` : `Team: ${s.teams.length} teams`);
   if (oppositionFilterActive(s)) out.push(s.opposition.length <= 3 ? `vs ${s.opposition.join(", ")}` : `vs ${s.opposition.length} opponents`);
   if (eventFilterActive(s)) out.push(s.event.length <= 2 ? `Event: ${s.event.join(", ")}` : `Event: ${s.event.length} events`);

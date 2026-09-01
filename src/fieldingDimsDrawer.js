@@ -26,7 +26,7 @@ import { loadDimOptions, hasNullValue } from "./dimOptions.js";
 import { canonicalStage } from "./canonicalNames.js";
 import { DIMS, CHECKLIST_FILTER_THRESHOLD } from "./fieldingDims.js";
 import { escHtml, escAttr } from "./html.js";
-import { STAGE_NONE, STAGE_NONE_LABEL } from "./state.js";
+import { STAGE_NONE, STAGE_NONE_LABEL, opponentPlayerValues } from "./state.js";
 
 // Position stays on the existing `fld_pos` singleton (byte-identical on every board),
 // so this controller owns every OTHER catalogue dim.
@@ -255,21 +255,27 @@ export function createFieldingDimsController({ host, store, onChange, requestRer
   }
 
   function mountPlayer(hostEl, dim) {
+    // Multi-select (decision 88 extension — owner 2026-09-01): the widget reads/writes
+    // an ARRAY of opponent picks. The adapter maps that to this dim's ids array
+    // (dim.field — the SACRED `col IN (…)` input) plus a PARALLEL names array
+    // (dim.nameField) so chips re-render with names, not ids. A lone pick keeps the
+    // one-element-array shape the query already unioned byte-identically.
     const adapter = {
       get: () => {
         const f = store.get().fielding || {};
-        const id = (f[dim.field] || [])[0] || null;
-        return { opponentPlayer: id ? { id, name: f[dim.nameField] || id } : null };
+        const ids = f[dim.field] || [];
+        const names = Array.isArray(f[dim.nameField]) ? f[dim.nameField] : [];
+        return { opponentPlayer: ids.map((id, i) => ({ id, name: names[i] || id })) };
       },
       set: (patch) => {
-        const opp = patch.opponentPlayer;
-        if (opp && opp.id) patchFielding({ [dim.field]: [opp.id], [dim.nameField]: opp.name || opp.id });
+        const picks = opponentPlayerValues(patch.opponentPlayer);
+        if (picks.length) patchFielding({ [dim.field]: picks.map((p) => p.id), [dim.nameField]: picks.map((p) => p.name || p.id) });
         else patchFielding({ [dim.field]: [], [dim.nameField]: undefined });
       },
       subscribe: () => () => {},
       describeScope: () => "",
     };
-    return mountOpponentPlayer(hostEl, adapter, onChange, { embedded: true });
+    return mountOpponentPlayer(hostEl, adapter, onChange, { embedded: true, multi: true });
   }
 
   function mountOverRange(hostEl) {
