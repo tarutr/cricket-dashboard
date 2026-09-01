@@ -712,8 +712,8 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
       finalWhereParts.push(`(${disjuncts.join(" OR ")})`);
     } else if (hasActiveProfileFilter(state.profile) || activeGroups(state.advanced).length > 0) {
       // Fork 4 (decision 83): an "Any" group built ONLY of conditions that CANNOT match (e.g.
-      // a profile filter on the Women view, where profileSemiJoinSql no-ops → the profile
-      // disjunct vanishes) returns NOTHING — AND `1 = 0` into the always-AND inningsGate.
+      // a profile filter in a scope with no profile data, where profileSemiJoinSql no-ops → the
+      // profile disjunct vanishes) returns NOTHING — AND `1 = 0` into the always-AND inningsGate.
       // Distinguished from "no group condition at all" (→ only the inningsGate, the matchup
       // baseline) by these state-level active checks. Still pin-exempt.
       finalWhereParts.push("1 = 0");
@@ -2508,8 +2508,8 @@ export function buildQuery(state, visibleColumns, opts = {}) {
       havingSql = gateWithPinExemption(disjuncts.join(" OR "), idCol, pins);
     } else if (hasActiveProfileFilter(state.profile) || activeGroups(state.advanced).length > 0) {
       // Fork 4 (decision 83): an "Any" group built ONLY of conditions that CANNOT match
-      // (e.g. a profile filter on the Women view, where profileSemiJoinSql no-ops → the
-      // profile disjunct vanishes) returns NOTHING. Distinguished from "no group condition
+      // (e.g. a profile filter in a scope with no profile data, where profileSemiJoinSql
+      // no-ops → the profile disjunct vanishes) returns NOTHING. Distinguished from "no group condition
       // at all" (→ the core-scope baseline below) by these state-level active checks. Still
       // pin-exempt — a pinned player floats in regardless, exactly as everywhere else.
       havingSql = gateWithPinExemption("1 = 0", idCol, pins);

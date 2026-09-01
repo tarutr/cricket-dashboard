@@ -541,7 +541,7 @@ export function buildScopeClausesTagged(
   // Profile-powered filters (D4.2): semi-join to matched player_ids. Only added
   // when an idColumn is supplied by the caller (the player_matches/innings views
   // and matchup views all have a join key; some scoped lookups don't) and a
-  // profile filter is active. profileSemiJoinSql itself no-ops for women.
+  // profile filter is active. profileSemiJoinSql itself no-ops where no profile data exists.
   // Chunk 5 Phase 2 Wave B: tag it lane "player" — it is the ONLY player-lane
   // member that lives in the WHERE (the PotM / numeric conditions are HAVING). The
   // tag is SQL-invisible (buildScopeClauses joins only `.sql`, whereWithPinExemption

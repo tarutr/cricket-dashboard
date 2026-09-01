@@ -15,7 +15,7 @@
 // This module renders/wires the DOM and calls store.set(...); it never
 // queries the database.
 
-import { positionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, cityFilterActive, seasonFilterActive, seasonsForEvent, hasActiveProfileFilter, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, filterGroupOp, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
+import { positionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, cityFilterActive, seasonFilterActive, seasonsForEvent, hasActiveProfileFilter, profileDataPresent, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, filterGroupOp, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel, composedParamPrefixForBase, paramAppliedLabel, bowlingStyleDisplayLabel } from "./metrics.js";
@@ -293,9 +293,10 @@ export function mountPills(
       });
     }
 
-    // Profile pills are men-only (decision 21) — inert while viewing women,
-    // so no pill even if a stale value somehow lingered in state.
-    if (s.gender !== "female" && hasActiveProfileFilter(s.profile)) {
+    // Profile pills show only where profile data exists (has-profile / no-profile,
+    // owner directive 2026-08-06) and a profile filter is active — mirroring
+    // profileSemiJoinSql's gate, so a stale value in a no-profile scope shows no pill.
+    if (profileDataPresent(s) && hasActiveProfileFilter(s.profile)) {
       const p = s.profile;
       // `display` (optional) decouples the pill LABEL from the restore VALUE — the
       // Bowling Style pill title-cases its label (cutover S1) while remove/restore keep

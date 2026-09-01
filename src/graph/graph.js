@@ -333,10 +333,10 @@ function wireDropdown(toggleEl, panelEl) {
   };
 }
 
-// NOTE: the Dumbbell chart used to be batting+men-only (a matchup "vs Pace/vs
-// Spin" chart, gated by a dumbbellAvailable()/dumbbellUnavailableReason() pair
-// here). It is now a time-window chart drawing Slope's exact data source, so
-// it works wherever Slope does — any gender, batting OR bowling — and needs no
+// NOTE: the Dumbbell chart used to be a batting matchup-only chart (a matchup
+// "vs Pace/vs Spin" chart, gated by a dumbbellAvailable()/dumbbellUnavailableReason()
+// pair here). It is now a time-window chart drawing Slope's exact data source, so
+// it works wherever Slope does — any scope, batting OR bowling — and needs no
 // availability gate at all. Both helpers were removed with that rebuild.
 
 // R4 Wave 1b (item 3 + item 4): the radar-valid metric predicate — the ONE

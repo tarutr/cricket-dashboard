@@ -674,7 +674,7 @@ export async function searchStages(
   };
 }
 
-/** The player's profile row (null for the ~unmatched; profiles are men-only). */
+/** The player's profile row (null for players with no profile data). */
 export async function fetchProfile(playerId) {
   const { rows } = await query(`SELECT * FROM profiles WHERE player_id = '${esc(playerId)}'`);
   return rows[0] ?? null;

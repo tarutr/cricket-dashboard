@@ -3237,9 +3237,9 @@ export function resolveColumnMetric(key, ns) {
 // projection pom_cte uses), and offered explicitly in the leaderboard
 // Columns picker's "Player Profile" section. Availability MIRRORS the profile
 // filters' discipline gating (paletteGroups.js): Batting hand is batting-only; the
-// other four are offered in both disciplines. Men-only BY DATA today (profiles is
-// men-only) → they read blank ("—") for players without a profile; NOT
-// gender-hardcoded (owner "remove the hardcode everywhere").
+// other four are offered in both disciplines. Data-driven — players without a
+// profile read blank ("—"); the columns are NOT gender-hardcoded (owner "remove the
+// hardcode everywhere").
 //
 // Key scheme: `attr_<field>` — identifier-safe (no quoting), collides with no plain
 // metric key (none starts with "attr_") nor any composed/cross prefix (x__ / ph__ /

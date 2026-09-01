@@ -319,8 +319,8 @@ function syncDataAvailFromCache() {
  * mergeDataAvail(gender): ASYNC — resolve `gender` (cheap LIMIT-1 probe, usually
  * already cached) and, if it is STILL the current gender, push it onto the store.
  * A probe failure is swallowed so it never blocks Search / boot (the gate then
- * stays optimistic — men behave as today, women are held correct by the secondary
- * guards). Awaited by runSearch (the hard guarantee that no leaderboard query is
+ * stays optimistic — a scope with data behaves normally, one without is held correct
+ * by the secondary guards). Awaited by runSearch (the hard guarantee that no leaderboard query is
  * built from an unresolved value) and kicked fire-and-forget on load + filter
  * changes. When it lands while the graph is showing, re-run onScopeChanged — the
  * store.subscribe hook does not drive the graph, so a late resolve would otherwise
@@ -838,7 +838,7 @@ function boot() {
         // (matchupVsActive / profileSemiJoinSql) read a RESOLVED value — never the
         // optimistic pre-resolve default. Cheap LIMIT-1 probe, usually already
         // cached from the boot prewarm; on failure mergeDataAvail leaves dataAvail
-        // as-is and we proceed (men behave as today; women held by the guards).
+        // as-is and we proceed (a scope with data behaves normally; one without held by the guards).
         await mergeDataAvail(store.get().gender);
         closePopup();
         // R5-B #3: a POPUP Search is a fresh filters-applied change → RESET pins

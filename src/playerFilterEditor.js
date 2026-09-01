@@ -287,8 +287,8 @@ export function openFilterRowEditor(hostDoc, deps) {
   const noPreselect = () => () => {};
 
   // Data-driven filter availability (owner "remove the hardcode everywhere") — the
-  // Matchup Vs family's offer is decided by whether the current gender's matchup
-  // data exists, not a gender check. Same shared probe as the leaderboard drawer.
+  // Matchup Vs family's offer is decided by whether the current scope's matchup
+  // data exists (has-matchup / no-matchup), not a gender check. Same shared probe as the leaderboard drawer.
   // availabilityOnReady re-mounts the palette + re-renders the draft conditions once
   // a probe resolves (rebuildPalette / renderConditions are hoisted function decls).
   const availability = createFilterAvailability();
@@ -315,8 +315,8 @@ export function openFilterRowEditor(hostDoc, deps) {
     ensureVsBowlingTypesLoaded,
     metricSliceable: isPopupFilterMetric,
     // Data-driven availability (owner "remove the hardcode everywhere") — the
-    // Matchup Vs family is offered iff the current gender's matchup data exists
-    // (men → yes, women → no today, future women's data → auto-shown). Same
+    // Matchup Vs family is offered iff the current scope's matchup data exists
+    // (has-matchup / no-matchup — auto-shown wherever that data lands). Same
     // shared probe as the leaderboard; re-renders the palette + conditions once a
     // probe resolves. (Profile leaves stay excluded on the popup regardless.)
     isFilterAvailable: (key, s) => availability.isAvailable(key, s),

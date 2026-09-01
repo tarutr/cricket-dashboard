@@ -58,8 +58,8 @@ export function medallionHTML(name, extraClass = "") {
 
 /**
  * Identity header photo: a real headshot (has_real_headshot, ~1,360 players)
- * renders as a lazy <img>; every other case — no profile at all (women,
- * unmatched men — profiles are men-only, decision 21), a profile with only
+ * renders as a lazy <img>; every other case — no profile at all (players with no
+ * profile data), a profile with only
  * the placeholder Cricinfo image, or a broken URL at runtime — is the
  * medallion, so "no photo" always reads as an intentional design, never a
  * broken-image glyph. The medallion sits behind the <img> as a sibling (not a

@@ -56,7 +56,8 @@ Vercel (`cricdb.vercel.app`).
 
 - ~~No player role/type filters.~~ Superseded by Phase D4: the `player_profiles` table
   (from the Cricinfo sheet) powers playing-role, batting-hand, bowling-style, and
-  teams-played-for filters. Profiles are men-only, so these are inert on the Women view.
+  teams-played-for filters. Availability is data-driven: they are offered wherever profile
+  data exists and stay inert where it does not (a has-profile / no-profile distinction).
 - ~~No player profile pages.~~ Superseded by the player **pop-ups** (§7). They are
   overlays, not pages, per owner decision 32.
 
@@ -166,7 +167,7 @@ death 76+) rather than over_number.
 
 **player_profiles.parquet** — one row per matched player_id. A verbatim export
 (`SELECT *`) of the non-Cricsheet `player_profiles` enrichment table built by
-`pipeline/build_profiles.py` from the Cricinfo sheet. Men-only in practice. Columns:
+`pipeline/build_profiles.py` from the Cricinfo sheet. Columns:
 - `player_id`, `registry_name`, `full_name`, `country`, `dob`,
 - `playing_role` (verbatim sheet role), `role_group` (Batter / Allrounder / Bowler; NULL
   for Unknown), `role_subgroup` (Wicketkeeper / Opening / Top-order / Middle-order /
@@ -225,9 +226,9 @@ or wicket-only rows / diamond ducks).
 **matchup_batting.parquet** — one row per
 (PK `match_id`, `innings_number`, `batter_id`, `bowling_type`): the batter's record
 against every distinct bowling style faced that innings, keyed by the **bowler's** mapped
-style (`COALESCE(profile.bowling_type, profile.bowling_group, '(unmapped)')`). Men-only in
-practice; the `(unmapped)` bucket makes an honest "N of M balls" coverage denominator
-computable in the browser.
+style (`COALESCE(profile.bowling_type, profile.bowling_group, '(unmapped)')`). The
+`(unmapped)` bucket makes an honest "N of M balls" coverage denominator computable in the
+browser.
 - Keys + context: `match_id`, `innings_number`, `batter_id`, `bowling_type`,
   `bowling_group`, `batter_name`, `batting_team`, `bowling_team`, `match_type`, `gender`,
   `team_type`, `match_date`, `year`, `month`
@@ -345,7 +346,7 @@ A slim always-visible strip carries the coarse scope. Its controls apply the mom
 change (they are not held behind Search — but the *table* only re-queries on Search, §5.5):
 
 1. **Gender** — Men / Women, single-select. **Men is the default.** Switching gender
-   clears any profile-based filter (profiles are men-only).
+   clears any profile-based filter (it re-scopes to the new view's data).
 2. **Discipline** — Batting / Bowling / **Fielding** (Fielding BUILT + VERIFIED on the
    `ball-layer` branch, NOT yet live — see §5.1a; its availability is data-driven, so the
    option is only offered where fielding data exists). Lives in the scope strip (the
@@ -607,10 +608,11 @@ untouched. There is no Players tab.
   fielding credit. Previously the pop-up always showed matches-with-a-credit, which
   disagreed with the leaderboard's un-narrowed Matches; this is now fixed.
 
-**Profiles are men-only.** On the Women view, every profile-powered surface (the profile
-filter row, matchup sections, header profile fields) is greyed with an honest note —
-e.g. "We don't have profile data on Women yet." — because 0% of women players have a
-profile.
+**Profile availability is data-driven (has-profile / no-profile).** Every profile-powered
+surface (the profile filter row, matchup sections, header profile fields) is offered
+wherever the current scope's players carry profile data, and where none exists is greyed
+with an honest note (e.g. "No profile data for this player."). It auto-enables for any
+scope as its profile data lands, with no code change.
 
 ## 8. Non-negotiable engineering rules
 

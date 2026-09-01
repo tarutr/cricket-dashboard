@@ -36,10 +36,10 @@
 // ── DATA-DRIVEN availability (owner ruling, T-3a-ext — NO gender hardcode) ────
 // The profile-derived + any data-sourced dims (Batting Hand / Bowler Style /
 // City / Season / Stage) load their option lists via loadDimOptions on open; a dim
-// is OFFERED in the palette ONLY when its list is non-empty. Men return values →
-// the filter shows; women return [] for the profile dims (all NULL) → hidden; when
-// women's profiles land, options appear and the filter auto-shows. There is ZERO
-// `if (!women)` here — the DATA decides.
+// is OFFERED in the palette ONLY when its list is non-empty. A dim with values →
+// the filter shows; a scope whose profile dims are all NULL returns [] → hidden; when
+// that data lands, options appear and the filter auto-shows. There is ZERO
+// gender check here — the DATA decides.
 
 import { createAddPalette, paletteSkeletonHTML } from "./addPalette.js";
 import { mountOpponentPlayer } from "./drawerInnings.js";

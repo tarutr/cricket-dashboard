@@ -198,7 +198,7 @@ export function createPaletteGroupsBuilder(deps) {
     preselectPhase, preselectFielding, preselectMatchupVs, preselectEdge, preselectInningsNumber,
     getVsBowlingTypes, ensureVsBowlingTypesLoaded,
     // DATA-DRIVEN availability (owner "remove the hardcode everywhere",
-    // 2026-08-03) — replaces the old `!women` gates on the Player-Profile leaves
+    // 2026-08-03) — a has-data / no-data gate on the Player-Profile leaves
     // (role/hand/bowling) and the Matchup "Vs" family. `isFilterAvailable(key, s)`
     // is a SYNC getter over an async-loaded per-gender cache (src/filterAvailability.js),
     // wired by each surface (drawer + pop-up editor); `ensureFilterAvailabilityLoaded(s)`
@@ -465,8 +465,8 @@ export function createPaletteGroupsBuilder(deps) {
     // "popup" surface via excludeLeaf (see file header); Team is never excluded.
     pushGroup("Player Profile", [
       // Data-driven (owner 2026-08-03): each profile leaf is offered iff its
-      // profile data exists for the current scope (men → yes, women today → no,
-      // future women's data → auto-shown) — replaces the old `!women` gate.
+      // profile data exists for the current scope (has-profile → shown, no-profile →
+      // absent, auto-shown wherever that data lands) — a has-data / no-data gate.
       isFilterAvailable("profileRole", s) && !excludeLeaf("role") ? leafSingle("role", "Playing Role") : null,
       isFilterAvailable("profileHand", s) && disc === "batting" && !excludeLeaf("hand") ? leafSingle("hand", "Batting Hand") : null,
       isFilterAvailable("profileBowling", s) && !excludeLeaf("bowling") ? leafSingle("bowling", "Bowling Style") : null,
@@ -711,10 +711,10 @@ export function createPaletteGroupsBuilder(deps) {
     // T-F3: unaffected by `surface` — kept whole on "popup" (Team + every Matchup
     // entry stays). The profile-backed entries (vs bowling style / vs batting hand)
     // are offered DATA-DRIVEN (owner "remove the hardcode everywhere", 2026-08-03)
-    // — via isFilterAvailable, not the old `!women` gate. Matchup rows key every
-    // bowler/batter through profiles, so today the mapped-style data exists for men
-    // only (women are all '(unmapped)') → men offered, women absent, identical to
-    // before; women's future profiles auto-restore it.
+    // — via isFilterAvailable, a has-data / no-data gate. Matchup rows key every
+    // bowler/batter through profiles, so the mapped-style data exists only where the
+    // scope's players carry profiles (profile-less balls are all '(unmapped)') → the
+    // family is offered where that data exists and absent otherwise, auto-restoring as profiles land.
     //
     // M2a follow-up (owner ruling, 2026-08-27): on the LEADERBOARD ("leaderboard"
     // surface — the default, reached via drawer.js's lane-split Filters popup) the
@@ -738,7 +738,7 @@ export function createPaletteGroupsBuilder(deps) {
       const vsItems = [];
       // vs Bowling Style (batting) / vs Batting Hand (bowling) — the profile-backed
       // opponent style/hand axis of state.matchupVs. Offered iff the mapped data exists
-      // in scope (men today; women when their profiles land).
+      // in scope (a has-matchup / no-matchup distinction).
       if (disc === "batting") {
         if (isFilterAvailable("vsBowlingStyle", s)) {
           if (surface === "popup") {
@@ -783,15 +783,15 @@ export function createPaletteGroupsBuilder(deps) {
       // state.positions control, but on the BOWLING board it filters the OPPONENT
       // batter's position (the strikers faced), so it reads as a matchup axis and lives
       // in this "Matchup (Vs)" grouping. Bowling-only + matchup-active (matchupVsActive
-      // is already false for women, so this never surfaces there without a gender check).
+      // is already false where matchup data is absent, so this never surfaces there without a gender check).
       // On the batting board the same control is the subject's OWN position, offered as
       // "Batting position" in Batting · Basic Stats above (a self attribute, not a Vs axis).
       if (matchup && disc === "bowling") vsItems.push(leafSingle("strikerpos", "vs Opponent Batting Position"));
       // Opponent-player head-to-head (T-1, owner decision 70): "subject X vs opponent
       // Y" (bowler_id when batting / batter_id when bowling). BALL-ENGINE ONLY —
       // flag-gated exactly like the Ball Ranges group (per-delivery ids are absent
-      // from the innings parquets). NOT men-only: those ids exist for every delivery,
-      // so it works for both genders. Kept in this "Matchup (Vs)" section on its own
+      // from the innings parquets). NOT profile-gated: those ids exist for every delivery,
+      // so it works everywhere. Kept in this "Matchup (Vs)" section on its own
       // now (decision-70 grouping) — the M2a follow-up above removed the profile-backed
       // vs entries it used to sit beside; vs_opp is untouched (not yet in the Matchup
       // lane, so removing it here would make it unreachable — a later, separate task).
@@ -804,14 +804,14 @@ export function createPaletteGroupsBuilder(deps) {
       // Match award. A VALUELESS standalone leaf: picking it sets the potm axis (drawer's
       // pickSingleton("vs_potm")), so it needs no ▸ variants. BALL-ENGINE ONLY (the
       // reconstructed vs_potm column exists only there) + offered iff the board's matchup
-      // data exists (men today). Leaderboard-only — the pop-up keeps its own per-innings
+      // data exists. Leaderboard-only — the pop-up keeps its own per-innings
       // PotM (Y/N) slice; this axis is not offered there.
       if (surface !== "popup" && ballOn && isFilterAvailable(disc === "batting" ? "vsBowlingStyle" : "vsBattingHand", s)) {
         vsItems.push({ kind: "leaf", label: "vs PotMs", disabled: singlePresent("vs_potm"), run: () => pickSingleton("vs_potm") });
       }
-      // No "men only" note (owner 2026-08-03): the men-only limitation on the profile-backed
-      // entries is TEMPORARY — women's data arrives in the player-registry backlog phase, so this
-      // group goes cross-gender soon; a "men only" label would just mislead in the meantime.
+      // No availability caveat label (owner 2026-08-03): the profile-backed entries are
+      // offered wherever their data exists (a has-data / no-data distinction) and simply
+      // absent otherwise — an availability label would only mislead.
       pushGroup("Matchup (Vs)", vsItems);
     }
 

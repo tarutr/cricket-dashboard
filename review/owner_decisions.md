@@ -107,7 +107,7 @@ change requires a new owner decision recorded here. Dates are decision dates.
 ## 2026-07-07 — D4 build decisions
 
 19. **D4 build list (owner picks):** matchup stats (batter × bowling-style, bowler ×
-    batting-hand, men-only, always with "based on N of M balls"); the three free
+    batting-hand, available wherever profile data exists, always with "based on N of M balls"); the three free
     splits (batting-position, opposition, dismissal-type — UI only); bowler
     wicket-type breakdown columns; innings-progression splits. SPELL figures:
     later / maybe never.
@@ -115,8 +115,8 @@ change requires a new owner decision recorded here. Dates are decision dates.
     for INTERNATIONAL cricket only (country names are clean); club-opposition waits
     for a future curated mapping project. Partnership stats deferred with it.
 21. **Missing-data display (resolves deferred decision 8): SHOW INERT with "–".**
-    Sections/filters with no mapped data (incl. all women's matchups) appear greyed
-    with an honest "no style data" note — never hidden, never silently empty.
+    Sections/filters with no mapped data (any scope whose matchups are all unmapped)
+    appear greyed with an honest "no style data" note — never hidden, never silently empty.
 
 ## 2026-07-08 — D4 data layer built (pending gate confirmations)
 
@@ -148,9 +148,11 @@ change requires a new owner decision recorded here. Dates are decision dates.
     - **Bowling filter = the 10 specific types** (Off-spin, Leg-spin, Slow left-arm
       orthodox, Left-arm wrist-spin, Slow-medium, Medium, Medium-fast, Fast-medium,
       Fast) — matches the decision-13 taxonomy. Not the coarse Pace/Spin.
-    - **Women view:** the profile-filter row greys out with the exact note
-      **"We don't have profile data on Women yet."** (profiles are men-only; 0% of
-      women players have one). Switching gender clears any profile filter.
+    - **No-profile scope:** the profile-filter row greys out with an honest note
+      where the current scope's players carry no profile data (a has-profile /
+      no-profile distinction). Availability is data-driven and auto-enables as
+      profile data lands. Switching gender clears any profile filter (it re-scopes
+      with the view).
     - **Men is now the DEFAULT gender** (overrides SPEC §5.1 "Women"), so profile
       filters are live on first load.
     - **No automated search:** the Compare Stats results table is **blank on first
@@ -239,7 +241,7 @@ change requires a new owner decision recorded here. Dates are decision dates.
 
 31. **R2 (player pages) — BUILT + VERIFIED, awaiting gate review.** New Players
     destination: search-first; page shows a profile header (or the honest "No
-    profile data for this player." — all women, unmatched men), an honest scope
+    profile data for this player." — players with no profile data), an honest scope
     line (Format + Date + Team type only; the fixed caveat "leaderboard-only
     filters don't apply here"), then Batting (overview cards with the Test/MDM
     BPD swap, by-position table, vs-opposition table [international-only,
@@ -284,7 +286,7 @@ change requires a new owner decision recorded here. Dates are decision dates.
     decision 24); Bowling gains "Vs left- and right-handers". Every section
     leads with its coverage line ("Style data covers N of M balls faced (X%)")
     and renders an honest greyed note instead of tables when coverage is zero
-    (all women, unmapped men — decision 21). (b) **Leaderboard matchup mode
+    (players with no profile coverage — decision 21). (b) **Leaderboard matchup mode
     (decision 33):** a "Vs" selector in the table toolbar (batting: Pace/Spin +
     the fine types; bowling: right/left-handers). Active mode switches the
     table to the matchup views with fixed columns and a per-player Coverage
@@ -478,8 +480,8 @@ change requires a new owner decision recorded here. Dates are decision dates.
     localhost, the owner approved the full second-round evaluation. Rulings:
     (a) **Player popup redesign**: identity header uses the real headshots
     already in player_profiles.parquet (1,360 flagged has_real_headshot; all
-    others get a designed monogram medallion — never a broken image; no-profile
-    players and all women keep medallion + honest note); popup becomes a
+    others get a designed monogram medallion — never a broken image; players with
+    no profile keep the medallion + an honest note); popup becomes a
     single-scroll layout with a **Batting | Bowling toggle** under the header,
     each discipline a tight grid; the popup gains its **own filters drawer
     that RE-SCOPES the whole popup** (vs type, dates, positions, opposition —
@@ -1062,13 +1064,13 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
         `profileSemiJoinSql` now key on a resolved per-gender `state.dataAvail` map — new `src/dataAvailability.js`,
         wired in `main.js`; the Search commit awaits it; byte-identical today) AND the **DISPLAY path** (`table.js`
         toolbar Vs control). Owner: "no reason for this to be men only — data only; a lot of MALE players also lack
-        this matchup/profile data." Women's matchup/profile features auto-appear when women's data lands.
+        this matchup/profile data." Matchup/profile features auto-appear for any scope as its data lands.
       • Fix set approved: Group A (cleanup: slice word, dead code, hidden Unknown, dropdown leak) + Group B (engine
         cache key) + the toolbar-Vs sweep. Item-7 dropdown fix done **"properly, not later"** (real close() surfaced
         on the shared drawer editors, not a click hack).
       • Sourcemap-404 nit → **BACKLOG #16** (defer to the design/chart-review stage).
-    - **A fresh Opus review of the gender→data change caught 1 real BLOCKER** (the graph read stale availability for
-      women with a persisted matchupVs) → fixed (clear matchupVs on gender switch). Fix-wave commits `8064c3d`
+    - **A fresh Opus review of the data-presence change caught 1 real BLOCKER** (the graph read stale availability
+      in a no-matchup scope with a persisted matchupVs) → fixed (clear matchupVs on gender switch). Fix-wave commits `8064c3d`
       `0ba0fef` `3b58acb` `ecb49ae` `a3a4332` `5aef338`.
     - **NEXT (unchanged order):** columns rejig → columns-in-popup + presets → AND/OR → sweep → review → cutover
       (LAST). SPEC/BACKLOG docs **UPDATED 2026-08-07** (owner lifted Option B, #70) — reworded "built on branch,
@@ -1336,7 +1338,7 @@ chartability #9, (4) features #7/#8/#11/#12. DEPLOY HELD until the bugs are clea
       **OUTSIDE** the group, in their own always-AND rows/panel. The group holds only the OR-able conditions:
       scope which-values, profile, PotM (Y/N), and numeric stat conditions.
     - **(Fork 4) RULED — an all-ineffective "Any" returns NOTHING.** An "Any" group built only of conditions that
-      cannot match (e.g. profile-only conditions on the Women view) returns no rows.
+      cannot match (e.g. profile-only conditions in a scope with no profile data) returns no rows.
     - Build model (Task 2, awaiting owner "go"): OR logic gated behind `groupOp === "OR"` so the AND path is
       untouched/byte-identical; OR = existence disjuncts in HAVING, WHERE keeps only core scope + always-AND
       (delivery-window/matchup/search) + pin-wrap; shared filters.js disjunction helper reused by both buildQuery

@@ -40,11 +40,11 @@
 // by the striker's hand AND the striker's batting_position. A batter who faced 0
 // balls has NO matchup row — there is NO zero-ball appearance recovery here
 // (that was plain-batting only). The `(unmapped)` bucket (bowler/striker with no
-// profile) IS produced — it is the coverage denominator ("N of M balls"). Women
-// have no profiles, so every women's ball maps to `(unmapped)`; the app greys
-// the Vs surface for women, so those rows stay honestly empty.
+// profile) IS produced — it is the coverage denominator ("N of M balls"). A
+// delivery whose bowler/striker has no profile maps to `(unmapped)`; where a scope
+// has no profile coverage the Vs surface is not offered, so those rows stay honestly empty.
 //
-// ── Profile join (men-only in practice) ─────────────────────────────────────
+// ── Profile join ────────────────────────────────────────────────────────────
 // matchup_batting keys on the BOWLER's style:
 //   COALESCE(profiles.bowling_type, profiles.bowling_group, '(unmapped)').
 // matchup_bowling keys on the STRIKER's hand:

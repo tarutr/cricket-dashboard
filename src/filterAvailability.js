@@ -4,22 +4,22 @@
 // everywhere"). Whether a PROFILE-derived filter (Playing role / Batting hand /
 // Bowling style) or a MATCHUP "Vs" filter (vs bowling style / vs batting hand) is
 // OFFERED is decided by whether its underlying DATA exists for the current scope —
-// NEVER a `if (gender === "female")` hardcode. Men have profile + matchup data →
-// the filters are offered; women (today) have none → the filters are absent
-// (identical to today's behaviour); when women's profile data lands the SAME probe
-// returns "present" → every affected filter auto-appears with NO code change.
+// a has-data / no-data probe, NEVER a gender check. A scope whose players carry
+// profile + matchup data → the filters are offered; a scope with none → the filters
+// are absent; when that data lands the SAME probe returns "present" → every affected
+// filter auto-appears with NO code change.
 //
 // DISPLAY / OFFER-LOGIC ONLY — numbers are sacred (CLAUDE.md Rule 1). Nothing here
 // touches buildQuery / buildMatchupQuery / buildScopeClauses / conditionToHaving /
 // profileSemiJoinSql / matchupVsActive; these probes only decide WHETHER a filter
 // is shown, never WHAT a query counts.
 //
-// AXIS = GENDER (all formats). The dimension that decides whether profile/matchup
-// data exists at all is gender, not format/date/team-type — men's records carry it
-// across every format, women's carry none. So the probes fix formats to ALL buckets
-// and vary only gender: this reproduces today's behaviour for EVERY scope (men
-// always offered / women never) and never hides a filter for a men scope that a
-// narrow date/format window happens to be sparse in. Data-driven, not hardcoded.
+// AXIS = GENDER (all formats). Whether profile/matchup data exists at all is a
+// property of the broad gender-scope population, not of a narrow format/date/team-type
+// window — the data that carries it carries it across every format. So the probes fix
+// formats to ALL buckets and vary only by gender: availability stays stable for EVERY
+// scope and never hides a filter for a scope that a narrow date/format window happens
+// to be sparse in. Data-driven, not hardcoded.
 //
 // The probes are cheap EXISTENCE checks (`SELECT 1 … LIMIT 1`) — NOT the full
 // DISTINCT-values load loadDimOptions does — because the offered set must settle

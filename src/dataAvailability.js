@@ -1,23 +1,23 @@
 // src/dataAvailability.js
 //
 // Shared DATA-PRESENCE probes + the NUMBERS-PATH availability resolver
-// (owner directive 2026-08-06: "there's no reason for this to be men only. It
-// needs to be data only"). Group 3 of the gender→data work.
+// (owner directive 2026-08-06: "it needs to be data only"). The profile/matchup
+// data-presence work.
 //
 // TWO consumers share the ONE copy of the probe SQL that lives here:
 //   1. src/filterAvailability.js — the OFFER path (whether a profile/matchup "Vs"
 //      filter is SHOWN). It imports probeMatchup / probeProfile from here.
 //   2. This module's own resolveDataAvail() — the NUMBERS path. It fills the
-//      per-gender bools that state.js's matchupVsActive / profileSemiJoinSql now
-//      gate on (in place of the old `gender === "male"` / `gender === "female"`
-//      hardcodes). main.js wires resolveDataAvail into boot + gender-switch +
-//      the Search commit path (see there).
+//      per-scope bools that state.js's matchupVsActive / profileSemiJoinSql gate on
+//      (a has-data / no-data distinction). main.js wires resolveDataAvail into
+//      boot + scope-switch + the Search commit path (see there).
 //
 // AXIS = GENDER (all formats). Whether profile/matchup data exists at all is a
-// property of gender, not format/date/team-type — men's records carry it across
-// every format, women's carry none. So the probes fix formats to ALL buckets and
-// vary only gender (identical reasoning to filterAvailability.js's header). Cheap
-// EXISTENCE checks (`SELECT 1 … LIMIT 1`), never a full DISTINCT scan.
+// property of the broad gender-scope population, not of a narrow format/date/team-type
+// window — the data that carries it carries it across every format. So the probes fix
+// formats to ALL buckets and vary only by gender (identical reasoning to
+// filterAvailability.js's header). Cheap EXISTENCE checks (`SELECT 1 … LIMIT 1`),
+// never a full DISTINCT scan.
 //
 // This module has NO import from state.js beyond the FORMAT_BUCKETS constant and
 // NONE from filterAvailability.js, so no import cycle is introduced (state.js does
@@ -38,8 +38,8 @@ const coreFor = (gender) => buildCoreScopeClauses({ gender, formats: ALL_FORMATS
 /**
  * A MATCHUP dim exists for the gender iff there is at least one MAPPED (non-
  * '(unmapped)') value in scope. Fast existence check; mirrors the drawer's
- * vs-bowling-type loader's '(unmapped)' exclusion. Women's matchup rows key every
- * bowler/batter to '(unmapped)' (no profiles), so this is false for them today.
+ * vs-bowling-type loader's '(unmapped)' exclusion. Where a scope's players carry no
+ * profiles every matchup row keys to '(unmapped)', so this returns false there.
  * `source`/`column` are trusted internal literals (never user input).
  */
 export async function probeMatchup(source, column, gender) {
@@ -55,8 +55,8 @@ export async function probeMatchup(source, column, gender) {
  * gender's scope has a non-null value. `profiles` carries no gender/scope columns,
  * so it is gender-scoped via a `player_matches` semi-join (player_matches DOES
  * carry gender + the core-scope columns). `column` is a trusted internal literal
- * (never user input). Women have no profile rows today → false; when they do, this
- * returns true → the gate opens with no code change.
+ * (never user input). A scope with no profile rows → false; when profile rows exist,
+ * this returns true → the gate opens with no code change.
  */
 export async function probeProfile(column, gender) {
   const sql =
@@ -73,9 +73,8 @@ export async function probeProfile(column, gender) {
  * and the sacred fielding CTE rank over (buildFieldingCteSql excludes substitutes).
  * Fast existence check (LIMIT 1), gender-only axis like the matchup/profile probes.
  * Fielding events come from wicket_fielders (fielder_id + kind), which — unlike the
- * men-only PROFILE tables — exist for every match, so this is true for BOTH genders
- * today; the gate is DATA-driven (not gender-hardcoded), so it stays correct if a
- * gender ever has no fielding data.
+ * profile tables — exist for every match, so this is true across the board today;
+ * the gate is DATA-driven, so it stays correct if a scope ever has no fielding data.
  */
 export async function probeFielding(gender) {
   const sql =

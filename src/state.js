@@ -160,9 +160,11 @@ export const FORMAT_BUCKETS = [
 // ── Profile filters (D4.2) ────────────────────────────────────────────────────
 // The four profile-powered filters live in a single `profile` state block. They
 // filter the Compare Stats table (and everything downstream that shares
-// buildScopeClauses) to players whose player_profiles row matches. Profiles are
-// men-only by design (the sheet is men-only), so these never apply while
-// gender = female — the filter bar greys them out there (owner decision 21).
+// buildScopeClauses) to players whose player_profiles row matches. Availability is
+// data-driven — a has-profile / no-profile distinction: they apply wherever profile
+// data exists and stay inert where it does not, auto-enabling for any scope whose
+// players carry profile data the instant that data lands. The filter bar offers them
+// only where that data is present.
 
 /** Fresh, all-cleared profile-filter block. */
 export function emptyProfile() {
@@ -196,30 +198,27 @@ export function escSql(s) {
   return String(s).replace(/'/g, "''");
 }
 
-// ── Data-presence gate (Group 3, owner directive 2026-08-06) ─────────────────
-// "There's no reason for this to be men only. It needs to be data only." Whether
-// the matchup "Vs" mode and the profile-derived filters apply to a query is now
-// keyed on whether the underlying DATA exists for the current gender — NOT on a
-// `gender === "male"` / `gender === "female"` hardcode. For today's data the two
-// are byte-identical (men → data present; women → 0% profile/matchup coverage →
-// absent); the gate only diverges when non-male data lands, at which point the
-// feature turns on with no code change (the whole point).
+// ── Data-presence gate (owner directive 2026-08-06) ──────────────────────────
+// "It needs to be data only" (owner directive). Whether
+// the matchup "Vs" mode and the profile-derived filters apply to a query is keyed
+// on whether the underlying DATA exists for the current scope — a has-profile /
+// no-profile (and has-matchup / no-matchup) distinction. The feature turns on for
+// any scope whose data carries it, with no code change, the instant that data lands.
 //
-// `state.dataAvail` is the RESOLVED per-gender existence map
+// `state.dataAvail` is the RESOLVED existence map for the current scope
 //   { matchupBatting, matchupBowling, profileRole, profileHand, profileBowling }
 // that src/dataAvailability.js fills (main.js kicks resolveDataAvail on load +
-// gender switch). matchupVsActive / profileSemiJoinSql are PURE SYNC and are read
+// scope switch). matchupVsActive / profileSemiJoinSql are PURE SYNC and are read
 // by the query builders AND the UI, so correctness rides on WHO reads them when:
 //   • The leaderboard's Search commit path AWAITS resolveDataAvail before building
 //     any query (main.js runSearch), so a leaderboard/graph query NEVER reads an
 //     unresolved value.
 //   • The pop-up's per-row builders start from a fresh createInitialState (no live
 //     dataAvail — so they hit the optimistic fallback below), but the secondary
-//     guards make that correct for today's data: a matchup row is men-only in
-//     practice (row.matchupVs is null for women — the offer path never lets a women
-//     row set it), and a profile filter is never active on a pop-up row
-//     (buildRowState leaves profile empty). So "optimistic present" routes exactly
-//     as the old gender gate did.
+//     guards make that correct: a matchup row only carries a matchupVs where the
+//     offer path allowed one (never set for a scope with no matchup data), and a
+//     profile filter is never active on a pop-up row (buildRowState leaves profile
+//     empty). So "optimistic present" always routes to the right path.
 //   • Other UI reads (pills/palette/toolbar) are display-only — no number rides on
 //     them — so an optimistic read is harmless and self-corrects on resolve.
 /** Resolved data-availability bool for `key`; TRUE (optimistic) until resolved.
@@ -231,9 +230,9 @@ function dataAvailBool(state, key) {
 }
 
 /** True iff PROFILE data (role / batting-hand / bowling-style) exists for the
- * current gender — the data-presence replacement for the old `gender === "female"`
- * guard in profileSemiJoinSql / profileScopeTokens. Optimistic until resolved. */
-function profileDataPresent(state) {
+ * current scope — the has-profile / no-profile gate for profileSemiJoinSql /
+ * profileScopeTokens and the profile pills. Optimistic until resolved. */
+export function profileDataPresent(state) {
   return (
     dataAvailBool(state, "profileRole") ||
     dataAvailBool(state, "profileHand") ||
@@ -245,11 +244,11 @@ function profileDataPresent(state) {
  * SQL semi-join clause restricting `idColumn` (batter_id / bowler_id / player_id)
  * to the player_ids whose profile matches every active profile filter. Returns
  * null when no profile filter is active OR no profile data exists for the current
- * gender (data-presence gate, owner directive 2026-08-06 — REPLACES the old
- * `gender === "female"` hardcode; never silently empty a view that has no profile
- * data, and the offer path already disables the controls where there's none, so
- * this stays a query-side backstop, now data-driven not gender). Shared by table,
- * graph, and team-option lookups so the honest scope sentence and every query agree.
+ * scope (has-profile / no-profile gate, owner directive 2026-08-06 — never silently
+ * empty a view that has no profile data, and the offer path already disables the
+ * controls where there's none, so this stays a query-side backstop, data-driven).
+ * Shared by table, graph, and team-option lookups so the honest scope sentence and
+ * every query agree.
  */
 export function profileSemiJoinSql(state, idColumn) {
   if (!idColumn) return null;
@@ -276,10 +275,9 @@ export function profileSemiJoinSql(state, idColumn) {
 
 /** Human tokens for describeScope() — only the profile filters actually applied. */
 function profileScopeTokens(state) {
-  // Data-presence gate (owner 2026-08-06) — mirrors profileSemiJoinSql's guard in
-  // place of the old `gender === "female"` hardcode. Profile is cleared on gender
-  // switch, so a no-profile-data gender yields [] either way; this keeps the
-  // subtitle and the query on the ONE guard.
+  // Has-profile / no-profile gate (owner 2026-08-06) — mirrors profileSemiJoinSql's
+  // guard. Profile is cleared on scope switch, so a no-profile-data scope yields []
+  // either way; this keeps the subtitle and the query on the ONE guard.
   if (!profileDataPresent(state)) return [];
   const p = state.profile;
   const tokens = [];
@@ -336,8 +334,8 @@ export function positionsFilterActive(state) {
 // ── Matchups (D4 R3, decision 33) ───────────────────────────────────────────
 // The leaderboard's "Vs" comparison mode: pick a bowling style (batting view)
 // or a batting hand (bowling view) and every stat recomputes against that
-// bucket, with a coverage figure attached. Men-only in practice — matchup
-// coverage for women is ~0% (decision 21).
+// bucket, with a coverage figure attached. Availability is data-driven — a
+// has-matchup / no-matchup distinction, offered wherever matchup data exists.
 
 // Canonical dimension order for the composite matchup opponent filter (decision
 // 81A) — fixes the order axes are emitted in so the generated SQL is
@@ -390,11 +388,11 @@ export function matchupVsAxes(matchupVs) {
 }
 
 /** Is one opponent-axis dimension applicable to the current discipline + data?
- * Data-presence gated, NOT gender (owner directive 2026-08-06): the `hand` dim
- * (batting_hand bucket) needs matchup_bowling on the bowling board; `group`/
- * `type` (bowling_group/bowling_type buckets) need matchup_batting on the
- * batting board. This is the exact rule the single-axis gate always applied,
- * factored out so the composite gate can `.some()` over its axes. */
+ * Data-presence gated (owner directive 2026-08-06): the `hand` dim (batting_hand
+ * bucket) needs matchup_bowling on the bowling board; `group`/`type`
+ * (bowling_group/bowling_type buckets) need matchup_batting on the batting board.
+ * This is the exact rule the single-axis gate always applied, factored out so the
+ * composite gate can `.some()` over its axes. */
 function matchupAxisApplicable(dim, state) {
   if (dim === "hand") return state.discipline === "bowling" && dataAvailBool(state, "matchupBowling");
   if (dim === "group" || dim === "type") return state.discipline === "batting" && dataAvailBool(state, "matchupBatting");
@@ -418,12 +416,11 @@ function matchupAxisApplicable(dim, state) {
  * state.matchupVs but is INERT here — same keep-but-inert precedent as the
  * positions filter — so switching back and forth never loses the pick.
  *
- * The gate now keys on DATA PRESENCE, not gender (owner directive 2026-08-06 —
- * REPLACES the old `gender !== "male"` hardcode): a batting matchup (dim
- * group/type, keyed on bowling_type) needs matchup_batting rows; a bowling matchup
- * (dim hand, keyed on batting_hand) needs matchup_bowling rows. For today's data
- * that is byte-identical to the gender check (men present / women absent). See the
- * data-presence block above dataAvailBool for why the sync read is always correct.
+ * The gate keys on DATA PRESENCE (owner directive 2026-08-06 — a has-matchup /
+ * no-matchup distinction): a batting matchup (dim group/type, keyed on bowling_type)
+ * needs matchup_batting rows; a bowling matchup (dim hand, keyed on batting_hand)
+ * needs matchup_bowling rows. See the data-presence block above dataAvailBool for
+ * why the sync read is always correct.
  */
 export function matchupVsActive(state) {
   const axes = matchupVsAxes(state.matchupVs);
@@ -1956,8 +1953,8 @@ export function activeLeaderboardFilterSources(state) {
   }
   if (opponentPlayerActive(state)) push("filter:vs_opp", [VSOPP_SET_KEY]);
 
-  // Player-attribute filters (men-only by DATA — profile is empty for women, so this
-  // is data-driven, not gender-hardcoded). One column per active profile field.
+  // Player-attribute filters (data-driven — a column rides on whether the profile
+  // filter is set; players without a profile read blank). One column per active profile field.
   const p = state.profile || {};
   const PROFILE_MAP = [
     ["roleGroup", "attr_role_group"],

@@ -9,10 +9,10 @@
 //
 // THE DATA-DRIVEN AVAILABILITY RULE (owner, T-3a-ext — NO gender hardcoding): a
 // profile-derived dim (out_hand / out_role / bowler_style) is offered ONLY when this
-// loader returns a non-empty list for the current scope. Men have profile values →
-// options present → the filter shows; women have none (every value is NULL) → [] →
-// the filter is absent. When women's profiles land, options appear and the filter
-// auto-shows. No `if (!women)` anywhere — the DATA decides.
+// loader returns a non-empty list for the current scope. A scope with profile values →
+// options present → the filter shows; a scope with none (every value NULL) → [] →
+// the filter is absent. When that data lands, options appear and the filter
+// auto-shows. No gender check anywhere — the DATA decides.
 
 import { query } from "./db.js";
 import { buildCoreScopeClauses } from "./filters.js";

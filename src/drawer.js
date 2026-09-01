@@ -21,8 +21,8 @@
 //
 // Nothing here touches buildScopeClauses or the state schema — each editor just
 // calls store.set(...). Role/Hand/Bowling (+ Matchup Vs) are offered DATA-DRIVEN
-// (owner 2026-08-03): shown wherever their profile/matchup data exists — men today,
-// women when their profiles land — via filterAvailability, never a gender check.
+// (owner 2026-08-03): shown wherever their profile/matchup data exists — a
+// has-data / no-data distinction resolved via filterAvailability, never a gender check.
 
 import { query } from "./db.js";
 import {
@@ -113,9 +113,9 @@ function orderBy(present, order) {
 // The singleton (non-numeric) condition types. The profile/matchup-backed rows
 // (Role / Batting hand / Bowling style / Matchup Vs / striker Batting position)
 // are offered DATA-DRIVEN now (owner "remove the hardcode everywhere", 2026-08-03):
-// isPresent gates them on filterAvailability, not the old `menOnly` gender flag —
-// so they show wherever their data exists (men today; women when their profiles
-// land) and stay absent otherwise. R5 Wave 1a (item 7)
+// isPresent gates them on filterAvailability (a has-data / no-data probe) — so they
+// show wherever their profile/matchup data exists and stay absent otherwise.
+// R5 Wave 1a (item 7)
 // restructured the "+ Add condition" dropdown: the old standalone "Team" subset
 // is dissolved into "Player" (Played for → "Team", Against opposition →
 // "Opposition"); Bowling style IS a standalone dropdown entry (R6 cleanup:
@@ -148,15 +148,15 @@ const SINGLETON_TYPES = [
   // — both edit state.matchupVs, synced via the shared store (see
   // buildPaletteGroups). Leads this array too, so its applied row renders
   // first among the singleton rows (SINGLETON_TYPES order also drives applied-row
-  // order). Availability is data-driven (matchupVsActive keys on state.dataAvail,
-  // not gender — Group 3); for today's data that means men-only (matchup coverage
-  // is ~0% for women, so the profile-backed Vs source is absent there).
+  // order). Availability is data-driven (matchupVsActive keys on state.dataAvail —
+  // a has-matchup / no-matchup probe): the Vs row is offered wherever matchup data
+  // exists and hidden where it is absent.
   { key: "vs", label: "Matchup (Vs)", group: "Basic" },
   // "vs PotMs" (decision 81 + 83 Fork 2): the cross-board vs-Player-of-the-Match axis
   // of the composite state.matchupVs (dim `potm`, bucket value "1"). A VALUELESS Matchup-
   // lane row — adding it IS the filter (pickSingleton sets the potm axis); no editor.
   // BALL-ENGINE ONLY (`ballOnly` — the reconstructed vs_potm column exists only there),
-  // offered iff the board's matchup data exists (data-driven; men today).
+  // offered iff the board's matchup data exists (data-driven; has-matchup / no-matchup).
   { key: "vs_potm", label: "vs PotMs", group: "Basic", ballOnly: true },
   { key: "team", label: "Team", group: "Player" },
   { key: "opposition", label: "Opposition", group: "Player" },
@@ -493,9 +493,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   }
 
   // ── Data-driven filter availability (owner "remove the hardcode everywhere") ──
-  // One instance per drawer: an async per-gender probe of matchup + profile DATA
-  // existence, cached behind a SYNC getter the palette builder + isPresent read.
-  // Replaces the old men-only gender gates — display/offer-logic only, no query
+  // One instance per drawer: an async probe of matchup + profile DATA existence for
+  // the current scope, cached behind a SYNC getter the palette builder + isPresent
+  // read. A has-data / no-data gate — display/offer-logic only, no query
   // builder touched (numbers sacred). availabilityOnReady re-renders the singleton
   // rows + numeric groups (which host the palettes) once a probe resolves so the
   // offered set settles for the new scope. (availabilityOnReady is a hoisted
@@ -1026,7 +1026,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
 
   // Profile/matchup-backed singleton rows are offered only where their DATA exists
   // in the current scope (data-driven — owner "remove the hardcode everywhere",
-  // 2026-08-03; replaces the old `menOnly && gender === "female"` gate). Others
+  // 2026-08-03; a has-data / no-data gate). Others
   // are always eligible. "vs"/"strikerpos" resolve by discipline (bowling-style
   // vs batting-hand matchup source). SYNC read of the async availability cache
   // (optimistic true until loaded — see filterAvailability.js).
@@ -1039,7 +1039,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
       case "vs":
       // vs PotMs is CROSS-BOARD (the reconstructed vs_potm column exists on both matchup
       // views), so it rides the same per-board matchup-data gate as "vs": available iff
-      // the board's matchup source exists (men today; women when their profiles land).
+      // the board's matchup source exists (a has-matchup / no-matchup probe).
       case "vs_potm":
         return availability.isAvailable(s.discipline === "batting" ? "vsBowlingStyle" : "vsBattingHand", s);
       case "strikerpos":
@@ -1066,10 +1066,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // the fielding query ignores, so its row never shows on the Fielding board. Skipped
     // entirely off the Fielding board, so batting/bowling presence is byte-identical.
     if (s.discipline === "fielding" && !FIELDING_BOARD_SINGLETONS.has(t.key)) return false;
-    // Data-driven availability gate (see singletonDataAvailable) — replaces the old
-    // men-only gender hardcode. For men everything is available (unchanged); women's
-    // profile/matchup rows stay hidden because their data is absent (and their state
-    // carries no value anyway).
+    // Data-driven availability gate (see singletonDataAvailable) — a has-data /
+    // no-data probe. A profile/matchup row shows wherever its data exists and stays
+    // hidden where it is absent (and a no-data scope's state carries no value anyway).
     if (!singletonDataAvailable(t.key, s)) return false;
     // Delivery window (Wave 3): ball-engine-only — never shows, nor auto-appears,
     // while the flag is OFF (a window can't apply to the pre-summed parquet path).
@@ -1476,11 +1475,10 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   function structuralKey(s) {
     return JSON.stringify({
       ns: effectiveNamespace(s),
-      // Data-driven availability signature (owner "remove the hardcode everywhere")
-      // — replaces the old `women: gender === "female"` field. Rebuilds the numeric
-      // groups (palette hosts) whenever the offered profile/matchup set flips, i.e.
-      // on a gender switch AND when an availability probe resolves. Gender is the
-      // probe axis, so this still changes on the men↔women switch it used to catch.
+      // Data-driven availability signature (owner "remove the hardcode everywhere").
+      // Rebuilds the numeric groups (palette hosts) whenever the offered profile/
+      // matchup set flips — i.e. on a scope switch AND when an availability probe
+      // resolves — so the offered set always matches the data present.
       avail: AVAIL_KEYS.map((k) => availability.isAvailable(k, s)),
       present: SINGLETON_TYPES.filter((t) => isPresent(t, s)).map((t) => t.key),
       formats: s.formats,
@@ -1597,7 +1595,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   // same encoding the shared palette's buildGroups decodes. The three triggers are
   // rendered by renderAddRow into the group card's top add-row. Player/Scope are never
   // empty in practice (Player always has stat metrics, Scope always has Match Details);
-  // Matchup CAN be empty (women / flag-off with no matchup data) — renderAddRow hides it
+  // Matchup CAN be empty (no matchup data present / flag-off) — renderAddRow hides it
   // then rather than showing a disabled trigger.
   function laneTriggerHTML(lane, encodedGi, s) {
     const gi = encodedGi >> 2;
@@ -1633,7 +1631,7 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     if (playerHost) playerHost.innerHTML = laneTriggerHTML("player", 0, s);
     if (scopeHost) scopeHost.innerHTML = laneTriggerHTML("scope", 1, s);
     // Matchup (decision 83 Fork 2): the THIRD dropdown (encodedGi 2). HIDDEN when it has
-    // no offerings (women / flag-off with no matchup data) — unlike Player/Scope which
+    // no offerings (no matchup data present / flag-off) — unlike Player/Scope which
     // always offer something, an empty Matchup dropdown reads as clutter, so we render no
     // trigger at all there rather than a disabled one.
     if (matchupHost) {
@@ -1835,10 +1833,9 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     // Opponent-player head-to-head (Tab-2 T-1): one when active (ball engine only).
     if (opponentPlayerActive(s)) n++;
     if ((s.teams || []).length > 0) n++;
-    // Profile filters count when SET (data-driven, not gender-hardcoded — owner
-    // "remove the hardcode everywhere"): women's state carries no profile value
-    // (cleared on gender switch; the filters aren't offered), so this adds 0 for
-    // them exactly as the old `gender !== "female"` guard did.
+    // Profile filters count when SET (data-driven — owner "remove the hardcode
+    // everywhere"): a no-profile scope carries no profile value (cleared on scope
+    // switch; the filters aren't offered there), so this adds 0 for it.
     {
       const p = s.profile;
       if (p.roleGroup) n++;

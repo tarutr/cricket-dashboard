@@ -824,8 +824,8 @@ function buildRowState(row, pageState, discipline) {
     // honors the scope singletons above (buildScopeClauses / buildMatchContextClauses)
     // but ignores per-innings slices + ball predicates, which the editor guarantees are
     // empty on a matchup row. null ⇒ the plain path (byte-identical). matchupVsActive
-    // also gates on data presence (state.dataAvail, not gender — Group 3), and a
-    // women's row is never offered the family (row.matchupVs stays null), so it
+    // also gates on data presence (state.dataAvail — has-matchup / no-matchup), and a
+    // no-matchup row is never offered the family (row.matchupVs stays null), so it
     // simply falls to the plain path.
     matchupVs: row.matchupVs || null,
     advanced: emptyAdvancedBlock(),
