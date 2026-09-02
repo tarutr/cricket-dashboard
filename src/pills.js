@@ -16,7 +16,7 @@
 // queries the database.
 
 import { opponentPlayerValues } from "./state.js";
-import { positionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, cityFilterActive, seasonFilterActive, seasonsForEvent, hasActiveProfileFilter, profileDataPresent, matchupVsActive, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, filterGroupOp, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
+import { positionsFilterActive, oppositionFilterActive, opponentPlayerActive, eventFilterActive, venueFilterActive, cityFilterActive, seasonFilterActive, seasonsForEvent, hasActiveProfileFilter, profileDataPresent, matchupVsActive, matchupVsAxes, matchupAxisApplicable, matchupAxisLabel, effectiveNamespace, fieldingPositionActive, resultFilterActive, tossResultFilterActive, tossDecisionFilterActive, potmYNFilterActive, inningsNumberFilterActive, inningsNumberLabel, stageFilterActive, resultConditionFilterActive, filterGroupOp, RESULT_OPTIONS, RESULT_ALL, RESULT_CONDITION_OPTIONS, RESULT_CONDITION_ALL, STAGE_ALL, STAGE_NONE, STAGE_NONE_LABEL, TOSS_RESULT_OPTIONS, TOSS_DECISION_OPTIONS } from "./state.js";
 import { deliveryWindowTokens, withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { isConditionComplete, isBowlingFiguresCondition } from "./advanced.js";
 import { metricsFor, getMetric, metricDisplayLabel, composedParamPrefixForBase, paramAppliedLabel, bowlingStyleDisplayLabel } from "./metrics.js";
@@ -301,6 +301,48 @@ export function mountPills(
         remove: () => store.set({ opponentPlayer: null }),
         restore: () => store.set({ opponentPlayer: captured }),
       });
+    }
+
+    // Matchup "Vs" style/hand/PotM axes (Wave 4 item 1): one removable pill PER
+    // active + applicable axis of the composite state.matchupVs map (decision 81A's
+    // combinable opponent filter — a style/hand axis AND a PotM axis can both be
+    // live at once). Labelled with matchupAxisLabel — the SAME mapping
+    // describeScope's own per-axis token uses (state.js), so a pill and the scope
+    // sentence can never disagree. Derived from the APPLIED snapshot like every
+    // other filter pill; ×/+ rebuilds the composite map from the LIVE store's
+    // CURRENT axes (matchupVsAxes normalises the legacy single-object shape too)
+    // and drops/restores only the ONE axis, leaving any sibling axis (e.g. potm
+    // while removing the style axis) untouched — mirroring the toolbar Vs
+    // quick-select's own read-rebuild-write pattern (table.js's vsSelectEl
+    // "change" handler) so both write state.matchupVs consistently: clearing the
+    // style axis here also snaps the toolbar back to "Everyone/Anyone".
+    if (matchupVsActive(s)) {
+      // Mutually-exclusive style/hand dim keys (only one is ever set at a time —
+      // same set the toolbar quick-select clears on every change).
+      const STYLE_DIMS = ["group", "type", "hand"];
+      for (const ax of matchupVsAxes(s.matchupVs)) {
+        if (!matchupAxisApplicable(ax.dim, s)) continue;
+        const dim = ax.dim;
+        const captured = [...ax.values];
+        const dropKeys = STYLE_DIMS.includes(dim) ? STYLE_DIMS : [dim];
+        pills.push({
+          key: `matchupVs:${dim}`,
+          label: matchupAxisLabel(ax),
+          remove: () => {
+            const map = {};
+            for (const a of matchupVsAxes(store.get().matchupVs)) map[a.dim] = a.values;
+            for (const k of dropKeys) delete map[k];
+            const keys = Object.keys(map);
+            store.set({ matchupVs: keys.length ? map : null });
+          },
+          restore: () => {
+            const map = {};
+            for (const a of matchupVsAxes(store.get().matchupVs)) map[a.dim] = a.values;
+            map[dim] = captured;
+            store.set({ matchupVs: map });
+          },
+        });
+      }
     }
 
     // Profile pills show only where profile data exists (has-profile / no-profile,

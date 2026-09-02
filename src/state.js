@@ -434,7 +434,7 @@ export function matchupVsAxes(matchupVs) {
  * (bowling_group/bowling_type buckets) need matchup_batting on the batting board.
  * This is the exact rule the single-axis gate always applied, factored out so the
  * composite gate can `.some()` over its axes. */
-function matchupAxisApplicable(dim, state) {
+export function matchupAxisApplicable(dim, state) {
   if (dim === "hand") return state.discipline === "bowling" && dataAvailBool(state, "matchupBowling");
   if (dim === "group" || dim === "type") return state.discipline === "batting" && dataAvailBool(state, "matchupBatting");
   // vs-PotMs (decision 81) is CROSS-BOARD: the reconstructed `vs_potm` column
@@ -448,6 +448,23 @@ function matchupAxisApplicable(dim, state) {
     );
   }
   return false;
+}
+
+/** One "vs …" token for a SINGLE matchup opponent axis (`{ dim, values }`, from
+ * matchupVsAxes). Wave 4 (pills item 1): factored out of describeScope's own
+ * per-axis loop below so the leaderboard scope sentence AND each axis's
+ * removable pill (pills.js) read from the exact same wording — one vocabulary,
+ * never two copies to drift apart. Byte-identical to describeScope's prior
+ * inline mapping. */
+export function matchupAxisLabel(ax) {
+  // R4-C naming (locked): no "-handers" wording, even mid-sentence.
+  if (ax.dim === "hand") {
+    const names = ax.values.map((v) => (v === "Left-hand bat" ? "left-hand batters" : "right-hand batters"));
+    return `vs ${names.join(", ")}`;
+  }
+  if (ax.dim === "type") return `vs ${ax.values.map(matchupBucketLabel).join(", ")}`;
+  if (ax.dim === "potm") return "vs Players of the Match";
+  return `vs ${ax.values.join(", ")}`; // group bucket (Pace / Spin)
 }
 
 /**
@@ -2830,18 +2847,9 @@ export function createStore(initial) {
         if (!matchupAxisApplicable(ax.dim, s)) continue;
         // Multi-select union: several values within a dim read as a comma list —
         // mirrors the Opposition token ("vs India, Australia"). A single value
-        // reads byte-identically to the pre-multi wording.
-        if (ax.dim === "hand") {
-          // R4-C naming (locked): no "-handers" wording, even mid-sentence.
-          const names = ax.values.map((v) => (v === "Left-hand bat" ? "left-hand batters" : "right-hand batters"));
-          parts.push(`vs ${names.join(", ")}`);
-        } else if (ax.dim === "type") {
-          parts.push(`vs ${ax.values.map(matchupBucketLabel).join(", ")}`);
-        } else if (ax.dim === "potm") {
-          parts.push("vs Players of the Match");
-        } else {
-          parts.push(`vs ${ax.values.join(", ")}`); // group bucket (Pace / Spin)
-        }
+        // reads byte-identically to the pre-multi wording. matchupAxisLabel is the
+        // ONE shared mapping (also used by each axis's removable pill, pills.js).
+        parts.push(matchupAxisLabel(ax));
       }
     }
 

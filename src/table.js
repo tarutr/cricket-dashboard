@@ -2753,6 +2753,15 @@ function ensureMeasureProbe() {
   if (measureProbe) return measureProbe;
   const table = document.createElement("table");
   table.className = "data-table";
+  // Wave 4 item 2 (DOM hygiene): the "data-table" CLASS is load-bearing — it's
+  // how this offscreen probe inherits the real `.data-table__td` cell's genuine
+  // padding/font cascade (see the doc comment above widestNameColWidthPx), so it
+  // can't be dropped without changing what gets measured. This marker ATTRIBUTE
+  // is purely additive: a query that means "the real results table" should read
+  // `.data-table:not([data-measure-probe])` (or filter it out in JS) to skip this
+  // offscreen sizing probe and its sibling header probe (ensureHeaderMeasureProbe
+  // below) instead of matching all three `.data-table` elements in the document.
+  table.setAttribute("data-measure-probe", "true");
   table.setAttribute("aria-hidden", "true");
   table.style.position = "absolute";
   table.style.visibility = "hidden";
@@ -2804,6 +2813,10 @@ function widestNameColWidthPx(names) {
     const w = td.getBoundingClientRect().width;
     if (w > max) max = w;
   }
+  // DOM hygiene: don't leave the last-measured player's name sitting in the
+  // probe cell between renders — a stray DOM query landing on it (see the
+  // data-measure-probe comment above) should find it empty, not a stale name.
+  td.textContent = "";
   return max;
 }
 
@@ -2890,6 +2903,12 @@ function ensureHeaderMeasureProbe() {
   if (headerMeasureProbe) return headerMeasureProbe;
   const table = document.createElement("table");
   table.className = "data-table";
+  // Wave 4 item 2: same load-bearing-class + additive-marker split as
+  // ensureMeasureProbe above — "data-table" stays (this probe's `<th>` needs
+  // the real `.data-table thead th` cascade: font-weight/uppercase/letter-
+  // spacing all affect the measured width), and data-measure-probe lets a
+  // "the real table" query exclude this offscreen one.
+  table.setAttribute("data-measure-probe", "true");
   table.setAttribute("aria-hidden", "true");
   table.style.position = "absolute";
   table.style.visibility = "hidden";
@@ -2928,6 +2947,10 @@ function minHeaderWidthPx(label) {
   labelEl.textContent = text;
   const w = Math.ceil(th.getBoundingClientRect().width) || MIN_COL_WIDTH_PX;
   headerMinWidthCache.set(text, w);
+  // DOM hygiene (Wave 4 item 2): don't leave the last-measured column label
+  // sitting in the probe between renders — see the data-measure-probe comment
+  // above ensureHeaderMeasureProbe.
+  labelEl.textContent = "";
   return w;
 }
 
