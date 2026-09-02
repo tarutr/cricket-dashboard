@@ -102,6 +102,11 @@ import {
   // SIXTH + SEVENTH SEARCH composers — Venue-shape (RAW names, no fold).
   composedCityPool, makeComposedCityKey, parseComposedCityKey, registerComposedCityKeys,
   composedSeasonPool, makeComposedSeasonKey, parseComposedSeasonKey, registerComposedSeasonKeys,
+  // Wave 3C (C2): the fielding VALUE composer key scheme + session registry. The
+  // categorical siblings of the fc__ composers — one column per (tally × dim × value),
+  // e.g. "Catches vs Australia". Reuses the SAME compose-editor machinery via
+  // SEARCH_COMPOSER_META (search dims) and composerValueRows (result/toss checklists).
+  makeComposedFieldingValueKey, parseComposedFieldingValueKey, registerComposedFieldingValueKeys,
 } from "./metrics.js";
 // Standalone TEAM/OPPOSITION composers: their value control is the SAME searchable
 // multi-select the Team/Opposition/Event/Venue FILTERS use (drawerInnings.js mounts
@@ -177,6 +182,12 @@ function togglePairByCount(key, ns) {
   const fc = parseComposedFieldingKey(key);
   if (fc && !fc.perMatch) {
     return { count: key, alt: makeComposedFieldingKey(fc.tally, fc.dim, fc.value, true), mode: "permatch" };
+  }
+  // Wave 3C (C2): a fielding VALUE composer COUNT (fcv__…) pairs with its per-match
+  // variant, same PERMATCH toggle as the fc__ family above.
+  const fcv = parseComposedFieldingValueKey(key);
+  if (fcv && !fcv.perMatch) {
+    return { count: key, alt: makeComposedFieldingValueKey(fcv.value, fcv.tally, fcv.dim, true), mode: "permatch" };
   }
   return null;
 }
@@ -1385,6 +1396,75 @@ export function createColumnsPicker({
       placeholder: "Choose seasons…", filterPlaceholder: "Type to filter seasons…", ariaLabel: "Seasons",
     },
   };
+  // ── Wave 3C (C2): fielding VALUE composers ────────────────────────────────────
+  // The categorical siblings of the fc__ composers: one column per (base tally × a
+  // match/scope dim × a picked value) — "Catches vs Australia", "Catches (Final)",
+  // "Catches (Won)". NINE dims: seven DATA-DRIVEN (a search value picker, reusing the
+  // SAME SEARCH_COMPOSER machinery as the batting/bowling Team/Opposition/… composers)
+  // + Result / Toss decision (a fixed checklist, like the fc_ finite dims). All route
+  // through the SAME R4-A compose editor; the stat <select> is the 5 base tallies
+  // (composerSelectOptions → FC_TALLY_OPTIONS). ADD-only (composerKindForKey returns
+  // null for fcv keys — no edit pencil, mirroring the Team/Opposition composers).
+  const FCV_KIND_DIM = {
+    fcv_team: "team", fcv_opp: "opp", fcv_event: "event", fcv_venue: "venue",
+    fcv_city: "city", fcv_season: "season", fcv_stage: "stage",
+    fcv_result: "result", fcv_toss: "toss",
+  };
+  const FCV_COMPOSER_KINDS = Object.keys(FCV_KIND_DIM);
+  const FCV_COMPOSER_LABEL = {
+    fcv_team: "Team", fcv_opp: "Opposition", fcv_event: "Event", fcv_venue: "Venue",
+    fcv_city: "City", fcv_season: "Season", fcv_stage: "Stage",
+    fcv_result: "Match Result", fcv_toss: "Toss Decision",
+  };
+  // The two FINITE-value fcv dims render a fixed checklist (composerValueRows) — labels
+  // MIRROR metrics.js's RESULT_OPTIONS / TOSS_DECISION_OPTIONS. The KEY drives the SQL,
+  // so a label never moves a number; the metric's own label is authoritative.
+  const FCV_FINITE_KINDS = new Set(["fcv_result", "fcv_toss"]);
+  const FCV_RESULT_VALUES = [
+    { value: "won", label: "Won" }, { value: "lost", label: "Lost" },
+    { value: "drawn", label: "Drawn" }, { value: "tied", label: "Tied" },
+    { value: "no_result", label: "No Result" },
+  ];
+  const FCV_TOSS_VALUES = [
+    { value: "bat", label: "Chose to Bat" }, { value: "field", label: "Chose to Field" },
+  ];
+  // The per-dim value loader for the SEVEN SEARCH dims (undefined for result/toss).
+  // Reuses the SAME host loaders the batting/bowling search composers use, so the value
+  // lists are identical (an opponent IS a team → loadTeamOptions).
+  const FCV_SEARCH_LOADER = {
+    fcv_team: loadTeamOptions, fcv_opp: loadTeamOptions, fcv_event: loadEventOptions,
+    fcv_venue: loadVenueOptions, fcv_city: loadCityOptions, fcv_season: loadSeasonOptions,
+    fcv_stage: loadStageOptions,
+  };
+  const FCV_SEARCH_NOUN = {
+    fcv_team: "team", fcv_opp: "opponent", fcv_event: "event", fcv_venue: "venue",
+    fcv_city: "city", fcv_season: "season", fcv_stage: "stage",
+  };
+  // Register the nine fcv kinds into the shared SEARCH machinery. parse/make/register/
+  // nameOf are common (the value IS its own display name); only the seven search dims add
+  // a loader + nouns (result/toss have no mount block — their value control is the
+  // checklist, gated on SEARCH_COMPOSER_KINDS below). Giving ALL nine a META row makes
+  // the stat-remap (searchComposerRemapTicks) + confirm-time register() kind-agnostic;
+  // adding only the seven search dims to SEARCH_COMPOSER_KINDS keeps result/toss on the
+  // checklist path (mount block + confirm's ticks-are-keys both key off that set).
+  for (const kind of FCV_COMPOSER_KINDS) {
+    const dim = FCV_KIND_DIM[kind];
+    SEARCH_COMPOSER_META[kind] = {
+      parse: (k) => {
+        const p = parseComposedFieldingValueKey(k);
+        return p && p.dim === dim && !p.perMatch ? { value: p.value, baseKey: p.tally } : null;
+      },
+      make: (value, tally) => makeComposedFieldingValueKey(value, tally, dim, false),
+      register: registerComposedFieldingValueKeys,
+      nameOf: (p) => p.value,
+      loader: FCV_SEARCH_LOADER[kind],
+      noun: FCV_SEARCH_NOUN[kind] || "value",
+      placeholder: `Choose ${FCV_SEARCH_NOUN[kind] || "value"}s…`,
+      filterPlaceholder: `Type to filter ${FCV_SEARCH_NOUN[kind] || "value"}s…`,
+      ariaLabel: FCV_COMPOSER_LABEL[kind],
+    };
+    if (!FCV_FINITE_KINDS.has(kind)) SEARCH_COMPOSER_KINDS.add(kind);
+  }
   // #35 (columns-popup rework Wave B): the count/% AXIS is NOT a selectable choice in
   // the compose editor — it is ONLY the post-add per-row toggle. Runs by Source and
   // Wicket Type are the two composers whose "stat" IS that count/% axis, so their
@@ -1519,7 +1599,7 @@ export function createColumnsPicker({
   }
   /** Label for a fielding COMPOSER kind (fielding kinds + the batting/bowling ones). */
   function composerKindLabel(kind) {
-    return COMPOSER_KIND_LABEL[kind] || FC_COMPOSER_LABEL[kind] || kind;
+    return COMPOSER_KIND_LABEL[kind] || FC_COMPOSER_LABEL[kind] || FCV_COMPOSER_LABEL[kind] || kind;
   }
   /** The chip / row-suffix label for a user-defined over/pos range key. */
   function fcRangeChipLabel(key) {
@@ -1641,6 +1721,8 @@ export function createColumnsPicker({
     if (kind === "wickettype") return (ns === "batting" || ns === "bowling") ? [{ value: "count", label: "Count" }, { value: "pct", label: "%" }] : [];
     // FC-2: every fielding composer's stat <select> is the 5 base tallies.
     if (FC_KIND_DIM[kind]) return FC_TALLY_OPTIONS.slice();
+    // Wave 3C (C2): the fielding VALUE composers' stat <select> is the SAME 5 tallies.
+    if (FCV_KIND_DIM[kind]) return FC_TALLY_OPTIONS.slice();
     return [];
   }
 
@@ -1698,6 +1780,17 @@ export function createColumnsPicker({
       if (dim === "hand") return FC_HAND_VALUES.map((v) => ({ label: v.label, key: mk(v.token), rare: false }));
       if (dim === "bstyle") return FC_BSTYLE_VALUES.map((v) => ({ label: bowlingStyleDisplayLabel(v.label), key: mk(v.token), rare: false }));
       if (dim === "inns") return fcInningsTokens(formats).map((t) => ({ label: FC_INNINGS_LABEL[t], key: mk(t), rare: false }));
+      return [];
+    }
+    // Wave 3C (C2): the two FINITE-value fielding VALUE composers (Match Result / Toss
+    // decision) render a fixed checklist; sel = the base tally token, key = the fcv__
+    // column ticking that value. The SEVEN search dims carry no fixed list (a data-driven
+    // value picker) and are handled by the compose editor's search host (return [] here).
+    if (FCV_FINITE_KINDS.has(kind)) {
+      const dim = FCV_KIND_DIM[kind];
+      const mk = (value) => makeComposedFieldingValueKey(value, sel, dim, false);
+      if (dim === "result") return FCV_RESULT_VALUES.map((v) => ({ label: v.label, key: mk(v.value), rare: false }));
+      if (dim === "toss") return FCV_TOSS_VALUES.map((v) => ({ label: v.label, key: mk(v.value), rare: false }));
       return [];
     }
     return [];
@@ -2251,6 +2344,15 @@ export function createColumnsPicker({
       for (const kind of FC_COMPOSER_KINDS) {
         if (composerAvailable(kind, ns, formats)) fieldingComposerItems.push({ type: "composer", kind, label: FC_COMPOSER_LABEL[kind] });
       }
+      // Wave 3C (C2): the fielding VALUE composers (Team / Opposition / Event / Venue /
+      // City / Season / Stage / Match Result / Toss decision) — one column per picked
+      // value, e.g. "Catches vs Australia". The seven search dims self-gate on their host
+      // loader (composerAvailable → undefined loader in the pop-up ⇒ not offered, exactly
+      // like the batting/bowling search composers); result/toss self-gate on their value
+      // rows. Additive to the fc__ composers above.
+      for (const kind of FCV_COMPOSER_KINDS) {
+        if (composerAvailable(kind, ns, formats)) fieldingComposerItems.push({ type: "composer", kind, label: FCV_COMPOSER_LABEL[kind] });
+      }
     }
     const fieldingMode = getFieldingMode ? getFieldingMode() : false;
     // Fielding board LIST columns (Wave 2b) — leaderboard fielding board ONLY
@@ -2278,6 +2380,9 @@ export function createColumnsPicker({
       : [];
     const fieldingDismissalSetItems = fieldingSetLeaderboard
       ? [
+          // Wave 3C (C1): the Wicket Type which-values list column — the parity gap fill,
+          // placed first among the dismissal-dimension lists.
+          { type: "plain", key: "fld_kind_set", label: "Wicket Type" },
           { type: "plain", key: "fld_bowler_style_set", label: "Bowler Style" },
           { type: "plain", key: "fld_out_position_set", label: "Dismissed Batter's Position" },
           { type: "plain", key: "fld_out_hand_set", label: "Dismissed Batter Hand" },

@@ -49,6 +49,8 @@ import {
   eligibleComposedRunSourceConcededKeys,
   eligibleComposedWicketTypeKeys,
   eligibleComposedFieldingKeys,
+  // Wave 3C (C2): registered composed fielding VALUE keys (fcv__…) that still resolve.
+  eligibleComposedFieldingValueKeys,
   // Fielding cols Wave 2b: the fielding board's list-column keys (fld_*_set).
   fieldingSetColumnKeys,
   // Chunk 1B: per-position breakdown composed keys + the B. Pos. which-values key.
@@ -1504,6 +1506,11 @@ export function eligibleColumnKeys(discipline, formats) {
       if (m.section === "fielding") keys.add(m.key);
     }
     for (const key of eligibleComposedFieldingKeys("batting")) keys.add(key);
+    // Wave 3C (C2): registered composed fielding VALUE columns (fcv__…, e.g. "Catches
+    // vs Australia") — data-driven value space, kept alive via the session registry
+    // (like the batting/bowling composers), resolved under "batting" (the fielding
+    // board's metricNsFor). Byte-identical when none is chosen (the set is empty).
+    for (const key of eligibleComposedFieldingValueKeys("batting")) keys.add(key);
     // Fielding cols Wave 2b: the fielding list columns (fld_*_set) — Team/Opposition/
     // Event/Venue/City/Bowler-style/Dismissed-position/Dismissed-hand + Season. Folded
     // in so a chosen / auto-added list column survives a re-render / prune (the prune
@@ -1591,6 +1598,15 @@ export function eligibleColumnKeys(discipline, formats) {
   // exist on both plain batting and bowling. Byte-identical when no fc__ column is
   // present (the extra keys just never match).
   for (const key of eligibleComposedFieldingKeys(discipline)) {
+    keys.add(key);
+  }
+  // Wave 3C (C2): composed fielding VALUE column keys (fcv__…, e.g. "Catches vs
+  // Australia") — the categorical siblings of the fc__ composers. DATA-DRIVEN value
+  // space, so kept alive via the session registry (like the Team/Opposition/… composer
+  // families), folded here so a chosen fcv column survives a re-render / prune on the
+  // batting/bowling boards too. Fielding is discipline-agnostic, so these exist on both
+  // plain disciplines. Byte-identical when none is chosen (the set is empty).
+  for (const key of eligibleComposedFieldingValueKeys(discipline)) {
     keys.add(key);
   }
   // Wave D — D1: the five player-profile attribute column keys (attr_<field>) are
@@ -2031,6 +2047,9 @@ export function activeLeaderboardFilterSources(state) {
     if (venueFilterActive(state)) push("filter:fld:venue", ["fld_venue_set"]);
     if (has(f.cities)) push("filter:fld:city", ["fld_city_set"]);
     if (has(f.bowlerStyles)) push("filter:fld:bowler_style", ["fld_bowler_style_set"]);
+    // Wave 3C (C1): the Wicket Type filter (state.fielding.kinds) now auto-adds its
+    // fld_kind_set list column, same rule/shape as every other fielding filter above.
+    if (has(f.kinds)) push("filter:fld:kind", ["fld_kind_set"]);
     if (has(f.positions)) push("filter:fld:position", ["fld_out_position_set"]);
     if (has(f.hands)) push("filter:fld:hand", ["fld_out_hand_set"]);
     if (has(f.seasons)) push("filter:fld:season", ["fld_season_set"]);

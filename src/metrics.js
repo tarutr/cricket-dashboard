@@ -3053,6 +3053,11 @@ export function getMetric(key, discipline) {
       resolveComposedWicketTypeMetric(key, discipline) ??
       resolveComposedParamMetric(key, discipline) ??
       resolveComposedFieldingMetric(key, discipline) ??
+      // Wave 3C (C2): composed fielding VALUE columns (fcv__<tally>__<dim>__<value>) —
+      // the categorical siblings of the fc__ composers ("Catches vs Australia",
+      // "Catches (Won)"). null for any other prefix / plain-cross key / matchup ns, so
+      // every other caller is unchanged (same ?? fall-through).
+      resolveComposedFieldingValueMetric(key, discipline) ??
       // Fielding board "list columns" (fielding cols Wave 2b, 2026-08-20): fld_*_set —
       // one list(DISTINCT <col>) column per fielding categorical filter (the fielding
       // analogue of the batting/bowling team_set/opp_set/city_set/… which-values
@@ -6163,6 +6168,12 @@ const FIELDING_SET_SPECS = [
   { key: "fld_bowler_style_set", label: "Bowler Style",                col: "bowler_style",         title: "Bowler styles behind the fielder's dismissals in the filtered rows", displayTransform: "bowlingStyle" },
   { key: "fld_out_position_set", label: "Dismissed Batter's Position", col: "out_batting_position", title: "Dismissed batters' positions in the filtered rows" },
   { key: "fld_out_hand_set",     label: "Dismissed Batter Hand",       col: "out_hand",             title: "Dismissed batters' handedness in the filtered rows" },
+  // Wave 3C (C1 parity gap): the Wicket Type filter (fieldingDims `kind`, state.fielding.kinds
+  // → buildFieldingSliceClauses `kind IN (…)`) had NO list column. Group A — `kind` is a RAW
+  // column on the fielding view (the credited dismissal kind: caught / caught and bowled /
+  // stumped / run out), so NO join, NO NULL fold (every fielding event has a kind). Mirrors the
+  // other Group-A set columns EXACTLY — a `list(DISTINCT kind ORDER BY kind)` over the view.
+  { key: "fld_kind_set",         label: "Wicket Type",                 col: "kind",                 title: "Wicket types (dismissal kinds) present in the filtered rows" },
   // Group A (Phase 1.2, 2026-08-25) — Innings number / Over: raw event-grain columns
   // on the fielding view (innings_number / over_number), both 0-based STORED. `col`
   // is the display-numbering EXPRESSION (+1), the same convention the Over range
@@ -6361,6 +6372,211 @@ export function resolveFieldingSetMetric(key, discipline) {
  * Columns picker. Fielding board only. */
 export function fieldingSetColumnKeys() {
   return FIELDING_SET_KEYS.slice();
+}
+
+// ── Composed FIELDING VALUE columns (fielding value composers, Wave 3C — C2) ───
+// The CATEGORICAL siblings of the fc__ composers above. A fielding value composer =
+// a BASE TALLY × a match/scope DIMENSION × a picked VALUE → its own COLUMN, e.g.
+// "Catches vs Australia", "Catches (Final)", "Catches (Won)". Where the fc__ family
+// covers the ENUMERATED delivery/dismissal dims (phase/over/inns/pos/hand/bstyle),
+// this family covers the DATA-DRIVEN categorical dims (Team/Opposition/Event/Venue/
+// City/Season/Stage/Result/Toss-decision) — the ones the batting/bowling
+// makeComposerFamily offers, and the ones the fielding LIST columns (fld_*_set) list.
+//
+// It REUSES the fc__ injection mechanism verbatim: each column carries
+// fieldingCteAlias + fieldingCteCaseSql (SUM(CASE WHEN <dim-value> AND <tally> THEN 1
+// ELSE 0 END)) that table.js's buildFieldingCteSql injects over the SAME
+// `GROUP BY fielder_id` (so the four sacred base tallies stay byte-identical), and
+// the metric's sqlExpression only PROJECTS the injected alias with MAX(). Match-level
+// dims (Season/Stage/Result/Toss) carry `needsFieldingMctx` so the SAME 1:1 fld_mctx
+// join the Group-B list columns light is lit — the predicate then reads `fld_mctx.*`.
+// isComposedFielding is set true so EVERY existing table.js path treats it exactly
+// like an fc__ column (injection loop, fieldingBoardColExpr per-match handling,
+// buildQuery/buildFieldingLeaderboardQuery's `isComposedFielding` filters). NO
+// table.js change.
+//
+// KEY = `fcv__<tally>__<dim>__<hexToken>` (+ `_per_match`). The value is HEX-encoded
+// (teamNameToToken — the SAME codec the batting/bowling composers use) so a raw team
+// name / canonical stage / etc. stays an identifier-safe, `__`-free, splittable token.
+// `fcv__`.startsWith(`fc__`) is FALSE, so parseComposedFieldingKey never mis-parses an
+// fcv__ key (and vice-versa) — the two families are disjoint.
+const FCV_PREFIX = "fcv__";
+
+// The dimension registry. `predFor(value)` → the event-grain WHERE fragment (matching
+// the corresponding FILTER byte-for-byte), or null for an invalid value. `mctx` marks
+// the match-level dims that need the fld_mctx join. `versus` picks the owner-ruled
+// "<tally> vs <value>" label form (Opposition only, mirroring the opp__ composer);
+// every other dim uses "<tally> (<value>)". `label(value)` → the display fragment.
+// Built LAZILY (functions, not module-eval consts) so the ones reading state.js's
+// option constants (RESULT_OPTIONS / TOSS_DECISION_OPTIONS / STAGE_NONE) do so at CALL
+// time across the benign state↔metrics cycle, exactly like derivedSetExpr above.
+const _FCV_RESULT_PRED = {
+  // The EXACT player-relative rule filters.js buildMatchContextClauses emits (rowTeamCol
+  // = the fielder's `fielding_team`, alias fld_mctx). Won/Lost use the derived
+  // match_winner (super-over resolved); drawn/no_result/tied read result_type.
+  won: "fielding_team = fld_mctx.match_winner",
+  lost: "(fld_mctx.match_winner IS NOT NULL AND fld_mctx.match_winner <> fielding_team)",
+  drawn: "fld_mctx.result_type = 'draw'",
+  no_result: "fld_mctx.result_type = 'no result'",
+  tied: "fld_mctx.result_type = 'tie'",
+};
+function _fcvResultLabel(v) {
+  const o = RESULT_OPTIONS.find((x) => x.value === v);
+  return o ? o.label : v;
+}
+function _fcvTossLabel(v) {
+  const o = TOSS_DECISION_OPTIONS.find((x) => x.value === v);
+  return o ? o.label : v;
+}
+const FCV_DIMS = {
+  // Group A — RAW columns on the fielding view (no join). Team/Opposition/Venue/City
+  // are single RAW equality (matches the Team/Opposition/Venue/City filter + the
+  // batting/bowling Team/Opposition/Venue/City composers). Event is a canonical→raw
+  // MEMBERSHIP via eventAliases — the EXACT expansion filters.js eventPredicateSql +
+  // the batting event composer use, so a value the picker offers is a value the query
+  // finds and the composer agrees with the Event FILTER.
+  team:   { mctx: false, versus: false, label: (v) => v, predFor: (v) => `fielding_team = ${composerSqlLiteral(v)}` },
+  opp:    { mctx: false, versus: true,  label: (v) => v, predFor: (v) => `opposition = ${composerSqlLiteral(v)}` },
+  event:  { mctx: false, versus: false, label: (v) => v, predFor: (v) => {
+    const raws = eventAliases(v);
+    if (!Array.isArray(raws) || raws.length === 0) return null;
+    return `event_name IN (${raws.map(composerSqlLiteral).join(", ")})`;
+  } },
+  venue:  { mctx: false, versus: false, label: (v) => v, predFor: (v) => `venue = ${composerSqlLiteral(v)}` },
+  city:   { mctx: false, versus: false, label: (v) => v, predFor: (v) => `city = ${composerSqlLiteral(v)}` },
+  // Group B — match-level (fld_mctx join). Season = RAW equality (matches the Season
+  // semi-join within the gender-scoped CTE + the fld_season_set list column). Stage =
+  // canonical→raw MEMBERSHIP via stageAliases + the STAGE_NONE sentinel (IS NULL) —
+  // the EXACT rule filters.js stagePredicateSql + the fld_stage_set list column use.
+  // Result = the player-relative rule above. Toss = raw toss_decision equality.
+  season: { mctx: true, versus: false, label: (v) => v, predFor: (v) => `fld_mctx.season = ${composerSqlLiteral(v)}` },
+  stage:  { mctx: true, versus: false, label: (v) => (v === STAGE_NONE ? STAGE_NONE_LABEL : v), predFor: (v) => {
+    if (v === STAGE_NONE) return "fld_mctx.event_stage IS NULL";
+    const raws = stageAliases(v);
+    if (!Array.isArray(raws) || raws.length === 0) return null;
+    return `fld_mctx.event_stage IN (${raws.map(composerSqlLiteral).join(", ")})`;
+  } },
+  result: { mctx: true, versus: false, label: (v) => _fcvResultLabel(v), predFor: (v) => _FCV_RESULT_PRED[v] || null },
+  toss:   { mctx: true, versus: false, label: (v) => _fcvTossLabel(v), predFor: (v) => {
+    if (v !== "bat" && v !== "field") return null;
+    return `fld_mctx.toss_decision = ${composerSqlLiteral(v)}`;
+  } },
+};
+
+/** Build a composed fielding VALUE column key. `value` is hex-encoded (identifier-safe,
+ * `__`-free), so the key doubles as the CTE column alias with no quoting. */
+export function makeComposedFieldingValueKey(value, tally, dim, perMatch) {
+  return `${FCV_PREFIX}${tally}__${dim}__${teamNameToToken(value)}${perMatch ? _FC_PER_MATCH : ""}`;
+}
+
+/** Parse a composed fielding VALUE key → { tally, dim, value, perMatch } or null.
+ * Splits on `__` (exactly 3 parts after the prefix — the hex value token carries no
+ * `__`); the `_per_match` suffix (single underscores) rides on the token and is
+ * stripped first, then the hex is decoded back to the value string. */
+export function parseComposedFieldingValueKey(key) {
+  if (typeof key !== "string" || !key.startsWith(FCV_PREFIX)) return null;
+  const parts = key.slice(FCV_PREFIX.length).split("__");
+  if (parts.length !== 3) return null;
+  const [tally, dim] = parts;
+  let token = parts[2];
+  if (!_FC_TALLIES.has(tally) || !FCV_DIMS[dim] || !token) return null;
+  let perMatch = false;
+  if (token.endsWith(_FC_PER_MATCH)) {
+    perMatch = true;
+    token = token.slice(0, -_FC_PER_MATCH.length);
+    if (!token) return null;
+  }
+  const value = teamTokenToName(token);
+  if (value == null) return null;
+  return { tally, dim, value, perMatch };
+}
+
+/** Build the VIRTUAL metric for a composed fielding value column, or null. Mirrors
+ * buildComposedFieldingMetric (the fc__ builder) exactly — same CTE-injection shape,
+ * same per-match division by pmatch_cte.match_count — differing only in the predicate
+ * (a categorical value, possibly match-level) and the label form. */
+function buildComposedFieldingValueMetric(parsed, discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return null;
+  const tally = _FC_TALLIES.get(parsed.tally);
+  if (!tally) return null;
+  const dimSpec = FCV_DIMS[parsed.dim];
+  if (!dimSpec) return null;
+  const pred = dimSpec.predFor(parsed.value);
+  if (!pred) return null;
+  const valueLabel = dimSpec.label(parsed.value);
+  const alias = makeComposedFieldingValueKey(parsed.value, parsed.tally, parsed.dim, false);
+  const caseSql = `SUM(CASE WHEN (${pred}) AND (${tally.pred}) THEN 1 ELSE 0 END)`;
+  const countProjection = `MAX(fielding_cte.${alias})`;
+  const label = dimSpec.versus ? `${tally.label} vs ${valueLabel}` : `${tally.label} (${valueLabel})`;
+  const shortLabel = dimSpec.versus ? `${tally.short} vs ${valueLabel}` : `${tally.short} (${valueLabel})`;
+  const common = {
+    isComposedFielding: true,
+    isComposedFieldingValue: true,
+    discipline,
+    source: "fielding_events",
+    section: "fielding",
+    fieldingCteAlias: alias,
+    fieldingCteCaseSql: caseSql,
+    needsFieldingMctx: !!dimSpec.mctx,
+    isPhaseMetric: null,
+    additive: true,
+  };
+  if (!parsed.perMatch) {
+    return {
+      ...common,
+      key: alias,
+      sqlExpression: countProjection,
+      label, shortLabel,
+      columnTitle: label,
+      higherIsBetter: true, format: "int",
+      zeroIsData: true, kind: "total",
+    };
+  }
+  return {
+    ...common,
+    key: `${alias}${_FC_PER_MATCH}`,
+    perMatch: true,
+    sqlExpression: `(${countProjection}) * 1.0 / NULLIF(MAX(pmatch_cte.match_count), 0)`,
+    label: `${label} per Match`, shortLabel: `${shortLabel}/M`,
+    columnTitle: `${label} per Match`,
+    higherIsBetter: true, format: "dec2",
+    zeroIsData: false, kind: "rate",
+  };
+}
+
+/** Resolve a composed fielding VALUE column key to its virtual metric, or null.
+ * Chained into getMetric after resolveComposedFieldingMetric. */
+export function resolveComposedFieldingValueMetric(key, discipline) {
+  const parsed = parseComposedFieldingValueKey(key);
+  if (!parsed) return null;
+  return buildComposedFieldingValueMetric(parsed, discipline);
+}
+
+// Session registry (append-only; resets with the columns on reload — no persistence).
+// The value space (team names / events / …) is DATA-DRIVEN, so — like the batting/
+// bowling composer families — a chosen fcv column can't be enumerated into
+// eligibleColumnKeys ahead of time; the columns picker calls register() on confirm and
+// eligibleComposedFieldingValueKeys() returns the registered keys that still resolve
+// (folded into eligibleColumnKeys so a chosen column survives a re-render / prune).
+const _fcvRegistered = new Set();
+export function registerComposedFieldingValueKeys(keys) {
+  for (const k of Array.isArray(keys) ? keys : [keys]) {
+    if (typeof k === "string" && parseComposedFieldingValueKey(k)) _fcvRegistered.add(k);
+  }
+}
+/** Every registered fcv key that RESOLVES for `discipline`, plus its per-match sibling
+ * (so the count↔per-match toggle's alternate survives too — the DATA-DRIVEN analogue of
+ * eligibleComposedFieldingKeys enumerating both variants for the fixed fc__ tokens). */
+export function eligibleComposedFieldingValueKeys(discipline) {
+  if (discipline !== "batting" && discipline !== "bowling") return [];
+  const out = [];
+  for (const k of _fcvRegistered) {
+    if (resolveComposedFieldingValueMetric(k, discipline)) {
+      out.push(k);
+      out.push(`${k}${_FC_PER_MATCH}`);
+    }
+  }
+  return out;
 }
 
 // ── The one fielding list column the BATTING/BOWLING boards also offer (Phase 1.1) ──
