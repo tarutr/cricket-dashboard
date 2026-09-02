@@ -272,21 +272,38 @@ export function orderBowlingTypes(values) {
 /**
  * Append ` FILTER (WHERE <filterSql>)` after EVERY top-level aggregate call
  * in a metrics.js sqlExpression/sortExpression string (C1 single-scan merge).
- * Walks the string char-by-char; whenever it sees a known aggregate head
- * ("SUM(" or "COUNT(" — the only two heads used anywhere in the matchup_*
- * metric catalogue, verified by inspection of MATCHUP_BATTING_METRICS /
- * MATCHUP_BOWLING_METRICS in metrics.js), it paren-balances forward from the
- * matching "(" to find the TRUE matching ")" (so nested parens, e.g.
- * `NULLIF(SUM(balls_faced), 0)` or `COUNT(DISTINCT match_id || ':' ||
- * CAST(innings_number AS VARCHAR))`, are never mistaken for the aggregate's
- * own close-paren) and inserts the FILTER clause right after it. A bare
- * regex substitution would either truncate at the first inner ")" or need a
- * hand-rolled balanced-paren regex anyway — this is that logic, explicit.
- * Throws if parens are unbalanced (a metrics.js authoring bug, not a runtime
- * data issue) rather than silently emitting broken SQL.
+ * Walks the string char-by-char; whenever it sees a known aggregate head, it
+ * paren-balances forward from the matching "(" to find the TRUE matching ")"
+ * (so nested parens, e.g. `NULLIF(SUM(balls_faced), 0)` or
+ * `COUNT(DISTINCT match_id || ':' || CAST(innings_number AS VARCHAR))`, are
+ * never mistaken for the aggregate's own close-paren) and inserts the FILTER
+ * clause right after it. A bare regex substitution would either truncate at
+ * the first inner ")" or need a hand-rolled balanced-paren regex anyway —
+ * this is that logic, explicit. Throws if parens are unbalanced (a metrics.js
+ * authoring bug, not a runtime data issue) rather than silently emitting
+ * broken SQL.
+ *
+ * Heads:
+ *  • "SUM(" / "COUNT(" — the two heads the matchup_* STAT catalogue uses
+ *    (MATCHUP_BATTING_METRICS / MATCHUP_BOWLING_METRICS; the peak metrics'
+ *    MAX(/arg_max( never reach here — kind "peak" is split out before this
+ *    call and carries a placeholder sqlExpression anyway).
+ *  • "list(" / "MIN(" — Wave 3A.2 (2026-09): the 10 match-context which-values
+ *    columns addable under a matchup (Team/Opposition/Innings-Number + the
+ *    mctx City/Season/Event/Venue/Stage/Toss/Result set columns). Their
+ *    display aggregate is `list(DISTINCT <col> …)` (or, for Result Condition,
+ *    `list_sort(list_distinct(flatten(list(<facets>))))` — the head match is
+ *    the INNERMOST `list(`, the true aggregate; "list_sort"/"list_distinct"
+ *    never start with "list(") and their sort is `MIN(<col>)`. Recognising
+ *    these two heads bucket-filters BOTH the printed list AND its sort key to
+ *    the selected Vs bucket, so "SA Yadav vs Spin" → the Opposition column
+ *    lists only the teams he faced spin against (owner ruling). NUMBERS-SAFE:
+ *    no STAT metric reachable under a matchup uses "list("/"MIN(" (audited),
+ *    so every SUM/COUNT stat aggregate is byte-identical; only the new/
+ *    unanchored which-values columns change.
  */
 function appendFilterToAggregates(expr, filterSql) {
-  const heads = ["SUM(", "COUNT("];
+  const heads = ["SUM(", "COUNT(", "list(", "MIN("];
   let out = "";
   let i = 0;
   while (i < expr.length) {
