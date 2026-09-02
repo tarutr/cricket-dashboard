@@ -769,7 +769,13 @@ export function createColumnsPicker({
     if (baseKey === "matches") return "match";
     if (MATCH_LEVEL_SET_KEYS.has(baseKey)) return "match";
     if (FIELDING_BUCKET_SET_KEYS.has(baseKey)) return "fielding";
-    if (OWN_BUCKET_SET_KEYS.has(baseKey)) return disciplineBucket(ns);
+    if (OWN_BUCKET_SET_KEYS.has(baseKey)) {
+      // Wave 3A: under a matchup the Innings-Number which-values column is offered in the
+      // Match dropdown (matchLevelSetItems above), so its badge counts there; on the plain
+      // boards it stays in the own-discipline Basic Stats.
+      if (baseKey === INNINGS_NUMBER_SET_KEY && (ns === "matchup_batting" || ns === "matchup_bowling")) return "match";
+      return disciplineBucket(ns);
+    }
     if (baseKey.startsWith("attr_")) return disciplineBucket(ns); // Player Profile columns
     if (parseComposedFieldingKey(baseKey)) return "fielding";
     const m = getMetric(baseKey, ns);
@@ -2055,6 +2061,12 @@ export function createColumnsPicker({
     const all = eligibleMetrics(ns, formats);
     const isDetailed = (m) => m.kind === "rate" || m.kind === "percent" || DETAILED_TOTAL_KEYS.has(m.key);
     const isPlainNs = ns === "batting" || ns === "bowling";
+    // Wave 3A (un-lens matchup columns): the Match dropdown gains "Matches" + the 10
+    // match-context which-values columns under a matchup. Everything else the matchup
+    // vocabulary already gated OFF (Impact/Fielding/cross-discipline) stays off — the
+    // matchup catalogue simply has no impact/fielding-section metrics, so those lists are
+    // empty by construction; this flag only widens the Match-dropdown offer.
+    const isMatchupNs = ns === "matchup_batting" || ns === "matchup_bowling";
     const hiddenAlts = isPlainNs ? toggleAltKeys(ns) : new Set();
     // Stage-3 M1: on a MATCHUP ns, the "% Runs in…" / "% Runs Conceded in…" percents
     // move out of the flat "Detailed Stats" list into their family control below — hide
@@ -2069,14 +2081,18 @@ export function createColumnsPicker({
       (m) => m.section === "impact" && !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key)) && !hiddenAlts.has(m.key)
     );
     const fielding = all.filter((m) => m.section === "fielding" && !hiddenAlts.has(m.key));
-    const matchesMetric = isPlainNs ? all.find((m) => m.key === "matches") || null : null;
+    // Wave 3A: Matches is offered in the Match dropdown under a matchup too (the matchup
+    // "matches" metric — COUNT(DISTINCT match_id) FILTER'd on the bucket — already exists in
+    // eligibleMetrics). It is EXCLUDED from the own-discipline "core" list below in that mode
+    // (mirroring the plain board), so it renders once, in the Match dropdown.
+    const matchesMetric = isPlainNs || isMatchupNs ? all.find((m) => m.key === "matches") || null : null;
     const core = all.filter(
       (m) =>
         !m.isPhaseMetric &&
         m.section !== "dismissal" &&
         m.section !== "fielding" &&
         m.section !== "impact" &&
-        !(isPlainNs && m.key === "matches") &&
+        !((isPlainNs || isMatchupNs) && m.key === "matches") &&
         !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key)) &&
         !(isPlainNs && BALL_RANGE_ENUMERATED_KEYS.has(m.key)) &&
         !(isPlainNs && D3_ENUMERATED_HIDDEN_KEYS.has(m.key)) &&
@@ -2329,7 +2345,25 @@ export function createColumnsPicker({
           { type: "plain", key: TOSS_DECISION_SET_KEY, label: "Toss Decision" },
           { type: "plain", key: RESULT_CONDITION_SET_KEY, label: "Result Condition" },
         ]
-      : [];
+      : // Wave 3A (un-lens matchup columns): under a matchup the Match dropdown offers the
+        // SAME 9 match-context which-values columns PLUS Innings Number (which, on the plain
+        // board, lives in the own-discipline Basic Stats via scopeSetItems — but the matchup
+        // own dropdown is the Vs-stats vocabulary, so all 10 sit here together). Each resolves
+        // in the matchup ns (SCOPE_SET_SPECS.colFor widened) and auto-adds with its filter.
+        isMatchupNs
+        ? [
+            { type: "plain", key: INNINGS_NUMBER_SET_KEY, label: "Innings Number" },
+            { type: "plain", key: TEAM_SET_KEY, label: "Team" },
+            { type: "plain", key: OPPOSITION_SET_KEY, label: "Opposition" },
+            { type: "plain", key: EVENT_SET_KEY, label: "Event" },
+            { type: "plain", key: VENUE_SET_KEY, label: "Venue" },
+            { type: "plain", key: CITY_SET_KEY, label: "City" },
+            { type: "plain", key: SEASON_SET_KEY, label: "Season" },
+            { type: "plain", key: STAGE_SET_KEY, label: "Stage" },
+            { type: "plain", key: TOSS_DECISION_SET_KEY, label: "Toss Decision" },
+            { type: "plain", key: RESULT_CONDITION_SET_KEY, label: "Result Condition" },
+          ]
+        : [];
     const matchItems = fieldingMode
       ? [...plainItems(matchesMetric ? [matchesMetric] : []), ...fieldingMatchSetItems]
       : [...plainItems([...(matchesMetric ? [matchesMetric] : []), ...impact]), ...matchLevelSetItems];

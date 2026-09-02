@@ -568,8 +568,13 @@ function autoManageColumns() {
   // hand-added columns, manages the sort, AND maps each active fielding filter to its
   // own fld_*_set list column. effectiveNamespace(fielding) === "fielding" (fielding
   // is never a matchup), so this reaches the reconciler.
-  if (ns !== "batting" && ns !== "bowling" && ns !== "fielding") return;
-  const seeding = !((state.columnsSeeded || {})[state.discipline]);
+  // Wave 3A (un-lens matchup columns): the matchup namespaces now run the reconciler too —
+  // it takes its own restricted path (reconcileMatchupColumns) that manages ONLY the 10
+  // match-context which-values columns on state.columns[ns]. NO seeding there (the matchup
+  // defaults are fixed), so the seeding-bookkeeping below is gated off for matchup.
+  const matchup = ns === "matchup_batting" || ns === "matchup_bowling";
+  if (ns !== "batting" && ns !== "bowling" && ns !== "fielding" && !matchup) return;
+  const seeding = !matchup && !((state.columnsSeeded || {})[state.discipline]);
   // reconcileLeaderboardColumns owns the whole Option-B pass: first-Search Core seed,
   // filter→column add/remove per the mapping + origins, prune-stick, and the sort
   // default/reset. It returns null (no-op) when "Keep Selected Columns" is ON (Q4a) or

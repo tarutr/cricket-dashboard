@@ -4076,6 +4076,20 @@ export function battingPositionSetColumnKeys(discipline) {
 // team-name string lists, format "list" like B. Pos.
 const SCOPE_TEAM_COL = { batting: "batting_team", bowling: "bowling_team" };
 const SCOPE_OPP_COL = { batting: "bowling_team", bowling: "batting_team" };
+// Wave 3A (un-lens matchup columns): the SAME which-values columns are offerable UNDER A
+// MATCHUP too. The matchup views carry the player's own team as batting_team (batting board)
+// / bowling_team (bowling board) and the opponent as the mirror — identical column NAMES to
+// the plain views, but keyed here by the matchup NAMESPACE for the colFor widening below.
+// Kept SEPARATE from SCOPE_TEAM_COL/SCOPE_OPP_COL on purpose: those maps' truthiness ALSO
+// gates the Team / Opposition COMPOSER families (makeComposerFamily), which stay plain-only
+// this wave — folding matchup keys into them would silently offer the composers too.
+const MATCHUP_SET_TEAM_COL = { matchup_batting: "batting_team", matchup_bowling: "bowling_team" };
+const MATCHUP_SET_OPP_COL = { matchup_batting: "bowling_team", matchup_bowling: "batting_team" };
+/** True for the four namespaces that can carry a match-context which-values COLUMN — the
+ * two plain boards AND (Wave 3A) the two matchup boards. Widens the per-spec colFor guards
+ * below from the old `(d === "batting" || d === "bowling")` shape. */
+const isSetColumnNs = (d) =>
+  d === "batting" || d === "bowling" || d === "matchup_batting" || d === "matchup_bowling";
 
 export const INNINGS_NUMBER_SET_KEY = "inn_set";
 export const TEAM_SET_KEY = "team_set";
@@ -4132,7 +4146,9 @@ const SCOPE_SET_SPECS = [
     label: "Innings Number",
     shortLabel: "Inns #",
     title: "Innings numbers present in the filtered rows",
-    colFor: (d) => (d === "batting" || d === "bowling" ? "innings_number" : null),
+    // Wave 3A: matchup views carry a 0-based innings_number too (verified), so the +1
+    // display override is correct there as well; widened via isSetColumnNs.
+    colFor: (d) => (isSetColumnNs(d) ? "innings_number" : null),
     listCol: (col) => `${col} + 1`, // display override: sortExpression still uses the bare col.
   },
   {
@@ -4140,42 +4156,45 @@ const SCOPE_SET_SPECS = [
     label: "Team",
     shortLabel: "Team",
     title: "Teams the player represented in the filtered rows",
-    colFor: (d) => SCOPE_TEAM_COL[d] || null,
+    // Wave 3A: matchup namespaces map through MATCHUP_SET_TEAM_COL (same column NAMES,
+    // kept out of SCOPE_TEAM_COL so the Team composer stays plain-only).
+    colFor: (d) => SCOPE_TEAM_COL[d] || MATCHUP_SET_TEAM_COL[d] || null,
   },
   {
     key: OPPOSITION_SET_KEY,
     label: "Opposition",
     shortLabel: "Opp.",
     title: "Opponents faced in the filtered rows",
-    colFor: (d) => SCOPE_OPP_COL[d] || null,
+    // Wave 3A: matchup namespaces map through MATCHUP_SET_OPP_COL (the mirror side).
+    colFor: (d) => SCOPE_OPP_COL[d] || MATCHUP_SET_OPP_COL[d] || null,
   },
   {
     key: CITY_SET_KEY,
     label: "City",
     shortLabel: "City",
     title: "Cities played in across the filtered rows",
-    colFor: (d) => (d === "batting" || d === "bowling" ? "mctx.city" : null),
+    colFor: (d) => (isSetColumnNs(d) ? "mctx.city" : null),
   },
   {
     key: SEASON_SET_KEY,
     label: "Season",
     shortLabel: "Season",
     title: "Seasons present in the filtered rows",
-    colFor: (d) => (d === "batting" || d === "bowling" ? "mctx.season" : null),
+    colFor: (d) => (isSetColumnNs(d) ? "mctx.season" : null),
   },
   {
     key: EVENT_SET_KEY,
     label: "Event",
     shortLabel: "Event",
     title: "Events played in across the filtered rows",
-    colFor: (d) => (d === "batting" || d === "bowling" ? "mctx.event_name" : null),
+    colFor: (d) => (isSetColumnNs(d) ? "mctx.event_name" : null),
   },
   {
     key: VENUE_SET_KEY,
     label: "Venue",
     shortLabel: "Venue",
     title: "Venues played at across the filtered rows",
-    colFor: (d) => (d === "batting" || d === "bowling" ? "mctx.venue" : null),
+    colFor: (d) => (isSetColumnNs(d) ? "mctx.venue" : null),
   },
   // ── Stage-3 Phase 1.1: the three DERIVED match-context which-values columns ──
   // `colFor` returns a whole SQL EXPRESSION here, not a bare column name — the same
@@ -4192,7 +4211,7 @@ const SCOPE_SET_SPECS = [
     // Canonical fold (stageAliases over STAGE_CANONICALS — the SAME expansion the Stage
     // FILTER and the Stage composer use) + a "No Stage" bucket for the NULL event_stage
     // of a league fixture with no round name, matching the filter's own STAGE_NONE option.
-    colFor: (d) => (d === "batting" || d === "bowling" ? derivedSetExpr("stage", "mctx") : null),
+    colFor: (d) => (isSetColumnNs(d) ? derivedSetExpr("stage", "mctx") : null),
   },
   {
     key: TOSS_DECISION_SET_KEY,
@@ -4201,7 +4220,7 @@ const SCOPE_SET_SPECS = [
     title: "Toss decisions in the filtered rows",
     // matches.toss_decision mapped to TOSS_DECISION_OPTIONS' own labels ("Chose to bat" /
     // "Chose to field"), so the column reads in the filter's words.
-    colFor: (d) => (d === "batting" || d === "bowling" ? derivedSetExpr("tossDecision", "mctx") : null),
+    colFor: (d) => (isSetColumnNs(d) ? derivedSetExpr("tossDecision", "mctx") : null),
   },
   {
     key: RESULT_CONDITION_SET_KEY,
@@ -4216,7 +4235,7 @@ const SCOPE_SET_SPECS = [
     // contributes a LIST of the labels that apply to it (resultConditionFacetsSql) and the
     // aggregate flattens / de-duplicates / sorts them. `list_distinct` also strips the NULL
     // placeholders the per-row list carries for the facets that do not apply.
-    colFor: (d) => (d === "batting" || d === "bowling" ? resultConditionFacetsSql("mctx") : null),
+    colFor: (d) => (isSetColumnNs(d) ? resultConditionFacetsSql("mctx") : null),
     aggFor: (expr) => `list_sort(list_distinct(flatten(list(${expr}))))`,
     // Sorting a list column needs a scalar: the FIRST applicable facet in the filter's own
     // option order (COALESCE over the same per-facet CASEs).
@@ -4348,6 +4367,33 @@ export function resolveMatchOutcomeSetMetric(key, discipline) {
  * auto-added column survives a re-render. */
 export function matchOutcomeSetColumnKeys(discipline) {
   return discipline === "batting" || discipline === "bowling" ? MATCH_OUTCOME_SET_KEYS.slice() : [];
+}
+
+/** Wave 3A (un-lens matchup columns) — the SINGLE source of truth for the 10 match-context
+ * which-values column keys that are valid UNDER A MATCHUP (Innings-Number + Team + Opposition
+ * + City + Season + Event + Venue + Stage + Toss-decision + Result-Condition). [] for any
+ * non-matchup namespace. Consumed by state.js (the matchup prune fold in pruneIneligibleState,
+ * the restricted activeLeaderboardFilterSources matchup branch, and reconcileMatchupColumns'
+ * addability check) and mirrored by columnsPicker.js's Match-dropdown offer under a matchup.
+ * Every key here resolves via getMetric(key, ns) because SCOPE_SET_SPECS.colFor was widened
+ * to isSetColumnNs (matchup namespaces included). The matchup "matches" count is a real
+ * catalogued MATCHUP_*_METRICS key (already in eligibleMetrics), so it is deliberately NOT
+ * listed here — only the virtual which-values keys need this extra fold. */
+export function matchupScopeSetColumnKeys(ns) {
+  return ns === "matchup_batting" || ns === "matchup_bowling"
+    ? [
+        INNINGS_NUMBER_SET_KEY,
+        TEAM_SET_KEY,
+        OPPOSITION_SET_KEY,
+        CITY_SET_KEY,
+        SEASON_SET_KEY,
+        EVENT_SET_KEY,
+        VENUE_SET_KEY,
+        STAGE_SET_KEY,
+        TOSS_DECISION_SET_KEY,
+        RESULT_CONDITION_SET_KEY,
+      ]
+    : [];
 }
 
 // ── Ball-Ranges / vs-Opponent-Player "which values" columns (Stage-3 Phase 8,

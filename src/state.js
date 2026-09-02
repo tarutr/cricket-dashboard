@@ -87,6 +87,9 @@ import {
   // ONE fielding list column the batting/bowling boards offer too (Dismissed batter's
   // position, the fld_pos singleton's column).
   matchOutcomeSetColumnKeys,
+  // Wave 3A (un-lens matchup columns): the 10 match-context which-values keys valid under
+  // a matchup — folded into the matchup prune allow-set + the matchup auto-add path.
+  matchupScopeSetColumnKeys,
   plainBoardFieldingSetColumnKeys,
   // Cutover S1 (ball-engine-gated, Stage-3 Phase 8): the Ball-Ranges / vs-Opponent
   // which-values column keys — folded into eligibleColumnKeys ONLY under the engine, and
@@ -1651,6 +1654,17 @@ export function eligibleColumnKeys(discipline, formats) {
   for (const key of plainBoardFieldingSetColumnKeys(discipline)) {
     keys.add(key);
   }
+  // Wave 3A (un-lens matchup columns): under a MATCHUP namespace the 10 match-context
+  // which-values columns are valid columns too. The eight *SetColumnKeys folds above all
+  // gate on "batting"||"bowling" (so they add nothing here for a matchup ns), so fold the
+  // matchup keys in explicitly — WITHOUT this, table.js's pruneInvalidColumns (which reads
+  // eligibleColumnKeys(ns) with ns = the matchup namespace) drops every added Team / City /
+  // Opposition / … which-values column on the next render, exactly like it would a stray
+  // column. [] for every non-matchup namespace → byte-identical there. The matchup "matches"
+  // count is a catalogued metric already harvested at the top, so it needs no fold.
+  for (const key of matchupScopeSetColumnKeys(discipline)) {
+    keys.add(key);
+  }
   // Cutover S1 (ball-engine-gated, Stage-3 Phase 8): the Ball-Ranges / vs-Opponent
   // which-values columns (wphase_set / wover_set / wtball_set / wpball_set / vsopp_set,
   // both plain disciplines) — eligible ONLY while the ball engine is on, because their
@@ -1743,7 +1757,16 @@ export function pruneIneligibleState(store) {
   const newMatchupColumns = { ...s.columns };
   let matchupChanged = false;
   for (const ns of ["matchup_batting", "matchup_bowling"]) {
-    const nsAllowed = new Set(eligibleMetrics(ns, s.formats).map((m) => m.key));
+    // Wave 3A: the 10 match-context which-values columns are valid matchup columns too, but
+    // are VIRTUAL (resolved by getMetric, never in the static catalogue eligibleMetrics
+    // harvests), so fold their keys in — otherwise an added Team / City / … which-values
+    // column would be silently pruned on the next discipline/format sync. They are
+    // format-agnostic (kind "attribute"), so no phase-gate applies. The matchup "matches"
+    // count is a catalogued metric already in eligibleMetrics, so it needs no fold.
+    const nsAllowed = new Set([
+      ...eligibleMetrics(ns, s.formats).map((m) => m.key),
+      ...matchupScopeSetColumnKeys(ns),
+    ]);
     const nsCols = s.columns[ns] || []; // Slot[] (E1a)
     const nsPruned = nsCols.filter((sl) => nsAllowed.has(sl.key));
     if (nsPruned.length !== nsCols.length) {
@@ -1931,6 +1954,39 @@ function conditionColumnKey(cond, discipline) {
 }
 
 /**
+ * Wave 3A (un-lens matchup columns) — the RESTRICTED FILTER → COLUMN map used UNDER A
+ * MATCHUP. Only the 10 match-context which-values columns are eligible here (see
+ * matchupScopeSetColumnKeys); each rides on the SAME scope filter the plain board maps it
+ * from, with the SAME "filter:" tag so reconcileMatchupColumns' remove-on-remove tidy drops
+ * the column when its filter clears. Every colKey is validated to resolve in the matchup ns
+ * (getMetric) AND to be one of the allowed matchup which-values keys — a defensive belt so
+ * this can never seed a column the matchup table couldn't render. Deliberately excludes:
+ * batting-position (bpos_set), PotM (potm_count), Match Result (res_*), Toss Result
+ * (res_toss_won), fielding-position, delivery-window, opponent-player, profile, and numeric
+ * stat conditions — none has a coherent matchup column.
+ */
+function matchupFilterSources(state, ns) {
+  const out = [];
+  const allowed = new Set(matchupScopeSetColumnKeys(ns));
+  const push = (tag, colKey) => {
+    if (allowed.has(colKey) && getMetric(colKey, ns)) out.push({ tag, cols: [colKey] });
+  };
+  // Same tags the plain path uses (filter:teams / filter:opposition / …) so the origin
+  // bookkeeping + remove-on-remove tidy behave identically — just on state.columns[ns].
+  if (teamsFilterActive(state)) push("filter:teams", TEAM_SET_KEY);
+  if (oppositionFilterActive(state)) push("filter:opposition", OPPOSITION_SET_KEY);
+  if (inningsNumberFilterActive(state)) push("filter:innings_number", INNINGS_NUMBER_SET_KEY);
+  if (cityFilterActive(state)) push("filter:city", CITY_SET_KEY);
+  if (seasonFilterActive(state)) push("filter:season", SEASON_SET_KEY);
+  if (eventFilterActive(state)) push("filter:event", EVENT_SET_KEY);
+  if (venueFilterActive(state)) push("filter:venue", VENUE_SET_KEY);
+  if (stageFilterActive(state)) push("filter:mc_stage", STAGE_SET_KEY);
+  if (tossDecisionFilterActive(state)) push("filter:mc_toss_decision", TOSS_DECISION_SET_KEY);
+  if (resultConditionFilterActive(state)) push("filter:mc_result_condition", RESULT_CONDITION_SET_KEY);
+  return out;
+}
+
+/**
  * The active FILTER → COLUMN map for the plain leaderboard: an array of
  * { tag, cols } where `tag` uniquely identifies the filter (the origin source it
  * stamps) and `cols` are the column key(s) it maps to. Owner-confirmed mapping —
@@ -1939,7 +1995,16 @@ function conditionColumnKey(cond, discipline) {
  */
 export function activeLeaderboardFilterSources(state) {
   const disc = state.discipline;
-  if (effectiveNamespace(state) !== disc) return []; // matchup mode
+  const ns = effectiveNamespace(state);
+  // Wave 3A (un-lens matchup columns): under a matchup the auto-add engine no longer
+  // short-circuits to []. It returns a RESTRICTED source list — ONLY the 10 match-context
+  // which-values columns (Team/Opposition/Innings-Number/City/Season/Event/Venue/Stage/
+  // Toss-decision/Result-Condition), each mapped from the SAME scope filter the plain board
+  // maps it from. Everything else (numeric stat conditions, PotM/Result/Toss-result,
+  // fielding, delivery-window, profile, cross-discipline) stays short-circuited — those have
+  // no coherent "vs X" column. reconcileMatchupColumns consumes this and manages the columns
+  // on state.columns[ns] (NOT state.columns[disc]).
+  if (ns !== disc) return matchupFilterSources(state, ns);
   const out = [];
   const push = (tag, cols) => {
     const valid = cols.filter((c) => isLeaderboardColumnAddable(c, disc, state.formats));
@@ -2237,7 +2302,11 @@ export function reconcileLeaderboardColumns(state, { firstSearch = false } = {})
   // Additive to batting/bowling (they still take the exact same path). (The autoManage
   // caller in main.js has its own batting/bowling gate — un-gated in step with this.)
   if (disc !== "batting" && disc !== "bowling" && disc !== "fielding") return null;
-  if (effectiveNamespace(state) !== disc) return null; // matchup mode: no auto-manage
+  // Wave 3A (un-lens matchup columns): matchup mode now takes a SEPARATE, restricted path —
+  // reconcileMatchupColumns manages ONLY the 10 match-context which-values columns on
+  // state.columns[ns] (no Core seed, no rank-by-filter). The plain batting/bowling/fielding
+  // path below is left byte-identical (this branch fires before any of it runs).
+  if (effectiveNamespace(state) !== disc) return reconcileMatchupColumns(state);
   if (state.keepColumns) return null; // Keep ON freezes ALL automatic management (Q4a)
 
   let slots = (state.columns[disc] || []).map((s) => ({ ...s }));
@@ -2334,6 +2403,96 @@ export function reconcileLeaderboardColumns(state, { firstSearch = false } = {})
     prunedColumns: { ...(state.prunedColumns || {}), [disc]: [...pruned] },
     columnsSeeded: { ...(state.columnsSeeded || {}), [disc]: true },
     filterSourcesPrev: { ...(state.filterSourcesPrev || {}), [disc]: [...activeTags] },
+    sort,
+  };
+}
+
+/**
+ * Wave 3A (un-lens matchup columns) — the matchup sibling of reconcileLeaderboardColumns.
+ * RESTRICTED and ADDITIVE by construction: it manages ONLY the 10 match-context which-values
+ * columns (matchupFilterSources) on state.columns[ns] (ns = matchup_batting|matchup_bowling),
+ * NOT the plain batting/bowling store. Key differences from the plain path, all deliberate:
+ *   • NO Core seed — the matchup namespaces keep their FIXED defaults (DEFAULT_MATCHUP_COLUMNS,
+ *     seeded at init). Those default columns carry NO origin, so the emptied-origin removal
+ *     below never touches them (an `undefined` origin is left alone), and a manually-added
+ *     matchup column (reconcileManualColumnEdit's columns-only path, also no origin) survives
+ *     every Search too. Only the auto-added which-values columns (tagged "filter:…") tidy away.
+ *   • NO rank-by-first-filter — every column this adds is a non-rankable which-values LIST
+ *     (kind "attribute"), so it must never re-rank; the sort only RESETS to the matchup
+ *     default when its own column vanished (e.g. the user sorted by a which-values column then
+ *     removed the filter), mirroring the plain reset rule.
+ * Freezes entirely under "Keep Selected Columns" (Q4a), exactly like the plain reconciler.
+ * Returns a store patch or null (no change / frozen).
+ */
+function reconcileMatchupColumns(state) {
+  const ns = effectiveNamespace(state);
+  if (state.keepColumns) return null; // Keep ON freezes ALL automatic management (Q4a)
+
+  let slots = (state.columns[ns] || []).map((s) => ({ ...s }));
+  const origins = { ...((state.columnOrigins || {})[ns] || {}) };
+  const pruned = new Set((state.prunedColumns || {})[ns] || []);
+
+  const sources = activeLeaderboardFilterSources(state); // matchup branch → restricted
+  const activeTags = new Set(sources.map((s) => s.tag));
+  const prevTags = new Set((state.filterSourcesPrev || {})[ns] || []);
+
+  // Q3b: a filter that became active SINCE the last Search clears its columns' prune.
+  for (const { tag, cols } of sources) {
+    if (!prevTags.has(tag)) for (const c of cols) clearPrunedIdentity(pruned, c);
+  }
+
+  // Drop filter origins whose filter is no longer active (remove-on-remove).
+  for (const s of slots) {
+    const o = origins[s.id];
+    if (o) origins[s.id] = o.filter((src) => !src.startsWith("filter:") || activeTags.has(src));
+  }
+
+  // Add each active filter's column (skip pruned). New columns go AFTER the last managed
+  // (filter:) column, else at the END — the fixed matchup defaults have no origin, so
+  // appending keeps the which-values columns to the right of the stat columns.
+  const insertBoundary = () => {
+    let idx = slots.length;
+    for (let i = 0; i < slots.length; i++) {
+      const o = origins[slots[i].id] || [];
+      if (o.some((x) => x.startsWith("filter:"))) idx = i + 1;
+    }
+    return idx;
+  };
+  for (const { tag, cols } of sources) {
+    for (const c of cols) {
+      if (isPrunedIdentity(pruned, c)) continue;
+      const existing = slots.find((s) => sameColumnIdentity(s.key, c));
+      if (existing) {
+        origins[existing.id] = addOriginTag(origins[existing.id], tag);
+      } else {
+        const slot = makeSlot(c);
+        origins[slot.id] = [tag];
+        slots.splice(insertBoundary(), 0, slot);
+      }
+    }
+  }
+
+  // Remove slots whose MANAGED origin set emptied. A slot with no origin entry (the fixed
+  // defaults + manual adds) is left alone — never auto-removed.
+  slots = slots.filter((s) => {
+    const o = origins[s.id];
+    if (o === undefined) return true;
+    if (o.length > 0) return true;
+    delete origins[s.id];
+    return false;
+  });
+  gcOrigins(origins, slots);
+
+  // Sort: keep the current matchup sort; reset to the matchup default only if its column is
+  // gone (a which-values column that was the sort tidied away). Never re-rank on an add.
+  let sort = state.sort;
+  if (!sortStillShown(sort, slots)) sort = defaultLeaderboardSort(slots, ns);
+
+  return {
+    columns: { ...state.columns, [ns]: slots },
+    columnOrigins: { ...(state.columnOrigins || {}), [ns]: origins },
+    prunedColumns: { ...(state.prunedColumns || {}), [ns]: [...pruned] },
+    filterSourcesPrev: { ...(state.filterSourcesPrev || {}), [ns]: [...activeTags] },
     sort,
   };
 }

@@ -595,8 +595,25 @@ function buildMatchupQuery(state, discipline, visibleColumns) {
     // sets bypassable:false, exactly as pushing the bare string did) → byte-identical.
     for (const c of buildMatchContextClauses(state, teamCol)) whereClauses.push(alwaysClause(c, "scope"));
   }
+  // Wave 3A (un-lens matchup columns): a match-context which-values COLUMN can now be added
+  // under a matchup with NO matching filter active. The City/Season/Event/Venue/Stage/
+  // Toss-decision/Result-Condition list columns read `mctx.*`, so — exactly like the plain
+  // board's wantsMctxColumn gate — the mctx LEFT JOIN must be lit on COLUMN PRESENCE, not
+  // only on an active filter (wantsMatchContext). ADDITIVE and numbers-safe: the join is 1:1
+  // on match_id, so it moves no aggregate (anchors verified byte-identical with the join on),
+  // and it adds NO WHERE clause. Team/Opposition/Innings-Number read raw view columns, so
+  // they are deliberately absent here (they need no join). Byte-identical when none present.
+  const wantsMctxColumn = allMetrics.some(
+    (m) =>
+      m &&
+      (m.key === CITY_SET_KEY ||
+        m.key === SEASON_SET_KEY ||
+        m.key === EVENT_SET_KEY ||
+        m.key === VENUE_SET_KEY ||
+        MATCH_OUTCOME_SET_KEYS.includes(m.key))
+  );
   // The FROM used by both `agg` and the peak CTE: base view + optional mctx join.
-  const matchupFrom = wantsMatchContext ? view + matchContextJoinSql(view) : view;
+  const matchupFrom = wantsMatchContext || wantsMctxColumn ? view + matchContextJoinSql(view) : view;
 
   // Pinned players (Wave 4b, decision 47a): additive — a pinned player is scanned
   // as long as they have a row that passes every ALWAYS-APPLIES clause above
