@@ -473,6 +473,23 @@ function battingViewSql(files, scopePredicate, windowPredicate, playerPredicate,
   // ── CTEs ──────────────────────────────────────────────────────────────────
   // app / crease define the ROW SET (every crease appearance, incl. the ~4,450
   // zero-ball ones). NEVER pruned in a way that changes which rows exist.
+  //
+  // OPPONENT / DELIVERY-WINDOW LEAK FIX: a non-empty `windowPredicate` is the
+  // single, exact signal that a "faced" filter is active — it is
+  // deliveryWindowPredicate AND opponentPlayerPredicate ONLY (db.js
+  // windowPredicateFor); scope filters (date/team/venue/…) travel in the
+  // SEPARATE scopePredicate. Under a faced filter the base ball CTE `b` holds
+  // only the qualifying balls, so a crease appearance that faced NONE of them (a
+  // pure non-striker, a run-out non-striker, a wickets_extra overflow) did NOT
+  // face the qualifying ball and must NOT enter the batting row set — otherwise
+  // "batters vs Bumrah" wrongly counts players who were merely present (e.g.
+  // R Chopra: 0 balls as striker vs Bumrah, 6 as non-striker). So: with a faced
+  // filter the row set is the STRIKER branch only; the downstream bat/dis/disp
+  // CTEs LEFT JOIN onto it, so a striker who faced the ball still counts and a
+  // non-striker run-out correctly does not. With NO faced filter (windowPredicate
+  // empty — baseline + scope-only) keep the full 4-branch union that recovers the
+  // ~4,450 zero-ball crease appearances → BYTE-IDENTICAL.
+  const facedFilter = (windowPredicate || "").trim() !== "";
   const appCols = needPos
     ? [
         "SELECT match_id, innings_number, batter_id AS pid, batter_name AS nm, batting_position AS pos FROM b",
@@ -486,15 +503,26 @@ function battingViewSql(files, scopePredicate, windowPredicate, playerPredicate,
         "SELECT match_id, innings_number, player_out_id, CAST(NULL AS VARCHAR)\n    FROM b WHERE player_out_id IS NOT NULL",
         "SELECT match_id, innings_number, x.player_out_id, x.player_out_name FROM wx",
       ];
-  const ctes = [
-    wicketExtrasCte(needDispT20 || needDispODI ? ["over_number", "team_ball", "balls_per_over"] : []),
-    cte("app", `\n    ${appCols.join("\n    UNION ALL\n    ")}\n`),
+  // Striker branch only under a faced filter (see above); the full union otherwise.
+  const appUnion = facedFilter ? [appCols[0]] : appCols;
+  // `wx` (the wickets_extra overflow) is read by app branch 4 (full union only),
+  // by `dis`, and by `disp`. Build it only when something reads it — this keeps
+  // the wickets_extra LIST out of the lean base projection under a striker-only
+  // faced filter that needs no dismissal CTE. In the full-union path needWx is
+  // always true, so this is byte-identical to the prior unconditional build.
+  const needWx = !facedFilter || needDis || needDispT20 || needDispODI;
+  const ctes = [];
+  if (needWx) {
+    ctes.push(wicketExtrasCte(needDispT20 || needDispODI ? ["over_number", "team_ball", "balls_per_over"] : []));
+  }
+  ctes.push(
+    cte("app", `\n    ${appUnion.join("\n    UNION ALL\n    ")}\n`),
     cte(
       "crease",
       `SELECT match_id, innings_number, pid AS batter_id, MIN(nm) AS any_name` +
         `${needPos ? ",\n                  MIN(pos) AS any_pos" : ""} FROM app GROUP BY 1,2,3`
-    ),
-  ];
+    )
+  );
   if (needPosx) {
     ctes.push(cte("posx", "SELECT DISTINCT match_id, innings_number, batter_id, batting_position FROM b"));
   }
