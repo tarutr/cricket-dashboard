@@ -1414,3 +1414,29 @@ SA Yadav 60·1,544·29.13·150.34; vs Spin 38/454/140.99; Bumrah vs RHB pos1-2 2
     (`out_batter_id` / `bowler_id IN (…)` via `pushInList` in table.js) — so the picker merely writes the
     already-array `fielding.outBatters` / `.bowlers`; a single pick stays **byte-identical**; the sacred fielding
     CTE is untouched. Built in the Wave 2 UI pass (commit f45a51a; anchors 2,813 / fielding 2,345 held).
+
+
+## 2026-09-01 — decision 90: Wave 3 (matchup/columns rework) — design pass + build (owner)
+90. **WAVE 3 — MATCHUP + COLUMNS REWORK (owner design pass 2026-09-01; BUILT on ball-layer, NOT pushed).** A
+    detailed design pass (4 read-only audits) reshaped the plan; the owner ruled and the build shipped:
+    - **(A) Un-lens matchup columns (SELECTIVE).** Under a matchup the 10 match-context which-values columns
+      (Team/Opposition/Event/Venue/City/Season/Stage/Toss/Result/Innings) now show + auto-add, and a real
+      **match-count** ("faced X in N matches" = `COUNT(DISTINCT match_id)` in the bucket) is available. **3A.2:** those
+      lists are MATCHUP-SPECIFIC (SA Yadav vs Spin → the 12 teams he faced spin against, not 14 scope-wide) —
+      `appendFilterToAggregates` widened to bucket-filter `list(`/`MIN(` heads. buildMatchupQuery ADDITIVE only;
+      anchors 38/454/140.99 + 27/177/9 byte-identical. Commits 09b0e0b + 873927b.
+    - **DROPPED (owner):** fielding / "matches-won" / cross-discipline columns UNDER a matchup (the matchup summary
+      is batting/bowling-delivery grain — no coherent "vs X" number; NOT a pipeline gap); the **matchup-axis-as-a-
+      column** idea ("vs Spin" as a cell — single matchup = same value every row).
+    - **(B) Columns as versatile as filters** — found LARGELY ALREADY BUILT (pick-a-value composers, PotM=count,
+      Wicket-Hauls composer, the filter→column auto-add engine). The 4 raw-count filter gaps (boundary/dot balls)
+      = DROPPED (the useful %/count versions exist). **Hidden-column cleanup:** the careful delete-the-dead pass
+      found **NOTHING dead** — all 27 hidden keys are still used (graph metrics, filter leaves, composer bases,
+      pop-up) — so hiding-from-the-picker (not deletion) is correct; zero code change.
+    - **Cross-discipline / non-scope column dropdowns = KEPT** (owner) — they compute the same player's real
+      other-discipline stats (the all-rounder view); the fielding board already hides non-scope. Not touched.
+    - **(C) Fielding columns.** Added the 3 parity-gap columns (Wicket Type which-values; Specific Batter /
+      Specific Bowler as **pick-a-value** columns — "Catches off Bumrah") + a full fielding value-composer family
+      (Team/Opposition/Event/Venue/City/Season/Stage/Result/Toss — "Catches vs Australia"). Additive to the sacred
+      fielding CTE; anchor 2,345 held; verified vs independent DuckDB. Commits bff32df + 0b3035e. **NO** dismissed-
+      batter-role (owner: not a good enough fielding filter); fielding preset rework stays BACKLOG.
