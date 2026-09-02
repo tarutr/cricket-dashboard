@@ -107,11 +107,20 @@ import {
   // e.g. "Catches vs Australia". Reuses the SAME compose-editor machinery via
   // SEARCH_COMPOSER_META (search dims) and composerValueRows (result/toss checklists).
   makeComposedFieldingValueKey, parseComposedFieldingValueKey, registerComposedFieldingValueKeys,
+  // Wave 3C.2: Specific Bowler / Batter fcv dims carry a PLAYER value — a COMPOSITE
+  // id+name, codec'd via these two so the label reads the name and the predicate the id.
+  encodeFieldingValuePlayer, fieldingValuePlayerParts,
 } from "./metrics.js";
 // Standalone TEAM/OPPOSITION composers: their value control is the SAME searchable
 // multi-select the Team/Opposition/Event/Venue FILTERS use (drawerInnings.js mounts
 // it identically).
 import { mountSearchMultiSelect } from "./searchSelect.js";
+// Wave 3C.2: the Specific Bowler / Batter VALUE composers reuse the SAME unbounded player
+// search the fielding Specific Bowler/Batter FILTER mounts (drawerInnings.mountOpponentPlayer,
+// omnisearch-backed) — a data-driven player pick, not a bounded option list. opponentFilter
+// is a pure data module (no imports), so opponentPlayerValues pulls in no cycle.
+import { mountOpponentPlayer } from "./drawerInnings.js";
+import { opponentPlayerValues } from "./opponentFilter.js";
 // FC-2: the Bowler Style composer is gated on the presence of fielding.bowling_group
 // (added by the FC-1b pipeline re-run) — a data-driven schema probe, cached per session.
 import { getFieldingColumnPresent, ensureFieldingColumnProbed } from "./dataAvailability.js";
@@ -1409,13 +1418,24 @@ export function createColumnsPicker({
     fcv_team: "team", fcv_opp: "opp", fcv_event: "event", fcv_venue: "venue",
     fcv_city: "city", fcv_season: "season", fcv_stage: "stage",
     fcv_result: "result", fcv_toss: "toss",
+    // Wave 3C.2: Specific Bowler / Batter — a PLAYER value (raw bowler_id / out_batter_id).
+    fcv_bowler: "bowler", fcv_batter: "batter",
   };
   const FCV_COMPOSER_KINDS = Object.keys(FCV_KIND_DIM);
   const FCV_COMPOSER_LABEL = {
     fcv_team: "Team", fcv_opp: "Opposition", fcv_event: "Event", fcv_venue: "Venue",
     fcv_city: "City", fcv_season: "Season", fcv_stage: "Stage",
     fcv_result: "Match Result", fcv_toss: "Toss Decision",
+    // Menu labels mirror the fielding FILTER's own "Specific Bowler" / "Specific Batter".
+    fcv_bowler: "Specific Bowler", fcv_batter: "Specific Batter",
   };
+  // Wave 3C.2: the two PLAYER-value fcv dims. Unlike the seven categorical search dims
+  // (bounded mountSearchMultiSelect over a loaded option list), a player is picked from an
+  // UNBOUNDED per-keystroke player search (mountOpponentPlayer). So they are kept OUT of
+  // SEARCH_COMPOSER_KINDS (below) and get their OWN editor-body + mount branch; they still
+  // share the fcv key codec / stat-remap / confirm-register via their SEARCH_COMPOSER_META
+  // row (built by the loop below, minus a loader). Their VALUE is a composite id+name.
+  const FCV_PLAYER_KINDS = new Set(["fcv_bowler", "fcv_batter"]);
   // The two FINITE-value fcv dims render a fixed checklist (composerValueRows) — labels
   // MIRROR metrics.js's RESULT_OPTIONS / TOSS_DECISION_OPTIONS. The KEY drives the SQL,
   // so a label never moves a number; the metric's own label is authoritative.
@@ -1463,7 +1483,9 @@ export function createColumnsPicker({
       filterPlaceholder: `Type to filter ${FCV_SEARCH_NOUN[kind] || "value"}s…`,
       ariaLabel: FCV_COMPOSER_LABEL[kind],
     };
-    if (!FCV_FINITE_KINDS.has(kind)) SEARCH_COMPOSER_KINDS.add(kind);
+    // The finite dims (result/toss) render a checklist; the player dims (bowler/batter)
+    // render an unbounded player search — both stay OUT of the bounded-search set.
+    if (!FCV_FINITE_KINDS.has(kind) && !FCV_PLAYER_KINDS.has(kind)) SEARCH_COMPOSER_KINDS.add(kind);
   }
   // #35 (columns-popup rework Wave B): the count/% AXIS is NOT a selectable choice in
   // the compose editor — it is ONLY the post-add per-row toggle. Runs by Source and
@@ -1819,6 +1841,15 @@ export function createColumnsPicker({
     if (SEARCH_COMPOSER_KINDS.has(kind)) {
       return typeof SEARCH_COMPOSER_META[kind].loader === "function" && composerSelectOptions(kind, ns, formats).length > 0;
     }
+    // Wave 3C.2 Specific Bowler / Batter: an unbounded player search (no fixed value rows,
+    // no bounded loader — the search is the global omnisearch). Leaderboard-only, matching
+    // the categorical search composers: gate on a leaderboard search loader being wired
+    // (loadTeamOptions, passed by the leaderboard host and absent on the pop-up) AND ≥1 base
+    // tally in the pool. So the player composers appear in the leaderboard's Fielding
+    // dropdown, never the pop-up.
+    if (FCV_PLAYER_KINDS.has(kind)) {
+      return typeof loadTeamOptions === "function" && composerSelectOptions(kind, ns, formats).length > 0;
+    }
     const opts = composerSelectOptions(kind, ns, formats);
     if (!opts.length) return false;
     return composerValueRows(kind, ns, formats, opts[0].value).length > 0;
@@ -2063,6 +2094,11 @@ export function createColumnsPicker({
     } else if (SEARCH_COMPOSER_KINDS.has(kind)) {
       // Standalone TEAM / OPPOSITION composers: a mounted search-and-pick widget
       // (wired later), not a fixed tick-box grid.
+      bodyHTML = teamComposeBodyHTML();
+    } else if (FCV_PLAYER_KINDS.has(kind)) {
+      // Wave 3C.2 Specific Bowler / Batter: a mounted PLAYER search (wired later). Reuses
+      // the same empty host container the search composers use — only one editor is ever
+      // open, and the mount block dispatches on kind.
       bodyHTML = teamComposeBodyHTML();
     } else {
       const body = composeEditorBody(kind, effNs, formats, sel, ticks, single);
@@ -2811,6 +2847,45 @@ export function createColumnsPicker({
       }
     }
 
+    // Wave 3C.2 Specific Bowler / Batter: mount the SAME unbounded player search the
+    // fielding Specific Bowler/Batter FILTER uses (drawerInnings.mountOpponentPlayer, multi),
+    // INDEPENDENT of any filter state — the picks live on the editor, not on state.fielding.
+    // The widget reads/writes an opponentPlayer array of { id, name }; a store adapter bridges
+    // that to editor.ticks: each pick becomes one fcv__ key whose composite value carries the
+    // id (for the bowler_id/out_batter_id equality) AND the name (for the "off"/"of" label).
+    // Its onChange never re-renders (the open search + chips survive ticking); only a stat
+    // change / confirm / cancel re-renders (re-mounting + re-seeding from the staged ticks).
+    // mountOpponentPlayer returns { sync } with no destroy(), so it is NOT tracked as
+    // searchPickerHandle (the categorical teardown only covers mountSearchMultiSelect); its
+    // one document-level omnisearch listener is inert once its DOM is replaced (same profile
+    // as the fielding drawer's own repeated mounts). ADD-only.
+    if (FCV_PLAYER_KINDS.has(editor.kind) && editor.mode === "add" && searchMeta && inlineState) {
+      const { parse: parseFn, make: makeFn } = searchMeta;
+      const host = rootEl.querySelector('[data-role="team-picker-host"]');
+      if (host) {
+        const confirmBtn = () => rootEl.querySelector('[data-role="compose-confirm"]');
+        // editor.ticks -> the opponentPlayer [{id,name}] the widget reads (re-seeds a
+        // stat-change re-mount from whatever players were already staged).
+        const readPicks = () =>
+          [...editor.ticks]
+            .map((k) => { const p = parseFn(k); return p ? fieldingValuePlayerParts(p.value) : null; })
+            .filter(Boolean)
+            .map((pp) => ({ id: pp.id, name: pp.name }));
+        const adapter = {
+          get: () => ({ opponentPlayer: readPicks() }),
+          set: (patch) => {
+            const arr = opponentPlayerValues(patch.opponentPlayer);
+            editor.ticks = new Set(arr.map((pp) => makeFn(encodeFieldingValuePlayer(pp.id, pp.name), editor.sel)));
+            const btn = confirmBtn();
+            if (btn) btn.disabled = editor.ticks.size === 0;
+          },
+          subscribe: () => () => {},
+          describeScope: () => "",
+        };
+        mountOpponentPlayer(host, adapter, () => {}, { embedded: true, multi: true });
+      }
+    }
+
     // Dimension inputs. ADD (checkbox): toggle the key in the staged set + keep the Add
     // button enabled iff ≥1 ticked — no re-render (native check state + a cheap disabled
     // flip, so focus/scroll hold). EDIT (radio): the staged set becomes exactly that key.
@@ -2871,7 +2946,7 @@ export function createColumnsPicker({
           // ARE the composed keys (no fixed value list to filter against — user-defined
           // ranges / a data-driven team/stage search); every other composer filters
           // composerValueRows.
-          const keys = FC_RANGE_KINDS.has(editor.kind) || SEARCH_COMPOSER_KINDS.has(editor.kind)
+          const keys = FC_RANGE_KINDS.has(editor.kind) || SEARCH_COMPOSER_KINDS.has(editor.kind) || FCV_PLAYER_KINDS.has(editor.kind)
             ? [...editor.ticks]
             : composerValueRows(editor.kind, ns, formats, editor.sel)
                 .map((r) => r.key)

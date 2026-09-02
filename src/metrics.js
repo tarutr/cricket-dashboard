@@ -6428,6 +6428,37 @@ function _fcvTossLabel(v) {
   const o = TOSS_DECISION_OPTIONS.find((x) => x.value === v);
   return o ? o.label : v;
 }
+
+// ── Wave 3C.2: Specific Bowler / Batter — a PLAYER value ──────────────────────
+// These two dims are Group A raw-id equality (the SAME `bowler_id` / `out_batter_id`
+// columns the fielding Specific Bowler/Batter FILTER uses — buildFieldingExtraSliceClauses
+// `pushInList("bowler_id"/"out_batter_id", …)`). But a player value has TWO faces: the
+// predicate needs the player's ID, the column label needs the player's NAME. So the fcv
+// VALUE for these dims is a COMPOSITE `<id>U+001F<name>` — the id+name the FILTER already
+// carries as parallel arrays (state.fielding.bowlers + bowlerName). The U+001F unit
+// separator never appears in a cricsheet player id or a player name, so a split on the
+// first occurrence recovers each part; the whole composite round-trips through
+// teamNameToToken exactly like any other value string, so the fcv KEY scheme is unchanged.
+const _FCV_PLAYER_SEP = "\u001f";
+/** Compose the fcv player VALUE from a picked player's id + name (name falls back to the
+ * id when absent). The columns picker calls this when a bowler/batter is picked. */
+export function encodeFieldingValuePlayer(id, name) {
+  const pid = id == null ? "" : String(id);
+  const pname = name == null || name === "" ? pid : String(name);
+  return `${pid}${_FCV_PLAYER_SEP}${pname}`;
+}
+/** Split an fcv player VALUE back into { id, name }. A value with no separator (defensive)
+ * is treated as an id that doubles as its own name. The picker uses this to re-seed the
+ * player search from a staged key. */
+export function fieldingValuePlayerParts(value) {
+  const s = String(value);
+  const i = s.indexOf(_FCV_PLAYER_SEP);
+  if (i === -1) return { id: s, name: s };
+  return { id: s.slice(0, i), name: s.slice(i + 1) };
+}
+function _fcvPlayerId(value) { return fieldingValuePlayerParts(value).id; }
+function _fcvPlayerName(value) { return fieldingValuePlayerParts(value).name; }
+
 const FCV_DIMS = {
   // Group A — RAW columns on the fielding view (no join). Team/Opposition/Venue/City
   // are single RAW equality (matches the Team/Opposition/Venue/City filter + the
@@ -6444,6 +6475,18 @@ const FCV_DIMS = {
   } },
   venue:  { mctx: false, versus: false, label: (v) => v, predFor: (v) => `venue = ${composerSqlLiteral(v)}` },
   city:   { mctx: false, versus: false, label: (v) => v, predFor: (v) => `city = ${composerSqlLiteral(v)}` },
+  // Group A — PLAYER identity (Wave 3C.2). Raw id equality on the fielding view, the SAME
+  // `bowler_id` / `out_batter_id` the Specific Bowler/Batter FILTER narrows on — so a
+  // composer value picks exactly the events that FILTER would. The value is a COMPOSITE
+  // `<id>U+001F<name>` (see above): predFor takes the ID (a blank id ⇒ null ⇒ invalid key,
+  // never a metric), label takes the NAME, and wrapLabel gives the natural "off"/"of"
+  // reading ("Catches off Bumrah" / "Fielding Dismissals of Kohli").
+  bowler: { mctx: false, versus: false, label: (v) => _fcvPlayerName(v),
+    wrapLabel: (t, name) => `${t} off ${name}`,
+    predFor: (v) => { const id = _fcvPlayerId(v); return id ? `bowler_id = ${composerSqlLiteral(id)}` : null; } },
+  batter: { mctx: false, versus: false, label: (v) => _fcvPlayerName(v),
+    wrapLabel: (t, name) => `${t} of ${name}`,
+    predFor: (v) => { const id = _fcvPlayerId(v); return id ? `out_batter_id = ${composerSqlLiteral(id)}` : null; } },
   // Group B — match-level (fld_mctx join). Season = RAW equality (matches the Season
   // semi-join within the gender-scoped CTE + the fld_season_set list column). Stage =
   // canonical→raw MEMBERSHIP via stageAliases + the STAGE_NONE sentinel (IS NULL) —
@@ -6507,8 +6550,14 @@ function buildComposedFieldingValueMetric(parsed, discipline) {
   const alias = makeComposedFieldingValueKey(parsed.value, parsed.tally, parsed.dim, false);
   const caseSql = `SUM(CASE WHEN (${pred}) AND (${tally.pred}) THEN 1 ELSE 0 END)`;
   const countProjection = `MAX(fielding_cte.${alias})`;
-  const label = dimSpec.versus ? `${tally.label} vs ${valueLabel}` : `${tally.label} (${valueLabel})`;
-  const shortLabel = dimSpec.versus ? `${tally.short} vs ${valueLabel}` : `${tally.short} (${valueLabel})`;
+  // Label form: a dim may supply its OWN wrapLabel (the player dims read "off"/"of"); else
+  // Opposition uses the "vs" form and every other dim the parenthetical "(value)" form.
+  const label = dimSpec.wrapLabel
+    ? dimSpec.wrapLabel(tally.label, valueLabel)
+    : dimSpec.versus ? `${tally.label} vs ${valueLabel}` : `${tally.label} (${valueLabel})`;
+  const shortLabel = dimSpec.wrapLabel
+    ? dimSpec.wrapLabel(tally.short, valueLabel)
+    : dimSpec.versus ? `${tally.short} vs ${valueLabel}` : `${tally.short} (${valueLabel})`;
   const common = {
     isComposedFielding: true,
     isComposedFieldingValue: true,
