@@ -3142,7 +3142,7 @@ function floatPinsToTop(rows, state) {
 export function mountTable(
   container,
   store,
-  { onPlayerClick, onOpenFilters, onOpenColumns, onClear, onSearch, onDateChange, getAppliedState, onColumnsApplied, onSkeletonReady, onTogglePin } = {}
+  { onPlayerClick, onOpenFilters, onOpenColumns, onClear, onSearch, onDateChange, getAppliedState, getStagedDirty, onColumnsApplied, onSkeletonReady, onTogglePin } = {}
 ) {
   let lastRows = [];
   let loadToken = 0;
@@ -4787,7 +4787,13 @@ export function mountTable(
     // button). The enabled path (active === true) is byte-for-byte unchanged.
     let searchable = false;
     if (searchBtnEl) {
-      const dirty = serializeQueryState(live) !== serializeQueryState(applied);
+      // Option B (UX rework): a toolbar pill's × stages a pending removal that does
+      // NOT mutate the live store, so serialize(live) === serialize(applied) for a
+      // lone pill toggle. OR in getStagedDirty() so such a removal still arms Search;
+      // it is applied + cleared when this Search commits (pillsController.commitStaged).
+      const dirty =
+        serializeQueryState(live) !== serializeQueryState(applied) ||
+        (getStagedDirty ? getStagedDirty() : false);
       searchable = Boolean(live.dateFrom && live.dateTo);
       const active = dirty && searchable;
       searchBtnEl.classList.toggle("is-dirty", active);

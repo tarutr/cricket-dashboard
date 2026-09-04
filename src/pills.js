@@ -143,12 +143,14 @@ function conditionPillLabel(cond, state) {
  * `onPinChange` (task 3b, owner decision 46) is a separate hook retained so a
  * caller could ever treat un-pinning differently from a filter-pill removal.
  * As of the R4 Wave 4a ADDENDUM it makes no difference: every pill's ×/+ —
- * FILTER and PIN alike — goes through the same PENDING path (`onChange`:
- * soft-delete into the pending set, light the Search button, never re-query;
- * the table stays frozen until Search). The ADDENDUM's INSTANT behaviour is
- * scoped to *adding* a pin from the results search (main.js pinPlayer), NOT to
- * a pill's ×/+. Defaults to `onChange` so a caller that never pins anything
- * needs to pass only one callback.
+ * FILTER and PIN alike — goes through the same PENDING path (`onChange`). Under
+ * Option B (UX rework 2026-09-04) a pill's × STAGES its removal WITHOUT touching
+ * the live store (see `staged` below), lights the Search button, and never
+ * re-queries; the table (and the open popup) stay frozen and the removal is
+ * applied only at the next Search. The ADDENDUM's INSTANT behaviour is scoped to
+ * *adding* a pin from the results search (main.js pinPlayer), NOT to a pill's ×/+.
+ * Defaults to `onChange` so a caller that never pins anything needs to pass only
+ * one callback.
  *
  * R5-A #9: `getState` returns the APPLIED snapshot (main.js passes
  * `() => appliedState`) — FILTER pills derive from it, so a filter edited inside
@@ -174,14 +176,20 @@ export function mountPills(
   getState = () => store.get(),
   getNoInningsIds = () => new Set()
 ) {
-  // R4 Wave 4a (A4): soft-delete-with-undo. A pill's × removes its effect from
-  // the PENDING store (so the Search button lights, per A2) AND stages the pill
-  // for display — it stays visible with a red outline and the × flipped to a +.
-  // Clicking + re-adds the effect and returns the pill to normal. A staged pill
-  // survives re-render (its effect is gone from state, so render() can't
-  // re-derive it) via this Map, keyed by a stable pill key; each entry carries
-  // the captured descriptor + a restore() closure. Cleared on the next Search /
-  // Clear commit (clearStaged), at which point the removal is permanent.
+  // Option B (UX rework 2026-09-04): a toolbar pill's × is a STAGED (pending)
+  // removal that does NOT touch the live store until Search — so with the filters
+  // popup open, toggling a pill changes nothing (popup or table) until Search.
+  // A pill's × records its removal here (keyed by a stable pill key) WITHOUT
+  // mutating state: each entry carries the captured display descriptor + the pill's
+  // own remove() closure, held to APPLY at the next Search (commitStaged). The pill
+  // stays visible with a red outline and the × flipped to a + (staged wins over the
+  // still-active pill in the merge below). Clicking + simply un-stages (deletes the
+  // entry) — the live store was never touched, so there is nothing to restore and
+  // the pill re-derives as active. Search arms while this Map is non-empty (main.js
+  // wires hasStaged() into table.js's dirty check). commitStaged() applies every
+  // staged removal to the live store then clears the Map (called by runSearch just
+  // before it snapshots the applied state); clearStaged() drops the display WITHOUT
+  // applying (the Clear path, which replaces the whole store anyway).
   const staged = new Map();
 
   // R5-A #9: content-based condition remove/restore on the LIVE (pending) store's
@@ -620,13 +628,12 @@ export function mountPills(
     void live;
     void getNoInningsIds;
 
-    // R5-A #9: merge ACTIVE pills (derived above) with STAGED (soft-deleted) ones.
-    // STAGED wins over active: a FILTER pill derives from the APPLIED snapshot, so
-    // after its × the filter is still in applied (unchanged until Search) and would
-    // otherwise re-derive as active — the staged entry must keep showing its red-
-    // outline undo instead. A PIN pill's × removes it from the live store, so it
-    // isn't active anyway (staged-wins is a harmless no-op there). A restored pill
-    // is deleted from `staged` (see the ×/+ handler), so it returns to active.
+    // Merge ACTIVE pills (derived above) with STAGED (pending-removal) ones. STAGED
+    // wins over active: under Option B a pill's × never mutates the live store, so a
+    // staged filter is still present in BOTH the applied snapshot AND live and would
+    // re-derive as active — the staged entry must win so it keeps showing its red-
+    // outline + (pending removal) instead. An un-staged (restored) pill is deleted
+    // from `staged` (see the ×/+ handler), so it returns to active automatically.
     const active = new Map(pills.map((p) => [p.key, p]));
     reconcileOrder([...active.keys()], [...staged.keys()]);
 
@@ -696,21 +703,23 @@ export function mountPills(
       btn.addEventListener("click", () => {
         const p = display[Number(btn.dataset.idx)];
         if (p.staged) {
-          // + : restore the pill's effect to the pending set, un-stage it.
+          // + : un-stage the pending removal. The live store was never mutated
+          // (Option B), so there is nothing to restore — dropping the staged entry
+          // is enough; the pill re-derives as active from the applied snapshot.
           staged.delete(p.key);
-          p.restore();
         } else {
-          // × : soft-delete — stage the captured descriptor (so it stays
-          // visible), then remove its effect from the pending set.
-          staged.set(p.key, { key: p.key, label: p.label, inert: p.inert, pinned: p.pinned, noInnings: p.noInnings, title: p.title, restore: p.restore });
-          p.remove();
+          // × : stage the removal WITHOUT touching the live store — capture the
+          // display descriptor + the pill's own remove() closure, to be APPLIED at
+          // the next Search (commitStaged). The pill stays visible (red-outline +).
+          staged.set(p.key, { key: p.key, label: p.label, inert: p.inert, pinned: p.pinned, noInnings: p.noInnings, title: p.title, remove: p.remove });
         }
-        // Every pill's ×/+ (FILTER and PIN alike) is a PENDING edit: refresh
-        // derived views + light/settle the Search button; the frozen table
-        // never moves here — a staged removal only takes effect at the next
-        // Search. (Owner ruling 2026-07-17: INSTANT applies ONLY to *picking* a
-        // player from the results search — see main.js pinPlayer/onPinsChanged
-        // — NOT to a pill's ×/+.)
+        // A staged ×/+ is a PENDING edit that never touches live: refresh the pills
+        // (so the toggled pill flips its +/× glyph) and light/settle the toolbar
+        // Search button (main.js's onFiltersChanged → syncToolbar, whose dirty check
+        // ORs in hasStaged()). The frozen table and the open popup both read the
+        // (untouched) live store, so neither moves until Search commits the removal.
+        // (Owner ruling 2026-07-17: INSTANT applies ONLY to *picking* a player from
+        // the results search — main.js pinPlayer/onPinsChanged — NOT to a pill's ×/+.)
         onChange();
       });
     });
@@ -718,12 +727,30 @@ export function mountPills(
 
   render();
 
-  // A4: drop every staged (soft-deleted) pill — called by main.js when a Search
-  // or Clear commits, at which point the removals are permanent and the staged
-  // pills must stop rendering.
+  // Option B: whether any toolbar-pill removal is staged (pending). main.js wires
+  // this into table.js's Search-dirty check so a pill × alone arms Search even
+  // though the live store is untouched (serialize(live) === serialize(applied)).
+  function hasStaged() {
+    return staged.size > 0;
+  }
+
+  // Option B: apply every staged removal to the LIVE store, then clear the set.
+  // Called by runSearch (main.js) BEFORE it reconciles columns + snapshots applied,
+  // so a pill's × commits at exactly that Search. Each entry's remove() closure is
+  // the pill's own (byte-identical to the pre-Option-B on-× removal); every closure
+  // reads store.get() at call time, so deferring it to here is safe.
+  function commitStaged() {
+    for (const entry of staged.values()) {
+      if (typeof entry.remove === "function") entry.remove();
+    }
+    staged.clear();
+  }
+
+  // Drop every staged pill's DISPLAY without applying it — called by main.js's
+  // clearAll(), which replaces the whole store, so the pending removals are moot.
   function clearStaged() {
     staged.clear();
   }
 
-  return { render, clearStaged };
+  return { render, hasStaged, commitStaged, clearStaged };
 }

@@ -846,6 +846,13 @@ function boot() {
         // as-is and we proceed (a scope with data behaves normally; one without held by the guards).
         await mergeDataAvail(store.get().gender);
         closePopup();
+        // Option B (UX rework): commit any STAGED toolbar-pill removals (a pill's ×
+        // is a pending removal that never touched the live store) to the live store
+        // NOW — BEFORE autoManageColumns reads the filters and BEFORE the applied
+        // snapshot below — so the removal lands in this Search's columns + applied
+        // state exactly as an on-× live mutation used to. Each staged entry runs its
+        // pill's own remove() closure, then the staged set is cleared.
+        if (pillsController) pillsController.commitStaged();
         // R5-B #3: a POPUP Search is a fresh filters-applied change → RESET pins
         // (and their no-innings flags); a TOOLBAR Search (fromToolbar) commits
         // toolbar-only tweaks, so pins PERSIST. Do this BEFORE the applied snapshot
@@ -885,10 +892,11 @@ function boot() {
         // (and pinned rows — pins OBEY it) recompute over only balls against opponent
         // Y. null ⇒ predicate "" ⇒ byte-identical to today.
         setOpponentPlayer(appliedState.opponentPlayer);
-        // A4: this Search commits any soft-deleted (staged) pill removals — the
-        // pending store already dropped their effects at × time, so clear the
-        // staged display set before re-rendering so committed pills vanish.
-        if (pillsController) { pillsController.clearStaged(); pillsController.render(); }
+        // Option B: the staged pill removals were applied to the live store AND the
+        // staged set cleared by commitStaged() above (before the snapshot), so the
+        // committed pills are already gone from the applied state — just re-render
+        // the row from the fresh applied snapshot.
+        if (pillsController) pillsController.render();
         updateDrawerBadge();
         if (tableController) tableController.syncToolbar(); // clear the dirty cue now
         // 4d/A6: a committed Search is the primary no-data-pin detection point
@@ -1006,6 +1014,12 @@ function boot() {
         // R3.2: the toolbar's Search dirty cue = pending (live store) ≠ applied
         // snapshot. table.js computes it via this accessor.
         getAppliedState: () => appliedState,
+        // Option B (UX rework): a toolbar pill's × is a pending removal that does
+        // NOT touch the live store (so serialize(live) === serialize(applied) for a
+        // lone pill toggle). table.js ORs this into its Search-dirty check so such a
+        // removal still arms Search; it is applied + cleared when Search commits it
+        // (pillsController.commitStaged) or discarded by Clear (clearStaged).
+        getStagedDirty: () => (pillsController ? pillsController.hasStaged() : false),
         // R4 Wave 4a (A1): the Columns picker + column drag-reorder are INSTANT
         // (they change the frozen table in place) and must NOT light Search —
         // unlike the PENDING preset dropdown, which also sets columns. table.js
