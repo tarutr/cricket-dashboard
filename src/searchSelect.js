@@ -1133,3 +1133,463 @@ export function mountSearchMultiSelect(hostEl, {
     },
   };
 }
+
+/**
+ * Turn `hostEl` into a SEARCHABLE checkbox dropdown over an UNBOUNDED, per-keystroke
+ * search (Chunk B2, owner decision: ONE multi-select control model). It is the third
+ * sibling of mountSearchSelect / mountSearchMultiSelect above and reuses their exact
+ * DOM + CSS (`.search-select--multi`, `.search-select__toggle` reading "N selected",
+ * a `.search-select__panel` with a filter box over a `role="listbox"` of tickable
+ * `.search-select__option--multi` rows) — so it is visually IDENTICAL to the
+ * style/hand checkbox dropdown. The ONE difference from mountSearchMultiSelect: the
+ * option rows are not a preloaded closed set but the results of an async
+ * `searchLoader(term)` run (debounced, request-token-guarded) each time the user
+ * types — the vocabulary is thousands of players, too large to preload.
+ *
+ * Because the search vocabulary is unbounded, the SELECTION carries its own labels
+ * (each pick is `{ value, label }`) rather than being looked up in an option list.
+ * Selected values that don't match the current search term are PINNED as checked
+ * rows at the top of the list (a hairline divider under the last of them), so a pick
+ * is always visible and un-tickable regardless of what is being searched — the same
+ * "keepMissingSelected + pinSelected" affordance mountSearchMultiSelect gives its
+ * bounded lists, expressed for an unbounded one. A selected value that DOES match the
+ * current search renders in the results list, checked, in place (no jump).
+ *
+ * `onChange(selection)` fires after every tick with the full selection as an ordered,
+ * de-duplicated `Array<{value,label}>` (insertion order). `getValues()` returns the
+ * same shape; `setValues(arr)` replaces the selection (no onChange) and is what a
+ * host's sync() calls to reflect an external state change (a pill removal, Clear-all)
+ * without clobbering an in-flight search (the filter box + results are left intact).
+ *
+ * Accessibility + keyboard mirror the multi-select: real <button> toggle
+ * (aria-haspopup/expanded), a combobox filter <input> owning aria-activedescendant
+ * over an aria-multiselectable listbox; Arrow moves the active row, Enter toggles it,
+ * Escape closes (and, when portaled, is kept from bubbling to a host popup's own
+ * Escape handler), Tab closes. Space is a literal character here (names contain
+ * spaces) — only Enter/click toggle. `portal:true` lifts the open panel to <body> so
+ * it escapes the Filters/player popup's `overflow` clip, same technique as the two
+ * siblings above.
+ *
+ * @param {HTMLElement} hostEl
+ * @param {object} opts
+ * @param {Array<{value:string,label:string}>} [opts.values] initially-selected picks
+ * @param {(term:string) => Promise<Array<{value:string,label:string}>>} opts.searchLoader
+ * @param {string} [opts.placeholder] toggle text when nothing is selected
+ * @param {string} [opts.searchPlaceholder] filter-box placeholder
+ * @param {(count:number)=>string} [opts.summarize] toggle text when >=1 selected
+ * @param {(selection:Array<{value:string,label:string}>) => void} [opts.onChange]
+ * @param {(opt:object) => string} [opts.renderRow] custom row inner HTML (must include
+ *   the `.search-select__check` glyph, like mountSearchMultiSelect's renderRow callers)
+ * @param {string} [opts.ariaLabel]
+ * @param {boolean} [opts.portal]
+ * @param {number} [opts.minChars] min term length before searchLoader runs (default 2)
+ * @param {number} [opts.debounceMs] keystroke debounce (default 250)
+ * @param {string} [opts.emptyHint] list text when nothing typed yet
+ * @param {string} [opts.noMatchLabel] list text when a search found nothing
+ * @returns {{setValues:Function,getValues:Function,open:Function,close:Function,destroy:Function}}
+ */
+export function mountSearchCheckSelect(hostEl, {
+  values = [],
+  searchLoader = null,
+  placeholder = "Choose…",
+  searchPlaceholder = "Search…",
+  summarize = (count) => `${count} selected`,
+  onChange = () => {},
+  renderRow = null,
+  ariaLabel = null,
+  portal = false,
+  minChars = 2,
+  debounceMs = 250,
+  emptyHint = "Type to search…",
+  noMatchLabel = "No matches",
+} = {}) {
+  const uid = `scsel-${++uidCounter}`;
+  /** Selection: value → {value,label}. A Map keeps insertion order + de-dupes, and
+   * — unlike the multi-select's value-only Set — carries the LABEL, because an
+   * unbounded search has no option list to resolve a name from. */
+  const selected = new Map();
+  const seedSelected = (vals) => {
+    selected.clear();
+    for (const v of Array.isArray(vals) ? vals : []) {
+      if (!v || v.value == null) continue;
+      const value = String(v.value);
+      if (selected.has(value)) continue;
+      selected.set(value, { value, label: v.label != null ? String(v.label) : value });
+    }
+  };
+  seedSelected(values);
+
+  let results = []; // latest search rows for `term`
+  let rows = []; // pinned-selected (not in results) + results — the rendered list
+  let pinnedLen = 0; // count of pinned-selected rows (the leading block)
+  let pinnedRowCount = 0; // rows forming the block that gets the hairline (0 if a section is empty)
+  let term = "";
+  let searched = false; // has a searchLoader run resolved for the current term?
+  let activeIndex = -1;
+  let isOpen = false;
+  let destroyed = false;
+  let requestToken = 0;
+  let debounceId = null;
+  // Pick-flash (decision 77.6 row-wash) — closure state consulted by drawList's
+  // template so a synchronous setValues() echo can't wipe it before paint, exactly
+  // as mountSearchMultiSelect does.
+  let flashValue = null;
+  let flashTimer = null;
+
+  hostEl.classList.add("search-select", "search-select--multi");
+  hostEl.innerHTML = `
+    <button type="button" class="select search-select__toggle" aria-haspopup="listbox" aria-expanded="false"${ariaLabel ? ` aria-label="${escHtml(ariaLabel)}"` : ""}>
+      <span class="search-select__value"></span>
+      <span class="search-select__caret" aria-hidden="true"></span>
+    </button>
+    <div class="search-select__panel" hidden>
+      <input type="text" class="input search-select__filter" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${uid}-list" placeholder="${escHtml(searchPlaceholder)}" aria-label="${escHtml(ariaLabel ? `Search ${ariaLabel.toLowerCase()}` : "Search")}" />
+      <div class="search-select__list" id="${uid}-list" role="listbox" aria-multiselectable="true"${ariaLabel ? ` aria-label="${escHtml(ariaLabel)}"` : ""}></div>
+    </div>
+  `;
+
+  const toggleEl = hostEl.querySelector(".search-select__toggle");
+  const valueEl = hostEl.querySelector(".search-select__value");
+  const panelEl = hostEl.querySelector(".search-select__panel");
+  const filterEl = hostEl.querySelector(".search-select__filter");
+  const listEl = hostEl.querySelector(".search-select__list");
+
+  // ── Optional portal (identical technique to the two siblings above) ─────────
+  const panelHome = { parent: panelEl.parentNode, next: panelEl.nextSibling };
+  let portaled = false;
+  function positionPanel() {
+    // If the toggle has been HIDDEN while the panel is open — e.g. the fielding-dims
+    // row auto-hides the moment its last pick is un-ticked (state.fielding.<field>
+    // empties) — its rect collapses to (0,0). Rather than pin the portaled panel to
+    // that degenerate origin (leaving it stranded, floating over the table), close the
+    // dropdown: its host is gone. offsetParent is null only when the element/an
+    // ancestor is display:none, so this never misfires on a visible toggle.
+    if (!toggleEl.offsetParent) {
+      close();
+      return;
+    }
+    const r = toggleEl.getBoundingClientRect();
+    const margin = 8;
+    const gap = 6;
+    panelEl.style.position = "fixed";
+    panelEl.style.zIndex = "1000";
+    panelEl.style.minWidth = `${Math.round(r.width)}px`;
+    panelEl.style.maxHeight = "";
+    const width = panelEl.offsetWidth || Math.round(r.width);
+    const desired = panelEl.scrollHeight;
+    let left = Math.min(r.left, window.innerWidth - width - margin);
+    left = Math.max(margin, left);
+    panelEl.style.left = `${Math.round(left)}px`;
+    panelEl.style.right = "auto";
+    const spaceBelow = window.innerHeight - r.bottom - gap - margin;
+    const spaceAbove = r.top - gap - margin;
+    let openDown;
+    if (spaceBelow >= desired) openDown = true;
+    else if (spaceAbove >= desired) openDown = false;
+    else openDown = spaceBelow >= spaceAbove;
+    if (openDown) {
+      panelEl.style.top = `${Math.round(r.bottom + gap)}px`;
+      panelEl.style.bottom = "auto";
+      panelEl.style.maxHeight = `${Math.max(120, Math.round(spaceBelow))}px`;
+    } else {
+      panelEl.style.top = "auto";
+      panelEl.style.bottom = `${Math.round(window.innerHeight - r.top + gap)}px`;
+      panelEl.style.maxHeight = `${Math.max(120, Math.round(spaceAbove))}px`;
+    }
+    panelEl.style.overflowY = "auto";
+  }
+  const onPortalScroll = () => { if (portaled) positionPanel(); };
+  const onPortalResize = () => { if (portaled) positionPanel(); };
+  function portalOpen() {
+    if (!portal || portaled) return;
+    portaled = true;
+    document.body.appendChild(panelEl);
+    positionPanel();
+    window.addEventListener("scroll", onPortalScroll, true);
+    window.addEventListener("resize", onPortalResize);
+  }
+  function portalClose() {
+    if (!portaled) return;
+    portaled = false;
+    window.removeEventListener("scroll", onPortalScroll, true);
+    window.removeEventListener("resize", onPortalResize);
+    for (const p of ["position", "zIndex", "minWidth", "top", "left", "right", "bottom", "maxHeight", "overflowY"]) {
+      panelEl.style[p] = "";
+    }
+    if (panelHome.next && panelHome.next.parentNode === panelHome.parent) {
+      panelHome.parent.insertBefore(panelEl, panelHome.next);
+    } else {
+      panelHome.parent.appendChild(panelEl);
+    }
+  }
+
+  function getValues() {
+    return [...selected.values()].map((s) => ({ value: s.value, label: s.label }));
+  }
+
+  function syncToggleLabel() {
+    const count = selected.size;
+    if (count > 0) {
+      valueEl.textContent = summarize(count);
+      valueEl.classList.remove("search-select__value--placeholder");
+    } else {
+      valueEl.textContent = placeholder;
+      valueEl.classList.add("search-select__value--placeholder");
+    }
+  }
+
+  /** Recompute `rows` from the selection + the latest results. Selected values that
+   * DON'T appear in the current results pin to the top (checked, un-tickable); the
+   * results follow, each checked iff already selected — so a matching pick sits in
+   * place rather than jumping to the block. */
+  function computeRows() {
+    const resultVals = new Set(results.map((r) => r.value));
+    const pinned = [];
+    for (const s of selected.values()) if (!resultVals.has(s.value)) pinned.push(s);
+    pinnedLen = pinned.length;
+    pinnedRowCount = pinned.length && results.length ? pinned.length : 0;
+    rows = [...pinned, ...results];
+  }
+
+  function rowInnerHTML(o) {
+    if (renderRow) return renderRow(o);
+    return `<span class="search-select__check" aria-hidden="true"></span><span class="search-select__opt-label">${escHtml(o.label)}</span>`;
+  }
+
+  function drawList() {
+    if (rows.length === 0) {
+      const msg = term.length < minChars ? emptyHint : searched ? noMatchLabel : emptyHint;
+      listEl.innerHTML = `<p class="search-select__empty">${escHtml(msg)}</p>`;
+      filterEl.removeAttribute("aria-activedescendant");
+      if (portaled) positionPanel();
+      return;
+    }
+    const html = rows
+      .map((o, i) => {
+        const checked = selected.has(o.value);
+        const active = i === activeIndex;
+        const pinEdge = pinnedRowCount > 0 && i === pinnedRowCount - 1;
+        const isFlash = flashValue !== null && o.value === flashValue;
+        return (
+          `<div id="${uid}-opt-${i}" class="search-select__option search-select__option--multi${active ? " is-active" : ""}${checked ? " is-selected" : ""}${pinEdge ? " is-pin-last" : ""}${isFlash ? " is-pick-flash" : ""}"` +
+          ` role="option" aria-selected="${checked}" data-idx="${i}">${rowInnerHTML(o)}</div>`
+        );
+      })
+      .join("");
+    // A search that matched nothing while picks are pinned above: a trailing quiet
+    // note so the empty result reads as "no NEW matches", not a broken list.
+    const note =
+      searched && results.length === 0 && term.length >= minChars && pinnedLen > 0
+        ? `<p class="search-select__empty">${escHtml(noMatchLabel)}</p>`
+        : "";
+    listEl.innerHTML = html + note;
+    if (activeIndex >= 0 && activeIndex < rows.length) {
+      filterEl.setAttribute("aria-activedescendant", `${uid}-opt-${activeIndex}`);
+      const activeEl = listEl.querySelector(".search-select__option.is-active");
+      if (activeEl) activeEl.scrollIntoView({ block: "nearest" });
+    } else {
+      filterEl.removeAttribute("aria-activedescendant");
+    }
+    if (portaled) positionPanel();
+  }
+
+  function renderList() {
+    computeRows();
+    if (activeIndex >= rows.length) activeIndex = rows.length ? rows.length - 1 : -1;
+    drawList();
+  }
+
+  function open() {
+    if (isOpen) return;
+    isOpen = true;
+    panelEl.hidden = false;
+    toggleEl.setAttribute("aria-expanded", "true");
+    filterEl.setAttribute("aria-expanded", "true");
+    filterEl.value = "";
+    term = "";
+    results = [];
+    searched = false;
+    computeRows();
+    activeIndex = rows.length ? 0 : -1;
+    drawList();
+    portalOpen(); // reparent BEFORE focus so focus is preserved
+    filterEl.focus();
+  }
+
+  function close({ focusToggle = false } = {}) {
+    if (!isOpen) return;
+    isOpen = false;
+    clearTimeout(debounceId);
+    panelEl.hidden = true;
+    toggleEl.setAttribute("aria-expanded", "false");
+    filterEl.setAttribute("aria-expanded", "false");
+    filterEl.removeAttribute("aria-activedescendant");
+    activeIndex = -1;
+    portalClose();
+    if (focusToggle) toggleEl.focus();
+  }
+
+  /** Toggle the row at `idx`; the panel STAYS OPEN. Ticking a result adds it (with
+   * its label); un-ticking removes it. A newly-ticked result stays put (it's still
+   * in `results`); an un-ticked pinned pick drops out of the list. */
+  function toggle(idx) {
+    const o = rows[idx];
+    if (!o) return;
+    const val = o.value;
+    const turningOn = !selected.has(val);
+    if (turningOn) selected.set(val, { value: val, label: o.label });
+    else selected.delete(val);
+    syncToggleLabel();
+    if (turningOn) {
+      flashValue = val;
+      clearTimeout(flashTimer);
+      flashTimer = setTimeout(() => { flashValue = null; }, 550);
+    } else if (flashValue === val) {
+      flashValue = null;
+      clearTimeout(flashTimer);
+    }
+    computeRows();
+    const ni = rows.findIndex((r) => r.value === val);
+    if (ni >= 0) activeIndex = ni;
+    else if (activeIndex >= rows.length) activeIndex = rows.length ? rows.length - 1 : -1;
+    drawList();
+    onChange(getValues());
+  }
+
+  function moveActive(delta) {
+    if (rows.length === 0) return;
+    if (activeIndex === -1) activeIndex = delta > 0 ? 0 : rows.length - 1;
+    else activeIndex = (activeIndex + delta + rows.length) % rows.length;
+    drawList();
+  }
+
+  async function runSearch(t) {
+    const token = ++requestToken;
+    let result = [];
+    try {
+      result = await searchLoader(t);
+    } catch {
+      result = []; // degrade to "no matches" — never a stuck control
+    }
+    if (destroyed || token !== requestToken || !isOpen) return;
+    results = (Array.isArray(result) ? result : [])
+      .filter((r) => r && r.value != null)
+      .map((r) => ({ ...r, value: String(r.value), label: r.label != null ? String(r.label) : String(r.value) }));
+    searched = true;
+    computeRows();
+    // Highlight the first RESULT row (past the pinned block) so Enter ticks the top
+    // match rather than un-ticking an already-selected pinned pick.
+    activeIndex = results.length ? Math.min(pinnedLen, rows.length - 1) : rows.length ? 0 : -1;
+    drawList();
+  }
+
+  // ── Events ──────────────────────────────────────────────────────────────
+  function onToggleClick(e) {
+    e.stopPropagation();
+    if (isOpen) close({ focusToggle: true });
+    else open();
+  }
+  function onToggleKeydown(e) {
+    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+      e.preventDefault();
+      open();
+    }
+  }
+  function onFilterInput() {
+    term = filterEl.value.trim();
+    clearTimeout(debounceId);
+    if (!searchLoader || term.length < minChars) {
+      results = [];
+      searched = false;
+      renderList();
+      return;
+    }
+    debounceId = setTimeout(() => runSearch(term), debounceMs);
+  }
+  function onFilterKeydown(e) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveActive(1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveActive(-1);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (activeIndex >= 0) toggle(activeIndex);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      // Portaled inside a scrolling popup: keep this Escape from bubbling to the
+      // popup's own document-level Escape handler (mirrors the two siblings).
+      if (portal) e.stopPropagation();
+      close({ focusToggle: true });
+    } else if (e.key === "Tab") {
+      close();
+    }
+  }
+  function onListClick(e) {
+    const row = e.target.closest(".search-select__option");
+    if (!row) return;
+    // STAY OPEN on toggle: stop this click reaching onDocClick, whose
+    // hostEl.contains check would misfire on the row detached by the re-render.
+    e.stopPropagation();
+    toggle(Number(row.dataset.idx));
+  }
+  function onDocClick(e) {
+    if (!isOpen) return;
+    if (hostEl.contains(e.target) || panelEl.contains(e.target)) return;
+    close();
+  }
+
+  // Capture-phase document Escape guard (mirrors mountScopedMultiSelect's own, and
+  // drawer.js's wireSearchPickerEscape for the style/hand pickers). This widget's
+  // `portal:true` panel lives on <body>, so once a row is clicked (focus leaves the
+  // filter box) the popup's OWN capture-phase document Escape handler would fire first
+  // — closing the whole Filters/player popup and STRANDING this panel floating over the
+  // table — before onFilterKeydown's bubble handler ever sees the key. Registered in
+  // capture so it runs first: while this dropdown is open it closes JUST the dropdown
+  // and stops the event, so Escape dismisses the panel, not the popup. Inert when
+  // closed, and skipped for a detached (re-mounted composer) instance.
+  function onDocEscapeCapture(e) {
+    if (e.key !== "Escape") return;
+    if (!isOpen || !toggleEl.isConnected) return;
+    close({ focusToggle: true });
+    e.stopPropagation();
+  }
+
+  toggleEl.addEventListener("click", onToggleClick);
+  toggleEl.addEventListener("keydown", onToggleKeydown);
+  filterEl.addEventListener("input", onFilterInput);
+  filterEl.addEventListener("keydown", onFilterKeydown);
+  listEl.addEventListener("click", onListClick);
+  document.addEventListener("click", onDocClick);
+  document.addEventListener("keydown", onDocEscapeCapture, true);
+
+  // Initial paint.
+  syncToggleLabel();
+
+  // ── Handle ──────────────────────────────────────────────────────────────
+  return {
+    setValues(vals) {
+      seedSelected(vals);
+      syncToggleLabel();
+      if (isOpen) renderList(); // reflect the new selection; results/term untouched
+    },
+    getValues,
+    open,
+    close,
+    destroy() {
+      destroyed = true;
+      clearTimeout(debounceId);
+      clearTimeout(flashTimer);
+      close();
+      portalClose(); // idempotent — never leave an orphaned panel on <body>
+      toggleEl.removeEventListener("click", onToggleClick);
+      toggleEl.removeEventListener("keydown", onToggleKeydown);
+      filterEl.removeEventListener("input", onFilterInput);
+      filterEl.removeEventListener("keydown", onFilterKeydown);
+      listEl.removeEventListener("click", onListClick);
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onDocEscapeCapture, true);
+    },
+  };
+}

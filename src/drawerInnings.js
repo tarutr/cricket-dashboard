@@ -65,11 +65,11 @@ import {
   inningsNumberLabel,
   opponentPlayerValues,
 } from "./state.js";
-import { searchTeams, searchEvents, searchVenues, searchCities, searchSeasons, searchEventSeasons, searchStages } from "./playerData.js";
+import { searchTeams, searchEvents, searchVenues, searchCities, searchSeasons, searchEventSeasons, searchStages, searchPlayers } from "./playerData.js";
 import { withDeliveryWindowPiece } from "./deliveryWindow.js";
 import { canonicalStage } from "./canonicalNames.js";
 import { query } from "./db.js";
-import { mountSearchMultiSelect } from "./searchSelect.js";
+import { mountSearchMultiSelect, mountSearchCheckSelect } from "./searchSelect.js";
 import { mountOmnisearch } from "./omnisearch.js";
 import { escHtml, escAttr } from "./html.js";
 
@@ -1388,72 +1388,77 @@ export function mountWindowPlayer(container, store, onChange, { embedded = false
  */
 export function mountOpponentPlayer(container, store, onChange, { embedded = false, multi = false } = {}) {
   void embedded;
+
+  // ── MULTI mode (decision 88 — opponent OR/union; fielding Specific Batter/Bowler) ──
+  // Chunk B2 (owner: ONE multi-select control model): the picker is now a SEARCHABLE
+  // CHECKBOX DROPDOWN (searchSelect.js's mountSearchCheckSelect) — the SAME look/behaviour
+  // as the style/hand `mountSearchMultiSelect` dropdown, only its rows come from a
+  // per-keystroke player search (searchPlayers) rather than a preloaded list. The trigger
+  // reads "N selected" (or the lone name for one pick); ticking accumulates picks; there
+  // are no chips. It still reads/writes an ARRAY of opponent { id, name } via
+  // store.opponentPlayer (the sacred `col IN (…)` input, decision 88) — so a lone pick is
+  // byte-identical to the single-value path and EVERY adapter caller (leaderboard
+  // opponent, popup opponent, fielding Specific Batter/Bowler, columns composer) switches
+  // together with no signature change. sync() only ever re-reflects the selection, so a
+  // state change (pill removal / Clear-all / Search commit) can never clobber a live
+  // search the user is mid-typing.
+  if (multi) {
+    container.innerHTML = `<div class="opp-picker opp-picker--check" data-role="opp-picker"></div>`;
+    const hostEl = container.querySelector('[data-role="opp-picker"]');
+    const asPairs = () =>
+      opponentPlayerValues(store.get().opponentPlayer).map((p) => ({ value: p.id, label: p.name || p.id }));
+    let handle;
+    handle = mountSearchCheckSelect(hostEl, {
+      values: asPairs(),
+      portal: true, // escape the Filters / player popup overflow clip
+      ariaLabel: "Opponent player",
+      placeholder: "Search a player…",
+      searchPlaceholder: "Search a player…",
+      emptyHint: "Type a player's name…",
+      noMatchLabel: "No players match",
+      // 1 pick → the player's own name; >1 → "N selected" (mirrors the style/hand dropdown).
+      summarize: (count) => {
+        const vals = handle ? handle.getValues() : [];
+        return vals.length === 1 ? vals[0].label : `${count} selected`;
+      },
+      // Rich row: name + a muted "country · role" meta, same as the old omnisearch rows.
+      renderRow: (o) => {
+        const meta = [o.country, o.role && o.role !== "Unknown" ? o.role : null].filter(Boolean).join(" · ");
+        return (
+          `<span class="search-select__check" aria-hidden="true"></span>` +
+          `<span class="search-select__opt-label">${escHtml(o.label)}</span>` +
+          (meta ? `<span class="search-select__meta">${escHtml(meta)}</span>` : "")
+        );
+      },
+      searchLoader: async (term) => {
+        const rows = await searchPlayers(term);
+        // Cap to 8 like the previous omnisearch picker; map to {value,label,+meta}.
+        return (rows || [])
+          .slice(0, 8)
+          .map((r) => ({ value: r.id, label: r.name, country: r.country, role: r.playing_role }));
+      },
+      onChange: (sel) => {
+        const picks = sel.map((s) => ({ id: s.value, name: s.label }));
+        store.set({ opponentPlayer: picks.length ? picks : null });
+        onChange();
+      },
+    });
+    const syncMulti = () => handle.setValues(asPairs());
+    syncMulti();
+    return { sync: syncMulti, close: () => handle.close() };
+  }
+
+  // ── SINGLE mode (default OFF — unchanged single-overwrite; NO current caller, kept as
+  // the pre-multi fallback) ─────────────────────────────────────────────────────────────
   container.innerHTML = `
     <div class="opp-picker" data-role="opp-picker">
       <input type="text" class="input opp-picker__input" data-role="opp-input" role="combobox"
              aria-autocomplete="list" aria-expanded="false" autocomplete="off"
              placeholder="Search a player…" aria-label="Opponent player" />
       <div class="opp-picker__results" data-role="opp-results" role="listbox" aria-label="Opponent player search results" hidden></div>
-      ${multi ? `<div class="cols-fc-chips opp-picker__chips" data-role="opp-chips" hidden></div>` : ""}
     </div>`;
   const inputEl = container.querySelector('[data-role="opp-input"]');
   const resultsEl = container.querySelector('[data-role="opp-results"]');
-
-  // ── MULTI mode (decision 88 — opponent OR/union; fielding Specific Batter/Bowler) ──
-  // Picking a player APPENDS a removable chip; each chip's × removes that one pick; the
-  // control reads/writes an ARRAY (state.opponentPlayer, or the fielding adapter's
-  // ids+names arrays). opponentPlayerValues normalises + de-dupes both shapes, so a lone
-  // pick stays byte-identical to the single-select path. Chips reuse the shared
-  // .cols-fc-chip visual convention (no new CSS). The input is cleared after each pick —
-  // the chips carry the selection — and sync() only ever re-renders chips, so a state
-  // change can never clobber a search term the user is mid-typing.
-  if (multi) {
-    const chipsEl = container.querySelector('[data-role="opp-chips"]');
-    const renderChips = () => {
-      const picks = opponentPlayerValues(store.get().opponentPlayer);
-      if (!picks.length) {
-        chipsEl.hidden = true;
-        chipsEl.innerHTML = "";
-        return;
-      }
-      chipsEl.hidden = false;
-      chipsEl.innerHTML = picks
-        .map(
-          (p) =>
-            `<span class="cols-fc-chip"><span class="cols-fc-chip__label">${escHtml(p.name || p.id)}</span>` +
-            `<button type="button" class="cols-fc-chip__x" data-opp-remove="${escAttr(p.id)}" title="Remove" aria-label="Remove ${escAttr(p.name || p.id)}">✕</button></span>`
-        )
-        .join("");
-      chipsEl.querySelectorAll("[data-opp-remove]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const rid = btn.dataset.oppRemove;
-          const next = opponentPlayerValues(store.get().opponentPlayer).filter((p) => p.id !== rid);
-          store.set({ opponentPlayer: next.length ? next : null });
-          onChange();
-          renderChips();
-        });
-      });
-    };
-    mountOmnisearch(inputEl, resultsEl, {
-      showFilterAction: false, // picker mode — no "Filter the table" action row
-      onOpenPlayer: (id, name) => {
-        const pid = id == null ? "" : String(id);
-        if (!pid) return;
-        const cur = opponentPlayerValues(store.get().opponentPlayer);
-        if (!cur.some((p) => p.id === pid)) {
-          store.set({ opponentPlayer: [...cur, { id: pid, name: name || pid }] });
-          onChange();
-        }
-        inputEl.value = ""; // ready for the next pick (chips carry the picks)
-        renderChips();
-      },
-    });
-    const syncMulti = () => renderChips();
-    syncMulti();
-    return { sync: syncMulti };
-  }
-
-  // ── SINGLE mode (default OFF — unchanged single-overwrite; every pre-multi caller) ──
   // Tracks the last id we WROTE to the input, so a state change (sync) refreshes
   // the box without clobbering a live search the user is typing.
   let lastWrittenId = null;
