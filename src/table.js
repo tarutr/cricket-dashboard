@@ -216,6 +216,15 @@ function serializeQueryState(state) {
     stage: state.stage,
     resultCondition: state.resultCondition,
     matchupVs: state.matchupVs,
+    // Opponent-player head-to-head (pop-up Tab-2 T-1, owner decision 70): the "vs {name}"
+    // filter narrows the counted balls (buildQuery/buildMatchupQuery read it via
+    // opponentPlayerActive), so a change — picking an opponent OR removing one via its
+    // pill — must re-light Search + bust the render cache, exactly like matchupVs above.
+    // Omitted originally (the opponent-filter wave forgot it here), which left the Search
+    // button unlit for any opponent-only change (Chunk B1 fix). Defaults to null so this
+    // serialises identically for every existing state. Change-detection only —
+    // buildQuery/buildMatchupQuery/buildScopeClauses are untouched.
+    opponentPlayer: state.opponentPlayer,
     // Lane match-mode (Chunk 5 Phase 2 Wave A): filterMatch.scope changes the emitted
     // WHERE (Match all vs Match any across scope filters), so toggling it must re-light
     // Search + bust the render cache, exactly like the scope filters themselves. Default
