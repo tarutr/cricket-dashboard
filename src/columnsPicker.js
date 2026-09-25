@@ -2209,7 +2209,13 @@ export function createColumnsPicker({
     const impact = all.filter(
       (m) => m.section === "impact" && !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key)) && !hiddenAlts.has(m.key)
     );
-    const fielding = all.filter((m) => m.section === "fielding" && !hiddenAlts.has(m.key));
+    // Fielding column reshuffle (Task C): Win % / Toss Win % (metrics.js
+    // FIELDING_RESULT_METRIC_SPECS, `isFieldingResult`) are section:"fielding" but must
+    // NEVER surface via this generic filter — they're pushed into BOTH BATTING_METRICS
+    // and BOWLING_METRICS (so `all` carries them for every ns, batting/bowling/fielding
+    // board alike) and compute BLANK off the fielding board (no fld_result_cte there).
+    // They're placed explicitly, fielding-board-Match-dropdown-only, below.
+    const fielding = all.filter((m) => m.section === "fielding" && !m.isFieldingResult && !hiddenAlts.has(m.key));
     // Wave 3A: Matches is offered in the Match dropdown under a matchup too (the matchup
     // "matches" metric — COUNT(DISTINCT match_id) FILTER'd on the bucket — already exists in
     // eligibleMetrics). It is EXCLUDED from the own-discipline "core" list below in that mode
@@ -2389,6 +2395,24 @@ export function createColumnsPicker({
       for (const kind of FCV_COMPOSER_KINDS) {
         if (composerAvailable(kind, ns, formats)) fieldingComposerItems.push({ type: "composer", kind, label: FCV_COMPOSER_LABEL[kind] });
       }
+      // Fielding column reshuffle (Task C, ORDER ONLY — no composer added/removed/
+      // renamed): Specific Bowler/Specific Batter (fcv_bowler/fcv_batter) move to right
+      // after Innings (fc_inns); Stage (fcv_stage) moves to right after Opposition
+      // (fcv_opp). Splices on the already-built (and already-availability-gated)
+      // `fieldingComposerItems`, by `kind` — a no-op if either the item being moved or
+      // its anchor isn't offered this call (e.g. Bowler Style self-gated off), so the
+      // rest of the menu is untouched either way.
+      const moveComposerAfter = (targetKind, anchorKind) => {
+        const anchorIdx = fieldingComposerItems.findIndex((it) => it.kind === anchorKind);
+        const targetIdx = fieldingComposerItems.findIndex((it) => it.kind === targetKind);
+        if (anchorIdx < 0 || targetIdx < 0) return;
+        const [moved] = fieldingComposerItems.splice(targetIdx, 1);
+        const anchorIdx2 = fieldingComposerItems.findIndex((it) => it.kind === anchorKind);
+        fieldingComposerItems.splice(anchorIdx2 + 1, 0, moved);
+      };
+      moveComposerAfter("fcv_batter", "fc_inns");
+      moveComposerAfter("fcv_bowler", "fc_inns");
+      moveComposerAfter("fcv_stage", "fcv_opp");
     }
     const fieldingMode = getFieldingMode ? getFieldingMode() : false;
     // Fielding board LIST columns (Wave 2b) — leaderboard fielding board ONLY
@@ -2400,6 +2424,20 @@ export function createColumnsPicker({
     // Fielding dropdown. (Match result / Toss result / Toss decision / Stage build no
     // list column this wave — see metrics.js FIELDING_SET_SPECS.)
     const fieldingSetLeaderboard = fieldingMode && !ownDisciplineOnly;
+    // Fielding column reshuffle (Task C): Win % / Toss Win % (Task B's
+    // FIELDING_RESULT_METRIC_SPECS, section:"fielding" + isFieldingResult) REPLACE the
+    // old Match Result / Toss Result list columns in this dropdown, in the same spot
+    // (after Stage, before Toss Decision). Resolved from `all` (fieldingSetLeaderboard
+    // already implies fieldingMode, i.e. ns "batting"/"bowling" under the fielding
+    // board, so both keys are present in `all`); pctKey is the visible default (the
+    // count is its toggle alt, hidden here exactly like every other toggle pair).
+    const fieldingResultItems = fieldingSetLeaderboard
+      ? plainItems(
+          ["fld_res_won_pct", "fld_res_toss_won_pct"]
+            .map((k) => all.find((m) => m.key === k))
+            .filter(Boolean)
+        )
+      : [];
     const fieldingMatchSetItems = fieldingSetLeaderboard
       ? [
           { type: "plain", key: "fld_team_set", label: "Team" },
@@ -2409,33 +2447,45 @@ export function createColumnsPicker({
           { type: "plain", key: "fld_city_set", label: "City" },
           { type: "plain", key: "fld_season_set", label: "Season" },
           { type: "plain", key: "fld_stage_set", label: "Stage" },
-          { type: "plain", key: "fld_result_set", label: "Match Result" },
-          { type: "plain", key: "fld_toss_result_set", label: "Toss Result" },
+          ...fieldingResultItems,
           { type: "plain", key: "fld_toss_decision_set", label: "Toss Decision" },
         ]
       : [];
+    // Fielding column reshuffle (Task C): the "Wicket Type" which-values column
+    // (fld_kind_set) is REMOVED from the offer (owner-ruled final column set — the
+    // Wicket Type FILTER is untouched, only this list column is dropped). Reordered to
+    // the owner's Basic Stats order: Bat. Pos. / Bat. Hand ahead of Bowler Style.
     const fieldingDismissalSetItems = fieldingSetLeaderboard
       ? [
-          // Wave 3C (C1): the Wicket Type which-values list column — the parity gap fill,
-          // placed first among the dismissal-dimension lists.
-          { type: "plain", key: "fld_kind_set", label: "Wicket Type" },
-          { type: "plain", key: "fld_bowler_style_set", label: "Bowler Style" },
           { type: "plain", key: "fld_out_position_set", label: "Dismissed Batter's Position" },
           { type: "plain", key: "fld_out_hand_set", label: "Dismissed Batter Hand" },
+          { type: "plain", key: "fld_bowler_style_set", label: "Bowler Style" },
         ]
       : [];
-    // Phase 1.2 (2026-08-25): the fielding board's three Ball Ranges list columns
-    // (audit3 §(ii) — Innings number/Phase/Over never got one). Same
-    // fieldingSetLeaderboard gate (fielding board's own picker only) as
-    // fieldingDismissalSetItems above; folded into the same "Fielding Stats" section
-    // below (the picker has no separate "Ball Ranges" bucket).
+    // Phase 1.2 (2026-08-25): the fielding board's Ball Ranges list columns (audit3
+    // §(ii) — Innings number/Phase never got one). Same fieldingSetLeaderboard gate
+    // (fielding board's own picker only) as fieldingDismissalSetItems above; folded
+    // into the same "Fielding Stats" section below (the picker has no separate "Ball
+    // Ranges" bucket). Fielding column reshuffle (Task C): the plain "Over" which-
+    // values column (fld_over_set) is REMOVED from the offer (the Over-range FILTER is
+    // untouched, only this list column is dropped); Innings Number reordered ahead of
+    // Phase to match the owner's Basic Stats order.
     const fieldingDeliverySetItems = fieldingSetLeaderboard
       ? [
-          { type: "plain", key: "fld_phase_set", label: "Phase" },
-          { type: "plain", key: "fld_over_set", label: "Over" },
           { type: "plain", key: "fld_innings_set", label: "Innings Number" },
+          { type: "plain", key: "fld_phase_set", label: "Phase" },
         ]
       : [];
+    // Fielding column reshuffle (Task C): "Matches" (the fld_matches_cte-backed
+    // per-fielder match count, same "matches" metric key the Match dropdown uses on
+    // the plain boards) MOVES OUT of the Match dropdown into Basic Stats, at the top —
+    // owner-ruled final order. Label overridden to "Matches" HERE ONLY (a display-site
+    // override, not a metrics.js edit): the shared "matches" metric object's own label
+    // ("Player Matches") stays untouched because the exact same object is also read by
+    // the plain batting/bowling boards' Match dropdown (matchItems below), which keeps
+    // "Player Matches" — that rename is explicitly deferred, not part of this task.
+    const fieldingMatchesItem =
+      fieldingSetLeaderboard && matchesMetric ? [{ type: "plain", key: matchesMetric.key, label: "Matches" }] : [];
     // Stage-3 Phase 1.1 (2026-08-25): the batting/bowling boards' Fielding Stats section
     // gains the ONE fielding list column whose filter they offer — Dismissed batter's
     // position (drawer.js's `fld_pos` singleton, the only member of FIELDING_SLICE_KEYS).
@@ -2447,8 +2497,34 @@ export function createColumnsPicker({
       isPlainNs && !fieldingMode && !ownDisciplineOnly
         ? [{ type: "plain", key: "fld_out_position_set", label: "Dismissed Batter's Position" }]
         : [];
+    // Fielding column reshuffle (Task C): owner-ruled final Basic Stats order — Matches
+    // · Innings Number · Phase · Bat. Pos. · Bat. Hand · Bowler Style · Fielding
+    // Dismissals · Catches · Caught & Bowled · Stumpings · Run Outs. The last five are
+    // the base tallies (`fielding`, metrics.js order: Catches, Caught & Bowled,
+    // Stumpings, Run Outs, Fielding Dismissals) — REORDERED to lead with Fielding
+    // Dismissals on the fielding board ONLY (fieldingMode); metrics.js's own array
+    // order (and so batting/bowling's cross-discipline Fielding dropdown, which reads
+    // the SAME `fielding` list unfiltered) is untouched. plainBoardFieldingSetItems
+    // (the batting/bowling boards' own Fielding dropdown) is untouched either way — it's
+    // empty whenever fieldingMatchesItem/fieldingDeliverySetItems/fieldingDismissalSetItems
+    // are non-empty (they're mutually exclusive on fieldingSetLeaderboard), so this
+    // reorder changes nothing there.
+    const FIELDING_BASE_TALLY_ORDER = ["dismissals_effected", "catches", "caught_and_bowled", "stumpings", "run_outs"];
+    const fieldingBaseTallies = fieldingMode
+      ? orderByKeys(plainItems(fielding), FIELDING_BASE_TALLY_ORDER)
+      : plainItems(fielding);
+    // Owner ruling: the fielding board's own stats section reads "Basic Stats" (to
+    // match batting/bowling's own section naming) — fieldingMode-gated so batting/
+    // bowling's cross-discipline Fielding dropdown keeps its existing "Fielding Stats"
+    // heading unchanged.
     const fieldingSections = [
-      ...section("Fielding Stats", [...plainItems(fielding), ...fieldingDismissalSetItems, ...fieldingDeliverySetItems, ...plainBoardFieldingSetItems]),
+      ...section(fieldingMode ? "Basic Stats" : "Fielding Stats", [
+        ...fieldingMatchesItem,
+        ...fieldingDeliverySetItems,
+        ...fieldingDismissalSetItems,
+        ...fieldingBaseTallies,
+        ...plainBoardFieldingSetItems,
+      ]),
       ...(fieldingComposerItems.length ? [{ name: "Composers", items: fieldingComposerItems }] : []),
     ];
 
@@ -2505,8 +2581,12 @@ export function createColumnsPicker({
             { type: "plain", key: RESULT_CONDITION_SET_KEY, label: "Result Condition" },
           ]
         : [];
+    // Fielding column reshuffle (Task C): "Matches" no longer renders here in fielding
+    // mode — it moved to the Fielding dropdown's Basic Stats (fieldingMatchesItem
+    // above). The plain-board branch (matchesMetric under "Player Matches") is
+    // unchanged — that move is explicitly deferred (NOT IN THIS BUILD).
     const matchItems = fieldingMode
-      ? [...plainItems(matchesMetric ? [matchesMetric] : []), ...fieldingMatchSetItems]
+      ? [...fieldingMatchSetItems]
       : [...plainItems([...(matchesMetric ? [matchesMetric] : []), ...impact]), ...matchLevelSetItems];
     const matchSections = section("", matchItems);
 

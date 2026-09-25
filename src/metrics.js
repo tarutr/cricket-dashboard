@@ -6259,8 +6259,12 @@ const FIELDING_SET_SPECS = [
   { key: "fld_venue_set",        label: "Venue",                       col: "venue",                title: "Venues played at across the filtered rows" },
   { key: "fld_city_set",         label: "City",                        col: "city",                 title: "Cities played in across the filtered rows" },
   { key: "fld_bowler_style_set", label: "Bowler Style",                col: "bowler_style",         title: "Bowler styles behind the fielder's dismissals in the filtered rows", displayTransform: "bowlingStyle" },
-  { key: "fld_out_position_set", label: "Dismissed Batter's Position", col: "out_batting_position", title: "Dismissed batters' positions in the filtered rows" },
-  { key: "fld_out_hand_set",     label: "Dismissed Batter Hand",       col: "out_hand",             title: "Dismissed batters' handedness in the filtered rows" },
+  // Fielding column reshuffle (Task C, 2026-09-25): short compact table headers,
+  // mirroring the B. Pos. which-values column's shortLabel/label split above (the
+  // full name stays the picker's label / the column's hover title; shortLabel is
+  // only the <th> text). Display-only — sqlExpression/col/title unchanged.
+  { key: "fld_out_position_set", label: "Dismissed Batter's Position", shortLabel: "Bat. Pos.", col: "out_batting_position", title: "Dismissed batters' positions in the filtered rows" },
+  { key: "fld_out_hand_set",     label: "Dismissed Batter Hand",       shortLabel: "Bat. Hand", col: "out_hand",             title: "Dismissed batters' handedness in the filtered rows" },
   // Wave 3C (C1 parity gap): the Wicket Type filter (fieldingDims `kind`, state.fielding.kinds
   // → buildFieldingSliceClauses `kind IN (…)`) had NO list column. Group A — `kind` is a RAW
   // column on the fielding view (the credited dismissal kind: caught / caught and bowled /
@@ -6435,7 +6439,7 @@ export function resolveFieldingSetMetric(key, discipline) {
   return {
     key: spec.key,
     label: spec.label,
-    shortLabel: spec.label,
+    shortLabel: spec.shortLabel || spec.label,
     discipline,
     source: "fielding_events",
     section: "fielding",
