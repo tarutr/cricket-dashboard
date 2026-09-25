@@ -163,8 +163,16 @@ const GROUP_DEFAULT_LANE = {
   "Fielder Profile": "player", // Matches = Player; Team tagged Scope per-item
   Match: "scope",
   "Wicket Types": "player",
-  "Bowler Details": "scope",
-  "Dismissed Batter": "scope",
+  // Fielding "Matchup" dropdown (Task A, .orchestrator/fielding-build-plan.md): the
+  // Bowler + Dismissed-Batter dims are a THIRD fielding lane, peer to Player / Scope.
+  // Unlike batting/bowling's MATCHUP_LANE_SINGLETONS (always-AND, rendered OUTSIDE the
+  // group card), these stay match-all/any PARTICIPANTS — the move is OFFERING-only: their
+  // applied rows still render inside the group card (the controller dims in the
+  // fielding-dim block, fld_pos as a Scope-lane singleton via drawer.js singletonLane),
+  // and the fielding query's and/any keys on state.fielding.* + filterGroupOp
+  // (fieldingScopeWhere), independent of which dropdown offered them.
+  Bowler: "matchup",
+  "Dismissed Batter": "matchup",
 };
 // The ordered section list each lane's dropdown renders (only present sections show).
 // Batting/bowling and fielding-board section names both appear; the two are mutually
@@ -176,12 +184,13 @@ const PLAYER_LANE_SECTIONS = [
   "Fielding Stats",
 ];
 const SCOPE_LANE_SECTIONS = [
-  "Match Details", "Match", "Ball Ranges",
-  "Bowler Details", "Dismissed Batter", "Fielding Stats",
+  "Match Details", "Match", "Ball Ranges", "Fielding Stats",
 ];
-// The Matchup lane (decision 83 Fork 2) — its single section is the "Matchup (Vs)"
-// group, re-laned above. Leaderboard-only; the pop-up passes no lane.
-const MATCHUP_LANE_SECTIONS = ["Matchup (Vs)"];
+// The Matchup lane — "Matchup (Vs)" is the batting/bowling matchup section (decision 83
+// Fork 2, re-laned above); "Bowler" / "Dismissed Batter" are the fielding board's
+// matchup subsections (Task A). The two sets are mutually exclusive per discipline, so
+// finalize's `order.filter(bySection.has)` keeps only whichever the current board built.
+const MATCHUP_LANE_SECTIONS = ["Matchup (Vs)", "Bowler", "Dismissed Batter"];
 // Attach a lane (and optional re-home section) to an item; null-safe so it can wrap a
 // builder that returned null (e.g. a popup-withheld singleton).
 const withLane = (item, laneVal, section) =>
@@ -374,14 +383,15 @@ export function createPaletteGroupsBuilder(deps) {
     // BOWLING else-branch and offered top-level Stage/Result/Toss (silently ignored by
     // the fielding query) + null metric leaves (the fielding namespace has no metrics).
     if (disc === "fielding") {
-      // 3.2c menu reorg (owner-approved, 2026-08-15): SIX groups in a fixed order —
-      // Fielder Profile · Match · Ball Ranges · Wicket Types · Bowler Details ·
-      // Dismissed Batter. Display-only reshuffle of the SAME honest offer set (only
-      // filters the fielding query actually narrows by), plus ONE new count filter
-      // (Caught & bowled — see Wicket Types below). Retired here: the old "Player
-      // Profile" fielding group (Playing role / Batting hand / Bowling style / Bowling
-      // hand) and the "Wicket type" checklist picker (dimLeaf("kind")) — both dropped
-      // as redundant (owner ruling); Team survives, moved into Fielder Profile.
+      // 3.2c menu reorg (owner-approved, 2026-08-15): the groups below feed THREE
+      // dropdowns via finalize — Player (Fielder Profile · Wicket Types), Scope (Match ·
+      // Ball Ranges), and Matchup (Bowler · Dismissed Batter — Task A,
+      // .orchestrator/fielding-build-plan.md). Display-only reshuffle of the SAME honest
+      // offer set (only filters the fielding query actually narrows by), plus ONE new
+      // count filter (Caught & bowled — see Wicket Types below). Retired here: the old
+      // "Player Profile" fielding group (Playing role / Batting hand / Bowling style /
+      // Bowling hand) and the "Wicket type" checklist picker (dimLeaf("kind")) — both
+      // dropped as redundant (owner ruling); Team survives, moved into Fielder Profile.
 
       // Count-threshold tallies resolve under the "batting" catalogue — the fielding
       // board has no "fielding" metrics namespace; buildFieldingCountGate /
@@ -441,21 +451,28 @@ export function createPaletteGroupsBuilder(deps) {
         tallyLeaf("caught_and_bowled", "Caught & Bowled"),
         tallyLeaf("stumpings", "Stumpings"),
         tallyLeaf("run_outs", "Run Outs"),
-        tallyLeaf("dismissals_effected", "Total Dismissals"),
+        tallyLeaf("dismissals_effected", "Fielding Dismissals"),
       ]);
-      // 5 ── Bowler Details (was "Bowler") ───────────────────────────────────────
-      pushGroup("Bowler Details", [dimLeaf("bowlerStyle"), dimLeaf("bowler")]);
-      // 6 ── Dismissed Batter (was "Dismissed batter") ───────────────────────────
-      // The dims about WHO was out — the "Wicket type" checklist picker (dimLeaf("kind"))
-      // is retired (redundant with Wicket Types' count filters). Position stays on the
-      // existing fld_pos singleton (byte-identical everywhere; no duplicate dim row). The
-      // "hand" dim now reads "Dismissed batter hand" (fieldingDims.js). The dead
-      // Batter-role fielding dim (owner ruling 2026-08-16: "doesn't work here") has
-      // been deleted outright (cleanup Item F5) — fieldingDims.js no longer defines it.
+      // 5/6 ── Matchup dropdown (Task A, .orchestrator/fielding-build-plan.md) ──────
+      // The Bowler + Dismissed-Batter dims move OUT of Scope into a THIRD "Matchup"
+      // dropdown: GROUP_DEFAULT_LANE tags both groups "matchup", so finalize routes them
+      // to the matchup lane's picker (peer to Player / Scope). This is an OFFERING move
+      // only — the five REMAIN match-all/any participants (see GROUP_DEFAULT_LANE note):
+      // their applied rows still render inside the group card and the fielding query's
+      // and/any keys on state.fielding.* + filterGroupOp (fieldingScopeWhere), so they get
+      // NONE of the always-AND behaviour batting/bowling's MATCHUP_LANE_SINGLETONS have.
+      // Specific Bowler / Specific Batter lead their subsections (owner).
+      pushGroup("Bowler", [dimLeaf("bowler"), dimLeaf("bowlerStyle")]);
+      // Dismissed Batter: Specific Batter (top), then Position (still the existing fld_pos
+      // singleton — byte-identical everywhere, no duplicate dim row; lane stays "scope" in
+      // drawer.js singletonLane so its applied row renders in the group card), then Hand.
+      // The dead Batter-role fielding dim (owner ruling 2026-08-16: "doesn't work here")
+      // and the retired "Wicket type" checklist picker (redundant with Wicket Types'
+      // count filters) are still absent — fieldingDims.js no longer defines the former.
       pushGroup("Dismissed Batter", [
+        dimLeaf("batter"),
         leafSingle("fld_pos", "Dismissed Batter's Position"),
         dimLeaf("hand"),
-        dimLeaf("batter"),
       ]);
       return finalize(groups);
     }
