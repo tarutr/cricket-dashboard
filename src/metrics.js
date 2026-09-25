@@ -1763,6 +1763,89 @@ for (const disc of ["batting", "bowling"]) {
   }
 }
 
+// ── Fielding-board Win % / Toss Win % (fielding rework Task B, 2026-09-25) ──────
+// Two per-fielder MATCH-OUTCOME rates for the FIELDING leaderboard only:
+//   • Win %      = matches WON ÷ matches WITH A RESULT (no-results EXCLUDED from the
+//                  denominator, ties INCLUDED). Toggles to the raw win COUNT.
+//   • Toss Win % = tosses WON ÷ ALL the fielder's matches. Toggles to the raw
+//                  toss-win COUNT.
+// Whole-MATCH facts (match_winner / result_type / toss_winner), NOT innings or
+// fielding-event aggregates — so, exactly like the batting/bowling Result family
+// (res_won/res_toss_won), they live in a per-player CTE. But result_cte is scoped by
+// the board's TOP-LEVEL match filters (buildBoardDivisorMatchClauses); the FIELDING
+// board's Stage/Result/Toss filters live under state.fielding.*, so these read a
+// SEPARATE `fld_result_cte` (table.js buildFieldingResultCteSql) scoped by
+// buildFieldingDivisorMatchClauses — the SAME divisor + playerOp:"AND" as the fielding
+// Matches column (pmatch_cte), so `total` === Matches and both new columns reconcile
+// with Matches by construction. Win identification (team = match_winner), the tie
+// predicate (result_type = 'tie', which — like everywhere — EXCLUDES super-over-decided
+// 'tie (<Team>)' rows since export_parquet resolves those to a match_winner) and the
+// no-result predicate mirror result_cte byte-for-byte.
+//
+// FIELDING-BOARD ONLY. A DEDICATED source "fielding_result" keeps them OUT of every
+// buildQuery (batting/bowling) projection bucket (table.js gates inningsMetrics on it),
+// so they are never computed on the batting/bowling boards — those keep their own
+// res_won_pct / res_toss_won_pct (a DIFFERENT, ÷total denominator; the definitions
+// deliberately differ — fielding-winpct-feasibility.md §4). `section: "fielding"` so the
+// fielding board's column machinery (table.js extras filter, columnsPicker fielding
+// offering) recognises them; `isFieldingResult` marks the fld_result_cte projection and
+// the count/% toggle. The projection is a BARE fld_result_cte reference (no MAX — the
+// fielding board is one row per fielder, not a GROUP BY) read by fieldingBoardColExpr.
+// Denominator 0 → NULLIF → NULL (—), never Infinity. Defined once, pushed into BOTH
+// disciplines (a match fact is discipline-agnostic, like the Result family / PoM); the
+// fielding board resolves under ns "batting" but the bowling copy keeps the catalogue
+// symmetric.
+const FIELDING_RESULT_METRIC_SPECS = [
+  { key: "fld_res_won", label: "Matches Won", shortLabel: "Won", higherIsBetter: true,
+    boardExpr: "COALESCE(fld_result_cte.won, 0)",
+    pctKey: "fld_res_won_pct", pctLabel: "Win %", pctShort: "Win%", pctHigherIsBetter: true,
+    pctBoardExpr: "fld_result_cte.won * 100.0 / NULLIF(fld_result_cte.total - fld_result_cte.no_result, 0)" },
+  { key: "fld_res_toss_won", label: "Toss Won", shortLabel: "Toss", higherIsBetter: null,
+    boardExpr: "COALESCE(fld_result_cte.toss_won, 0)",
+    pctKey: "fld_res_toss_won_pct", pctLabel: "Toss Win %", pctShort: "Toss%", pctHigherIsBetter: null,
+    pctBoardExpr: "fld_result_cte.toss_won * 100.0 / NULLIF(fld_result_cte.total, 0)" },
+];
+for (const disc of ["batting", "bowling"]) {
+  for (const r of FIELDING_RESULT_METRIC_SPECS) {
+    const target = disc === "batting" ? BATTING_METRICS : BOWLING_METRICS;
+    // Count column (win count / toss-win count) — the toggle pair's `count` side.
+    target.push({
+      key: r.key,
+      label: r.label,
+      shortLabel: r.shortLabel,
+      columnTitle: r.label,
+      discipline: disc,
+      source: "fielding_result",
+      section: "fielding",
+      isFieldingResult: true,
+      // Bare fld_result_cte reference (fielding board is one row per fielder). Never
+      // emitted on batting/bowling (source "fielding_result" is excluded there); read
+      // on the fielding board by fieldingBoardColExpr.
+      sqlExpression: r.boardExpr,
+      higherIsBetter: r.higherIsBetter, format: "int",
+      isPhaseMetric: null, zeroIsData: true,
+      additive: true,
+      kind: "total",
+    });
+    // Percent alternate (Win % / Toss Win %) — only the count/% toggle surfaces it
+    // (hidden from the picker listing via COLUMN_TOGGLE_PAIRS, like res_*_pct).
+    target.push({
+      key: r.pctKey,
+      label: r.pctLabel,
+      shortLabel: r.pctShort,
+      columnTitle: r.pctLabel,
+      discipline: disc,
+      source: "fielding_result",
+      section: "fielding",
+      isFieldingResult: true,
+      sqlExpression: r.pctBoardExpr,
+      higherIsBetter: r.pctHigherIsBetter, format: "pct1",
+      isPhaseMetric: null, zeroIsData: false,
+      kind: "percent",
+    });
+  }
+}
+
 // ── Per-column count/% (+ count/per-match) toggle pairings (Wave C) ────────────
 // The leaderboard's Columns picker (columnsPicker.js) renders each COUNT key below
 // as a single row whose value can be toggled between the count metric and its
@@ -1776,6 +1859,14 @@ for (const disc of ["batting", "bowling"]) {
 // the metric catalogue. The matchup namespaces have NO entry (no toggle there — Vs
 // mode keeps its pre-Wave-C layout). Every `alt` key is a real metric added above.
 const _RESULT_PAIRS = RESULT_METRIC_SPECS.map((r) => ({ count: r.key, alt: `${r.key}_pct`, mode: "pct" }));
+// Fielding-board Win % / Toss Win % (Task B): count ⇄ % toggle, mirroring _RESULT_PAIRS
+// (the count `#` segment shows the raw win / toss-win count; the `%` segment shows Win %
+// / Toss Win %). Fielding-board-only metrics, but placed in the plain batting/bowling
+// namespaces for the same reason _RESULT_PAIRS are — the fielding board resolves toggles
+// under ns "batting".
+const _FIELDING_RESULT_PAIRS = FIELDING_RESULT_METRIC_SPECS.map((r) => ({
+  count: r.key, alt: r.pctKey, mode: "pct",
+}));
 const _FIELDING_PAIRS = PER_MATCH_FIELDING_SPECS.map((f) => ({
   count: f.key, alt: `${f.key}_per_match`, mode: "permatch",
 }));
@@ -1787,12 +1878,14 @@ export const COLUMN_TOGGLE_PAIRS = {
     { count: "not_outs", alt: "not_out_pct", mode: "pct" },
     { count: "ducks", alt: "duck_pct", mode: "pct" },
     ..._RESULT_PAIRS,
+    ..._FIELDING_RESULT_PAIRS,
     ..._FIELDING_PAIRS,
   ],
   bowling: [
     { count: "maidens", alt: "maiden_pct", mode: "pct" },
     { count: "dot_balls_conceded", alt: "dot_pct", mode: "pct" },
     ..._RESULT_PAIRS,
+    ..._FIELDING_RESULT_PAIRS,
     ..._FIELDING_PAIRS,
   ],
 };

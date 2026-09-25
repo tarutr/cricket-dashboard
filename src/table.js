@@ -1844,6 +1844,61 @@ export function buildPmatchCteSql(state, { playerOp, coreScopeOnly = false } = {
 }
 
 /**
+ * Build the `fld_result_cte` definition (fielding rework Task B, 2026-09-25) — the
+ * FIELDING-board sibling of buildResultCteSql, feeding the fielding Win % / Toss Win %
+ * columns (metrics.js FIELDING_RESULT_METRIC_SPECS) and their raw count alternates.
+ *
+ * Structurally byte-for-byte buildResultCteSql — same per-player SUM(CASE…) over
+ * player_matches ⋈ matchContextSubselectSql (the win predicate `team = mctx.match_winner`,
+ * the tie predicate `result_type = 'tie'` [which EXCLUDES super-over-decided 'tie (<Team>)'
+ * rows, since export_parquet resolves those to a match_winner — a win/loss, never a tie],
+ * the `no result` predicate) — with exactly TWO deliberate differences from the
+ * batting/bowling result_cte:
+ *   1. SCOPE via buildFieldingDivisorMatchClauses (the FIELDING namespace's opposition +
+ *      season/city/stage/result/toss), NOT buildBoardDivisorMatchClauses — because the
+ *      fielding board's match-selecting filters live under state.fielding.*, so this counts
+ *      over the SAME match set as the fielding Matches column.
+ *   2. playerOp:"AND" — the fielding board keeps profile an always-AND shortlister
+ *      (Wave C/E), identical to buildPmatchCteSql's fielding-board call. Together (1)+(2)
+ *      make `total` (COUNT(DISTINCT match_id)) equal pmatch_cte.match_count row-for-row, so
+ *      Win % (÷ total − no_result) and Toss Win % (÷ total) reconcile with the Matches
+ *      column by construction.
+ *
+ * Alias `fres_player_id` + CTE name `fld_result_cte` keep it distinct from result_cte
+ * (which the fielding query never builds). Built + LEFT-JOINed onto fielding_cte ONLY when
+ * a fielding-result column is present (buildFieldingLeaderboardQuery's wantsFieldingResult
+ * gate), so with none the fielding board SQL is byte-identical. Every divisor clause emits
+ * nothing when its filter is unset, so with no match-selecting filter active the WHERE is
+ * the same core-scope + name-search set pmatch_cte uses.
+ */
+export function buildFieldingResultCteSql(state, { playerOp = "AND" } = {}) {
+  const resClauses = buildScopeClausesTagged(state, { includeTeams: true, teamColumn: "team", idColumn: "player_id" });
+  // The FIELDING-namespace match-selecting clauses — the SAME set buildPmatchCteSql pushes,
+  // so this CTE's `total` equals the fielding Matches count. Tagged "scope" (see the helper)
+  // so laneScope's OR path folds them in; empty when no match-selecting filter is active.
+  for (const c of buildFieldingDivisorMatchClauses(state)) resClauses.push(c);
+  if (state.search && state.search.trim()) {
+    resClauses.push(bypassableClause(`player_name ILIKE '%${escSearch(state.search.trim())}%' ESCAPE '\\'`));
+  }
+  const resWhereSql = laneScope(resClauses, state, { idColumn: "player_id", playerOp });
+  return [
+    "fld_result_cte AS (",
+    "  SELECT player_id AS fres_player_id,",
+    "         COUNT(DISTINCT match_id) AS total,",
+    "         SUM(CASE WHEN team = mctx.match_winner THEN 1 ELSE 0 END) AS won,",
+    "         SUM(CASE WHEN mctx.match_winner IS NOT NULL AND mctx.match_winner <> team THEN 1 ELSE 0 END) AS lost,",
+    "         SUM(CASE WHEN mctx.result_type = 'tie' THEN 1 ELSE 0 END) AS tied,",
+    "         SUM(CASE WHEN mctx.result_type = 'no result' THEN 1 ELSE 0 END) AS no_result,",
+    "         SUM(CASE WHEN team = mctx.toss_winner THEN 1 ELSE 0 END) AS toss_won",
+    "  FROM player_matches",
+    `  LEFT JOIN ${matchContextSubselectSql()} ON mctx.mctx_match_id = player_matches.match_id`,
+    `  WHERE ${resWhereSql}`,
+    "  GROUP BY player_id",
+    ")",
+  ].join("\n");
+}
+
+/**
  * Build the `xdisc_cte` definition (columns-rejig W3 — cross-discipline columns,
  * OQ1) — same "CTE body without leading WITH" convention as buildFieldingCteSql /
  * buildPomCteSql. ONE row per player over the OTHER discipline's innings-grain
@@ -2053,6 +2108,11 @@ const _FLD_PER_MATCH_SUFFIX = "_per_match";
  * ensure pmatch_cte is joined whenever a per-match column is present. */
 function fieldingBoardColExpr(m) {
   if (!m) return null;
+  // Fielding rework Task B: Win %/Toss Win % (+ their count alts) — a BARE fld_result_cte
+  // reference (the metric's own sqlExpression; no MAX, the board is one row per fielder).
+  // buildFieldingLeaderboardQuery builds + joins fld_result_cte whenever one of these is
+  // present. Guarded first so it never falls through to the generic branches below.
+  if (m.isFieldingResult) return m.sqlExpression || null;
   // Fielding list column (Wave 2b): the injected fielding_cte alias IS the list — read
   // it straight off the base table (no per-match / rate variant). Group-A lists are an
   // aggregate over the fielding view; the Group-B (Season) list rides fielding_cte's
@@ -2129,7 +2189,17 @@ export function buildFieldingLeaderboardQuery(state, visibleColumns = []) {
   // so its Matches denominator never drops profile under player-OR.
   const matchesCte = buildPmatchCteSql(state, { playerOp: "AND" });
   const matchesExpr = "COALESCE(pmatch_cte.match_count, 0) AS matches";
-  const joinSql = "LEFT JOIN pmatch_cte ON pmatch_cte.pm_player_id = fielding_cte.fld_player_id";
+  // Fielding rework Task B: Win %/Toss Win % (+ count alts) read a per-fielder
+  // fld_result_cte (win/toss-win/no-result/total over player_matches ⋈ match context),
+  // scoped by the SAME fielding divisor as pmatch_cte so `total` === Matches. Built +
+  // joined ONLY when one such column is present — with none, wantsFieldingResult is false,
+  // the CTE is neither built nor joined, and the emitted SQL is byte-identical.
+  const wantsFieldingResult = extras.some((e) => e.metric && e.metric.source === "fielding_result");
+  const resultCte = wantsFieldingResult ? buildFieldingResultCteSql(state) : null;
+  let joinSql = "LEFT JOIN pmatch_cte ON pmatch_cte.pm_player_id = fielding_cte.fld_player_id";
+  if (wantsFieldingResult) {
+    joinSql += "\nLEFT JOIN fld_result_cte ON fld_result_cte.fres_player_id = fielding_cte.fld_player_id";
+  }
   const selectCols = [
     "fielding_cte.fld_player_id AS id",
     "fielding_cte.fielder_name AS name",
@@ -2167,7 +2237,9 @@ export function buildFieldingLeaderboardQuery(state, visibleColumns = []) {
   const body = countGate
     ? `SELECT * FROM (\n${baseSelect}\n) AS fld_board\nWHERE ${countGate}`
     : baseSelect;
-  const sql = ["WITH " + [cte, matchesCte].join(",\n"), body].join("\n");
+  const withCtes = [cte, matchesCte];
+  if (resultCte) withCtes.push(resultCte);
+  const sql = ["WITH " + withCtes.join(",\n"), body].join("\n");
   return { sql, matchesSql: null };
 }
 
@@ -2244,6 +2316,13 @@ export function buildQuery(state, visibleColumns, opts = {}) {
         m.source !== "player_matches" &&
         m.source !== "fielding_events" &&
         m.source !== "result" &&
+        // Fielding rework Task B: the fielding-board Win %/Toss Win % metrics
+        // (source "fielding_result") are computed ONLY by buildFieldingLeaderboardQuery
+        // (via fld_result_cte); they have no batting/bowling projection, so exclude them
+        // here so buildQuery never tries to emit their fld_result_cte-referencing
+        // sqlExpression on the innings view. A no-op for every existing column (none is
+        // source "fielding_result") ⇒ batting/bowling SQL byte-identical.
+        m.source !== "fielding_result" &&
         // Wave D — D1: profile attribute columns are player-level constants surfaced
         // via profile_cte (like fielding/pom/result), NOT innings aggregates.
         m.source !== "profiles"
