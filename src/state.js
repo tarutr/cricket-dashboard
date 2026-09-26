@@ -1986,6 +1986,20 @@ function conditionColumnKey(cond, discipline) {
   return cond.metricKey;
 }
 
+/** Autocolumn rework Task A (2026-09-26): the Bucket-3 ">1 selected value" gate for
+ * a categorical which-values LIST column. A which-values column only DIFFERS across
+ * player rows once the filter carries ≥2 real values — at exactly one value the
+ * filter's own WHERE predicate fixes every displayed row to that one value (the
+ * column would render a constant list, e.g. `[India]` for everyone), so the toolbar
+ * pill alone says it and no column is auto-added. `sentinel`, when given, excludes a
+ * "no narrowing" token (e.g. STAGE_ALL) from the count — mirrors each filter's own
+ * *FilterActive predicate's sentinel handling above. */
+function multiSelected(arr, sentinel) {
+  if (!Array.isArray(arr)) return false;
+  const n = sentinel == null ? arr.length : arr.filter((v) => v !== sentinel).length;
+  return n > 1;
+}
+
 /**
  * Wave 3A (un-lens matchup columns) — the RESTRICTED FILTER → COLUMN map used UNDER A
  * MATCHUP. Only the 10 match-context which-values columns are eligible here (see
@@ -2006,15 +2020,19 @@ function matchupFilterSources(state, ns) {
   };
   // Same tags the plain path uses (filter:teams / filter:opposition / …) so the origin
   // bookkeeping + remove-on-remove tidy behave identically — just on state.columns[ns].
-  if (teamsFilterActive(state)) push("filter:teams", TEAM_SET_KEY);
-  if (oppositionFilterActive(state)) push("filter:opposition", OPPOSITION_SET_KEY);
-  if (inningsNumberFilterActive(state)) push("filter:innings_number", INNINGS_NUMBER_SET_KEY);
-  if (cityFilterActive(state)) push("filter:city", CITY_SET_KEY);
-  if (seasonFilterActive(state)) push("filter:season", SEASON_SET_KEY);
-  if (eventFilterActive(state)) push("filter:event", EVENT_SET_KEY);
-  if (venueFilterActive(state)) push("filter:venue", VENUE_SET_KEY);
-  if (stageFilterActive(state)) push("filter:mc_stage", STAGE_SET_KEY);
-  if (tossDecisionFilterActive(state)) push("filter:mc_toss_decision", TOSS_DECISION_SET_KEY);
+  // Autocolumn rework Task A (2026-09-26): each which-values entry below now gates on
+  // >1 selected value (multiSelected, Bucket 3) — at exactly one value the column is
+  // constant for every row, mirroring the SAME gate on the plain board below. Result
+  // Condition is deliberately NOT gated (owner: "leave Result Condition as is").
+  if (teamsFilterActive(state) && multiSelected(state.teams)) push("filter:teams", TEAM_SET_KEY);
+  if (oppositionFilterActive(state) && multiSelected(state.opposition)) push("filter:opposition", OPPOSITION_SET_KEY);
+  if (inningsNumberFilterActive(state) && multiSelected(state.inningsNumber)) push("filter:innings_number", INNINGS_NUMBER_SET_KEY);
+  if (cityFilterActive(state) && multiSelected(state.city)) push("filter:city", CITY_SET_KEY);
+  if (seasonFilterActive(state) && multiSelected(state.season)) push("filter:season", SEASON_SET_KEY);
+  if (eventFilterActive(state) && multiSelected(state.event)) push("filter:event", EVENT_SET_KEY);
+  if (venueFilterActive(state) && multiSelected(state.venue)) push("filter:venue", VENUE_SET_KEY);
+  if (stageFilterActive(state) && multiSelected(state.stage, STAGE_ALL)) push("filter:mc_stage", STAGE_SET_KEY);
+  if (tossDecisionFilterActive(state) && multiSelected(state.tossDecision)) push("filter:mc_toss_decision", TOSS_DECISION_SET_KEY);
   if (resultConditionFilterActive(state)) push("filter:mc_result_condition", RESULT_CONDITION_SET_KEY);
   return out;
 }
@@ -2054,36 +2072,48 @@ export function activeLeaderboardFilterSources(state) {
   // NOT mapped — no list column built for them this wave; see metrics.js.)
   if (disc === "fielding") {
     const f = state.fielding || {};
-    const has = (a) => Array.isArray(a) && a.length > 0;
+    const hasMulti = (a) => multiSelected(a);
     // Tags MUST start with "filter:" — reconcileLeaderboardColumns' remove-on-remove
     // step (Q1a) only drops an origin whose src `startsWith("filter:")` and is no longer
     // active, so a "fld:*" tag would auto-ADD its column but never TIDY away.
-    if (teamsFilterActive(state)) push("filter:fld:teams", ["fld_team_set"]);
-    if (oppositionFilterActive(state)) push("filter:fld:opposition", ["fld_opposition_set"]);
-    if (eventFilterActive(state)) push("filter:fld:event", ["fld_event_set"]);
-    if (venueFilterActive(state)) push("filter:fld:venue", ["fld_venue_set"]);
-    if (has(f.cities)) push("filter:fld:city", ["fld_city_set"]);
-    if (has(f.bowlerStyles)) push("filter:fld:bowler_style", ["fld_bowler_style_set"]);
-    // Wave 3C (C1): the Wicket Type filter (state.fielding.kinds) now auto-adds its
-    // fld_kind_set list column, same rule/shape as every other fielding filter above.
-    if (has(f.kinds)) push("filter:fld:kind", ["fld_kind_set"]);
-    if (has(f.positions)) push("filter:fld:position", ["fld_out_position_set"]);
-    if (has(f.hands)) push("filter:fld:hand", ["fld_out_hand_set"]);
-    if (has(f.seasons)) push("filter:fld:season", ["fld_season_set"]);
-    if (has(f.stage)) push("filter:fld:stage", ["fld_stage_set"]);
-    if (has(f.result)) push("filter:fld:result", ["fld_result_set"]);
-    if (has(f.tossResult)) push("filter:fld:toss_result", ["fld_toss_result_set"]);
-    if (has(f.tossDecision)) push("filter:fld:toss_decision", ["fld_toss_decision_set"]);
+    // Autocolumn rework Task A (2026-09-26): every which-values LIST push below now
+    // gates on >1 selected value (Bucket 3) — at exactly one value the column is
+    // constant for every row, so the toolbar pill alone covers it.
+    if (teamsFilterActive(state) && multiSelected(state.teams)) push("filter:fld:teams", ["fld_team_set"]);
+    if (oppositionFilterActive(state) && multiSelected(state.opposition)) push("filter:fld:opposition", ["fld_opposition_set"]);
+    if (eventFilterActive(state) && multiSelected(state.event)) push("filter:fld:event", ["fld_event_set"]);
+    if (venueFilterActive(state) && multiSelected(state.venue)) push("filter:fld:venue", ["fld_venue_set"]);
+    if (hasMulti(f.cities)) push("filter:fld:city", ["fld_city_set"]);
+    if (hasMulti(f.bowlerStyles)) push("filter:fld:bowler_style", ["fld_bowler_style_set"]);
+    // fld_kind_set REMOVED (autocolumn rework Task A, 2026-09-26): the Wicket Type
+    // filter is retired from the leaderboard and its column no longer exists — dead
+    // auto-add.
+    if (hasMulti(f.positions)) push("filter:fld:position", ["fld_out_position_set"]);
+    if (hasMulti(f.hands)) push("filter:fld:hand", ["fld_out_hand_set"]);
+    if (hasMulti(f.seasons)) push("filter:fld:season", ["fld_season_set"]);
+    if (hasMulti(f.stage)) push("filter:fld:stage", ["fld_stage_set"]);
+    // Match Result REPOINTED (autocolumn rework Task A, 2026-09-26; owner ruling
+    // 2026-09-26 amends this to Bucket 3): Win % is a rate column, but with exactly
+    // ONE outcome picked it's constant (100% for "Won" alone, 0% for "Lost" alone,
+    // etc. — same for every displayed row), so it's gated on >1 selected outcome like
+    // any other which-values Bucket-3 filter; only 2+ outcomes make it vary.
+    if (multiSelected(f.result)) push("filter:fld:result", ["fld_res_won_pct"]);
+    // Toss Result auto-add REMOVED (owner ruling 2026-09-26): Toss Result has only
+    // Won/Lost-toss, so a single value is constant and picking both is a no-op filter
+    // — pill-only in every real case. Toss Win % (fld_res_toss_won_pct) stays
+    // MANUALLY addable from the picker; only the auto-add is gone.
+    if (hasMulti(f.tossDecision)) push("filter:fld:toss_decision", ["fld_toss_decision_set"]);
     // Phase 1.2 (2026-08-25) — the three Ball Ranges dims (audit3 §(ii), ledger:
     // Phase/Over range/Innings number never got a list column). Same rule, same
     // shape as the pushes above; "active" mirrors buildFieldingExtraSliceClauses'
     // (table.js) own predicates for these three fields exactly (phases/inningsNumbers
     // non-empty arrays; overFrom/overTo either bound a finite number).
-    if (has(f.phases)) push("filter:fld:phase", ["fld_phase_set"]);
-    if (Number.isFinite(Number(f.overFrom)) || Number.isFinite(Number(f.overTo))) {
-      push("filter:fld:overs", ["fld_over_set"]);
-    }
-    if (has(f.inningsNumbers)) push("filter:fld:innings", ["fld_innings_set"]);
+    if (hasMulti(f.phases)) push("filter:fld:phase", ["fld_phase_set"]);
+    // fld_over_set auto-add REMOVED (autocolumn rework Task A, 2026-09-26, Bucket 1):
+    // Over Range is an informational numeric range — every displayed row's own overs
+    // are simply bounded by it, not fixed to one value, so it never varies usefully
+    // as a which-values list; the pill already states the range.
+    if (hasMulti(f.inningsNumbers)) push("filter:fld:innings", ["fld_innings_set"]);
     // Phase 1.2 (2026-08-25) — audit3 §(v): numeric fielding COUNT conditions (Matches
     // / Catches / Caught & bowled / Stumpings / Run-outs / Total dismissals) never
     // claimed a column — this branch used to `return out` before ever reaching the
@@ -2122,29 +2152,48 @@ export function activeLeaderboardFilterSources(state) {
   // column (THE RULE — every scope categorical filter → its which-values column). Only
   // reached in plain batting (matchup mode already returned [] above; positionsFilterActive
   // is false in plain bowling), and push() re-checks addability (bpos_set is batting-only).
-  if (positionsFilterActive(state)) push("filter:positions", [BATTING_POSITION_SET_KEY]);
-  if (potmYNFilterActive(state)) push("filter:potm_yn", ["potm_count"]);
-  if (resultFilterActive(state)) push("filter:mc_result", ["res_won", "res_lost", "res_tied", "res_no_result"]);
-  if (tossResultFilterActive(state)) push("filter:mc_toss_result", ["res_toss_won"]);
+  // Autocolumn rework Task A (2026-09-26, Bucket 3): gated on >1 selected value — at
+  // exactly one position the column is constant for every row.
+  if (positionsFilterActive(state) && multiSelected(state.positions)) push("filter:positions", [BATTING_POSITION_SET_KEY]);
+  // PotM (Y/N) (Bucket 4 special case): auto-add potm_count ONLY on "Yes" — "No"
+  // forces the column to a constant 0 for every row (the HAVING gate), so the pill
+  // alone covers it. Deliberately NOT routed through potmYNFilterActive (which is
+  // true for either single choice) — this checks the specific "yes" branch.
+  {
+    const potmSel = Array.isArray(state.potmYN) ? state.potmYN : [];
+    if (potmSel.includes("yes") && !potmSel.includes("no")) push("filter:potm_yn", ["potm_count"]);
+  }
+  // Match Result REPOINTED (autocolumn rework Task A, 2026-09-26; owner ruling
+  // 2026-09-26 amends this to Bucket 3): with exactly ONE outcome picked, Win % is
+  // constant for every row (100% for "Won" alone, 0% for "Lost" alone, etc.), so it's
+  // gated on >1 selected outcome like any other which-values filter — only 2+
+  // outcomes make it vary.
+  if (resultFilterActive(state) && multiSelected(state.result, RESULT_ALL)) push("filter:mc_result", ["res_won_pct"]);
+  // Toss Result auto-add REMOVED (owner ruling 2026-09-26): Toss Result has only
+  // Won/Lost-toss, so a single value is constant and picking both is a no-op filter —
+  // pill-only in every real case. Toss Win % (res_toss_won_pct) stays MANUALLY
+  // addable from the picker; only the auto-add is gone.
   // Wave 2A.3: the Innings-Number / Team / Opposition which-values columns —
   // generalising the B. Pos. rule above to three more scope categorical filters.
   // Both disciplines (unlike positions, batting-only); push() re-validates
-  // addability per discipline/format.
-  if (inningsNumberFilterActive(state)) push("filter:innings_number", [INNINGS_NUMBER_SET_KEY]);
-  if (teamsFilterActive(state)) push("filter:teams", [TEAM_SET_KEY]);
-  if (oppositionFilterActive(state)) push("filter:opposition", [OPPOSITION_SET_KEY]);
+  // addability per discipline/format. Autocolumn rework Task A: each gated on >1
+  // selected value (Bucket 3).
+  if (inningsNumberFilterActive(state) && multiSelected(state.inningsNumber)) push("filter:innings_number", [INNINGS_NUMBER_SET_KEY]);
+  if (teamsFilterActive(state) && multiSelected(state.teams)) push("filter:teams", [TEAM_SET_KEY]);
+  if (oppositionFilterActive(state) && multiSelected(state.opposition)) push("filter:opposition", [OPPOSITION_SET_KEY]);
   // City & Season everywhere (2026-08-16): each new match-level filter auto-adds its
   // which-values column (THE RULE — every scope categorical filter → its which-values
   // column), tidying away when the filter is removed. Both disciplines; push()
   // re-validates addability. Reads mctx.city/mctx.season (table.js lights the join).
-  if (cityFilterActive(state)) push("filter:city", [CITY_SET_KEY]);
-  if (seasonFilterActive(state)) push("filter:season", [SEASON_SET_KEY]);
+  // Autocolumn rework Task A: gated on >1 selected value (Bucket 3).
+  if (cityFilterActive(state) && multiSelected(state.city)) push("filter:city", [CITY_SET_KEY]);
+  if (seasonFilterActive(state) && multiSelected(state.season)) push("filter:season", [SEASON_SET_KEY]);
   // Event & Venue which-values columns (completing City & Season everywhere,
   // 2026-08-16): same auto-add-with-filter rule as City/Season above. Reads
   // mctx.event_name/mctx.venue (table.js lights the join — same gate the Event/Venue
-  // composer columns already use).
-  if (eventFilterActive(state)) push("filter:event", [EVENT_SET_KEY]);
-  if (venueFilterActive(state)) push("filter:venue", [VENUE_SET_KEY]);
+  // composer columns already use). Autocolumn rework Task A: gated on >1 selected value.
+  if (eventFilterActive(state) && multiSelected(state.event)) push("filter:event", [EVENT_SET_KEY]);
+  if (venueFilterActive(state) && multiSelected(state.venue)) push("filter:venue", [VENUE_SET_KEY]);
   // Stage-3 Phase 1.1 (2026-08-25): the three match-context filters that narrowed the
   // numbers with nothing on screen to show it — Stage (ledger L-037), Toss decision
   // (L-038) and Result Condition (L-039) — now auto-add their which-values column, the
@@ -2152,8 +2201,11 @@ export function activeLeaderboardFilterSources(state) {
   // (table.js's wantsMctxColumn lights it on column presence). Their "All" sentinels
   // keep the filters INACTIVE until a real value is picked, so an added-but-untouched
   // Stage / Result Condition row adds no column — exactly like the query it emits.
-  if (stageFilterActive(state)) push("filter:mc_stage", [STAGE_SET_KEY]);
-  if (tossDecisionFilterActive(state)) push("filter:mc_toss_decision", [TOSS_DECISION_SET_KEY]);
+  // Autocolumn rework Task A: Stage and Toss Decision are gated on >1 selected value
+  // (Bucket 3; Stage excludes the STAGE_ALL sentinel from the count). Result Condition
+  // is deliberately NOT gated (owner: "leave Result Condition as is").
+  if (stageFilterActive(state) && multiSelected(state.stage, STAGE_ALL)) push("filter:mc_stage", [STAGE_SET_KEY]);
+  if (tossDecisionFilterActive(state) && multiSelected(state.tossDecision)) push("filter:mc_toss_decision", [TOSS_DECISION_SET_KEY]);
   if (resultConditionFilterActive(state)) push("filter:mc_result_condition", [RESULT_CONDITION_SET_KEY]);
   // Dismissed batter's position (ledger L-040): the ONE fielding-dimension filter offered
   // on the batting/bowling boards (drawer.js's `fld_pos` singleton, writing the same
@@ -2162,8 +2214,11 @@ export function activeLeaderboardFilterSources(state) {
   // fielding board maps it to — mirrored semantics, one definition. The tag differs from
   // the fielding branch's "filter:fld:position" deliberately: these are separate boards
   // with separate column sets, and a shared tag would let one board's prune memory speak
-  // for the other.
-  if (fieldingPositionActive(state)) push("filter:fld_pos", ["fld_out_position_set"]);
+  // for the other. Autocolumn rework Task A (owner ruling 2026-09-26): gated on >1
+  // selected position (Bucket 3), same rule as every other which-values filter.
+  if (fieldingPositionActive(state) && multiSelected(state.fielding && state.fielding.positions)) {
+    push("filter:fld_pos", ["fld_out_position_set"]);
+  }
 
   // Cutover S1 (ball-engine-gated, Stage-3 Phase 8): the four delivery-window pieces
   // (Ball Ranges — Phase / Over range / Team ball range / Batter-or-Bowler ball range)
@@ -2178,26 +2233,23 @@ export function activeLeaderboardFilterSources(state) {
   // tidy (reconcile Q1a) drops the column when its filter clears.
   const w = state.deliveryWindow;
   if (w) {
-    if (Array.isArray(w.phase) && w.phase.length > 0) push("filter:win_phase", [WPHASE_SET_KEY]);
-    if (w.overs) push("filter:win_overs", [WOVER_SET_KEY]);
-    if (w.balls) push("filter:win_balls", [WTBALL_SET_KEY]);
-    if (w.player) push("filter:win_player", [WPBALL_SET_KEY]);
+    // Autocolumn rework Task A (owner ruling 2026-09-26): gated on >1 selected phase
+    // (Bucket 3), same rule as every other which-values filter.
+    if (multiSelected(w.phase)) push("filter:win_phase", [WPHASE_SET_KEY]);
+    // win_overs / win_balls / win_player auto-adds REMOVED (autocolumn rework Task A,
+    // 2026-09-26, Bucket 1): Over Range / Team Ball Range / Batter-or-Bowler Ball Range
+    // are informational numeric ranges — a shown row's own ordinals are bounded by
+    // them, not fixed to one value, so the column never varies usefully; the pill
+    // already states the range.
   }
   if (opponentPlayerActive(state)) push("filter:vs_opp", [VSOPP_SET_KEY]);
 
-  // Player-attribute filters (data-driven — a column rides on whether the profile
-  // filter is set; players without a profile read blank). One column per active profile field.
-  const p = state.profile || {};
-  const PROFILE_MAP = [
-    ["roleGroup", "attr_role_group"],
-    ["roleSub", "attr_role_subgroup"],
-    ["battingHand", "attr_batting_style"],
-    ["bowlingType", "attr_bowling_type"],
-    ["bowlingArm", "attr_bowling_arm"],
-  ];
-  for (const [field, colKey] of PROFILE_MAP) {
-    if (p[field]) push(`filter:profile:${field}`, [colKey]);
-  }
+  // Profile (attribute) filter auto-adds REMOVED (autocolumn rework Task A,
+  // 2026-09-26, Bucket 1): Role / Batting Hand / Bowling Style / Bowling Hand are
+  // single-select, so their attr_* column is a semi-join-forced CONSTANT for every
+  // displayed row whenever the filter is active — the toolbar pill already says it.
+  // The attr_* columns stay MANUALLY addable from the picker; only the auto-add
+  // stops here.
 
   // Numeric stat conditions → their column (same-key / dismissal-type / parametric).
   // One source tag per distinct COLUMN key, so several conditions on one metric share
