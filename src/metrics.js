@@ -6575,6 +6575,38 @@ export function fieldingValuePlayerParts(value) {
 function _fcvPlayerId(value) { return fieldingValuePlayerParts(value).id; }
 function _fcvPlayerName(value) { return fieldingValuePlayerParts(value).name; }
 
+// ── Autocolumn rework Task B (2026-09-26): Specific Bowler / Batter column HEADERS ──
+// The owner ruled the always-on Specific Bowler / Specific Batter columns read as a
+// per-type SHORTHAND + a CONNECTOR + the player's LAST name — bowler: "Ct off Kohli"
+// / "C&B off Kohli" / "St off Kohli" / "RO off Kohli", total "Wkts off Kohli"; batter:
+// "Ct v. Kohli" … total "v. Kohli". DISPLAY-ONLY: only these two dims' label FORM
+// changes (was "Catches off <full name>"); the fielding_cte tally VALUE is untouched,
+// and no other composer family's labels move.
+//
+// The shorthand Ct/C&B/St/RO is sourced from DISMISSAL_KINDS (the one dismissal-kind
+// table), keyed by the fielding TALLY token; the DISMISSALS total drops the shorthand
+// (its head is "Wkts"/"" — see the two dims below). The full tally name (from
+// _FC_TALLIES) feeds the hover columnTitle — decision 81C's full-name tooltip for an
+// abbreviated header.
+const _dismissalKindShort = (kind) =>
+  (DISMISSAL_KINDS.find((d) => d.kind === kind)?.short) || kind;
+const _FCV_PLAYER_TALLY_SHORT = {
+  catches: _dismissalKindShort("caught"),           // "Ct"
+  cab: _dismissalKindShort("caught and bowled"),    // "C&B"
+  stumpings: _dismissalKindShort("stumped"),        // "St"
+  runouts: _dismissalKindShort("run out"),          // "RO"
+  // `dismissals` (the TOTAL) has no per-type shorthand — special-cased per dim below.
+};
+/** LAST name for a Specific Bowler/Batter column header: the final whitespace-delimited
+ * token (Virat Kohli → Kohli; MS Dhoni → Dhoni). A single-token name / initials-only
+ * name returns as-is; an empty name lets the caller fall back to the raw value. */
+function _fcvLastName(name) {
+  const s = String(name == null ? "" : name).trim();
+  if (!s) return "";
+  const parts = s.split(/\s+/);
+  return parts[parts.length - 1] || s;
+}
+
 const FCV_DIMS = {
   // Group A — RAW columns on the fielding view (no join). Team/Opposition/Venue/City
   // are single RAW equality (matches the Team/Opposition/Venue/City filter + the
@@ -6595,13 +6627,28 @@ const FCV_DIMS = {
   // `bowler_id` / `out_batter_id` the Specific Bowler/Batter FILTER narrows on — so a
   // composer value picks exactly the events that FILTER would. The value is a COMPOSITE
   // `<id>U+001F<name>` (see above): predFor takes the ID (a blank id ⇒ null ⇒ invalid key,
-  // never a metric), label takes the NAME, and wrapLabel gives the natural "off"/"of"
-  // reading ("Catches off Bumrah" / "Fielding Dismissals of Kohli").
+  // never a metric), label takes the NAME, and composeLabels (Task B, 2026-09-26) gives
+  // the owner-ruled shorthand+lastname header ("Ct off Kohli" / "v. Kohli"), the total
+  // (`dismissals`) reading "Wkts off <last>" (bowler) / "v. <last>" (batter).
   bowler: { mctx: false, versus: false, label: (v) => _fcvPlayerName(v),
-    wrapLabel: (t, name) => `${t} off ${name}`,
+    composeLabels: (tally, name) => {
+      const last = _fcvLastName(name) || name;
+      const full = _FC_TALLIES.get(tally)?.label || tally;
+      const head = tally === "dismissals"
+        ? `Wkts off ${last}`
+        : `${_FCV_PLAYER_TALLY_SHORT[tally] || full} off ${last}`;
+      return { label: head, shortLabel: head, columnTitle: `${full} off ${last}` };
+    },
     predFor: (v) => { const id = _fcvPlayerId(v); return id ? `bowler_id = ${composerSqlLiteral(id)}` : null; } },
   batter: { mctx: false, versus: false, label: (v) => _fcvPlayerName(v),
-    wrapLabel: (t, name) => `${t} of ${name}`,
+    composeLabels: (tally, name) => {
+      const last = _fcvLastName(name) || name;
+      const full = _FC_TALLIES.get(tally)?.label || tally;
+      const head = tally === "dismissals"
+        ? `v. ${last}`
+        : `${_FCV_PLAYER_TALLY_SHORT[tally] || full} v. ${last}`;
+      return { label: head, shortLabel: head, columnTitle: `${full} v. ${last}` };
+    },
     predFor: (v) => { const id = _fcvPlayerId(v); return id ? `out_batter_id = ${composerSqlLiteral(id)}` : null; } },
   // Group B — match-level (fld_mctx join). Season = RAW equality (matches the Season
   // semi-join within the gender-scoped CTE + the fld_season_set list column). Stage =
@@ -6666,14 +6713,22 @@ function buildComposedFieldingValueMetric(parsed, discipline) {
   const alias = makeComposedFieldingValueKey(parsed.value, parsed.tally, parsed.dim, false);
   const caseSql = `SUM(CASE WHEN (${pred}) AND (${tally.pred}) THEN 1 ELSE 0 END)`;
   const countProjection = `MAX(fielding_cte.${alias})`;
-  // Label form: a dim may supply its OWN wrapLabel (the player dims read "off"/"of"); else
-  // Opposition uses the "vs" form and every other dim the parenthetical "(value)" form.
-  const label = dimSpec.wrapLabel
-    ? dimSpec.wrapLabel(tally.label, valueLabel)
-    : dimSpec.versus ? `${tally.label} vs ${valueLabel}` : `${tally.label} (${valueLabel})`;
-  const shortLabel = dimSpec.wrapLabel
-    ? dimSpec.wrapLabel(tally.short, valueLabel)
-    : dimSpec.versus ? `${tally.short} vs ${valueLabel}` : `${tally.short} (${valueLabel})`;
+  // Label form: a dim may supply its OWN composeLabels (the player dims read the owner's
+  // shorthand+lastname header + a full-name hover columnTitle); else Opposition uses the
+  // "vs" form and every other dim the parenthetical "(value)" form (columnTitle = label,
+  // unchanged from before Task B).
+  let label, shortLabel, columnTitle;
+  if (dimSpec.composeLabels) {
+    ({ label, shortLabel, columnTitle } = dimSpec.composeLabels(parsed.tally, valueLabel));
+  } else if (dimSpec.versus) {
+    label = `${tally.label} vs ${valueLabel}`;
+    shortLabel = `${tally.short} vs ${valueLabel}`;
+    columnTitle = label;
+  } else {
+    label = `${tally.label} (${valueLabel})`;
+    shortLabel = `${tally.short} (${valueLabel})`;
+    columnTitle = label;
+  }
   const common = {
     isComposedFielding: true,
     isComposedFieldingValue: true,
@@ -6692,7 +6747,7 @@ function buildComposedFieldingValueMetric(parsed, discipline) {
       key: alias,
       sqlExpression: countProjection,
       label, shortLabel,
-      columnTitle: label,
+      columnTitle,
       higherIsBetter: true, format: "int",
       zeroIsData: true, kind: "total",
     };
@@ -6703,7 +6758,7 @@ function buildComposedFieldingValueMetric(parsed, discipline) {
     perMatch: true,
     sqlExpression: `(${countProjection}) * 1.0 / NULLIF(MAX(pmatch_cte.match_count), 0)`,
     label: `${label} per Match`, shortLabel: `${shortLabel}/M`,
-    columnTitle: `${label} per Match`,
+    columnTitle: `${columnTitle} per Match`,
     higherIsBetter: true, format: "dec2",
     zeroIsData: false, kind: "rate",
   };

@@ -51,6 +51,12 @@ import {
   eligibleComposedFieldingKeys,
   // Wave 3C (C2): registered composed fielding VALUE keys (fcv__…) that still resolve.
   eligibleComposedFieldingValueKeys,
+  // Autocolumn rework Task B (2026-09-26): compose + register the fcv PLAYER keys that back
+  // the fielding Specific Bowler / Specific Batter always-on auto-columns (display-only —
+  // the existing fcv composer supplies the values; no query change).
+  makeComposedFieldingValueKey,
+  registerComposedFieldingValueKeys,
+  encodeFieldingValuePlayer,
   // Fielding cols Wave 2b: the fielding board's list-column keys (fld_*_set).
   fieldingSetColumnKeys,
   // Chunk 1B: per-position breakdown composed keys + the B. Pos. which-values key.
@@ -2114,6 +2120,36 @@ export function activeLeaderboardFilterSources(state) {
     // are simply bounded by it, not fixed to one value, so it never varies usefully
     // as a which-values list; the pill already states the range.
     if (hasMulti(f.inningsNumbers)) push("filter:fld:innings", ["fld_innings_set"]);
+    // Specific Bowler / Specific Batter (autocolumn rework Task B, 2026-09-26; owner
+    // ruling 2026-09-26): ALWAYS-ON labelled auto-columns. Whenever the filter holds ≥1
+    // player, EACH selected player gets the FIVE fielding-tally columns off the EXISTING
+    // fcv_bowler / fcv_batter VALUE composers — Ct / C&B / St / RO + the dismissals TOTAL,
+    // labelled "Ct off <Last>" … "Wkts off <Last>" (bowler) / "Ct v. <Last>" … "v. <Last>"
+    // (batter) by metrics.js. DISPLAY-ONLY: the column VALUE is the composer's own; no
+    // query / metric / filter-semantics change (the Specific Bowler/Batter FILTER itself is
+    // untouched — run-outs stay INCLUDED, the fielder-stats framing). NOT gated on >1 (the
+    // owner ruled the explicit labelled header is the point even for a single pick, whose
+    // value duplicates the narrowed tally). Per-player TAG (`filter:fld:bowler:<id>` /
+    // `filter:fld:batter:<id>`): one tag per player so de-selecting ONE of several tidies
+    // away exactly that player's five columns (Q1a drops the now-inactive tag) — a single
+    // shared tag would strand them. Keys are REGISTERED first so eligibleColumnKeys
+    // (folding eligibleComposedFieldingValueKeys under the board's "batting" ns) — and thus
+    // push()'s addability re-check — accepts them.
+    const FCV_PLAYER_TALLIES = ["catches", "cab", "stumpings", "runouts", "dismissals"];
+    const pushFcvPlayerColumns = (ids, names, dim, tagBase) => {
+      if (!Array.isArray(ids) || ids.length === 0) return;
+      const nameArr = Array.isArray(names) ? names : null;
+      ids.forEach((id, i) => {
+        if (id == null || id === "") return;
+        const nm = nameArr ? (nameArr[i] || id) : (names || id);
+        const value = encodeFieldingValuePlayer(id, nm);
+        const cols = FCV_PLAYER_TALLIES.map((t) => makeComposedFieldingValueKey(value, t, dim, false));
+        registerComposedFieldingValueKeys(cols);
+        push(`${tagBase}:${id}`, cols);
+      });
+    };
+    pushFcvPlayerColumns(f.bowlers, f.bowlerName, "bowler", "filter:fld:bowler");
+    pushFcvPlayerColumns(f.outBatters, f.outBatterName, "batter", "filter:fld:batter");
     // Phase 1.2 (2026-08-25) — audit3 §(v): numeric fielding COUNT conditions (Matches
     // / Catches / Caught & bowled / Stumpings / Run-outs / Total dismissals) never
     // claimed a column — this branch used to `return out` before ever reaching the
