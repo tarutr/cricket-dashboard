@@ -150,9 +150,14 @@ import {
 const BATTING_METRICS = [
   {
     key: "matches",
-    label: "Player Matches",
+    // Batting/bowling alignment (Task B, 2026-09-26): label renamed "Player Matches"
+    // → "Matches" (owner-ruled; all three leaderboard scopes now read "Matches" — the
+    // fielding board's columnsPicker.js call-site label override, previously needed
+    // because this label still said "Player Matches", is now redundant text but
+    // harmless). Display-only: key/sqlExpression unchanged.
+    label: "Matches",
     shortLabel: "Mat",
-    columnTitle: "Player Matches",
+    columnTitle: "Matches",
     discipline: "batting",
     source: "player_matches",
     sqlExpression: "COUNT(DISTINCT match_id)",
@@ -868,9 +873,11 @@ for (const d of DISMISSAL_KINDS) {
 const BOWLING_METRICS = [
   {
     key: "matches",
-    label: "Player Matches",
+    // Batting/bowling alignment (Task B, 2026-09-26): label renamed "Player Matches"
+    // → "Matches" — see the matching batting "matches" spec's comment above.
+    label: "Matches",
     shortLabel: "Mat",
-    columnTitle: "Player Matches",
+    columnTitle: "Matches",
     discipline: "bowling",
     source: "player_matches",
     sqlExpression: "COUNT(DISTINCT match_id)",

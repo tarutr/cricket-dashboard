@@ -842,7 +842,19 @@ export function createColumnsPicker({
   // the metric DEF (and its sqlExpression) stays in metrics.js untouched, so any
   // other consumer (pop-up popover, filters, graph) keeps offering it — this only
   // hides the column from THIS picker.
-  const HIDDEN_COLUMN_KEYS = new Set(["player_of_match", "wickets_per_innings", "four_wicket_hauls"]);
+  // Batting/bowling alignment (Task B, 2026-09-26): the four separate Result
+  // outcome counts (Matches Won/Lost/Tied/No Result) + Toss Won collapse into two
+  // single default-% rows (Win % / Toss Win %, see resultItems below) — the five
+  // base counts are hidden from the generic "impact" offering entirely (their
+  // _pct alts were already hidden via hiddenAlts/toggleAltKeys). res_won/
+  // res_toss_won stay reachable as the toggle's "#" segment on the Win %/Toss
+  // Win % row (COLUMN_TOGGLE_PAIRS still pairs them) — this only hides their OWN
+  // picker row, never the metric. PotM Count + Result Condition are untouched
+  // (owner ruling "Potm/result — leave as is").
+  const HIDDEN_COLUMN_KEYS = new Set([
+    "player_of_match", "wickets_per_innings", "four_wicket_hauls",
+    "res_won", "res_lost", "res_tied", "res_no_result", "res_toss_won",
+  ]);
 
   const BATTING_BASIC_ORDER = [
     "innings", "runs", "balls_faced", "dismissals", "high_score", "fours", "sixes",
@@ -2209,6 +2221,17 @@ export function createColumnsPicker({
     const impact = all.filter(
       (m) => m.section === "impact" && !(isPlainNs && HIDDEN_COLUMN_KEYS.has(m.key)) && !hiddenAlts.has(m.key)
     );
+    // Batting/bowling alignment (Task B, 2026-09-26): Win % (res_won_pct) + Toss Win %
+    // (res_toss_won_pct) as the SINGLE default-displayed Match-dropdown rows replacing
+    // the five separate outcome counts (now hidden above via HIDDEN_COLUMN_KEYS). The
+    // item's own key IS the % metric (mirrors the fielding board's fieldingResultItems
+    // below) — addPlainColumn seeds the % column; the existing count/% toggle
+    // (COLUMN_TOGGLE_PAIRS' res_won/res_toss_won pairs, unchanged) switches it to the
+    // raw count. Plain ns only — matchup has no res_* metrics at all. (Converted to
+    // picker items via plainItems further below, once it's in scope.)
+    const resultMetrics = isPlainNs
+      ? ["res_won_pct", "res_toss_won_pct"].map((k) => all.find((m) => m.key === k)).filter(Boolean)
+      : [];
     // Fielding column reshuffle (Task C): Win % / Toss Win % (metrics.js
     // FIELDING_RESULT_METRIC_SPECS, `isFieldingResult`) are section:"fielding" but must
     // NEVER surface via this generic filter — they're pushed into BOTH BATTING_METRICS
@@ -2340,6 +2363,14 @@ export function createColumnsPicker({
       bposInnIdx >= 0
         ? [...basicItems.slice(0, bposInnIdx + 1), ...bposItem, ...scopeSetItems, ...basicItems.slice(bposInnIdx + 1)]
         : [...basicItems, ...bposItem, ...scopeSetItems];
+    // Batting/bowling alignment (Task B, 2026-09-26): "Matches" moves OUT of the Match
+    // dropdown to the TOP of Basic Stats on the plain batting/bowling boards (owner-
+    // ruled; mirrors the fielding board's own fieldingMatchesItem placement). Matchup
+    // ns is untouched — its Match dropdown keeps "Matches" via matchesMetric below.
+    const matchesBasicItem =
+      isPlainNs && matchesMetric
+        ? [{ type: "plain", key: matchesMetric.key, label: metricDisplayLabel(matchesMetric, formats) }]
+        : [];
     // Cutover S1 (ball-engine-gated, Stage-3 Phase 8): the Ball-Ranges / vs-Opponent
     // which-values columns, offered as their OWN two sections in this discipline's
     // dropdown — mirroring the filter palette's "Ball Ranges" + "Matchup (Vs)" groups.
@@ -2358,7 +2389,7 @@ export function createColumnsPicker({
       : [];
     const opponentSetItems = showWindowSets ? [{ type: "plain", key: VSOPP_SET_KEY, label: "Opponent" }] : [];
     const ownSections = [
-      ...section("Basic Stats", basicWithBpos),
+      ...section("Basic Stats", [...matchesBasicItem, ...basicWithBpos]),
       ...section("Detailed Stats", plainItems(ownDetailed)),
       // Stage-3 M1: matchup mode no longer renders a flat "Dismissals" section — the
       // wicket-type counts are reachable through the "Wicket Type" family control in
@@ -2479,13 +2510,14 @@ export function createColumnsPicker({
     // Fielding column reshuffle (Task C): "Matches" (the fld_matches_cte-backed
     // per-fielder match count, same "matches" metric key the Match dropdown uses on
     // the plain boards) MOVES OUT of the Match dropdown into Basic Stats, at the top —
-    // owner-ruled final order. Label overridden to "Matches" HERE ONLY (a display-site
-    // override, not a metrics.js edit): the shared "matches" metric object's own label
-    // ("Player Matches") stays untouched because the exact same object is also read by
-    // the plain batting/bowling boards' Match dropdown (matchItems below), which keeps
-    // "Player Matches" — that rename is explicitly deferred, not part of this task.
+    // owner-ruled final order. Batting/bowling alignment (Task B, 2026-09-26): the
+    // shared "matches" metric's own label is now "Matches" (renamed in metrics.js, all
+    // three scopes read the same text), so this call site no longer needs its own
+    // hardcoded label override — reads metricDisplayLabel like every other row.
     const fieldingMatchesItem =
-      fieldingSetLeaderboard && matchesMetric ? [{ type: "plain", key: matchesMetric.key, label: "Matches" }] : [];
+      fieldingSetLeaderboard && matchesMetric
+        ? [{ type: "plain", key: matchesMetric.key, label: metricDisplayLabel(matchesMetric, formats) }]
+        : [];
     // Stage-3 Phase 1.1 (2026-08-25): the batting/bowling boards' Fielding Stats section
     // gains the ONE fielding list column whose filter they offer — Dismissed batter's
     // position (drawer.js's `fld_pos` singleton, the only member of FIELDING_SLICE_KEYS).
@@ -2583,11 +2615,19 @@ export function createColumnsPicker({
         : [];
     // Fielding column reshuffle (Task C): "Matches" no longer renders here in fielding
     // mode — it moved to the Fielding dropdown's Basic Stats (fieldingMatchesItem
-    // above). The plain-board branch (matchesMetric under "Player Matches") is
-    // unchanged — that move is explicitly deferred (NOT IN THIS BUILD).
+    // above). Batting/bowling alignment (Task B, 2026-09-26): "Matches" ALSO no longer
+    // renders here on the plain boards — it moved to Basic Stats (matchesBasicItem
+    // above). Matchup ns is the only remaining case that still lists it here (Wave 3A).
+    // resultItems (Win %/Toss Win %) sit right after PotM Count, where the five
+    // outcome counts used to be.
+    const resultItems = plainItems(resultMetrics);
     const matchItems = fieldingMode
       ? [...fieldingMatchSetItems]
-      : [...plainItems([...(matchesMetric ? [matchesMetric] : []), ...impact]), ...matchLevelSetItems];
+      : [
+          ...plainItems([...(isMatchupNs && matchesMetric ? [matchesMetric] : []), ...impact]),
+          ...resultItems,
+          ...matchLevelSetItems,
+        ];
     const matchSections = section("", matchItems);
 
     return {
@@ -2614,9 +2654,20 @@ export function createColumnsPicker({
     // FC-2: the pop-up's FIELDING mode shows only Match + Fielding (its ns maps to
     // "batting" for metrics, so disciplineBucket can't tell — the flag does).
     const fieldingMode = getFieldingMode ? getFieldingMode() : false;
+    // Batting/bowling alignment (Task B, 2026-09-26): the LEADERBOARD's plain batting/
+    // bowling boards also collapse to Match + own-discipline only (same restriction
+    // the pop-up already applies via ownDisciplineOnly, and the fielding board already
+    // applies via fieldingMode above) — cutting the cross-discipline Batting/Bowling/
+    // Fielding dropdown triggers from the OTHER board's offering. Matchup ns
+    // (matchup_batting/matchup_bowling) is NOT isPlainBoard, so its dropdown bar is
+    // untouched. Display-only: this only hides the trigger buttons in buildAddMenuHTML;
+    // columnsPaletteModel above still computes crossSections/crossBasic/crossDetailed
+    // (dormant, unused while no trigger renders them) — the xdisc_cte query machinery
+    // is untouched.
+    const isPlainBoard = ns === "batting" || ns === "bowling";
     const allowedDisc = fieldingMode
       ? new Set(["match", "fielding"])
-      : ownDisciplineOnly
+      : ownDisciplineOnly || isPlainBoard
       ? new Set(["match", disciplineBucket(ns)])
       : null;
     const skeletons = DISCIPLINE_ORDER.map((disc, gi) => {
