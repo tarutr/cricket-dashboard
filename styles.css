@@ -2490,8 +2490,23 @@ body.is-col-resizing {
 }
 /* R0 Step 2: each discipline trigger is wrapped in an .addctl (the positioning context
    for its floating palette), so the WRAPPER is the bar's flex child and carries the
-   sizing while the trigger fills it. */
-.cols-dd-ctl { flex: 1 1 8rem; min-width: 0; }
+   sizing while the trigger fills it.
+   Live-review fix #6 (2026-09-27): this used to be flex:1 1 8rem — a GROWING basis,
+   so the same bar read differently depending on how many triggers it held (two
+   dropdowns stretched into oversized boxes, four squeezed small). A dropdown's width
+   should describe its own label, not the row's leftover space, so the wrapper is now a
+   flat, non-growing standard width (flex-grow/shrink both 0) — every "Player Filters" /
+   "Scope Filters" / "Matchup" / "Match" / "Batting" / "Bowling" / "Fielding" /
+   "Advanced Columns" trigger is the SAME box regardless of sibling count, left-aligned
+   by the bar's own default flex-start, wrapping onto a new line (via .cols-dd-bar's
+   existing flex-wrap) once a row runs out of room. 13.5rem is the narrowest round
+   number that clears the longest label, "Advanced Columns" (measured: its own text
+   needs ~133px before the live count badge + caret + padding on top — 12rem/192px
+   ellipsised it to "Advanced Colu…"; 13.5rem/216px leaves it a few px of slack). Only
+   the desktop/tablet shape changes — the ≤640px media query below still lets a
+   STACKED (one-per-row) mobile column go full width, which is a distinct, deliberate
+   rule. */
+.cols-dd-ctl { flex: 0 0 13.5rem; width: 13.5rem; min-width: 0; }
 .cols-dd-ctl > .cols-dd-trigger { width: 100%; }
 .cols-dd-trigger {
   display: inline-flex;
@@ -4947,6 +4962,41 @@ body.is-row-dragging { cursor: grabbing; user-select: none; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Live-review fix #5 (2026-09-27): make the Search Conditions selects (Gender,
+   Discipline, Preset — real <select>s — and the Format/Team type toggle
+   buttons) match the Advanced Filters dropdowns' (Player Filters / Scope
+   Filters / Matchup, and the column-picker's Match/Batting/Bowling/Fielding —
+   see .cols-dd-caret above) chevron: a small, muted, downward-pointing
+   triangle inset from the right edge with real breathing room around it,
+   instead of each browser's own inconsistent native arrow (or, for Format/
+   Team type, no arrow at all — those are plain buttons, not <select>s, and
+   never had one). One shared SVG chevron (the fill is --color-muted's literal
+   #6b6f76 baked in — a background-image data-URI can't read a CSS custom
+   property) reused across all five controls (Gender, Discipline, Preset,
+   Format, Team type) so the glyph is pixel-identical everywhere. A
+   background-image (rather than a text pseudo-element) works on a native
+   <select> in every engine and sits independently of the Format/Team type
+   buttons' own text-overflow:ellipsis, so long labels ("International +
+   Domestic") still truncate cleanly short of the arrow rather than under it.
+   padding-right reserves the same amount of clear space the text needs so
+   nothing (e.g. "T20", "International") runs up against the box edge or the
+   glyph. Scoped to .filters-popup — the Search Conditions bar's only home
+   (see the ROUND 3 comment above). */
+.filters-popup .filter-group--gender .select,
+.filters-popup .filter-group--discipline .select,
+.filters-popup .filter-bar .date-preset-select,
+.filters-popup .filter-group--format .dropdown__toggle,
+.filters-popup .filter-group--teamtype .dropdown__toggle {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0L5 6L10 0Z' fill='%236b6f76'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 0.6rem auto;
+  padding-right: 1.9rem;
 }
 /* R7 Wave B (item 1): From · To · Preset now share ONE row inside .date-range
    (the preset select moved in from its old stacked .date-presets wrapper).
