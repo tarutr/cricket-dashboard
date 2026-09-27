@@ -775,14 +775,47 @@ export function createColumnsPicker({
   ]);
   const OWN_BUCKET_SET_KEYS = new Set([BATTING_POSITION_SET_KEY, INNINGS_NUMBER_SET_KEY]);
 
-  /** Which of the four dropdowns (match/batting/bowling/fielding) a currently-CHOSEN
-   * column key belongs to, or null for a stray/unrecognised key (never counted). A
-   * cross key (x__<disc>__…) always resolves to its OWN encoded discipline, whatever
-   * kind of key it wraps. Literal set/list keys and "matches" are special-cased first
-   * (their resolved metric carries no section, or the same section:"fielding" as an
-   * unrelated family, so section alone can't place them); a composed fielding key
-   * (fc__…) is always Fielding; everything else falls to its real/virtual metric's
-   * `.section` (impact → Match, fielding → Fielding, else the ns's own bucket). */
+  /** True iff `baseKey` (already cross-unwrapped) was minted by ANY composer family —
+   * every family Task 2 (Advanced Columns, 2026-09-27) moved into its own dropdown:
+   * Team/Opposition/Event/Venue/City/Season/Stage per-value, Phase/Ball/Innings
+   * ranges, Batting Position, Runs-by-Source/Runs-Conceded-by-Source, Wicket Type,
+   * Innings Score Range/Wicket Haul (the isParamComposerKey family), and the
+   * fielding fc__/fcv__ composers (incl. Specific Bowler/Batter). Used ONLY to
+   * classify a currently-CHOSEN key for the badge count below — display-only, mints
+   * nothing. (Cross-wrapped composer keys never reach here — dropdownForKey resolves
+   * a cross key to its own bucket first, unchanged; the cross "Composers" family
+   * stays dormant, as it already was before this task.) */
+  function isComposerBaseKey(baseKey) {
+    return !!(
+      parseComposedPhaseKey(baseKey) ||
+      parseComposedBallKey(baseKey) ||
+      parseComposedInningsKey(baseKey) ||
+      parseComposedPositionKey(baseKey) ||
+      parseComposedTeamKey(baseKey) ||
+      parseComposedOppositionKey(baseKey) ||
+      parseComposedStageKey(baseKey) ||
+      parseComposedEventKey(baseKey) ||
+      parseComposedVenueKey(baseKey) ||
+      parseComposedCityKey(baseKey) ||
+      parseComposedSeasonKey(baseKey) ||
+      parseComposedRunSourceKey(baseKey) ||
+      parseComposedRunSourceConcededKey(baseKey) ||
+      parseComposedWicketTypeKey(baseKey) ||
+      parseComposedParamKey(baseKey) ||
+      parseComposedFieldingKey(baseKey) ||
+      parseComposedFieldingValueKey(baseKey)
+    );
+  }
+
+  /** Which of the five dropdowns (match/batting/bowling/fielding/advanced) a
+   * currently-CHOSEN column key belongs to, or null for a stray/unrecognised key
+   * (never counted). A cross key (x__<disc>__…) always resolves to its OWN encoded
+   * discipline, whatever kind of key it wraps. Literal set/list keys and "matches"
+   * are special-cased first (their resolved metric carries no section, or the same
+   * section:"fielding" as an unrelated family, so section alone can't place them);
+   * ANY composer-minted key (Task 2) is always Advanced Columns; everything else
+   * falls to its real/virtual metric's `.section` (impact → Match, fielding →
+   * Fielding, else the ns's own bucket). */
   function dropdownForKey(key, ns) {
     const { baseKey, cross } = unwrapCrossKey(key);
     if (cross) return disciplineBucket(cross);
@@ -797,7 +830,22 @@ export function createColumnsPicker({
       return disciplineBucket(ns);
     }
     if (baseKey.startsWith("attr_")) return disciplineBucket(ns); // Player Profile columns
-    if (parseComposedFieldingKey(baseKey)) return "fielding";
+    if (isComposerBaseKey(baseKey)) {
+      // The player pop-up (ownDisciplineOnly) is out of scope for Task 2 — its
+      // composers still render INLINE in their original dropdown (see the
+      // ownSections/fieldingSections guards above), so their badge count must keep
+      // counting there too, exactly as before this task: a fielding composer
+      // (fc__/fcv__) under "fielding" (mirrors the old explicit fc__ special case),
+      // every other composer family under the ns's own bucket (mirrors the old
+      // getMetric/section fallback these composed metrics resolved to). Only the
+      // LEADERBOARD (!ownDisciplineOnly) counts a composer key under "advanced".
+      if (ownDisciplineOnly) {
+        return parseComposedFieldingKey(baseKey) || parseComposedFieldingValueKey(baseKey)
+          ? "fielding"
+          : disciplineBucket(ns);
+      }
+      return "advanced";
+    }
     const m = getMetric(baseKey, ns);
     if (!m) return null;
     if (m.section === "impact") return "match";
@@ -809,7 +857,7 @@ export function createColumnsPicker({
    * restore. Counts getColumns(), the same dedup visible-key list the picker itself
    * shows/prunes against, so the badge always agrees with what's actually on screen. */
   function dropdownCounts(ns) {
-    const counts = { match: 0, batting: 0, bowling: 0, fielding: 0 };
+    const counts = { match: 0, batting: 0, bowling: 0, fielding: 0, advanced: 0 };
     for (const key of getColumns()) {
       const dd = dropdownForKey(key, ns);
       if (dd && dd in counts) counts[dd] += 1;
@@ -2187,9 +2235,21 @@ export function createColumnsPicker({
   // one discipline's model into the palette's group/leaf tree, each leaf's run() calling
   // the SAME slot-store add logic the old data-add-* click handlers used.
 
-  /** The four discipline dropdowns, in bar order; the palette skeleton's data-gi is the
-   * INDEX here, which buildColumnsGroups maps back to a discipline. */
-  const DISCIPLINE_ORDER = ["match", "batting", "bowling", "fielding"];
+  /** The dropdowns, in bar order; the palette skeleton's data-gi is the INDEX here,
+   * which buildColumnsGroups maps back to a discipline. Task 2 (Advanced Columns,
+   * 2026-09-27) appends the fifth "advanced" bucket — the composer families,
+   * relocated out of their discipline's own dropdown into this shared one. */
+  const DISCIPLINE_ORDER = ["match", "batting", "bowling", "fielding", "advanced"];
+
+  /** Display label per dropdown bucket — plain capitalised name for the four
+   * original dropdowns, "Advanced Columns" (not just "Advanced") for the new one. */
+  const DROPDOWN_LABEL = {
+    match: "Match",
+    batting: "Batting",
+    bowling: "Bowling",
+    fielding: "Fielding",
+    advanced: "Advanced Columns",
+  };
 
   /** What each discipline dropdown OFFERS: { <discipline>: [{ name, items }] } where
    * item = { type:"plain", key, label } | { type:"composer", kind, label } |
@@ -2398,7 +2458,18 @@ export function createColumnsPicker({
       ...section("Player Profile", profileItems),
       ...section("Ball Ranges", ballRangeSetItems),
       ...section("Matchup (Vs)", opponentSetItems),
-      ...(composerItems.length ? [{ name: "Composers", items: composerItems }] : []),
+      // Task 2 (Advanced Columns, 2026-09-27): the own-discipline composerItems
+      // "Composers" subsection MOVED OUT of here into its own "Advanced Columns"
+      // dropdown (advancedSections below) — composerItems is unchanged (still built
+      // above, isPlainNs-only), only where it renders changes. Scoped to the
+      // LEADERBOARD only (!ownDisciplineOnly): the player pop-up's own picker
+      // (R5, ownDisciplineOnly) is OUT OF SCOPE for this task (never named in the
+      // brief) and must stay byte-identical — its composers (when it has any; most
+      // self-gate off with no loader) keep rendering inline in this SAME dropdown,
+      // exactly as before. matchupComposerItems is untouched/out of scope either
+      // way (matchup ns isn't one of the three boards this task names) and keeps
+      // its existing spot in this same dropdown for every caller.
+      ...(ownDisciplineOnly && composerItems.length ? [{ name: "Composers", items: composerItems }] : []),
       ...(matchupComposerItems.length ? [{ name: "Composers", items: matchupComposerItems }] : []),
     ];
     const crossSections = [
@@ -2557,7 +2628,15 @@ export function createColumnsPicker({
         ...fieldingBaseTallies,
         ...plainBoardFieldingSetItems,
       ]),
-      ...(fieldingComposerItems.length ? [{ name: "Composers", items: fieldingComposerItems }] : []),
+      // Task 2 (Advanced Columns, 2026-09-27): the fielding "Composers" subsection
+      // (fc__ base composers + fcv__ value composers, incl. Specific Bowler/Batter)
+      // MOVED OUT of here into the shared "Advanced Columns" dropdown (advancedSections
+      // below) — fieldingComposerItems is unchanged (still built above), only where it
+      // renders changes. Scoped to the LEADERBOARD fielding board only
+      // (!ownDisciplineOnly): the player pop-up's OWN Fielding mode (FC-2,
+      // ownDisciplineOnly && fieldingMode) is out of scope for this task and keeps
+      // its composers rendered inline in this SAME "Fielding" dropdown, unchanged.
+      ...(ownDisciplineOnly && fieldingComposerItems.length ? [{ name: "Composers", items: fieldingComposerItems }] : []),
     ];
 
     // FC-2: in the pop-up's FIELDING mode the Match dropdown offers only "matches"
@@ -2630,11 +2709,25 @@ export function createColumnsPicker({
         ];
     const matchSections = section("", matchItems);
 
+    // Task 2 (Advanced Columns, 2026-09-27): the shared "Advanced Columns" dropdown
+    // — one "Composers" section, sourced from whichever composer family this board
+    // offers. `fieldingMode` picks the family (fielding board vs the plain batting/
+    // bowling boards); `ownDisciplineOnly` excludes the player pop-up entirely — its
+    // own picker is out of scope for this task and keeps its composers inline (see
+    // the ownSections/fieldingSections guards above), so this dropdown is simply
+    // empty/disabled there. Also empty on the matchup boards (composerItems /
+    // fieldingComposerItems are both [] by their own isPlainNs guard).
+    const advancedComposerItems = ownDisciplineOnly ? [] : fieldingMode ? fieldingComposerItems : composerItems;
+    const advancedSections = advancedComposerItems.length
+      ? [{ name: "Composers", items: advancedComposerItems }]
+      : [];
+
     return {
       match: matchSections,
       batting: bucket === "batting" ? ownSections : crossSections,
       bowling: bucket === "bowling" ? ownSections : crossSections,
       fielding: fieldingSections,
+      advanced: advancedSections,
     };
   }
 
@@ -2665,20 +2758,37 @@ export function createColumnsPicker({
     // (dormant, unused while no trigger renders them) — the xdisc_cte query machinery
     // is untouched.
     const isPlainBoard = ns === "batting" || ns === "bowling";
+    // Task 2 (Advanced Columns, 2026-09-27): "advanced" joins the LEADERBOARD's
+    // restricted sets only — the fielding board gets Match · Fielding · Advanced
+    // Columns; the plain batting/bowling boards get Match · [discipline] · Advanced
+    // Columns. The player pop-up (ownDisciplineOnly) is explicitly EXCLUDED — it is
+    // never named in this task's brief, so it keeps its existing Match + [discipline]
+    // two-dropdown bar exactly as before (its composers, when any are offered, stay
+    // inline in that same dropdown — see the ownSections/fieldingSections guards
+    // above). The unrestricted (null) case — matchup ns, the only remaining caller —
+    // is untouched: DISCIPLINE_ORDER now has five entries so it renders a fifth
+    // trigger there too, same as it already renders a disabled "Fielding" trigger
+    // today (matchup's composerItems/fieldingComposerItems are both empty by their
+    // own isPlainNs guards, so that trigger is simply disabled/empty, never functional).
     const allowedDisc = fieldingMode
-      ? new Set(["match", "fielding"])
-      : ownDisciplineOnly || isPlainBoard
+      ? ownDisciplineOnly
+        ? new Set(["match", "fielding"])
+        : new Set(["match", "fielding", "advanced"])
+      : ownDisciplineOnly
       ? new Set(["match", disciplineBucket(ns)])
+      : isPlainBoard
+      ? new Set(["match", disciplineBucket(ns), "advanced"])
       : null;
     const skeletons = DISCIPLINE_ORDER.map((disc, gi) => {
       if (allowedDisc && !allowedDisc.has(disc)) return "";
-      const label = disc.charAt(0).toUpperCase() + disc.slice(1);
+      const label = DROPDOWN_LABEL[disc] || (disc.charAt(0).toUpperCase() + disc.slice(1));
       const disabled = (model[disc] || []).length === 0;
+      const toggleAriaLabel = disc === "advanced" ? "Open Advanced Columns" : `Add a ${label} column`;
       return paletteSkeletonHTML(gi, {
         ctlClass: "addctl cols-dd-ctl",
         toggleClass: "cols-dd-trigger",
         toggleAttrs: `${disabled ? " disabled" : ""} data-dd="${disc}"`,
-        toggleAriaLabel: `Add a ${label} column`,
+        toggleAriaLabel,
         toggleInner: `<span class="cols-dd-name">${escHtml(label)}</span><span class="cols-dd-badge">${counts[disc] || 0}</span><span class="cols-dd-caret" aria-hidden="true">▾</span>`,
         searchPlaceholder: "Search columns&hellip;",
         searchAriaLabel: "Search columns",
