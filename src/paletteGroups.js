@@ -273,7 +273,21 @@ export function createPaletteGroupsBuilder(deps) {
       }
       const order =
         lane === "player" ? PLAYER_LANE_SECTIONS : lane === "matchup" ? MATCHUP_LANE_SECTIONS : SCOPE_LANE_SECTIONS;
-      return order.filter((name) => bySection.has(name)).map((name) => ({ name, items: bySection.get(name) }));
+      const sections = order.filter((name) => bySection.has(name)).map((name) => ({ name, items: bySection.get(name) }));
+      // Live-review fix #3 (owner, .orchestrator/livereview-fix-plan.md Task 1 Part
+      // B): the fielding board's Player Filters (Fielder Profile / Wicket Types) and
+      // Matchup (Bowler / Dismissed Batter) dropdowns have too few filters to justify
+      // subsection headers — flatten into ONE headerless group, item order preserved
+      // (addPalette.js skips rendering a header for an empty group name). Scope
+      // Filters (Match / Ball Ranges) is untouched — still per-section headers.
+      // Gated strictly to `s.discipline === "fielding"` so batting/bowling's own
+      // Player/Matchup lanes (different section names, more filters each) keep their
+      // existing headers unchanged.
+      if (s.discipline === "fielding" && (lane === "player" || lane === "matchup")) {
+        const items = sections.flatMap((sec) => sec.items);
+        return items.length ? [{ name: "", items }] : [];
+      }
+      return sections;
     };
     const excludeLeaf = (key) => surface === "popup" && POPUP_EXCLUDED_PLAYER_PROFILE_LEAVES.has(key);
     const ns = effectiveNamespace(s);

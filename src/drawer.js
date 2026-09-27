@@ -922,7 +922,17 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
     host: fieldingDimHost,
     store,
     onChange,
-    requestRerender: () => { syncSingletonRows(); renderNumeric(store.get(), true); },
+    // renderAddRow() rebuilds the Player/Scope/Matchup "+ Add condition" dropdown
+    // triggers (their item lists are built once at mount time inside
+    // addPalette.js's mountAddPalette — see renderAddRow's own comment — NOT
+    // re-read on every open), so a data-driven fielding dim's option list
+    // resolving AFTER the dropdowns were last built (always true: the load is
+    // async, the initial render is sync) needs this call too, exactly like
+    // availabilityOnReady's identical three-call pattern below. Its absence was
+    // the #1/#2 bug: Bowler Style / Dismissed Batter Hand (and any other
+    // data-driven fielding dim) loaded their option lists fine, but the already-
+    // built Matchup/Scope dropdown never re-rendered to include them.
+    requestRerender: () => { syncSingletonRows(); renderNumeric(store.get(), true); renderAddRow(); },
   });
 
   // ── "This will come back empty" notice (owner ruling) ──────────────────────

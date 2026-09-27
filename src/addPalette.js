@@ -211,10 +211,16 @@ export function createAddPalette({ buildGroups, keepOpenOnPick = false }) {
     for (const g of buildGroups(gi)) {
       const groupEl = document.createElement("div");
       groupEl.className = "palette__group";
-      const header = document.createElement("div");
-      header.className = "palette__group-header";
-      header.innerHTML = `${escHtml(g.name)}${g.note ? `<span class="palette__group-note"> (${escHtml(g.note)})</span>` : ""}`;
-      groupEl.appendChild(header);
+      // Live-review fix #3 (fielding Player Filters / Matchup flatten): a group with
+      // no name and no note renders NO header — paletteGroups.js's finalize() emits
+      // this shape only for the fielding board's flattened lanes; every other caller
+      // still supplies a non-empty `name`, so this is byte-identical everywhere else.
+      if (g.name || g.note) {
+        const header = document.createElement("div");
+        header.className = "palette__group-header";
+        header.innerHTML = `${escHtml(g.name)}${g.note ? `<span class="palette__group-note"> (${escHtml(g.note)})</span>` : ""}`;
+        groupEl.appendChild(header);
+      }
 
       for (const item of g.items) {
         if (item.kind === "family") {
