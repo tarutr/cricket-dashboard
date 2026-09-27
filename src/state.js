@@ -2622,6 +2622,108 @@ function reconcileMatchupColumns(state) {
 }
 
 /**
+ * IMMEDIATE add-only column reconcile (live-review #7, decisions 50.6 + 47g). When a
+ * filter is ADDED while editing filters in the leaderboard popup, its auto-column must
+ * appear in the popup's column list RIGHT AWAY — instant, like the columns picker (47g) —
+ * while the filtered TABLE + pills stay frozen on the applied snapshot until Search
+ * (decision 50.9, the popup is fully staged for DATA). This is the ADD-ONLY twin of
+ * reconcileLeaderboardColumns / reconcileMatchupColumns: it reuses the SAME
+ * activeLeaderboardFilterSources map (so the columns it adds are byte-identical to what
+ * Search would add) and applies ONLY the additions to state.columns[ns] — plus the
+ * newly-active prune-clear (mirroring the reconcilers' Q3b), so a re-added filter's
+ * ✕'d column reappears exactly as it would at Search.
+ *
+ * It DELIBERATELY does NOT (all of these stay Search-only, so runSearch's full reconcile
+ * behaves byte-identically to as if this never ran):
+ *   • seed the Core preset — a plain batting/bowling board has no columns before its
+ *     first Search; auto-adding a lone filter column ahead of the Core seed would
+ *     misrepresent the picker, so this is gated on the board being seeded (matchup +
+ *     fielding are seeded from init, so they need no gate);
+ *   • REMOVE anything — removal follows the staging model: a filter's column tidies away
+ *     only on the next Search (reconcile* remove-on-remove). Add is instant; remove waits.
+ *   • reset the sort;
+ *   • advance filterSourcesPrev / columnsSeeded — these stay the LAST SEARCH's record, so
+ *     the Search-time reconcile still sees this filter as "newly active" and its
+ *     rank-by-first-filter (decision 76.5/78) + prune-clear fire exactly as before.
+ *
+ * Handles the plain batting/bowling/fielding board AND matchup mode via the SAME ns
+ * dispatch the reconcilers use (effectiveNamespace + activeLeaderboardFilterSources' own
+ * matchup branch), writing state.columns[ns]. Returns a store patch touching ONLY
+ * columns[ns]/columnOrigins[ns]/prunedColumns[ns], or null when there is nothing new to
+ * add — idempotent, so it is safe to call on EVERY filter change. Frozen under "Keep
+ * Selected Columns" (Q4a), like both reconcilers. DISPLAY-ONLY: never a query builder or
+ * a number (each add/removal is one independent SELECT expression).
+ */
+export function autoAddLeaderboardColumns(state) {
+  const disc = state.discipline;
+  if (disc !== "batting" && disc !== "bowling" && disc !== "fielding") return null;
+  if (state.keepColumns) return null; // Keep ON freezes ALL automatic management (Q4a)
+  const ns = effectiveNamespace(state);
+  const matchup = ns !== disc;
+  // Seed gate (plain batting/bowling only): before the FIRST Search these open EMPTY
+  // (seeded on first Search). Fielding + matchup carry fixed defaults from init, so
+  // columns[ns] is always populated there and no gate is needed.
+  if (!matchup && disc !== "fielding" && !((state.columnsSeeded || {})[disc])) return null;
+
+  const slots = (state.columns[ns] || []).map((s) => ({ ...s }));
+  const origins = { ...((state.columnOrigins || {})[ns] || {}) };
+  const pruned = new Set((state.prunedColumns || {})[ns] || []);
+  const prunedSizeBefore = pruned.size;
+
+  const sources = activeLeaderboardFilterSources(state); // plain/fielding OR matchup branch
+  const prevTags = new Set((state.filterSourcesPrev || {})[ns] || []);
+
+  // Q3b (mirror): a filter active SINCE the last Search clears its columns' prune, so a
+  // re-added filter's column reappears immediately — exactly as it would at Search.
+  for (const { tag, cols } of sources) {
+    if (!prevTags.has(tag)) for (const c of cols) clearPrunedIdentity(pruned, c);
+  }
+
+  // ADD each active filter's column (skip pruned) — the reconcilers' add loop, MINUS
+  // removal. New filter columns land after the last preset-or-filter column (plain) or
+  // after the last filter column / at the end (matchup), matching each reconciler's
+  // insertBoundary. `added` tracks a genuine change so we can no-op (return null) when
+  // there is nothing new.
+  let added = false;
+  const insertBoundary = () => {
+    let idx = matchup ? slots.length : 0;
+    for (let i = 0; i < slots.length; i++) {
+      const o = origins[slots[i].id] || [];
+      const managed = matchup
+        ? o.some((x) => x.startsWith("filter:"))
+        : o.some((x) => x === "preset" || x.startsWith("filter:"));
+      if (managed) idx = i + 1;
+    }
+    return idx;
+  };
+  for (const { tag, cols } of sources) {
+    for (const c of cols) {
+      if (isPrunedIdentity(pruned, c)) continue;
+      const existing = slots.find((s) => sameColumnIdentity(s.key, c));
+      if (existing) {
+        const next = addOriginTag(origins[existing.id], tag);
+        if (next !== origins[existing.id]) {
+          origins[existing.id] = next;
+          added = true;
+        }
+      } else {
+        const slot = makeSlot(c);
+        origins[slot.id] = [tag];
+        slots.splice(insertBoundary(), 0, slot);
+        added = true;
+      }
+    }
+  }
+
+  if (!added && pruned.size === prunedSizeBefore) return null; // nothing changed → no store churn
+  return {
+    columns: { ...state.columns, [ns]: slots },
+    columnOrigins: { ...(state.columnOrigins || {}), [ns]: origins },
+    prunedColumns: { ...(state.prunedColumns || {}), [ns]: [...pruned] },
+  };
+}
+
+/**
  * Preset applied ON PICK (the toolbar <select>) or on a discipline/format resync:
  * swap the old preset's columns for `presetKeys`, KEEP filter + manual columns (Q2a),
  * clear prunes for the new preset's keys, and mark the discipline seeded. Sort resets

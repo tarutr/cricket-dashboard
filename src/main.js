@@ -5,7 +5,7 @@
 // and do the initial render.
 
 import { initDB, getManifest, prewarmBallEngine, setDeliveryWindow, setOpponentPlayer } from "./db.js";
-import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, pruneDeliveryWindowForFormats, effectiveNamespace, slotKeys, reconcileSlots, reconcileLeaderboardColumns, applyLeaderboardPresetPatch, defaultLeaderboardSort } from "./state.js";
+import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, pruneDeliveryWindowForFormats, effectiveNamespace, slotKeys, reconcileSlots, reconcileLeaderboardColumns, autoAddLeaderboardColumns, applyLeaderboardPresetPatch, defaultLeaderboardSort } from "./state.js";
 import { resolveDataAvail, getResolvedDataAvail } from "./dataAvailability.js";
 import { mountFilters } from "./filters.js";
 import { mountFilterDrawer } from "./drawer.js";
@@ -357,6 +357,13 @@ function onFiltersChanged() {
   // for the same honesty reason — a phase window on red ball would silently empty
   // the board (phase IS NULL there). No-op flag-OFF (deliveryWindow is null).
   pruneDeliveryWindowForFormats(store);
+  // Live-review #7 (decisions 50.6 + 47g): a filter's auto-column appears in the popup's
+  // column list the INSTANT the filter goes active — add-only, on the live/pending store,
+  // AFTER the prunes above so it works on the valid post-scope state. This never re-queries,
+  // never touches the applied snapshot/pills, and never removes a column (removal still
+  // waits for Search, decision 50.9) — so the frozen table + pills stay put; only the
+  // picker's column list gains the new column now (via the store hook's picker refresh).
+  autoAddColumnsForFilters();
   // Group 3: keep the numbers-path availability gate (state.dataAvail) in step with
   // the current gender. Sync from the boot-prewarmed cache SYNCHRONOUSLY so any
   // reader below — pills and, critically, the graph's onScopeChanged (which builds
@@ -586,6 +593,29 @@ function autoManageColumns() {
   // a (re)seed the columns ARE that discipline's default, so a later format change can
   // still re-derive the owner's Red-Ball SR→BpD swap.
   if (seeding) lastAppliedDefaults[state.discipline] = defaultColumnsFor(state.discipline, state.formats);
+}
+
+/**
+ * Live-review #7 (decisions 50.6 + 47g): the IMMEDIATE half of the column engine. When a
+ * filter is added while editing the leaderboard popup, its auto-column must appear in the
+ * popup's column list the MOMENT the filter goes active — instant, like the columns picker
+ * itself — while the filtered TABLE + pills stay frozen on the applied snapshot until
+ * Search (decision 50.9). This runs on every filter change (via onFiltersChanged) and
+ * delegates to state.js's autoAddLeaderboardColumns, the ADD-ONLY twin of
+ * reconcileLeaderboardColumns: it reuses the SAME activeLeaderboardFilterSources map (so
+ * the columns are byte-identical to what Search would add) and applies ONLY the additions
+ * to state.columns[ns]. It does NOT seed Core, REMOVE columns, reset the sort, re-query the
+ * table, or advance filterSourcesPrev/columnsSeeded — so removal still waits for Search
+ * (staged model), the frozen table/pills never move, and runSearch's full reconcile still
+ * sees the filter as newly-active (rank-by-first-filter intact). Idempotent → returns null
+ * (no store.set) when there is nothing new to add. Writing state.columns[ns] refreshes the
+ * inline picker via the store hook's syncToolbar → columnsPicker.refresh(). Display/state
+ * only — no query builder or number moves.
+ */
+function autoAddColumnsForFilters() {
+  const patch = autoAddLeaderboardColumns(store.get());
+  if (!patch) return;
+  store.set(patch);
 }
 
 /**
