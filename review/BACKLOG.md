@@ -141,6 +141,13 @@ founding membership + price** to start; keep flexible so parts can stay public l
 partial-public split is not yet decided — build everything gate-able so it stays possible). Backend handoff
 context lives in the local-only (gitignored) `pre_launch_handoff/` pack.
 
+## 18. Delete the orphan `players.parquet` — **post-cut; owner ruling 2026-09-28; NOT built**
+[data] [app] · `players.parquet` (player_id + oldest registry name) has never been queried since it was registered in
+Phase 1 (2026-07-06): search reads names from `player_matches` because this file keeps only the OLDEST name. The new
+(ball-engine) site does not download it. **After the cut**, delete it everywhere: `export_parquet.py` (`sql_players`,
+`EXPORT_FILES`, content-type map, the write call), `src/config.js` `PARQUET_FILES`, `src/db.js` `VIEWS`, and SPEC.md.
+Not before the cut — the live site creates a view over it at boot, so removing the file early would break that boot.
+
 ---
 
 ## Deleted (do not include)
