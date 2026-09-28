@@ -4,13 +4,13 @@ Static cricket statistics explorer over the full Cricsheet dataset — DuckDB-WA
 
 ## Architecture
 
-Static browser-only site. DuckDB-WASM runs on the client and issues HTTPS range requests to Parquet files hosted on Cloudflare R2. The pipeline (GitHub Actions, `.github/workflows/pipeline.yml`) exports Parquet + manifest every 6 hours by running SQL against a local `cricket.duckdb` database (the source of truth) and uploading results to R2. Vercel hosts the static site (index.html + ES modules, no build step). The frontend is vanilla JS modules with no framework — the only bundled dependency is DuckDB-WASM (vendored locally in `vendor/`).
+Static browser-only site. DuckDB-WASM runs on the client and issues HTTPS range requests to Parquet files hosted on Cloudflare R2. The pipeline (GitHub Actions, `.github/workflows/pipeline.yml`) exports Parquet + manifest once a day by running SQL against a local `cricket.duckdb` database (the source of truth) and uploading results to R2. Vercel hosts the static site (index.html + ES modules, no build step). The frontend is vanilla JS modules with no framework — the only bundled dependency is DuckDB-WASM (vendored locally in `vendor/`).
 
 ## Data pipeline
 
 `cricket-dashboard` is the primary and only owner of `cricket.duckdb` on Cloudflare
 R2. A single GitHub Actions workflow, `.github/workflows/pipeline.yml` ("Data
-pipeline"), runs the whole chain every 6 hours (03:47/09:47/15:47/21:47 UTC, and
+pipeline"), runs the whole chain once a day (03:47 UTC, and
 on manual dispatch),
 sequentially:
 
@@ -136,7 +136,7 @@ in `review/owner_decisions.md`.
 
 ## Triggering a data refresh
 
-Data refreshes automatically every 6 hours (03:47/09:47/15:47/21:47 UTC) via the "Data pipeline" GitHub
+Data refreshes automatically once a day (03:47 UTC) via the "Data pipeline" GitHub
 Action. To refresh manually: GitHub → Actions → "Data pipeline" → Run workflow.
 See "Data pipeline" above for the full download → ingest → export chain, the
 Parquet export's own validation gates, and the `DB_UPLOAD_ENABLED` latch (now set

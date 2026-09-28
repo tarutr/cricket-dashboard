@@ -2,7 +2,7 @@ name: Data pipeline
 
 on:
   schedule:
-    - cron: '47 3,9,15,21 * * *'
+    - cron: '47 3 * * *'  # once a day, 03:47 UTC (owner ruling 2026-09-28)
   workflow_dispatch:
 
 concurrency:
