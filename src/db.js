@@ -678,7 +678,47 @@ async function loadDuckDB(onProgress) {
     );
   }
 
+  try {
+    // Perf switch (owner decision, 2026-09-28): without this, duckdb-wasm fetches
+    // each remote Parquet file WHOLE (measured: a footer-only COUNT(*) on a 15.5 MB
+    // file took 15.0s; boot ~50s). These flags force genuine HTTP range requests
+    // (2.2s / ~9.5s, anchors identical). `query`, `path` and `accessMode` are left
+    // out on purpose: this is the only open() call, so omitted fields keep
+    // duckdb-wasm's compiled defaults — SUMs still arrive as BigInt (normalizeValue).
+    await instance.open({
+      filesystem: {
+        reliableHeadRequests: true,
+        allowFullHTTPReads: false,
+        forceFullHTTPReads: false,
+      },
+    });
+  } catch (e) {
+    throw makeError(
+      e,
+      `Failed to configure DuckDB-WASM's filesystem (ranged HTTP reads). The vendored duckdb-wasm build may not support this option.`
+    );
+  }
+
   return { duckdb, db: instance };
+}
+
+// A file missing its manifest entry (sha256_12) gets a timestamp version, cached
+// per file so registerData and prewarmBallEngine build the SAME URL (the prewarm
+// must warm the exact URL DuckDB reads).
+const fallbackParquetVersions = new Map();
+
+/** The versioned R2 URL for a Parquet file, from the loaded manifest's content
+ * hash (or a cached fallback timestamp — see fallbackParquetVersions above).
+ * The ONE place this URL is computed, used by both registerData
+ * (registerFileURL) and prewarmBallEngine, so they always agree. */
+function parquetFileUrl(name, manifestData) {
+  const fileInfo = manifestData?.files?.[name];
+  let version = fileInfo?.sha256_12;
+  if (version == null) {
+    if (!fallbackParquetVersions.has(name)) fallbackParquetVersions.set(name, Date.now());
+    version = fallbackParquetVersions.get(name);
+  }
+  return `${DATA_BASE_URL}${name}?v=${version}`;
 }
 
 /**
@@ -696,9 +736,7 @@ async function registerData(duckdbMod, dbInstance, connection, manifestData, onP
   if (onProgress) onProgress({ stage: "register" });
   await Promise.all(
     PARQUET_FILES.map(async (name) => {
-      const fileInfo = manifestData?.files?.[name];
-      const version = fileInfo?.sha256_12 ?? Date.now();
-      const url = `${DATA_BASE_URL}${name}?v=${version}`;
+      const url = parquetFileUrl(name, manifestData);
       try {
         await dbInstance.registerFileURL(name, url, duckdbMod.DuckDBDataProtocol.HTTP, false);
       } catch (e) {
@@ -924,8 +962,10 @@ export function prewarmBallEngine() {
   if (!engineOn || prewarmed) return;
   prewarmed = true;
   const name = "deliveries_m_t20.parquet";
-  const version = manifest?.files?.[name]?.sha256_12 ?? "";
-  const url = `${DATA_BASE_URL}${name}${version ? `?v=${version}` : ""}`;
+  // Same URL registerData used to registerFileURL() this file (see
+  // parquetFileUrl) — otherwise this fetch warms a different URL than the one
+  // DuckDB's ranged reads actually hit, and pays for nothing.
+  const url = parquetFileUrl(name, manifest);
   try {
     // Fire-and-forget; drain the body so the whole file lands in the HTTP cache
     // under the same URL DuckDB's ranged reads will use.
