@@ -14,8 +14,31 @@ import { mountTable } from "./table.js";
 import { mountOmnisearch } from "./omnisearch.js";
 import { mountPlayerPopup } from "./playerPopup.js";
 import { getMetric } from "./metrics.js";
-import { mountGraph } from "./graph/graph.js";
+import { GRAPHS_ENABLED } from "./config.js";
 import { showToast } from "./toast.js";
+
+// Graphs (owner ruling 2026-09-28: off the public site pending a UX rework):
+// graph.js and Chart.js are only loaded when GRAPHS_ENABLED; graphController
+// stays null otherwise and every call site is null-safe.
+
+/** Injects the /vendor/chartjs/chart.umd.min.js <script> tag (removed from
+ * index.html's static markup so it is never downloaded when GRAPHS_ENABLED
+ * is false) and resolves once Chart.js has actually loaded. Idempotent —
+ * safe to call more than once; later calls reuse the same in-flight/settled
+ * promise so the script is only ever appended once. */
+let chartJsLoadPromise = null;
+function loadChartJs() {
+  if (typeof window !== "undefined" && window.Chart) return Promise.resolve();
+  if (chartJsLoadPromise) return chartJsLoadPromise;
+  chartJsLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "/vendor/chartjs/chart.umd.min.js";
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Could not load Chart.js"));
+    document.head.appendChild(script);
+  });
+  return chartJsLoadPromise;
+}
 
 const initStatusEl = document.getElementById("init-status");
 const appContentEl = document.getElementById("app-content");
@@ -25,6 +48,8 @@ const footerDataDateEl = document.getElementById("footer-data-date");
 // change (default columns + sort-key fallback) is handled via the
 // onDisciplineChanged callback passed to mountFilters below.
 const viewToggleEl = document.querySelector('[data-role="view"]');
+// Graphs off → the page is just Stats: hide the whole Stats|Graphs switch.
+if (!GRAPHS_ENABLED && viewToggleEl) viewToggleEl.hidden = true;
 const filterBarEl = document.getElementById("filter-bar");
 // F2: #pills-bar and #player-search-section are gone — pills and the table
 // search box now live INSIDE #table-area's own results toolbar (built by
@@ -80,7 +105,7 @@ function renderInitError(err, retryFn) {
 let store;
 let tableController;
 let filterController;
-let graphController;
+let graphController = null; // stays null when GRAPHS_ENABLED is false
 let drawerController;
 let pillsController;
 let playerPopupController;
@@ -278,7 +303,7 @@ function showTableView() {
 function applyView() {
   const state = store.get();
   const view = state.view;
-  if (view === "graph") {
+  if (GRAPHS_ENABLED && view === "graph" && graphController) {
     showGraphView();
     return graphController.onShow();
   }
@@ -337,7 +362,7 @@ async function mergeDataAvail(gender) {
   }
   if (store.get().gender !== gender || store.get().dataAvail === avail) return;
   store.set({ dataAvail: avail });
-  if (store.get().view === "graph" && graphController) graphController.onScopeChanged();
+  if (GRAPHS_ENABLED && store.get().view === "graph" && graphController) graphController.onScopeChanged();
 }
 
 /**
@@ -385,7 +410,7 @@ function onFiltersChanged() {
   // keeps the toolbar controls + the Search dirty cue in step. Graph view still
   // follows scope changes live.
   if (tableController) tableController.syncToolbar();
-  if (store.get().view === "graph") {
+  if (GRAPHS_ENABLED && store.get().view === "graph" && graphController) {
     graphController.onScopeChanged();
   }
   return Promise.resolve(null);
@@ -685,8 +710,12 @@ function mountTableToolbarExtras({ searchInputEl, searchResultsEl, pillsHostEl }
 
 function boot() {
   renderInitLoading({ stage: "manifest" });
+  // Graphs on: start loading Chart.js + graph.js in parallel with initDB
+  // (awaited before mountGraph below), matching the old static-load timing.
+  const graphJsPreload = GRAPHS_ENABLED ? loadChartJs() : undefined;
+  const graphModulePreload = GRAPHS_ENABLED ? import("./graph/graph.js") : undefined;
   initDB((progress) => renderInitLoading(progress))
-    .then(() => {
+    .then(async () => {
       const manifest = getManifest();
       maxDate = manifest?.data?.max_match_date || null;
       minDate = manifest?.data?.min_match_date || null;
@@ -1093,21 +1122,28 @@ function boot() {
         // exists there (onShow() first, in case Graphs has never been shown
         // this session and needs its initial seed).
         onGraphPlayer: (id, name) => {
+          if (!GRAPHS_ENABLED || !graphController) return;
           store.set({ view: "graph" });
           applyView().then(() => graphController.addPlayerFromOutside(id, name));
         },
       });
-      graphController = mountGraph(graphAreaEl, store, {
-        // Decision 46f: whether the Stats tab has ever been searched — gates
-        // Graphs' own empty-state vs. seeding its player pool from the
-        // current filtered set (see graph.js's onShow()/seedSelection()).
-        hasStatsResults: () => tableController.hasResults(),
-        // R7 Wave 2 (item 19): the graph's "Clear filters" button clears the
-        // SHARED filters through the one reset path, staying in the Graphs tab.
-        onClearFilters: () => clearAll({ returnToTable: false }),
-      });
+      // Graphs off → graph.js (and its boot-time filter drawer) never loads.
+      if (GRAPHS_ENABLED) {
+        await graphJsPreload;
+        const { mountGraph } = await graphModulePreload;
+        graphController = mountGraph(graphAreaEl, store, {
+          // Decision 46f: whether the Stats tab has ever been searched — gates
+          // Graphs' own empty-state vs. seeding its player pool from the
+          // current filtered set (see graph.js's onShow()/seedSelection()).
+          hasStatsResults: () => tableController.hasResults(),
+          // R7 Wave 2 (item 19): the graph's "Clear filters" button clears the
+          // SHARED filters through the one reset path, staying in the Graphs tab.
+          onClearFilters: () => clearAll({ returnToTable: false }),
+        });
+      }
 
       viewToggleEl.addEventListener("click", (e) => {
+        if (!GRAPHS_ENABLED) return; // the switch is hidden anyway; belt-and-braces
         const btn = e.target.closest(".segmented__btn");
         if (!btn) return;
         const view = btn.dataset.value;

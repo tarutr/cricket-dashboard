@@ -34,6 +34,11 @@ export const PARQUET_FILES = [
 
 export const VENDOR_DUCKDB = "/vendor/duckdb-wasm/";
 
+// Owner ruling 2026-09-28: graphs are switched OFF the public site pending a
+// UX rework — flip this back to true to re-enable the Graphs tab, the
+// "Player Graphs" popup button, and Chart.js loading, all in one place.
+export const GRAPHS_ENABLED = false;
+
 // Ball-grain rebuild (Wave 2a, owner decision 67): the `?engine=ball` URL param
 // switches the `batting`/`bowling` views from the pre-aggregated innings parquet
 // to a live reconstruction from the six delivery files (src/ballEngine.js, wired

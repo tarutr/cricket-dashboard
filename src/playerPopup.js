@@ -34,8 +34,9 @@
 // kept only so this module's call signature doesn't have to change either.
 
 import { mountPlayerPage } from "./playerPage.js";
-import { mountPlayerGraphChooser } from "./playerGraphChooser.js";
-import { enterWithChoice } from "./graph/graph.js";
+import { GRAPHS_ENABLED } from "./config.js";
+// playerGraphChooser.js + graph.js are dynamically imported only when
+// GRAPHS_ENABLED (owner ruling 2026-09-28: graphs off the public site).
 
 export function mountPlayerPopup(hostEl, store, { onGraphPlayer } = {}) {
   hostEl.innerHTML = `
@@ -67,15 +68,26 @@ export function mountPlayerPopup(hostEl, store, { onGraphPlayer } = {}) {
   // unwired here) so reviving the feature later is just re-pointing
   // onGraphPlayer below back at chooser.open(); the actual "do nothing" fix
   // is entirely in onGraphPlayer, a few lines down.
-  const chooserHost = document.createElement("div");
-  document.body.appendChild(chooserHost);
-  const chooser = mountPlayerGraphChooser(chooserHost, {
-    onConfirm: ({ chartType, metricKey, player }) => {
-      close(); // the player popup itself — task 2's "close the chooser and the player popup"
-      switchToGraphsView();
-      enterWithChoice({ chartType, metricKey, player });
-    },
-  });
+  //
+  // Owner ruling 2026-09-28: on top of that, the whole chooser is now only
+  // MOUNTED (via dynamic import) when GRAPHS_ENABLED — `chooser` stays null
+  // otherwise, and every call site below is null-safe.
+  let chooser = null;
+  if (GRAPHS_ENABLED) {
+    const chooserHost = document.createElement("div");
+    document.body.appendChild(chooserHost);
+    import("./playerGraphChooser.js").then(({ mountPlayerGraphChooser }) => {
+      chooser = mountPlayerGraphChooser(chooserHost, {
+        onConfirm: ({ chartType, metricKey, player }) => {
+          close(); // the player popup itself — task 2's "close the chooser and the player popup"
+          switchToGraphsView();
+          import("./graph/graph.js").then(({ enterWithChoice }) => {
+            enterWithChoice({ chartType, metricKey, player });
+          });
+        },
+      });
+    });
+  }
 
   // "Graph this player" made INERT (owner note 17, fix round): playerPage.js
   // has no notion of "popup" or "chooser" — it just reports which player was
@@ -144,7 +156,7 @@ export function mountPlayerPopup(hostEl, store, { onGraphPlayer } = {}) {
    * scoped to whatever Format/Date/Team type the table currently has applied.
    */
   function open(id, name, opts = {}) {
-    chooser.close(); // defensive: a stale chooser shouldn't survive a reopen for a different player
+    if (chooser) chooser.close(); // defensive: a stale chooser shouldn't survive a reopen for a different player
     page.showPlayer(id, name, opts);
     els.popup.hidden = false;
     els.body.scrollTop = 0;
@@ -152,7 +164,7 @@ export function mountPlayerPopup(hostEl, store, { onGraphPlayer } = {}) {
   }
 
   function close() {
-    chooser.close(); // defensive: never leave the chooser orphaned over a closed popup
+    if (chooser) chooser.close(); // defensive: never leave the chooser orphaned over a closed popup
     els.popup.hidden = true;
   }
 

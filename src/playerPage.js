@@ -45,6 +45,7 @@ import {
   fetchBowlingMatchups,
 } from "./playerData.js";
 import { getManifest } from "./db.js";
+import { GRAPHS_ENABLED } from "./config.js";
 import { escHtml, escAttr } from "./html.js";
 import { mountPlayerFiltersTab } from "./playerFiltersTab.js";
 import { headerPhotoHTML, scopeLine, normalizeBattingCore, battingGridHTML, bowlingGridHTML } from "./playerSections.js";
@@ -153,7 +154,8 @@ function headerRowHTML({ showControls = false } = {}) {
         <button type="button" class="segmented__btn" data-value="bowling">Bowling</button>
       </div>`
     : "";
-  const graphBtnHTML = showControls
+  // Omitted entirely while GRAPHS_ENABLED is false (owner ruling 2026-09-28).
+  const graphBtnHTML = showControls && GRAPHS_ENABLED
     ? `<button type="button" class="btn btn--ghost player-page__graph-btn" data-role="graph-player">Player Graphs</button>`
     : "";
   return `<div class="player-page__header-row">
