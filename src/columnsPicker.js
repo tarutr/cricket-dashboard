@@ -819,7 +819,15 @@ export function createColumnsPicker({
   function dropdownForKey(key, ns) {
     const { baseKey, cross } = unwrapCrossKey(key);
     if (cross) return disciplineBucket(cross);
-    if (baseKey === "matches") return "match";
+    if (baseKey === "matches") {
+      // Count "matches" where it is listed: the Match dropdown under a matchup and in
+      // the pop-up's fielding mode; otherwise Basic Stats (the Fielding dropdown on the
+      // fielding leaderboard, the own-discipline dropdown elsewhere).
+      if (ns === "matchup_batting" || ns === "matchup_bowling") return "match";
+      if (ownDisciplineOnly && getFieldingMode && getFieldingMode()) return "match";
+      if (!ownDisciplineOnly && getFieldingMode && getFieldingMode()) return "fielding";
+      return disciplineBucket(ns);
+    }
     if (MATCH_LEVEL_SET_KEYS.has(baseKey)) return "match";
     if (FIELDING_BUCKET_SET_KEYS.has(baseKey)) return "fielding";
     if (OWN_BUCKET_SET_KEYS.has(baseKey)) {
@@ -848,12 +856,8 @@ export function createColumnsPicker({
     }
     const m = getMetric(baseKey, ns);
     if (!m) return null;
-    // Win % merge (2026-09-28) — badge placement KEPT exactly as it was: on the fielding
-    // board, Win % / Toss Win % (+ their count alts) were a separate section:"fielding"
-    // family and so counted on the FIELDING badge, although that board lists them in its
-    // Match dropdown. The merged family is section:"impact"; this line preserves the old
-    // count (flagged to the owner — delete it to count them under Match instead).
-    if (m.onFieldingBoard && getFieldingMode && getFieldingMode()) return "fielding";
+    // Win % / Toss Win % are section:"impact" on every board, fielding included, and
+    // are listed in the Match dropdown there too — so they count under Match.
     if (m.section === "impact") return "match";
     if (m.section === "fielding") return "fielding";
     return disciplineBucket(ns);
