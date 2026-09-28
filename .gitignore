@@ -16,3 +16,5 @@ reference/ingest.py
 article_ideas/
 # Backend handoff pack for The Cordon (a separate project) — local-only briefing, never a cricdb repo file
 pre_launch_handoff/
+# Local planning/progress notes — never committed (owner ruling). Already-tracked files (e.g. event_canonical_map.json) stay tracked.
+.orchestrator/
