@@ -2699,8 +2699,14 @@ export function createColumnsPicker({
     // above). Matchup ns is the only remaining case that still lists it here (Wave 3A).
     // resultItems (Win %/Toss Win %) sit right after PotM Count, where the five
     // outcome counts used to be.
+    // The pop-up's own fielding mode offers only Matches here (owner, 2026-09-28;
+    // pop-up picker to be revisited later) — fieldingMatchSetItems is leaderboard-only.
     const matchItems = fieldingMode
-      ? [...fieldingMatchSetItems]
+      ? ownDisciplineOnly
+        ? matchesMetric
+          ? [{ type: "plain", key: matchesMetric.key, label: metricDisplayLabel(matchesMetric, formats) }]
+          : []
+        : [...fieldingMatchSetItems]
       : [
           ...plainItems([...(isMatchupNs && matchesMetric ? [matchesMetric] : []), ...impact]),
           ...resultItems,
