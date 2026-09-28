@@ -1440,3 +1440,36 @@ SA Yadav 60·1,544·29.13·150.34; vs Spin 38/454/140.99; Bumrah vs RHB pos1-2 2
       (Team/Opposition/Event/Venue/City/Season/Stage/Result/Toss — "Catches vs Australia"). Additive to the sacred
       fielding CTE; anchor 2,345 held; verified vs independent DuckDB. Commits bff32df + 0b3035e. **NO** dismissed-
       batter-role (owner: not a good enough fielding filter); fielding preset rework stays BACKLOG.
+
+## 2026-09-27/28 — Fielding rework + cross-scope alignment + auto-column rule refinement (UI approved)
+
+91. **FIELDING REWORK, BATTING/BOWLING ALIGNMENT, AUTO-COLUMN RULE REFINEMENT — BUILT + committed
+    (ball-layer, unpushed) + OWNER UI-APPROVED 2026-09-28.** Commits e395543..1d316b5. Full detail:
+    `.orchestrator/HANDOFF-perf-next.md` + the `.orchestrator/*-build-plan.md` set.
+    - **Fielding filters:** new **Matchup** dropdown holding the 5 opponent-side filters (Bowler
+      Style, Specific Bowler, Dismissed Batter's Position/Hand, Specific Batter) moved out of Scope —
+      they KEEP match-all/any (fielding has no separate matchup query, so it's an offering move, not
+      always-AND). Owner: it's the FIELDER's stats, so run-outs stay INCLUDED everywhere (bowler/
+      batter is context, not credit). "Total Dismissals" filter → "Fielding Dismissals". Fielding
+      Player + Matchup dropdowns are FLAT (no subsection headers; Scope keeps Match/Ball-Ranges).
+    - **Win % = wins ÷ matches WITH A RESULT** (no-results excluded, ties in) — the CANONICAL formula;
+      batting/bowling changed to match (was ÷ total). **Toss Win % = ÷ ALL matches.** Both toggle to a
+      count. The four outcome count columns (Won/Lost/Tied/No-Result) COLLAPSE into one Win %; Toss Won
+      → Toss Win %. Matches → top of Basic Stats (all scopes). Batting/bowling cut to two column
+      dropdowns.
+    - **Specific Bowler/Batter always-on labelled columns:** `Ct/C&B/St/RO off <lastname>` + `Wkts off
+      <lastname>` (bowler); `… v. <lastname>` + `v. <lastname>` (batter). Shorthand from DISMISSAL_KINDS.
+    - **AUTO-COLUMN RULE — REFINES "every filter gets a column":** a filter auto-adds a column ONLY
+      when the cell value would VARY row-to-row; else the toolbar PILL suffices. Buckets: profile +
+      range filters = pill-only; numeric stats always; categoricals = column only when >1 value picked;
+      Match Result → Win % gated on >1 outcome; Toss Result = pill-only; PotM = column only on "Yes";
+      Specific Bowler/Batter = always-on. **Auto-columns appear in the popup IMMEDIATELY on
+      filter-change** (add-only pass; table + pills still staged to Search — 50.6 + 47g + 50.9).
+    - **"Advanced Columns" dropdown** per scope holds the composer columns (moved out of the discipline
+      dropdown). Owner name = "Advanced Columns".
+    - **Live-review fixes:** the missing fielding Matchup dims were a REAL bug (renderAddRow not called
+      on async dim-option load) — data was fine (the "Bowler Style dormant" hypothesis was WRONG for the
+      dim). Dropdown chevrons/width/left-align consistency. **Browser caching** (dev http.server, no
+      cache headers) had hidden real fixes during review — use no-cache server + incognito.
+    - **NEXT (owner-chosen):** a read-only PERFORMANCE/load-time profiling pass (whole site slow;
+      Win%/Toss Win% col ~30s; all client-side DuckDB-WASM over Parquet/R2). Then pre-cut items + the cut.
