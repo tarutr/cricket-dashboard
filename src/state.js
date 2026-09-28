@@ -1525,8 +1525,11 @@ export function eligibleColumnKeys(discipline, formats) {
   // batting/bowling which-values columns a scope filter would otherwise auto-add.
   if (discipline === "fielding") {
     const keys = new Set(["matches"]);
+    // …plus the Win % / Toss Win % columns (and their count alts) — the SAME Result-family
+    // metrics the batting/bowling boards use, flagged onFieldingBoard (Win % merge,
+    // 2026-09-28; they were a separate section:"fielding" family before).
     for (const m of eligibleMetrics("batting", formats)) {
-      if (m.section === "fielding") keys.add(m.key);
+      if (m.section === "fielding" || m.onFieldingBoard) keys.add(m.key);
     }
     for (const key of eligibleComposedFieldingKeys("batting")) keys.add(key);
     // Wave 3C (C2): registered composed fielding VALUE columns (fcv__…, e.g. "Catches
@@ -2103,10 +2106,10 @@ export function activeLeaderboardFilterSources(state) {
     // ONE outcome picked it's constant (100% for "Won" alone, 0% for "Lost" alone,
     // etc. — same for every displayed row), so it's gated on >1 selected outcome like
     // any other which-values Bucket-3 filter; only 2+ outcomes make it vary.
-    if (multiSelected(f.result)) push("filter:fld:result", ["fld_res_won_pct"]);
+    if (multiSelected(f.result)) push("filter:fld:result", ["res_won_pct"]);
     // Toss Result auto-add REMOVED (owner ruling 2026-09-26): Toss Result has only
     // Won/Lost-toss, so a single value is constant and picking both is a no-op filter
-    // — pill-only in every real case. Toss Win % (fld_res_toss_won_pct) stays
+    // — pill-only in every real case. Toss Win % (res_toss_won_pct) stays
     // MANUALLY addable from the picker; only the auto-add is gone.
     if (hasMulti(f.tossDecision)) push("filter:fld:toss_decision", ["fld_toss_decision_set"]);
     // Phase 1.2 (2026-08-25) — the three Ball Ranges dims (audit3 §(ii), ledger:

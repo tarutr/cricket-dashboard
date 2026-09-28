@@ -848,6 +848,12 @@ export function createColumnsPicker({
     }
     const m = getMetric(baseKey, ns);
     if (!m) return null;
+    // Win % merge (2026-09-28) — badge placement KEPT exactly as it was: on the fielding
+    // board, Win % / Toss Win % (+ their count alts) were a separate section:"fielding"
+    // family and so counted on the FIELDING badge, although that board lists them in its
+    // Match dropdown. The merged family is section:"impact"; this line preserves the old
+    // count (flagged to the owner — delete it to count them under Match instead).
+    if (m.onFieldingBoard && getFieldingMode && getFieldingMode()) return "fielding";
     if (m.section === "impact") return "match";
     if (m.section === "fielding") return "fielding";
     return disciplineBucket(ns);
@@ -2284,21 +2290,16 @@ export function createColumnsPicker({
     // Batting/bowling alignment (Task B, 2026-09-26): Win % (res_won_pct) + Toss Win %
     // (res_toss_won_pct) as the SINGLE default-displayed Match-dropdown rows replacing
     // the five separate outcome counts (now hidden above via HIDDEN_COLUMN_KEYS). The
-    // item's own key IS the % metric (mirrors the fielding board's fieldingResultItems
-    // below) — addPlainColumn seeds the % column; the existing count/% toggle
-    // (COLUMN_TOGGLE_PAIRS' res_won/res_toss_won pairs, unchanged) switches it to the
-    // raw count. Plain ns only — matchup has no res_* metrics at all. (Converted to
-    // picker items via plainItems further below, once it's in scope.)
+    // item's own key IS the % metric — addPlainColumn seeds the % column; the existing
+    // count/% toggle (COLUMN_TOGGLE_PAIRS' res_won/res_toss_won pairs, unchanged)
+    // switches it to the raw count. Plain ns only — matchup has no res_* metrics at all.
+    // The fielding board (ns "batting") lists the SAME two rows in its own Match
+    // dropdown (Win % merge, 2026-09-28 — one metric family on every board). (Converted
+    // to picker items via plainItems further below, once it's in scope.)
     const resultMetrics = isPlainNs
       ? ["res_won_pct", "res_toss_won_pct"].map((k) => all.find((m) => m.key === k)).filter(Boolean)
       : [];
-    // Fielding column reshuffle (Task C): Win % / Toss Win % (metrics.js
-    // FIELDING_RESULT_METRIC_SPECS, `isFieldingResult`) are section:"fielding" but must
-    // NEVER surface via this generic filter — they're pushed into BOTH BATTING_METRICS
-    // and BOWLING_METRICS (so `all` carries them for every ns, batting/bowling/fielding
-    // board alike) and compute BLANK off the fielding board (no fld_result_cte there).
-    // They're placed explicitly, fielding-board-Match-dropdown-only, below.
-    const fielding = all.filter((m) => m.section === "fielding" && !m.isFieldingResult && !hiddenAlts.has(m.key));
+    const fielding = all.filter((m) => m.section === "fielding" && !hiddenAlts.has(m.key));
     // Wave 3A: Matches is offered in the Match dropdown under a matchup too (the matchup
     // "matches" metric — COUNT(DISTINCT match_id) FILTER'd on the bucket — already exists in
     // eligibleMetrics). It is EXCLUDED from the own-discipline "core" list below in that mode
@@ -2363,6 +2364,10 @@ export function createColumnsPicker({
 
     const plainItems = (list) => list.map((m) => ({ type: "plain", key: m.key, label: metricDisplayLabel(m, formats) }));
     const section = (name, items) => (items.length ? [{ name, items }] : []);
+    // Win % / Toss Win % rows — ONE list for every board's Match dropdown (see
+    // resultMetrics above): after PotM Count on batting/bowling (matchItems below), after
+    // Stage on the fielding board (fieldingMatchSetItems below).
+    const resultItems = plainItems(resultMetrics);
 
     // Composers section (own discipline, plain ns only): only kinds applicable to this
     // discipline/format, plus the parametric composer.
@@ -2526,20 +2531,11 @@ export function createColumnsPicker({
     // Fielding dropdown. (Match result / Toss result / Toss decision / Stage build no
     // list column this wave — see metrics.js FIELDING_SET_SPECS.)
     const fieldingSetLeaderboard = fieldingMode && !ownDisciplineOnly;
-    // Fielding column reshuffle (Task C): Win % / Toss Win % (Task B's
-    // FIELDING_RESULT_METRIC_SPECS, section:"fielding" + isFieldingResult) REPLACE the
-    // old Match Result / Toss Result list columns in this dropdown, in the same spot
-    // (after Stage, before Toss Decision). Resolved from `all` (fieldingSetLeaderboard
-    // already implies fieldingMode, i.e. ns "batting"/"bowling" under the fielding
-    // board, so both keys are present in `all`); pctKey is the visible default (the
-    // count is its toggle alt, hidden here exactly like every other toggle pair).
-    const fieldingResultItems = fieldingSetLeaderboard
-      ? plainItems(
-          ["fld_res_won_pct", "fld_res_toss_won_pct"]
-            .map((k) => all.find((m) => m.key === k))
-            .filter(Boolean)
-        )
-      : [];
+    // Fielding column reshuffle (Task C): Win % / Toss Win % (resultItems — the SAME
+    // two rows the batting/bowling Match dropdown lists) REPLACE the old Match Result /
+    // Toss Result list columns in this dropdown, in the same spot (after Stage, before
+    // Toss Decision); the % key is the visible default (the count is its toggle alt,
+    // hidden here exactly like every other toggle pair).
     const fieldingMatchSetItems = fieldingSetLeaderboard
       ? [
           { type: "plain", key: "fld_team_set", label: "Team" },
@@ -2549,7 +2545,7 @@ export function createColumnsPicker({
           { type: "plain", key: "fld_city_set", label: "City" },
           { type: "plain", key: "fld_season_set", label: "Season" },
           { type: "plain", key: "fld_stage_set", label: "Stage" },
-          ...fieldingResultItems,
+          ...resultItems,
           { type: "plain", key: "fld_toss_decision_set", label: "Toss Decision" },
         ]
       : [];
@@ -2699,7 +2695,6 @@ export function createColumnsPicker({
     // above). Matchup ns is the only remaining case that still lists it here (Wave 3A).
     // resultItems (Win %/Toss Win %) sit right after PotM Count, where the five
     // outcome counts used to be.
-    const resultItems = plainItems(resultMetrics);
     const matchItems = fieldingMode
       ? [...fieldingMatchSetItems]
       : [

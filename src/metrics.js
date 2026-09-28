@@ -1697,17 +1697,24 @@ for (const disc of ["batting", "bowling"]) {
 
 // ── Result family (columns content rework Wave B, 2026-08-08) ────────────────
 // Per-player counts of MATCH OUTCOMES relative to the player's own team — Matches
-// Won / Lost / Tied / No-result and Toss Won. Like Player-of-the-Match, these are
-// whole-MATCH facts, not innings aggregates, so they live in a per-player CTE
-// (`result_cte`, built by table.js's buildResultCteSql over player_matches +
-// matches) LEFT-JOINed onto the batting/bowling GROUP BY and projected with MAX()
-// (one row per player, constant across the group — the same functionally-dependent
-// -join shape pom_cte/fielding_cte use). A DEDICATED `source: "result"` (NOT
-// "player_matches", which isPomMetric would claim, routing them through the wrong
-// CTE) makes table.js gate + join result_cte only when a Result column/condition
-// is shown — so with none, the emitted SQL is byte-identical.
+// Won / Lost / Tied / No-result and Toss Won — plus their % alternates. Like
+// Player-of-the-Match, these are whole-MATCH facts, not innings aggregates, so they
+// live in a per-player step over player_matches + matches (table.js
+// buildPlayerMatchStepSql). A DEDICATED `source: "result"` (NOT "player_matches",
+// which isPomMetric would claim, routing them through the wrong CTE) makes table.js
+// build that step only when a Result column/condition is shown — so with none, the
+// emitted SQL is byte-identical.
 //
-// The five outcome predicates INSIDE result_cte are the SAME fields + comparisons
+// ONE family for all three boards (Win % merge, 2026-09-28): the fielding board's
+// Win % / Toss Win % used to be a second, hand-copied family; it now shows THESE
+// metrics. `sqlExpression` is the batting/bowling GROUP-BY form — MAX(result_cte.<col>),
+// `result_cte` LEFT-JOINed onto the GROUP BY, one row per player and constant across
+// the group (the same functionally-dependent-join shape pom_cte/fielding_cte use). The
+// fielding board (one row per fielder, no GROUP BY) renders the SAME formula over its
+// own step through resultMetricSql (table.js fieldingBoardColExpr). `onFieldingBoard`
+// marks the four columns that board offers (Win % / Toss Win % + their count alts).
+//
+// The five outcome predicates INSIDE that step are the SAME fields + comparisons
 // the "Match Result" / "Toss Result" FILTERS use (filters.js buildMatchContext-
 // Clauses): team = match_winner (won) / match_winner IS NOT NULL AND <> team
 // (lost) / result_type = 'tie' (tied) / result_type = 'no result' / team =
@@ -1715,18 +1722,18 @@ for (const disc of ["batting", "bowling"]) {
 // by construction. `section: "impact"` routes them to the Match dropdown right
 // after Player of the Match Count (the same rule potm_count uses). Defined once
 // and pushed into BOTH disciplines (a match fact is discipline-agnostic, exactly
-// like PoM). Counting totals: kind "total", additive, zeroIsData true.
+// like PoM; the fielding board resolves under ns "batting"). Counting totals: kind
+// "total", additive, zeroIsData true.
 const RESULT_METRIC_SPECS = [
-  // res_won's % alt (Win %) DIVERGES from the family's default ÷ total (owner-authorised
-  // 2026-09-26: "batting/bowling need to copy the win % formula from fielding"). Win % =
-  // won ÷ matches WITH A RESULT = won ÷ (total − no_result): no-results EXCLUDED from the
-  // denominator, ties INCLUDED, NULLIF-guarded (÷0 → NULL, never Infinity). This is the
-  // SAME shape fld_res_won_pct uses (won ÷ NULLIF(total − no_result, 0)), just MAX()-wrapped
-  // for the GROUP BY board. Only res_won carries pctDenomExpr; every other Result % (Loss %/
-  // Tie %/No Result %/Toss Win %) keeps the default MAX(result_cte.total) denominator.
+  // Win % DIVERGES from the family's default ÷ matches (owner-authorised 2026-09-26:
+  // "batting/bowling need to copy the win % formula from fielding"): won ÷ matches WITH
+  // A RESULT = won ÷ (match_count − no_result) — no-results EXCLUDED from the
+  // denominator, ties INCLUDED, NULLIF-guarded (÷0 → NULL, never Infinity). Only res_won
+  // carries pctExcludesNoResult; every other Result % (Loss % / Tie % / No Result % /
+  // Toss Win %) divides by match_count.
   { key: "res_won", label: "Matches Won", shortLabel: "Won", col: "won", higherIsBetter: true,
-    pctLabel: "Win %", pctShort: "Win%", pctHigherIsBetter: true,
-    pctDenomExpr: "MAX(result_cte.total) - MAX(result_cte.no_result)" },
+    pctLabel: "Win %", pctShort: "Win%", pctHigherIsBetter: true, pctExcludesNoResult: true,
+    onFieldingBoard: true },
   { key: "res_lost", label: "Matches Lost", shortLabel: "Lost", col: "lost", higherIsBetter: false,
     pctLabel: "Loss %", pctShort: "Loss%", pctHigherIsBetter: false },
   { key: "res_tied", label: "Matches Tied", shortLabel: "Tied", col: "tied", higherIsBetter: null,
@@ -1734,11 +1741,26 @@ const RESULT_METRIC_SPECS = [
   { key: "res_no_result", label: "No Result", shortLabel: "NR", col: "no_result", higherIsBetter: null,
     pctLabel: "No Result %", pctShort: "NR%", pctHigherIsBetter: null },
   { key: "res_toss_won", label: "Toss Won", shortLabel: "Toss", col: "toss_won", higherIsBetter: null,
-    pctLabel: "Toss Win %", pctShort: "Toss%", pctHigherIsBetter: null },
+    pctLabel: "Toss Win %", pctShort: "Toss%", pctHigherIsBetter: null, onFieldingBoard: true },
 ];
+
+/** The Result family's ONE formula (Win % merge, 2026-09-28), rendered over a board's
+ * per-player outcome step. `ref(col)` renders one of that step's columns (match_count /
+ * won / lost / tied / no_result / toss_won) — MAX(result_cte.<col>) on the batting/
+ * bowling GROUP BY, a bare pmatch_cte.<col> on the fielding board. A count reads its own
+ * column; a % divides it by match_count (minus no_result for Win %) × 100, NULLIF-guarded.
+ * So Win % can never be computed two different ways on two boards again. */
+export function resultMetricSql(m, ref) {
+  const count = ref(m.resultCol);
+  if (m.kind !== "percent") return count;
+  const denom = m.resultPctExcludesNoResult ? `${ref("match_count")} - ${ref("no_result")}` : ref("match_count");
+  return `${count} * 100.0 / NULLIF(${denom}, 0)`;
+}
+const _RESULT_CTE_REF = (col) => `MAX(result_cte.${col})`;
 for (const disc of ["batting", "bowling"]) {
+  const target = disc === "batting" ? BATTING_METRICS : BOWLING_METRICS;
   for (const r of RESULT_METRIC_SPECS) {
-    (disc === "batting" ? BATTING_METRICS : BOWLING_METRICS).push({
+    const count = {
       key: r.key,
       label: r.label,
       shortLabel: r.shortLabel,
@@ -1747,23 +1769,23 @@ for (const disc of ["batting", "bowling"]) {
       discipline: disc,
       source: "result",
       section: "impact",
-      sqlExpression: `MAX(result_cte.${r.col})`,
+      resultCol: r.col,
+      onFieldingBoard: !!r.onFieldingBoard,
       higherIsBetter: r.higherIsBetter, format: "int",
       isPhaseMetric: null, zeroIsData: true,
       additive: true,
       kind: "total",
-    });
+    };
+    count.sqlExpression = resultMetricSql(count, _RESULT_CTE_REF);
+    target.push(count);
     // ── Columns content rework Wave C: the % ALTERNATE of each Result count ────
-    // Result % = the outcome count ÷ the player's TOTAL matches × 100. Denominator
-    // is result_cte's `total` column (COUNT(DISTINCT match_id) — the same Player
-    // Matches count the counts partition, added by buildResultCteSql for this
-    // wave), NULLIF-guarded. NUMERATOR reuses the count's own result_cte column, so
-    // the count and its % never disagree. source "result" routes it through the
-    // SAME result_cte join. Only the count/% toggle surfaces these — never their
-    // own picker row. EXCEPTION (2026-09-26, owner-authorised): res_won's Win % uses
-    // r.pctDenomExpr (total − no_result) instead of the default total — see the
-    // RESULT_METRIC_SPECS note above.
-    (disc === "batting" ? BATTING_METRICS : BOWLING_METRICS).push({
+    // Result % = the outcome count ÷ the player's matches × 100 (÷ matches with a
+    // result for Win %). The NUMERATOR is the count's own step column, so the count
+    // and its % never disagree; the denominator is the SAME step's match_count (on the
+    // fielding board that step IS the Matches column, so Win % reconciles with Matches
+    // there by construction). source "result" routes it through the SAME step. Only
+    // the count/% toggle surfaces these — never their own picker row.
+    const pct = {
       key: `${r.key}_pct`,
       label: r.pctLabel,
       shortLabel: r.pctShort,
@@ -1772,96 +1794,15 @@ for (const disc of ["batting", "bowling"]) {
       discipline: disc,
       source: "result",
       section: "impact",
-      sqlExpression: `MAX(result_cte.${r.col}) * 100.0 / NULLIF(${r.pctDenomExpr || "MAX(result_cte.total)"}, 0)`,
+      resultCol: r.col,
+      resultPctExcludesNoResult: !!r.pctExcludesNoResult,
+      onFieldingBoard: !!r.onFieldingBoard,
       higherIsBetter: r.pctHigherIsBetter, format: "pct1",
       isPhaseMetric: null, zeroIsData: false,
       kind: "percent",
-    });
-  }
-}
-
-// ── Fielding-board Win % / Toss Win % (fielding rework Task B, 2026-09-25) ──────
-// Two per-fielder MATCH-OUTCOME rates for the FIELDING leaderboard only:
-//   • Win %      = matches WON ÷ matches WITH A RESULT (no-results EXCLUDED from the
-//                  denominator, ties INCLUDED). Toggles to the raw win COUNT.
-//   • Toss Win % = tosses WON ÷ ALL the fielder's matches. Toggles to the raw
-//                  toss-win COUNT.
-// Whole-MATCH facts (match_winner / result_type / toss_winner), NOT innings or
-// fielding-event aggregates — so, exactly like the batting/bowling Result family
-// (res_won/res_toss_won), they live in a per-player CTE. But result_cte is scoped by
-// the board's TOP-LEVEL match filters (buildBoardDivisorMatchClauses); the FIELDING
-// board's Stage/Result/Toss filters live under state.fielding.*, so these read a
-// SEPARATE `fld_result_cte` (table.js buildFieldingResultCteSql) scoped by
-// buildFieldingDivisorMatchClauses — the SAME divisor + playerOp:"AND" as the fielding
-// Matches column (pmatch_cte), so `total` === Matches and both new columns reconcile
-// with Matches by construction. Win identification (team = match_winner), the tie
-// predicate (result_type = 'tie', which — like everywhere — EXCLUDES super-over-decided
-// 'tie (<Team>)' rows since export_parquet resolves those to a match_winner) and the
-// no-result predicate mirror result_cte byte-for-byte.
-//
-// FIELDING-BOARD ONLY. A DEDICATED source "fielding_result" keeps them OUT of every
-// buildQuery (batting/bowling) projection bucket (table.js gates inningsMetrics on it),
-// so they are never computed on the batting/bowling boards — those keep their own
-// res_won_pct / res_toss_won_pct (scoped by the batting/bowling result_cte, not this
-// fld_result_cte). As of 2026-09-26 res_won_pct's denominator was aligned to this one
-// (won ÷ total − no_result, owner-authorised); res_toss_won_pct stays ÷ total, which
-// still matches fld_res_toss_won_pct. `section: "fielding"` so the
-// fielding board's column machinery (table.js extras filter, columnsPicker fielding
-// offering) recognises them; `isFieldingResult` marks the fld_result_cte projection and
-// the count/% toggle. The projection is a BARE fld_result_cte reference (no MAX — the
-// fielding board is one row per fielder, not a GROUP BY) read by fieldingBoardColExpr.
-// Denominator 0 → NULLIF → NULL (—), never Infinity. Defined once, pushed into BOTH
-// disciplines (a match fact is discipline-agnostic, like the Result family / PoM); the
-// fielding board resolves under ns "batting" but the bowling copy keeps the catalogue
-// symmetric.
-const FIELDING_RESULT_METRIC_SPECS = [
-  { key: "fld_res_won", label: "Matches Won", shortLabel: "Won", higherIsBetter: true,
-    boardExpr: "COALESCE(fld_result_cte.won, 0)",
-    pctKey: "fld_res_won_pct", pctLabel: "Win %", pctShort: "Win%", pctHigherIsBetter: true,
-    pctBoardExpr: "fld_result_cte.won * 100.0 / NULLIF(fld_result_cte.total - fld_result_cte.no_result, 0)" },
-  { key: "fld_res_toss_won", label: "Toss Won", shortLabel: "Toss", higherIsBetter: null,
-    boardExpr: "COALESCE(fld_result_cte.toss_won, 0)",
-    pctKey: "fld_res_toss_won_pct", pctLabel: "Toss Win %", pctShort: "Toss%", pctHigherIsBetter: null,
-    pctBoardExpr: "fld_result_cte.toss_won * 100.0 / NULLIF(fld_result_cte.total, 0)" },
-];
-for (const disc of ["batting", "bowling"]) {
-  for (const r of FIELDING_RESULT_METRIC_SPECS) {
-    const target = disc === "batting" ? BATTING_METRICS : BOWLING_METRICS;
-    // Count column (win count / toss-win count) — the toggle pair's `count` side.
-    target.push({
-      key: r.key,
-      label: r.label,
-      shortLabel: r.shortLabel,
-      columnTitle: r.label,
-      discipline: disc,
-      source: "fielding_result",
-      section: "fielding",
-      isFieldingResult: true,
-      // Bare fld_result_cte reference (fielding board is one row per fielder). Never
-      // emitted on batting/bowling (source "fielding_result" is excluded there); read
-      // on the fielding board by fieldingBoardColExpr.
-      sqlExpression: r.boardExpr,
-      higherIsBetter: r.higherIsBetter, format: "int",
-      isPhaseMetric: null, zeroIsData: true,
-      additive: true,
-      kind: "total",
-    });
-    // Percent alternate (Win % / Toss Win %) — only the count/% toggle surfaces it
-    // (hidden from the picker listing via COLUMN_TOGGLE_PAIRS, like res_*_pct).
-    target.push({
-      key: r.pctKey,
-      label: r.pctLabel,
-      shortLabel: r.pctShort,
-      columnTitle: r.pctLabel,
-      discipline: disc,
-      source: "fielding_result",
-      section: "fielding",
-      isFieldingResult: true,
-      sqlExpression: r.pctBoardExpr,
-      higherIsBetter: r.pctHigherIsBetter, format: "pct1",
-      isPhaseMetric: null, zeroIsData: false,
-      kind: "percent",
-    });
+    };
+    pct.sqlExpression = resultMetricSql(pct, _RESULT_CTE_REF);
+    target.push(pct);
   }
 }
 
@@ -1877,15 +1818,9 @@ for (const disc of ["batting", "bowling"]) {
 // Result + fielding pairs are derived from their specs so this can never drift from
 // the metric catalogue. The matchup namespaces have NO entry (no toggle there — Vs
 // mode keeps its pre-Wave-C layout). Every `alt` key is a real metric added above.
+// The Result pairs also serve the fielding board's Win % / Toss Win % rows (it resolves
+// toggles under ns "batting" — the same metrics, the same pairs).
 const _RESULT_PAIRS = RESULT_METRIC_SPECS.map((r) => ({ count: r.key, alt: `${r.key}_pct`, mode: "pct" }));
-// Fielding-board Win % / Toss Win % (Task B): count ⇄ % toggle, mirroring _RESULT_PAIRS
-// (the count `#` segment shows the raw win / toss-win count; the `%` segment shows Win %
-// / Toss Win %). Fielding-board-only metrics, but placed in the plain batting/bowling
-// namespaces for the same reason _RESULT_PAIRS are — the fielding board resolves toggles
-// under ns "batting".
-const _FIELDING_RESULT_PAIRS = FIELDING_RESULT_METRIC_SPECS.map((r) => ({
-  count: r.key, alt: r.pctKey, mode: "pct",
-}));
 const _FIELDING_PAIRS = PER_MATCH_FIELDING_SPECS.map((f) => ({
   count: f.key, alt: `${f.key}_per_match`, mode: "permatch",
 }));
@@ -1897,14 +1832,12 @@ export const COLUMN_TOGGLE_PAIRS = {
     { count: "not_outs", alt: "not_out_pct", mode: "pct" },
     { count: "ducks", alt: "duck_pct", mode: "pct" },
     ..._RESULT_PAIRS,
-    ..._FIELDING_RESULT_PAIRS,
     ..._FIELDING_PAIRS,
   ],
   bowling: [
     { count: "maidens", alt: "maiden_pct", mode: "pct" },
     { count: "dot_balls_conceded", alt: "dot_pct", mode: "pct" },
     ..._RESULT_PAIRS,
-    ..._FIELDING_RESULT_PAIRS,
     ..._FIELDING_PAIRS,
   ],
 };
