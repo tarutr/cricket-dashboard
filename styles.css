@@ -826,10 +826,20 @@ a { color: var(--color-accent); }
   gap: var(--space-2);
 }
 .cond-group-one__match-label { font-size: var(--text-sm2); color: var(--color-muted); }
-/* The two add dropdowns share a row on desktop (built to take a third — Matchup — in
-   Task 3); each takes an equal share. They stack on narrow screens. */
-.cond-group-one__addrow { display: flex; gap: var(--space-3); align-items: flex-start; }
-.cond-group-one__addrow > .cond-lane-bar { flex: 1 1 0; min-width: 0; }
+/* The two/three add dropdowns (Player Filters / Scope Filters / Matchup — each its
+   own .cond-lane-bar, one trigger apiece) share a row on desktop. Live-review
+   follow-up (2026-09-28): this used to be "each takes an equal share" (flex:1 1 0
+   on every .cond-lane-bar) — the SAME "growing basis" bug as #6 above, one level
+   up: each lane container stretched to a third of the row, spreading its
+   (now fixed-width, since #6) trigger button away from its neighbours with big
+   gaps, instead of sitting left-aligned and tight like the Columns bar
+   (.cols-dd-bar holds all its triggers in ONE flex container; the three lanes
+   here are three SEPARATE containers, so they need flex:0 0 auto + width:auto to
+   size to their own one-trigger content rather than to an equal row-share).
+   gap dropped from --space-3 to --space-2 (8px) to match .cols-dd-bar's gap
+   exactly. They stack on narrow screens. */
+.cond-group-one__addrow { display: flex; gap: var(--space-2); align-items: flex-start; }
+.cond-group-one__addrow > .cond-lane-bar { flex: 0 0 auto; width: auto; min-width: 0; }
 @media (max-width: 640px) { .cond-group-one__addrow { flex-direction: column; } }
 /* The merged condition list: every present slot (singleton rows, the numeric block, the
    fielding-dim block) is a direct child here and flows as one continuous list — same row
