@@ -1502,4 +1502,6 @@ SA Yadav 60·1,544·29.13·150.34; vs Spin 38/454/140.99; Bumrah vs RHB pos1-2 2
       - **D:** delete the unreachable `fld_kind_set` / `fld_over_set` list columns (filters untouched).
       - **E — NUMBERS CHANGE, AUTHORISED:** merge the fielding match filters into the top-level ones —
         "If there is a filter like stage/match result, it should absolutely affect every value!" Fielding
-        columns on the batting/bowling boards obey the top-level match filters.
+        columns on the batting/bowling boards obey the top-level match filters. Filters do NOT carry
+        across scopes: each leaderboard (batting / bowling / fielding) keeps its own saved filter set
+        when the member switches (owner, 2026-09-28).
