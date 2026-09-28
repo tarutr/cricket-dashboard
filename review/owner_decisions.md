@@ -1473,3 +1473,33 @@ SA Yadav 60·1,544·29.13·150.34; vs Spin 38/454/140.99; Bumrah vs RHB pos1-2 2
       cache headers) had hidden real fixes during review — use no-cache server + incognito.
     - **NEXT (owner-chosen):** a read-only PERFORMANCE/load-time profiling pass (whole site slow;
       Win%/Toss Win% col ~30s; all client-side DuckDB-WASM over Parquet/R2). Then pre-cut items + the cut.
+
+## 2026-09-28 — Speed programme + fielding clean-up rulings (owner)
+
+92. **SPEED PROGRAMME + FIELDING CLEAN-UP — rulings (owner, 2026-09-28).**
+    - **Built + committed (ball-layer, unpushed):** ranged HTTP reads (e9a0a0d); graphs OFF the public site
+      via `GRAPHS_ENABLED` (0345f25 — Graphs tab, Stats|Graphs switch and Player Graphs button removed; code
+      kept); ONE Win %/Toss Win % step for all boards (fa3f3d2); dropdown badges count where a column is
+      listed (b72fd59); pop-up fielding Match dropdown offers Matches (72c058d); daily pipeline 03:47 UTC
+      (4dc72cb); tiered export + manifest_v2/options_v2 (ac2169d); `.orchestrator/` gitignored.
+    - **Speed plan (order: speed build → owner live review → pre-cut → cut on VERCEL; the-cordon.com later):**
+      everything downloads in the background and is kept on the device; data split by match date into
+      HISTORY (< 1 Jan of last month's year) / THIS YEAR / RECENT (last month + this month); a search made
+      before its data is in shows a progress message; order = shared files → the member's selected
+      gender/format → rest smallest-first; Android on mobile data ASKS once, iPhone downloads without
+      asking. Audience = mostly kids in India on phones. No scope-favouring splits (never Men T20-first).
+      players.parquet = orphan → not downloaded; deleted everywhere after the cut (BACKLOG #18).
+      Server-side search ON HOLD. Re-sort of files DROPPED (no gain once files download whole).
+    - **Fielding clean-up — all 10 audit items approved** (`.orchestrator/progress/fielding-audit.md`):
+      drop unread columns (out_batter_name, bowler_name, out_role); pop-up fielding query reuses the
+      leaderboard builder; one fielding-tally definition; profile attributes JOINED at query time (not baked;
+      results must be identical — A); dead code + stale comments; exporter builds fielding off the delivery
+      build; one composer word-list; one shared fielding option loader; shared semi-join helpers; one
+      namespace helper; comment trim.
+      - **B:** the pop-up's fielding Stage filter offers "No Stage" (as the leaderboard, decision 74).
+      - **C:** fielding Bowler Style = the batting/bowling grouping (Pace/Spin + 9 types) in filter AND
+        column, plus a new **Bowler Arm** (Left/Right) fielding filter so no capability is lost.
+      - **D:** delete the unreachable `fld_kind_set` / `fld_over_set` list columns (filters untouched).
+      - **E — NUMBERS CHANGE, AUTHORISED:** merge the fielding match filters into the top-level ones —
+        "If there is a filter like stage/match result, it should absolutely affect every value!" Fielding
+        columns on the batting/bowling boards obey the top-level match filters.
