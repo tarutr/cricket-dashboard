@@ -326,6 +326,10 @@ committed to git.
 
 ### 4.4 R2 serving requirements
 
+> **Pre-launch note (owner ruling 2026-08-26):** this public-read posture is **temporary** — before
+> launch the data layer moves behind the members paywall (see backlog #17 / decision #79). Whatever
+> gates it must preserve HTTP range requests.
+
 - The `explorer/` prefix is publicly readable through the custom domain
   **`data.the-cordon.com`** (Cloudflare). Data files carry **immutable cache headers**
   (CDN edge caching); `manifest.json` is served so the browser can fetch it fresh.

@@ -128,6 +128,19 @@ console-noise only — pre-existing, present in production, unrelated to any app
 errors" during the player-pop-up fix wave. Fix at the design/chart-review stage by either vendoring the `.map` or
 stripping the trailing `sourceMappingURL` comment from the vendored file.
 
+## 17. Move the dashboard behind the members paywall — **pre-launch; owner ruling 2026-08-26; NOT built**
+[data] [app] [infra] · Before launch, this dashboard + the `data.the-cordon.com` cricket-data layer move
+**behind the members entitlement** built by the separate backend folder (The Cordon). Today everything is
+public: R2 `explorer/` is public-read, this repo is public on GitHub, the site is on public Vercel
+(`cricdb.vercel.app`). To gate it: lock the R2 read and serve data through an entitlement-checking
+Cloudflare Worker (short-lived signed URLs or a range-passing proxy — **must preserve HTTP
+`Range`/`Content-Range` or DuckDB-WASM breaks**), take this repo **private**, and move off public Vercel
+onto a gated `stats.the-cordon.com`. **Sequenced AFTER** that members/entitlement layer exists; the gating
+work is owned by this (cricdb/data) folder's own session, and reuses that entitlement layer. **Same
+founding membership + price** to start; keep flexible so parts can stay public later for marketing (a
+partial-public split is not yet decided — build everything gate-able so it stays possible). Backend handoff
+context lives in the local-only (gitignored) `pre_launch_handoff/` pack.
+
 ---
 
 ## Deleted (do not include)

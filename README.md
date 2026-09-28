@@ -60,6 +60,11 @@ behavior itself must be flagged to the owner first.
 The `explorer/` prefix of the `cricket-db` bucket must be publicly readable and
 CORS-enabled so the browser can issue HTTPS range requests against the Parquet files.
 
+> **Pre-launch note (owner ruling 2026-08-26):** the public-read R2 + public Vercel + public GitHub
+> posture is **temporary**. Before launch this dashboard moves behind the members paywall built in the
+> separate backend project — see backlog #17 and decision #79. Any gating must preserve HTTP range
+> requests (DuckDB-WASM depends on them).
+
 One-time setup in the Cloudflare dashboard:
 
 1. **Custom domain (public access + CDN caching)**: R2 → `cricket-db` → Settings →

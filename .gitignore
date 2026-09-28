@@ -14,3 +14,5 @@ scratchpad/
 reference/ingest.py
 # Personal article drafts — unrelated to the dashboard, kept out of the app repo
 article_ideas/
+# Backend handoff pack for The Cordon (a separate project) — local-only briefing, never a cricdb repo file
+pre_launch_handoff/
