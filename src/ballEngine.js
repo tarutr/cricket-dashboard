@@ -932,8 +932,13 @@ export function buildInningsViewSql(
   throw new Error(`ballEngine.buildInningsViewSql: unknown discipline "${discipline}"`);
 }
 
-/** The six ball-file names (gender × format bucket), matching config.js /
- * export_parquet.py DELIVERY_FILES. Exported so db.js registers + reads them. */
+/** The six LOGICAL ball-file names (gender × format bucket), matching config.js /
+ * export_parquet.py DELIVERY_FILES. db.js's scopeForQuery, cache signature and
+ * fold look-ahead key on these names. Speed build W2: with the ball engine on,
+ * each is physically read as its manifest_v2 tier files
+ * (`<name>__history|year|recent.parquet`, in that order — row-for-row identical
+ * to the single file); db.js maps them at its one choke point, engineViewSql(),
+ * and checks at boot that manifest_v2 lists tier files for every bucket here. */
 export const DELIVERY_FILES = [
   "deliveries_m_t20.parquet",
   "deliveries_m_odi.parquet",

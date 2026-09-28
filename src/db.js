@@ -2,12 +2,31 @@
 // The ONLY module that talks to DuckDB-WASM. Everything else (debug page, and
 // later Compare Stats / Graph Builder) goes through initDB()/query()/getManifest().
 //
-// Flow: fetch manifest.json (cache-busted) -> load vendored duckdb-wasm ->
-// instantiate AsyncDuckDB -> register each Parquet file's HTTP URL (cache-busted
-// with the manifest's per-file content hash) -> create SQL views over them.
+// Flow, flag OFF (old engine — unchanged): fetch manifest.json (cache-busted) ->
+// load vendored duckdb-wasm -> instantiate AsyncDuckDB -> register each Parquet
+// file's HTTP URL (cache-busted with the manifest's per-file content hash) ->
+// create SQL views over them (DuckDB then reads them with ranged HTTP requests).
+//
+// Flow, ball engine ON (Speed build W2, owner rulings 2026-09-28): fetch
+// manifest_v2.json + options_v2.json and load duckdb-wasm TOGETHER -> the page is
+// usable at once -> src/dataLoader.js keeps every tier file on the member's
+// device (downloaded whole, in the background, in the owner's order) and hands
+// each one to DuckDB; a view is created once all of its table's tier files are in.
+// Every query first waits for exactly the files it reads (query() below) — DuckDB
+// never reads over the network in this mode.
 
-import { DATA_BASE_URL, PARQUET_FILES, VENDOR_DUCKDB, ballEngineEnabled } from "./config.js";
+import {
+  DATA_BASE_URL,
+  PARQUET_FILES,
+  VENDOR_DUCKDB,
+  ballEngineEnabled,
+  dataBaseUrlV2,
+  isLocalDataMode,
+  devIoMode,
+  devForceMobileData,
+} from "./config.js";
 import { buildInningsViewSql, DELIVERY_FILES } from "./ballEngine.js";
+import { createDataLoader, sha256Hex12 } from "./dataLoader.js";
 import { buildMatchupViewSql } from "./ballEngineMatchup.js";
 import { neededViewColumns, coversColumns, unionColumns, columnsArePlayerLocal } from "./ballColumns.js";
 import { deliveryWindowPredicate } from "./deliveryWindow.js";
@@ -28,6 +47,25 @@ const VIEWS = {
   matchup_bowling: "matchup_bowling.parquet",
 };
 
+// Ball engine ON (Speed build W2): the plain views and the manifest_v2 TABLE each
+// reads (as the union of its tier files, history → year → recent). batting /
+// bowling / matchup_* are ball-engine reconstructions; `players` is not created
+// (no query reads it — W0; its file is not in manifest_v2).
+const TIERED_VIEWS = {
+  matches: "matches",
+  player_matches: "player_matches",
+  fielding: "fielding_events",
+  profiles: "player_profiles",
+};
+const VIEW_FOR_TABLE = Object.fromEntries(Object.entries(TIERED_VIEWS).map(([v, t]) => [t, v]));
+const VIEW_TOKEN_RES = Object.entries(TIERED_VIEWS).map(([view, table]) => [new RegExp(`\\b${view}\\b`), table]);
+
+/** The manifest_v2 table behind a LOGICAL delivery file name
+ * ("deliveries_m_t20.parquet" → "deliveries_m_t20"). */
+function bucketTable(file) {
+  return file.replace(/\.parquet$/, "");
+}
+
 // ── Ball engine (Wave 2a + 2b, owner decision 67) ───────────────────────────
 // When ballEngineEnabled() (the ?engine=ball flag) is on, the `batting` /
 // `bowling` views are RECONSTRUCTED from the six delivery files by
@@ -47,8 +85,9 @@ const VIEWS = {
 // machinery (scopeForQuery lifts the same gender/match_type/team_type/match_date
 // literals buildMatchupQuery's WHERE carries, and pruning/caching key on the
 // view name as their "discipline").
-const engineViews = ["batting", "bowling", "matchup_batting", "matchup_bowling"];
-let engineOn = false; // set in registerData from ballEngineEnabled()
+// (The four engine views: batting, bowling, matchup_batting, matchup_bowling —
+// see enginePlanDisciplines / viewBackedBy below.)
+let engineOn = false; // set by doInit (false) / doInitTiered (true) from ballEngineEnabled()
 
 // ── Delivery window (Wave 3, owner decision 67) ─────────────────────────────
 // The active delivery-window spec (null = no window). db.js is state-free (there
@@ -169,32 +208,24 @@ function windowPredicateFor(discipline, spec) {
 }
 
 /** Generate the reconstruction SELECT for an engine view, dispatching to the
- * plain (ballEngine.js) or matchup (ballEngineMatchup.js) generator by name. */
+ * plain (ballEngine.js) or matchup (ballEngineMatchup.js) generator by name.
+ *
+ * Speed build W2 — the ONE place logical file names become physical ones: every
+ * other part of the engine (scopeForQuery, the cache signature, the fold
+ * look-ahead) keeps keying on the six LOGICAL bucket names
+ * ("deliveries_m_t20.parquet"); here each is expanded to that bucket's tier files
+ * from manifest_v2, in chronological order (history, year, recent). W2 proved
+ * read_parquet([history, year, recent]) is row-for-row identical, in order, to the
+ * single bucket file, so the generated SQL (untouched) returns the same numbers. */
 function engineViewSql(discipline, opts) {
-  if (discipline === "batting" || discipline === "bowling") return buildInningsViewSql(discipline, opts);
-  return buildMatchupViewSql(discipline, opts);
+  const o = loader ? { ...opts, files: opts.files.flatMap((f) => loader.filesForTable(bucketTable(f))) } : opts;
+  if (discipline === "batting" || discipline === "bowling") return buildInningsViewSql(discipline, o);
+  return buildMatchupViewSql(discipline, o);
 }
-
-/** Seed the `batting` / `bowling` views as plain (unmaterialised) reconstruction
- * VIEWs over `files`. Metadata-only — the heavy per-ball aggregation runs when a
- * query executes against the view, not here. Used once at boot so the views
- * EXIST with a correct (if slow) definition; every real query then goes through
- * ensureEngineScope, which materialises a query-shaped table instead. */
-async function createEngineViews(connection, files, scopePredicate) {
-  for (const discipline of engineViews) {
-    try {
-      await connection.query(
-        `CREATE OR REPLACE VIEW ${discipline} AS ${engineViewSql(discipline, { files, scopePredicate })}`
-      );
-    } catch (e) {
-      throw makeError(
-        e,
-        `Could not create the ball-engine "${discipline}" view. The delivery Parquet files may be missing/unreadable, or the ballEngine SQL is malformed.`
-      );
-    }
-    viewBackedBy[discipline] = null;
-  }
-}
+// (Speed build W2: the old boot-time "seed" — unmaterialised engine views over
+// all six delivery files — is gone. Creating it needs every delivery file on
+// hand (85 MB), and it was never executed: every query goes through
+// ensureEngineScope, whose materialize() → pointViewAt() creates the view.)
 
 // ── Wave 2s Layer 2: scope-keyed materialisation cache ──────────────────────
 // Wave 2a re-ran the whole per-ball reconstruction for EVERY query — so a search
@@ -270,6 +301,13 @@ async function materialize(discipline, key, files, scopePredicate, windowPredica
   const previous = engineCache.get(key);
   const table = `__ball_${discipline}_${++engineTableSeq}`;
   const sql = engineViewSql(discipline, { files, scopePredicate, windowPredicate, playerPredicate, columns });
+  // Speed build W2: the generated SQL reads this bucket set's tier files and (the
+  // matchup views) the `profiles` / `player_matches` views — make sure they are
+  // all in first. Normally instant: query() already waited for this query's own
+  // needs; this covers columns folded in from a queued sibling (e.g. vs_potm →
+  // player_matches) so DuckDB never meets a file or view that is not there yet.
+  const dataWait = loader ? loader.ensureTables([...files.map(bucketTable), ...baseTablesForSql(sql)]) : null;
+  if (dataWait) await dataWait;
   try {
     await conn.query(`CREATE TABLE ${table} AS ${sql}`);
   } catch (e) {
@@ -585,9 +623,17 @@ async function rebuildEngineFull(plan) {
 }
 
 let initPromise = null;
-let manifest = null;
+let manifest = null; // manifest.json (flag off) or manifest_v2.json (ball engine on)
 let db = null; // AsyncDuckDB instance
 let conn = null; // shared AsyncDuckDBConnection
+
+// ── Speed build W2 state (ball engine on only; all null/empty flag-off) ───────
+let loader = null; // src/dataLoader.js instance
+let duckdbModule = null; // the duckdb-wasm module (DuckDBDataProtocol)
+let optionsV2 = null; // parsed options_v2.json, or null ⇒ callers keep their SQL path
+let askBeforeBackground = false; // Android mobile data: ask before downloading everything
+let pendingPriority = null; // a setDownloadPriority() that arrived before the loader existed
+const progressSubscribers = new Set();
 
 function makeError(rawError, userMessage) {
   const err = rawError instanceof Error ? rawError : new Error(String(rawError));
@@ -703,14 +749,12 @@ async function loadDuckDB(onProgress) {
 }
 
 // A file missing its manifest entry (sha256_12) gets a timestamp version, cached
-// per file so registerData and prewarmBallEngine build the SAME URL (the prewarm
-// must warm the exact URL DuckDB reads).
+// per file so repeated calls build the SAME URL.
 const fallbackParquetVersions = new Map();
 
 /** The versioned R2 URL for a Parquet file, from the loaded manifest's content
  * hash (or a cached fallback timestamp — see fallbackParquetVersions above).
- * The ONE place this URL is computed, used by both registerData
- * (registerFileURL) and prewarmBallEngine, so they always agree. */
+ * Flag-off (old engine) only: registerData's registerFileURL. */
 function parquetFileUrl(name, manifestData) {
   const fileInfo = manifestData?.files?.[name];
   let version = fileInfo?.sha256_12;
@@ -754,13 +798,11 @@ async function registerData(duckdbMod, dbInstance, connection, manifestData, onP
   // CREATE VIEW calls against the shared connection all completed correctly
   // during manual testing), so these also run in parallel.
   //
-  // Ball engine (Wave 2a): when the flag is on, `batting`/`bowling` are created
-  // separately by createEngineViews (from the delivery files) — skip them here.
-  // matchup_batting / matchup_bowling and every other view are unchanged.
-  engineOn = ballEngineEnabled();
+  // Flag-off only (Speed build W2): with the ball engine on, doInitTiered runs
+  // instead and this function is never called — so every view here is the plain
+  // pre-aggregated parquet, exactly as before the engine existed.
   await Promise.all(
     Object.entries(VIEWS).map(async ([viewName, fileName]) => {
-      if (engineOn && engineViews.includes(viewName)) return; // ball engine owns these
       try {
         await connection.query(
           `CREATE OR REPLACE VIEW ${viewName} AS SELECT * FROM read_parquet('${fileName}')`
@@ -773,19 +815,12 @@ async function registerData(duckdbMod, dbInstance, connection, manifestData, onP
       }
     })
   );
-
-  // Seed the ball-engine views over ALL six files, unscoped (a correct default so
-  // the views EXIST). Metadata-only; ensureEngineScope narrows BOTH the file set
-  // and the pushed-down scope predicate before any heavy aggregation runs, so the
-  // unscoped all-six definition is never actually executed.
-  if (engineOn) {
-    // eslint-disable-next-line no-console
-    console.info("[cricdb] ball engine ON (?engine=ball) — batting/bowling views reconstructed from delivery files");
-    await createEngineViews(connection, DELIVERY_FILES.slice(), "");
-  }
 }
 
 async function doInit(onProgress) {
+  // Ball engine on → the device-kept tier-file loader (Speed build W2).
+  if (ballEngineEnabled()) return doInitTiered(onProgress);
+  engineOn = false; // flag off: the old engine, byte-untouched below
   if (onProgress) onProgress({ stage: "manifest" });
   manifest = await fetchManifest();
 
@@ -805,6 +840,298 @@ async function doInit(onProgress) {
 
   if (onProgress) onProgress({ stage: "ready" });
   return { manifest };
+}
+
+// ── Speed build W2: ball-engine boot (manifest_v2 + device-kept tier files) ───
+
+/** Fetch a small JSON file past every cache; returns { json, bytes }. */
+async function fetchJsonNoStore(url, label) {
+  let res;
+  try {
+    res = await fetch(`${url}?t=${Date.now()}`, { cache: "no-store" });
+  } catch (e) {
+    throw makeError(
+      e,
+      `Could not reach the data server to fetch ${label}. Check your internet connection, or the data bucket may be down/misconfigured (CORS?). (${url})`
+    );
+  }
+  if (!res.ok) {
+    throw makeError(
+      new Error(`${label} HTTP ${res.status}`),
+      `${label} responded with HTTP ${res.status}. The data bucket may be misconfigured, or the data pipeline has not published it yet. (${url})`
+    );
+  }
+  try {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return { json: JSON.parse(new TextDecoder().decode(bytes)), bytes };
+  } catch (e) {
+    throw makeError(e, `${label} was not valid JSON. The pipeline may have written a corrupt file. (${url})`);
+  }
+}
+
+/**
+ * Ball-engine boot. The page is usable as soon as DuckDB, manifest_v2.json and
+ * options_v2.json are in — no data file is awaited here. The loader then keeps
+ * the tier files on the device in the background; each query waits for exactly
+ * the files it reads (query()).
+ */
+async function doInitTiered(onProgress) {
+  engineOn = true;
+  const base = dataBaseUrlV2();
+  if (onProgress) onProgress({ stage: "manifest" });
+  // The catalogue, the dropdown lists and DuckDB itself are independent —
+  // fetch all three at once.
+  const manifestP = fetchJsonNoStore(`${base}manifest_v2.json`, "manifest_v2.json");
+  const optionsP = fetchJsonNoStore(`${base}options_v2.json`, "options_v2.json").catch((e) => {
+    // eslint-disable-next-line no-console
+    console.warn("[cricdb] options_v2.json unavailable — dropdown lists fall back to live queries.", e && e.message);
+    return null;
+  });
+  const duckP = loadDuckDB(onProgress);
+  duckP.catch(() => {}); // awaited below; never an unhandled rejection meanwhile
+
+  let m2;
+  try {
+    m2 = (await manifestP).json;
+    if (!m2 || typeof m2.files !== "object" || !m2.files) {
+      throw makeError(new Error("manifest_v2.json has no files"), "manifest_v2.json is missing its file list. The pipeline may have written a corrupt catalogue.");
+    }
+  } catch (e) {
+    duckP.then(({ db: d }) => d.terminate()).catch(() => {}); // don't leak the worker on Retry
+    throw e;
+  }
+
+  if (onProgress) onProgress({ stage: "loading-duckdb" });
+  const { duckdb, db: dbInstance } = await duckP;
+  duckdbModule = duckdb;
+  db = dbInstance;
+
+  if (onProgress) onProgress({ stage: "connecting" });
+  try {
+    conn = await db.connect();
+  } catch (e) {
+    throw makeError(e, "Could not open a connection to the in-browser DuckDB instance.");
+  }
+
+  optionsV2 = await verifiedOptions(await optionsP, m2);
+  manifest = m2;
+  startLoader(base, m2);
+  // eslint-disable-next-line no-console
+  console.info(
+    `[cricdb] ball engine ON (?engine=ball) — data from ${base}manifest_v2.json, kept on this device ` +
+      `(${devIoMode()} reads)${isLocalDataMode() ? " [DEV: ?data=local]" : ""}`
+  );
+
+  if (onProgress) onProgress({ stage: "ready" });
+  return { manifest };
+}
+
+/** options_v2.json is only trusted when it is the one manifest_v2 lists (same
+ * pipeline run): a mismatch means null, and every caller then keeps its live SQL
+ * path — always correct, just slower. */
+async function verifiedOptions(fetched, m2) {
+  if (!fetched) return null;
+  const want = m2 && m2.options && m2.options.sha256_12;
+  if (want) {
+    const got = await sha256Hex12(fetched.bytes);
+    if (got != null && got !== want) {
+      // eslint-disable-next-line no-console
+      console.warn("[cricdb] options_v2.json is from a different data run than manifest_v2.json — using live queries instead.");
+      return null;
+    }
+  }
+  return fetched.json;
+}
+
+function startLoader(base, m2) {
+  const io = devIoMode();
+  const dirName = isLocalDataMode() ? "cricdb-data-local" : "cricdb-data";
+  loader = createDataLoader({
+    baseUrl: base,
+    fetchImpl: (url, init) => fetch(url, init),
+    openDirectory: () => (io === "memory" ? Promise.resolve(null) : openDataDirectory(dirName)),
+    locks: typeof navigator !== "undefined" && navigator.locks ? navigator.locks : null,
+    register: registerDataFile,
+    onTableReady: createTableView,
+    syncWrite: (deviceName, bytes) => syncWriteViaWorker(dirName, deviceName, bytes),
+    ioMode: io,
+    emit: (snap) => {
+      for (const cb of progressSubscribers) {
+        try {
+          cb(snap);
+        } catch {
+          /* a subscriber's bug must not stop the downloads */
+        }
+      }
+    },
+    // eslint-disable-next-line no-console
+    log: (...args) => console.info("[cricdb] data:", ...args),
+  });
+  // Owner ruling: on Android mobile data, ASK before downloading everything;
+  // until the member answers, only what each search needs is downloaded.
+  askBeforeBackground = onMobileData();
+  loader.setBackground(askBeforeBackground ? "hold" : "on");
+  if (pendingPriority) loader.setPriority(pendingPriority);
+  loader.start(m2);
+  // eslint-disable-next-line no-console
+  for (const f of DELIVERY_FILES) if (!loader.hasTable(bucketTable(f))) console.warn(`[cricdb] manifest_v2.json lists no ${f} tier files.`);
+}
+
+/** "On Android mobile data" per the owner's ruling: the Network Information API
+ * reports a cellular connection or Data Saver. (iPhone / most desktops have no
+ * such API → download everything without asking.) DEV: ?net=cellular. */
+function onMobileData() {
+  if (devForceMobileData()) return true;
+  try {
+    const c = typeof navigator !== "undefined" ? navigator.connection : null;
+    return !!(c && (c.type === "cellular" || c.saveData === true));
+  } catch {
+    return false;
+  }
+}
+
+/** The device-storage folder for the data (OPFS), or null when this browser /
+ * window cannot keep files (private windows, old browsers) — the loader then
+ * keeps everything in memory for the visit. Never throws, never hangs boot. */
+async function openDataDirectory(name) {
+  try {
+    if (typeof navigator === "undefined" || !navigator.storage || typeof navigator.storage.getDirectory !== "function") {
+      return null;
+    }
+    const root = await Promise.race([
+      navigator.storage.getDirectory(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("device storage did not open in 5 s")), 5000)),
+    ]);
+    return await root.getDirectoryHandle(name, { create: true });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.info("[cricdb] device storage unavailable — this visit keeps the data in memory only.", e && e.message);
+    return null;
+  }
+}
+
+/** Hand one file to DuckDB. A File from device storage is read in place
+ * (BROWSER_FILEREADER — range reads straight from disk, nothing held in memory);
+ * FSACCESS is the opt-in alternative (?io=fsaccess); a buffer is the in-memory
+ * fallback. `name` is the manifest file name the views / engine SQL use. */
+async function registerDataFile(name, source) {
+  const P = duckdbModule.DuckDBDataProtocol;
+  if (source.kind === "handle") {
+    await db.registerFileHandle(name, source.handle, P.BROWSER_FSACCESS, true);
+    return "device (fsaccess)";
+  }
+  if (source.kind === "file") {
+    await db.registerFileHandle(name, source.file, P.BROWSER_FILEREADER, true);
+    return "device (filereader)";
+  }
+  await db.registerFileBuffer(name, source.bytes);
+  return "memory";
+}
+
+/** Create a plain view over the union of its table's tier files, in tier order
+ * (history, year, recent) — row-for-row identical to the old single file. */
+async function createTableView(table, fileNames) {
+  const view = VIEW_FOR_TABLE[table];
+  if (!view) return; // delivery tables: read directly by the ball engine (engineViewSql)
+  const list = fileNames.map((f) => `'${f}'`).join(", ");
+  try {
+    await conn.query(`CREATE OR REPLACE VIEW ${view} AS SELECT * FROM read_parquet([${list}])`);
+  } catch (e) {
+    throw makeError(
+      e,
+      `Could not create the "${view}" view from its data files. The files may be corrupt or unreadable by DuckDB-WASM.`
+    );
+  }
+}
+
+// Older Safari has device storage but no FileSystemFileHandle.createWritable, so
+// a file can only be written from a worker via a sync access handle. This tiny
+// inline worker does exactly that (the `await`s also cover Safari 15.2–16's
+// promise-returning variant of the same API). The bytes are COPIED to it, not
+// transferred, so the loader keeps them for the in-memory fallback.
+const SYNC_WRITER_SRC = `self.onmessage = async (e) => {
+  const { id, dir, name, bytes } = e.data;
+  let h = null;
+  try {
+    const root = await navigator.storage.getDirectory();
+    const d = await root.getDirectoryHandle(dir, { create: true });
+    const fh = await d.getFileHandle(name, { create: true });
+    h = await fh.createSyncAccessHandle();
+    await h.truncate(0);
+    let off = 0;
+    while (off < bytes.byteLength) {
+      const n = await h.write(bytes.subarray(off), { at: off });
+      if (!n) throw new Error("write stalled");
+      off += n;
+    }
+    await h.flush();
+    await h.close();
+    h = null;
+    self.postMessage({ id, ok: true });
+  } catch (err) {
+    try { if (h) await h.close(); } catch (_) {}
+    self.postMessage({ id, ok: false, name: (err && err.name) || "Error", message: String((err && err.message) || err) });
+  }
+};`;
+let syncWriter = null;
+let syncWriterSeq = 0;
+const syncWriterPending = new Map();
+
+function syncWriteViaWorker(dirName, deviceName, bytes) {
+  return new Promise((resolve, reject) => {
+    try {
+      if (!syncWriter) {
+        const url = URL.createObjectURL(new Blob([SYNC_WRITER_SRC], { type: "text/javascript" }));
+        syncWriter = new Worker(url);
+        syncWriter.onmessage = (e) => {
+          const p = syncWriterPending.get(e.data.id);
+          if (!p) return;
+          syncWriterPending.delete(e.data.id);
+          if (e.data.ok) p.resolve();
+          else p.reject(Object.assign(new Error(e.data.message), { name: e.data.name }));
+        };
+        syncWriter.onerror = (ev) => {
+          for (const p of syncWriterPending.values()) p.reject(new Error(`device-storage writer failed: ${ev && ev.message}`));
+          syncWriterPending.clear();
+        };
+      }
+      const id = ++syncWriterSeq;
+      syncWriterPending.set(id, { resolve, reject });
+      syncWriter.postMessage({ id, dir: dirName, name: deviceName, bytes });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+/** The manifest_v2 tables a query's SQL reads, derived from the views / engine
+ * buckets it touches:
+ *   • each plain view named in it (matches / player_matches / fielding / profiles
+ *     — a name inside a string literal counts too, which keeps the
+ *     information_schema probe correct; over-inclusion only waits for a small
+ *     shared file);
+ *   • for a ball-engine query, the delivery bucket(s) scopeForQuery picks (the
+ *     same superset-safe rule the engine itself uses), plus — for the matchup
+ *     views — `profiles`, and `player_matches` when the vs-PotM axis is named.
+ * Exported (like scopeForQuery) so the offline harness derives a query's needs
+ * EXACTLY as the runtime does. Returns a Set of manifest_v2 table names. */
+export function tablesForSql(sql) {
+  const need = baseTablesForSql(sql);
+  const disciplines = enginePlanDisciplines(sql);
+  if (disciplines.length) {
+    for (const f of scopeForQuery(sql).files) need.add(bucketTable(f));
+    if (disciplines.some((d) => d.startsWith("matchup_"))) {
+      need.add(TIERED_VIEWS.profiles);
+      if (/\bvs_potm\b/.test(sql)) need.add(TIERED_VIEWS.player_matches);
+    }
+  }
+  return need;
+}
+
+function baseTablesForSql(sql) {
+  const need = new Set();
+  for (const [re, table] of VIEW_TOKEN_RES) if (re.test(sql)) need.add(table);
+  return need;
 }
 
 /**
@@ -851,8 +1178,17 @@ export async function query(sql, opts) {
   // overriding the module globals) and record it under a (SQL + spec signature)
   // key so the serialised execution + the look-ahead widening both read the right
   // one — an identical-SQL sibling with a different spec now gets its own slot
-  // instead of overwriting this one.
+  // instead of overwriting this one. Resolved BEFORE the data wait below, so a
+  // Search committed while this query waits can never lend it a different window.
   const spec = effectiveSpec(opts);
+  // Speed build W2: wait for exactly the files this query reads (bumping them to
+  // the front of the download queue). Instant once they are on the device. It
+  // joins the serialised engine queue only afterwards, so a query whose data is
+  // already in never waits behind another query's download. (No `await` at all
+  // when the data is in, so a burst of queries still registers in
+  // pendingEngineSpecs synchronously — the fold look-ahead sees them all.)
+  const dataWait = loader ? loader.ensureTables(tablesForSql(sql)) : null;
+  if (dataWait) await dataWait;
   const pendingKey = pendingSpecKey(sql, spec);
   pendingEngineSpecs.set(pendingKey, { sql, spec });
   return serializeEngineQuery(() => runQuery(sql, spec)).finally(() => {
@@ -933,48 +1269,108 @@ function normalizeValue(value) {
   return value;
 }
 
-/** Returns the parsed manifest.json (or null if init hasn't completed yet). */
+/** Returns the parsed manifest (or null if init hasn't completed yet):
+ * manifest.json flag-off, manifest_v2.json with the ball engine on. Callers read
+ * only `generated_at` and `data.{min,max}_match_date` / `data.match_count`,
+ * which both carry in the same shape. */
 export function getManifest() {
   return manifest;
 }
 
-let prewarmed = false;
+// ── Speed build W2: public loader API (all no-ops / null with the flag off) ───
+// (FIX 3's prewarmBallEngine — a background fetch of deliveries_m_t20 into the
+// HTTP cache — is gone: the loader's background queue downloads that bucket
+// early anyway, and keeps it on the device.)
+
+/** The parsed options_v2.json (boot dropdown lists / availability booleans),
+ * or null — flag off, not published, or from a different data run than
+ * manifest_v2.json. null ⇒ callers keep today's SQL path. */
+export function getOptionsV2() {
+  return optionsV2;
+}
+
+/** Scope keys (state.js FORMAT_BUCKETS) → the delivery bucket each reads —
+ * the same bucket scopeForQuery derives from those keys' match types. */
+const FORMAT_KEY_BUCKET = { T20: "t20", "50 Over": "odi", "Red Ball": "red" };
+
+/** {gender, formats} (store shape) → the loader's {gender: "m"|"f"|null, buckets}.
+ * Exported for the offline harness (checked against state.js FORMAT_BUCKETS). */
+export function scopeToPriority(scope) {
+  const gender = scope && scope.gender === "female" ? "f" : scope && scope.gender === "male" ? "m" : null;
+  const buckets = ((scope && scope.formats) || []).map((k) => FORMAT_KEY_BUCKET[k]).filter(Boolean);
+  return { gender, buckets };
+}
+
+/** Owner ruling: the background queue favours the member's CURRENT gender/format
+ * (after the shared files), live as they change the Filters popup. main.js calls
+ * this on every store change; cheap and idempotent. `scope` = {gender, formats}. */
+export function setDownloadPriority(scope) {
+  const p = scopeToPriority(scope);
+  if (!loader) {
+    pendingPriority = p;
+    return;
+  }
+  loader.setPriority(p);
+}
 
 /**
- * FIX 3 (Wave 2s2): after boot, pre-pay the NETWORK download of the default
- * Men/T20 delivery file so the user's FIRST search doesn't also wait on the
- * ~20 MB fetch (the dominant cold-search cost over R2). FLAG-ON ONLY — flag-OFF
- * never reads the delivery files, so it stays byte-untouched with no eager fetch.
- *
- * HOW: a plain background `fetch()` of the SAME versioned URL db.js registered
- * for deliveries_m_t20.parquet (the default gender+format bucket). This warms the
- * browser HTTP cache / TCP+TLS path so DuckDB's later ranged reads for that file
- * come off already-fetched bytes. Deliberately NOT a DuckDB query: it must not
- * enter the serialised engine queue, or the user's first search would wait behind
- * it (a pure-network prefetch has zero query-engine contention — the search still
- * runs the instant it's issued, just off warm bytes). Non-blocking (not awaited)
- * and best-effort: any failure (offline, file missing, engine off) is swallowed
- * and the first search just fetches the file itself, exactly as before. Warming
- * ONE file (the default) is the conservative choice; downloading it eagerly is
- * the accepted flag-ON trade (owner decision 67, "SPEED PULLED FORWARD").
+ * Make sure the data files a query (or a scope) needs are on hand, jumping them
+ * to the front of the queue. `target` = one SQL string, an array of them, or a
+ * scope {gender, formats}. Returns null when everything is already in (flag off:
+ * always null), else a Promise that resolves once DuckDB can read all of them.
+ * `onProgress({loadedBytes, totalBytes, files, readyFiles})` fires while some
+ * still have to download — the Search's "Downloading the data for this search"
+ * line. query() waits on its own anyway; this exists for the progress line.
  */
-export function prewarmBallEngine() {
-  if (!engineOn || prewarmed) return;
-  prewarmed = true;
-  const name = "deliveries_m_t20.parquet";
-  // Same URL registerData used to registerFileURL() this file (see
-  // parquetFileUrl) — otherwise this fetch warms a different URL than the one
-  // DuckDB's ranged reads actually hit, and pays for nothing.
-  const url = parquetFileUrl(name, manifest);
-  try {
-    // Fire-and-forget; drain the body so the whole file lands in the HTTP cache
-    // under the same URL DuckDB's ranged reads will use.
-    fetch(url)
-      .then((res) => (res.ok ? res.arrayBuffer() : null))
-      .catch(() => {
-        /* best-effort: the first search pays the fetch itself, as before */
-      });
-  } catch {
-    /* fetch unavailable / bad URL — ignore, first search fetches normally */
+export function ensureFilesForQuery(target, onProgress) {
+  if (!loader) return null;
+  const tables = new Set();
+  const add = (t) => {
+    if (typeof t === "string") {
+      for (const x of tablesForSql(t)) tables.add(x);
+    } else if (t && typeof t === "object") {
+      for (const x of Object.values(TIERED_VIEWS)) tables.add(x);
+      const { gender, buckets } = scopeToPriority(t);
+      const genders = gender ? [gender] : ["m", "f"];
+      const bs = buckets.length ? buckets : ["t20", "odi", "red"];
+      for (const g of genders) for (const b of bs) tables.add(`deliveries_${g}_${b}`);
+    }
+  };
+  if (Array.isArray(target)) target.forEach(add);
+  else add(target);
+  return loader.ensureTables([...tables], onProgress);
+}
+
+/** Subscribe to whole-site download progress (a snapshot of every file:
+ * state, bytes, loaded; plus storage "device"|"memory" and the background mode).
+ * Fires on change (throttled) and once at once if the loader exists.
+ * Returns an unsubscribe function. */
+export function onDownloadProgress(cb) {
+  if (typeof cb !== "function") return () => {};
+  progressSubscribers.add(cb);
+  if (loader) {
+    try {
+      cb(loader.snapshot());
+    } catch {
+      /* subscriber bug — ignore */
+    }
   }
+  return () => progressSubscribers.delete(cb);
+}
+
+/** Owner ruling (Android mobile data): resolves to {bytes} — how much is still
+ * to download — when the member should be ASKED before everything downloads in
+ * the background; null otherwise (flag off, not on mobile data, or nothing left
+ * to download). Background downloads stay held until setBackgroundDownloads(). */
+export async function getMobileDataPrompt() {
+  if (!loader || !askBeforeBackground) return null;
+  await loader.whenScanned();
+  const bytes = loader.remainingBytes();
+  return bytes > 0 ? { bytes } : null;
+}
+
+/** The member's answer: true → download everything in the background; false →
+ * download only what each search needs. No-op flag off. */
+export function setBackgroundDownloads(enabled) {
+  if (loader) loader.setBackground(enabled ? "on" : "off");
 }

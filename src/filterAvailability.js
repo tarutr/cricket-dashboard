@@ -42,6 +42,10 @@
 // into createPaletteGroupsBuilder.
 
 import { probeMatchup, probeProfile } from "./dataAvailability.js";
+// Speed build W3: db.js will export getOptionsV2() (added by a concurrent
+// edit) — import the module namespace and guard the access so this file still
+// loads even before that export lands.
+import * as db from "./db.js";
 
 // The availability keys the palette leaves + singleton rows consult.
 // profileBowlingArm (owner #8, columns rejig wave C): the "Bowling hand"
@@ -78,6 +82,21 @@ export function createFilterAvailability() {
     if (sig === g && avail) return; // already loaded for this gender
     if (loadingSig === g) return; // load in flight for this gender
     loadingSig = g;
+    // Speed build W3: options_v2.json precomputes this gender's filter_avail
+    // (same 6 keys as the probes below) — skip the boot-time queries when it's
+    // ready. Still resolved on a microtask (like the SQL path below), so a
+    // gender switch mid-flight is still caught by the loadingSig guard.
+    const opts = typeof db.getOptionsV2 === "function" ? db.getOptionsV2() : null;
+    if (opts) {
+      Promise.resolve().then(() => {
+        if (loadingSig !== g) return; // a newer load (gender switched) owns the cache
+        sig = g;
+        avail = opts.availability[g].filter_avail;
+        loadingSig = null;
+        if (onReady) onReady();
+      });
+      return;
+    }
     Promise.all([
       probeMatchup("matchup_batting", "bowling_type", g),
       probeMatchup("matchup_bowling", "batting_hand", g),

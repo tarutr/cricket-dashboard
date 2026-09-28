@@ -4,7 +4,15 @@
 // with Retry (never a blank page), then wire up state/filters/advanced/table
 // and do the initial render.
 
-import { initDB, getManifest, prewarmBallEngine, setDeliveryWindow, setOpponentPlayer } from "./db.js";
+import {
+  initDB,
+  getManifest,
+  setDeliveryWindow,
+  setOpponentPlayer,
+  setDownloadPriority,
+  getMobileDataPrompt,
+  setBackgroundDownloads,
+} from "./db.js";
 import { createStore, createInitialState, defaultColumnsFor, pruneIneligibleState, pruneDeliveryWindowForFormats, effectiveNamespace, slotKeys, reconcileSlots, reconcileLeaderboardColumns, autoAddLeaderboardColumns, applyLeaderboardPresetPatch, defaultLeaderboardSort } from "./state.js";
 import { resolveDataAvail, getResolvedDataAvail } from "./dataAvailability.js";
 import { mountFilters } from "./filters.js";
@@ -708,6 +716,77 @@ function mountTableToolbarExtras({ searchInputEl, searchResultsEl, pillsHostEl }
   });
 }
 
+// ── Speed build W2: the mobile-data question (owner ruling 2026-09-28) ────────
+// "Download all data for instant searches? (about 85 MB, once)". Asked only when
+// db.js reports Android mobile data (Network Information API: cellular or Data
+// Saver) AND something is still to download. The answer is remembered on this
+// device, so the member is asked once: Yes → everything downloads in the
+// background (now and on later mobile-data visits); No → only what each search
+// needs. Until they answer, only what each search needs is downloaded.
+const MOBILE_DATA_CHOICE_KEY = "cricdb.downloadAllOnMobileData";
+
+function readMobileDataChoice() {
+  try {
+    return localStorage.getItem(MOBILE_DATA_CHOICE_KEY);
+  } catch {
+    return null; // storage blocked (private window): ask each visit
+  }
+}
+
+function saveMobileDataChoice(value) {
+  try {
+    localStorage.setItem(MOBILE_DATA_CHOICE_KEY, value);
+  } catch {
+    /* storage blocked — the answer still applies to this visit */
+  }
+}
+
+function offerFullDownloadOnMobileData() {
+  getMobileDataPrompt()
+    .then((request) => {
+      if (!request) return;
+      const saved = readMobileDataChoice();
+      if (saved === "yes" || saved === "no") {
+        setBackgroundDownloads(saved === "yes");
+        return;
+      }
+      showMobileDataPrompt(request.bytes);
+    })
+    .catch(() => {
+      /* never let the question break the page — downloads stay search-driven */
+    });
+}
+
+function showMobileDataPrompt(bytes) {
+  // Decimal megabytes (1 MB = 1,000,000 bytes) — how phones and data plans count.
+  const mb = Math.max(1, Math.round(bytes / 1e6));
+  const el = document.createElement("div");
+  el.setAttribute("role", "dialog");
+  el.setAttribute("aria-label", "Download the data");
+  // Inline styling from the existing design tokens (a styles.css rule is a
+  // design-stylist follow-up); a light card so the standard buttons read.
+  el.style.cssText =
+    "position:fixed;left:50%;bottom:var(--space-6);transform:translateX(-50%);z-index:300;" +
+    "width:min(28rem,calc(100% - 2 * var(--space-4)));box-sizing:border-box;" +
+    "background:var(--color-bg);color:var(--color-fg);border:1px solid var(--color-line-strong);" +
+    "border-radius:var(--radius-md);box-shadow:var(--shadow-popover);padding:var(--space-4) var(--space-5);";
+  el.innerHTML = `
+    <p style="margin:0 0 var(--space-3);">Download all data for instant searches? (about ${mb} MB, once)</p>
+    <div style="display:flex;gap:var(--space-2);justify-content:flex-end;">
+      <button type="button" class="btn btn--ghost" data-choice="no">No</button>
+      <button type="button" class="btn btn--primary" data-choice="yes">Yes</button>
+    </div>`;
+  el.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-choice]");
+    if (!btn) return;
+    const yes = btn.dataset.choice === "yes";
+    saveMobileDataChoice(yes ? "yes" : "no");
+    setBackgroundDownloads(yes);
+    el.remove();
+  });
+  document.body.appendChild(el);
+}
+
 function boot() {
   renderInitLoading({ stage: "manifest" });
   // Graphs on: start loading Chart.js + graph.js in parallel with initDB
@@ -724,6 +803,10 @@ function boot() {
       // REQUIRED before Search — so seed the store with null dates rather than
       // createInitialState's legacy 36-month default.
       store = createStore(createInitialState(null));
+      // Speed build W2 (owner ruling): the background downloads favour the
+      // member's current gender/format — seed it now; the store hook below keeps
+      // it live as they change the Filters popup. No-op with the flag off.
+      setDownloadPriority(store.get());
       const initial = store.get();
       // E1a: initial.columns.* are Slot[]; lastAppliedDefaults tracks KEY arrays.
       lastAppliedDefaults.batting = slotKeys(initial.columns.batting);
@@ -994,6 +1077,9 @@ function boot() {
       // (still-frozen) applied snapshot and lights the toolbar's Search button
       // dirty via syncToolbar(). The graph has its own scope path (onScopeChanged).
       store.subscribe(() => {
+        // Speed build W2: follow the (pending) gender/format live, so the data the
+        // member is about to search downloads next. Cheap + idempotent; never a query.
+        setDownloadPriority(store.get());
         // Pills + badge render from appliedState (frozen) — a pending edit never
         // surfaces there before Search.
         if (pillsController) pillsController.render();
@@ -1170,11 +1256,10 @@ function boot() {
       // filters" card); the query still runs only from a Search.
       tableController.showPrompt();
 
-      // Wave 2s2 FIX 3: with the ball engine ON, pre-pay the default Men/T20
-      // delivery-file download in the background so the first Search isn't also
-      // waiting on the ~20 MB fetch. No-op flag-OFF (byte-untouched), non-blocking
-      // (not awaited) and best-effort (swallows failures). See prewarmBallEngine.
-      prewarmBallEngine();
+      // Speed build W2 (owner ruling): on Android mobile data, ASK once before
+      // downloading everything; iPhone / Wi-Fi / desktop never see this (the
+      // download simply runs in the background). No-op with the flag off.
+      offerFullDownloadOnMobileData();
     })
     .catch((err) => {
       renderInitError(err, boot);

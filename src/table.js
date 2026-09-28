@@ -40,7 +40,7 @@ import {
   // fielding board's own outcome step (fieldingBoardColExpr).
   resultMetricSql,
 } from "./metrics.js";
-import { query } from "./db.js";
+import { query, ensureFilesForQuery, getOptionsV2 } from "./db.js";
 import {
   buildScopeClausesTagged,
   bypassableClause,
@@ -3556,6 +3556,16 @@ export function mountTable(
 
   async function ensureBowlingTypes() {
     if (bowlingTypesCache) return bowlingTypesCache;
+    // Speed build W2: options_v2.json precomputes this exact DISTINCT list (W1
+    // proved it equal; drawer.js loadVsBowlingTypes reads it the same way). With
+    // the ball engine the query below is unscoped — it would make the FIRST
+    // Search wait for every delivery file (~85 MB) just to fill this dropdown.
+    // Flag off: getOptionsV2() is null → the query runs exactly as before.
+    const opts = getOptionsV2();
+    if (opts && Array.isArray(opts.vs_bowling_types)) {
+      bowlingTypesCache = orderBowlingTypes(opts.vs_bowling_types);
+      return bowlingTypesCache;
+    }
     try {
       const { rows } = await query(
         `SELECT DISTINCT bowling_type AS v FROM matchup_batting WHERE bowling_type <> '(unmapped)'`
@@ -4917,6 +4927,25 @@ export function mountTable(
    * overlay's, and restoring it after load() shifted the viewport. Keeping the
    * old table visible (dimmed by the overlay's own backdrop) keeps the height
    * — and the scroll position — stable across the whole reload. */
+  // Speed build W2: the Search's download progress, shown in the existing
+  // "Running query…" overlay while its data files come in, then restored.
+  let overlayShowsDownload = false;
+  function formatDownloadMB(bytes) {
+    const mb = bytes / 1e6; // decimal MB, as phones / data plans count (matches main.js's question)
+    return mb < 10 ? mb.toFixed(1) : String(Math.round(mb));
+  }
+  function showDownloadLine({ loadedBytes, totalBytes }) {
+    if (!overlayEl || !(totalBytes > 0)) return;
+    const text = `Downloading the data for this search: ${formatDownloadMB(Math.min(loadedBytes, totalBytes))} of ${formatDownloadMB(totalBytes)} MB`;
+    if (overlayEl.textContent !== text) overlayEl.textContent = text;
+    overlayShowsDownload = true;
+  }
+  function clearDownloadLine() {
+    if (!overlayShowsDownload) return;
+    overlayShowsDownload = false;
+    if (overlayEl) overlayEl.textContent = "Running query…";
+  }
+
   function renderLoadingState(state, bowlingTypes = lastBowlingTypes) {
     ensureSkeleton();
     overlayEl.hidden = false;
@@ -5247,7 +5276,23 @@ export function mountTable(
     // it, so a toolbar-only commit (resort:false) can preserve it.
     const prevRows = lastRows;
     renderLoadingState(state);
+    clearDownloadLine();
     try {
+      // Speed build W2 (owner ruling): a Search made before its data is on the
+      // device says so — "Downloading the data for this search: 12 of 29 MB" —
+      // while exactly those files jump the download queue. null (the usual case,
+      // and always with the flag off) = everything is in: straight to the query.
+      const dataWait = ensureFilesForQuery(matchesSql ? [sql, matchesSql] : [sql], (p) => {
+        if (token === loadToken) showDownloadLine(p);
+      });
+      if (dataWait) {
+        try {
+          await dataWait;
+        } finally {
+          if (token === loadToken) clearDownloadLine();
+        }
+        if (token !== loadToken) return; // a newer load superseded this one
+      }
       const [{ rows }, matchesResult, bowlingTypes] = await Promise.all([
         query(sql),
         matchesSql ? query(matchesSql) : Promise.resolve({ rows: [] }),

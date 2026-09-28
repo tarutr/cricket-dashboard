@@ -25,6 +25,10 @@
 // has-data / no-data distinction resolved via filterAvailability, never a gender check.
 
 import { query } from "./db.js";
+// Speed build W3: db.js will export getOptionsV2() (added by a concurrent
+// edit) — import the module namespace and guard the access so this file still
+// loads even before that export lands.
+import * as db from "./db.js";
 import {
   positionsFilterActive,
   oppositionFilterActive,
@@ -108,6 +112,22 @@ function orderBy(present, order) {
   const ranked = order.filter((v) => set.has(v));
   const rest = present.filter((v) => !order.includes(v)).sort();
   return [...ranked, ...rest];
+}
+
+// Same ordering intent as the toolbar's orderBowlingTypes: named fine styles
+// first, then any unlisted style alphabetically, then the bare Pace/Spin
+// buckets last (they read as "…(unspecified)" via matchupBucketLabel). Shared
+// by loadVsBowlingTypes' SQL path and its options_v2.json fast path (Speed
+// build W3) — the ordering is idempotent, so reapplying it over the
+// precomputed list is safe (W1 proved this).
+function orderVsBowlingTypes(vals) {
+  const set = new Set(vals);
+  const known = BOWLING_TYPE_ORDER.filter((v) => set.has(v));
+  const knownSet = new Set(known);
+  const buckets = ["Pace", "Spin"].filter((v) => set.has(v));
+  const bucketSet = new Set(buckets);
+  const rest = vals.filter((v) => !knownSet.has(v) && !bucketSet.has(v)).sort();
+  return [...known, ...rest, ...buckets];
 }
 
 // The singleton (non-numeric) condition types. The profile/matchup-backed rows
@@ -720,21 +740,18 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
   let vsBowlingTypes = null; // fetched once; null until loaded (Vs disabled/coarse-only until then)
   async function loadVsBowlingTypes() {
     if (vsBowlingTypes) return vsBowlingTypes;
+    // Speed build W3: options_v2.json precomputes this exact DISTINCT list —
+    // read it when the pipeline provides it, skip the boot query.
+    const opts = typeof db.getOptionsV2 === "function" ? db.getOptionsV2() : null;
+    if (opts) {
+      vsBowlingTypes = orderVsBowlingTypes(opts.vs_bowling_types);
+      return vsBowlingTypes;
+    }
     try {
       const { rows } = await query(
         `SELECT DISTINCT bowling_type AS v FROM matchup_batting WHERE bowling_type <> '(unmapped)'`
       );
-      const vals = rows.map((r) => r.v);
-      // Same ordering intent as the toolbar's orderBowlingTypes: named fine
-      // styles first, then any unlisted style alphabetically, then the bare
-      // Pace/Spin buckets last (they read as "…(unspecified)" via matchupBucketLabel).
-      const set = new Set(vals);
-      const known = BOWLING_TYPE_ORDER.filter((v) => set.has(v));
-      const knownSet = new Set(known);
-      const buckets = ["Pace", "Spin"].filter((v) => set.has(v));
-      const bucketSet = new Set(buckets);
-      const rest = vals.filter((v) => !knownSet.has(v) && !bucketSet.has(v)).sort();
-      vsBowlingTypes = [...known, ...rest, ...buckets];
+      vsBowlingTypes = orderVsBowlingTypes(rows.map((r) => r.v));
     } catch (e) {
       vsBowlingTypes = null; // leave null so a later render retries
       return [];
@@ -832,6 +849,26 @@ export function mountFilterDrawer({ advancedHost, keepColumnsCheckbox, noticeEl 
 
   async function loadProfileOptions() {
     const token = ++profileOptionsLoadToken;
+    // Speed build W3: options_v2.json precomputes profile_options with the same
+    // shape/ordering (idempotent — W1 proved it, so the orderBy calls below stay
+    // the single source of truth for display order) — no queries in flight here,
+    // so no staleness window against `token`.
+    const opts = typeof db.getOptionsV2 === "function" ? db.getOptionsV2() : null;
+    if (opts) {
+      const po = opts.profile_options;
+      const subByGroup = {};
+      for (const g of Object.keys(po.subByGroup || {})) subByGroup[g] = orderBy(po.subByGroup[g], ROLE_SUB_ORDER);
+      profileOptions = {
+        roleGroups: orderBy(po.roleGroups || [], ROLE_GROUP_ORDER),
+        subByGroup,
+        bowlingTypes: orderBy(po.bowlingTypes || [], BOWLING_TYPE_ORDER),
+        battingHands: orderBy(po.battingHands || [], BATTING_HAND_ORDER),
+        bowlingHands: orderBy(po.bowlingHands || [], BOWLING_HAND_ORDER),
+      };
+      profileOptionsErrored = false;
+      renderProfileEditors();
+      return;
+    }
     try {
       const [roleRows, optionRows] = await Promise.all([
         query(`SELECT DISTINCT role_group, role_subgroup FROM profiles WHERE role_group IS NOT NULL`),

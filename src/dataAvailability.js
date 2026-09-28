@@ -25,8 +25,19 @@
 // field the resolver writes onto the store).
 
 import { query } from "./db.js";
+// Speed build W3: db.js will export getOptionsV2() (added by a concurrent
+// edit) — import the module namespace and guard the access so this file still
+// loads even before that export lands.
+import * as db from "./db.js";
 import { buildCoreScopeClauses } from "./filters.js";
 import { FORMAT_BUCKETS } from "./state.js";
+
+/** Parsed options_v2.json (data-only boot lookups), or null (old engine / not
+ * fetched yet) — see db.js getOptionsV2 and export_parquet.py's options_v2
+ * shape comment. */
+function getOptionsV2() {
+  return typeof db.getOptionsV2 === "function" ? db.getOptionsV2() : null;
+}
 
 // All format buckets — the probes restrict by gender only (see AXIS note above).
 const ALL_FORMATS = FORMAT_BUCKETS.map((b) => b.key);
@@ -97,6 +108,13 @@ const _fieldingColPresent = new Map(); // column -> bool (resolved)
 const _fieldingColPending = new Map(); // column -> Promise (dedupe in-flight)
 
 export async function probeFieldingColumn(column) {
+  // Speed build W3: options_v2.json precomputes this probe for the columns the
+  // site actually checks today (fielding_columns.probed); fall back to the live
+  // schema probe for any column not in that precomputed set.
+  const opts = getOptionsV2();
+  if (opts && Object.prototype.hasOwnProperty.call(opts.fielding_columns.probed, column)) {
+    return opts.fielding_columns.probed[column];
+  }
   const sql =
     `SELECT 1 FROM information_schema.columns ` +
     `WHERE table_name = 'fielding' AND column_name = '${column}' LIMIT 1`;
@@ -158,6 +176,14 @@ export function resolveDataAvail(gender) {
   const g = gender || "male";
   if (_cache.has(g)) return Promise.resolve(_cache.get(g));
   if (_pending.has(g)) return _pending.get(g);
+  // Speed build W3: options_v2.json precomputes this gender's data_avail (same
+  // 6 keys as the probes below) — skip the boot-time queries when it's ready.
+  const opts = getOptionsV2();
+  if (opts) {
+    const avail = opts.availability[g].data_avail;
+    _cache.set(g, avail);
+    return Promise.resolve(avail);
+  }
   const p = Promise.all([
     probeMatchup("matchup_batting", "bowling_type", g),
     probeMatchup("matchup_bowling", "batting_hand", g),
