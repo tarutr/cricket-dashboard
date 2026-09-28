@@ -97,8 +97,10 @@ jobs:
           git commit -m "Queue new unmatched players for review" || { echo "Nothing to commit after add"; exit 0; }
           push_ok=""
           for attempt in 1 2; do
-            git pull --rebase origin main || echo "::warning::git pull --rebase failed (attempt $attempt)"
-            if git push origin HEAD:main; then
+            # Push to the branch this run was started from (main for the cron) — never
+            # main from another branch, which would deploy that branch to production.
+            git pull --rebase origin "$GITHUB_REF_NAME" || echo "::warning::git pull --rebase failed (attempt $attempt)"
+            if git push origin "HEAD:$GITHUB_REF_NAME"; then
               push_ok="yes"
               break
             fi

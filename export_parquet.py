@@ -10,6 +10,10 @@ All aggregation is done from the `deliveries` base table per the owner's
 ABSOLUTE calculation rules. See the block comments in each section for the
 exact rules applied.
 
+Speed build W1 (ADDITIVE): also writes date-tiered copies of the tiered tables
+(<table>__history/__year/__recent.parquet), manifest_v2.json and
+options_v2.json for the new background loader — see the TIER_DATE_COLUMN block.
+
 CLI:
     python export_parquet.py [--db PATH] [--out DIR] [--download] [--upload]
 
@@ -21,6 +25,7 @@ import datetime as _dt
 import hashlib
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -152,6 +157,81 @@ DELIVERY_PK = ["match_id", "innings_number", "over_number", "ball_index"]
 
 for _f in DELIVERY_FILES:
     CONTENT_TYPES[_f] = "application/vnd.apache.parquet"
+
+
+def delivery_files_sql(out_dir, files=None):
+    """read_parquet() file-LIST literal for the ball files (default: all six).
+    An explicit list, never a 'deliveries_*.parquet' glob: the glob also matches
+    the speed-build tier copies (deliveries_m_t20__history.parquet, ...) whenever
+    they sit in the same directory (e.g. a second run into the same --out), and
+    the ball gates would then count every ball twice."""
+    return "[" + ", ".join(
+        f"'{os.path.join(out_dir, f)}'" for f in (files or DELIVERY_FILES)) + "]"
+
+# ---------------------------------------------------------------------------
+# Speed build W1 (2026-09-28): date-tiered copies + manifest_v2.json +
+# options_v2.json for the new background loader.
+# ---------------------------------------------------------------------------
+# PURELY ADDITIVE. Every file above and manifest.json are written EXACTLY as
+# before (the live site reads them). The new loader reads manifest_v2.json and
+# downloads each TIERED table as three files split by match date, so a daily
+# data update changes only the small "recent" file (owner, 2026-09-28: "Old
+# data is never changed from this source"; "History + last two months").
+#
+#   <table>__history.parquet   match_date <  Y
+#   <table>__year.parquet      Y <= match_date < R
+#   <table>__recent.parquet    match_date >= R
+#
+#   R = the 1st of the month BEFORE the reference month; Y = 1 Jan of R's year;
+#   reference = the data's max match date (MAX(matches.match_date_1) -- the same
+#   value manifest.json reports as data.max_match_date). Calendar boundaries,
+#   no overlap, every run rebuilds all three tiers (no gaps possible). History
+#   therefore rolls once a year (in February); recent = last month + this month.
+#
+# The date column: every tiered file carries `match_date`, which each builder
+# takes straight from matches.match_date_1 (sql_matches `m.match_date_1 AS
+# match_date`; sql_player_matches m_ctx; sql_fielding_events via
+# build_delivery_cte; sql_deliveries mm) -- never a season column.
+#
+# Each tier is split FROM the single file this run just wrote (the heavy SQL
+# runs once), keeping the single file's own physical row order (ORDER BY
+# file_row_number -> the builder's ORDER BY, inherited, never re-declared) and
+# the same writer (write_parquet: zstd, ROW_GROUP_SIZE). So a tier is exactly the
+# single file's rows for its date range, same schema. An empty tier is still
+# written (0 rows, identical schema). run_tier_gates() proves the partition on
+# every run (row counts, date ranges, schema, EXCEPT ALL both ways).
+TIER_DATE_COLUMN = "match_date"
+TIERS = ("history", "year", "recent")
+TIERED_TABLES = (
+    ["matches", "player_matches", "fielding_events"]
+    + [f[: -len(".parquet")] for f in DELIVERY_FILES]
+)
+
+
+def tier_file(table, tier):
+    return f"{table}__{tier}.parquet"
+
+
+TIER_FILES = [tier_file(t, k) for t in TIERED_TABLES for k in TIERS]
+# Files the new site needs that are NOT tiered (no match date: one row per
+# player): v2-only name -> the single file it is a byte-for-byte copy of. The
+# copy has its OWN name because main's daily pipeline keeps re-uploading
+# player_profiles.parquet until the cut, which would leave manifest_v2.json
+# naming a stale fingerprint; nothing but this script ever writes the copy.
+# player_profiles.parquet itself is untouched.
+V2_UNTIERED_FILES = {"player_profiles__all.parquet": "player_profiles.parquet"}
+MANIFEST_V2 = "manifest_v2.json"
+OPTIONS_V2 = "options_v2.json"
+
+for _f in TIER_FILES + list(V2_UNTIERED_FILES):
+    CONTENT_TYPES[_f] = "application/vnd.apache.parquet"
+CONTENT_TYPES[MANIFEST_V2] = "application/json"
+CONTENT_TYPES[OPTIONS_V2] = "application/json"
+
+# Uploaded "no-cache, must-revalidate" (never edge-cached): the two manifests
+# are version POINTERS, and options_v2.json is a tiny lookup the browser may
+# fetch without a ?v=<hash> param. Everything else is immutable (hash-busted).
+NO_CACHE_FILES = ("manifest.json", MANIFEST_V2, OPTIONS_V2)
 
 # ---------------------------------------------------------------------------
 # SPOT_CHECKS — owner-verified career lines, asserted on every run.
@@ -3571,7 +3651,7 @@ def run_ball_layer_gates(con, out_dir):
     """
     log("Running ball-layer (delivery) gates — oracle + order + anchors ...")
 
-    dv = os.path.join(out_dir, "deliveries_*.parquet")
+    dv = delivery_files_sql(out_dir)  # explicit six-file list (see delivery_files_sql)
     # Join the SHIPPED profiles snapshot (sql_player_profiles = SELECT * FROM the
     # DB player_profiles table, so this is byte-identical to what the matchup
     # exports joined) rather than the DB table directly — the same file ships, and
@@ -3692,7 +3772,7 @@ def run_ball_layer_gates(con, out_dir):
     # ================= ORACLE 1 — batting_innings =====================
     con.execute(f"""
     CREATE OR REPLACE TEMP TABLE orx_bat AS
-    WITH b AS (SELECT * FROM read_parquet('{dv}') WHERE NOT is_super_over),
+    WITH b AS (SELECT * FROM read_parquet({dv}) WHERE NOT is_super_over),
     app AS (
         SELECT match_id, innings_number, batter_id AS pid, batter_name AS nm, batting_position AS pos FROM b
         UNION ALL
@@ -3834,7 +3914,7 @@ def run_ball_layer_gates(con, out_dir):
     # ================= ORACLE 2 — bowling_innings =====================
     con.execute(f"""
     CREATE OR REPLACE TEMP TABLE orx_bowl AS
-    WITH b AS (SELECT * FROM read_parquet('{dv}') WHERE NOT is_super_over),
+    WITH b AS (SELECT * FROM read_parquet({dv}) WHERE NOT is_super_over),
     os AS (SELECT match_id, innings_number, over_number, bowler_id,
                   ANY_VALUE(balls_per_over) bpo,
                   SUM(CASE WHEN {LEGAL} THEN 1 ELSE 0 END) legal_balls,
@@ -3955,7 +4035,7 @@ def run_ball_layer_gates(con, out_dir):
                -- from raw match_player_of_match (PotM is not a ball column),
                -- opposition-restricted by the bowler-id join.
                CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END AS vs_potm
-        FROM read_parquet('{dv}') b0
+        FROM read_parquet({dv}) b0
         LEFT JOIN {prof} pp ON pp.player_id = b0.bowler_id
         LEFT JOIN (SELECT DISTINCT match_id, player_id FROM match_player_of_match
                    WHERE player_id IS NOT NULL) pom
@@ -4049,7 +4129,7 @@ def run_ball_layer_gates(con, out_dir):
                -- M2b: vs_potm from raw match_player_of_match (PotM is not a ball
                -- column), opposition-restricted by the batter-id join.
                CASE WHEN pom.player_id IS NOT NULL THEN 1 ELSE 0 END AS vs_potm
-        FROM read_parquet('{dv}') b0
+        FROM read_parquet({dv}) b0
         LEFT JOIN {prof} pp ON pp.player_id = b0.batter_id
         LEFT JOIN (SELECT DISTINCT match_id, player_id FROM match_player_of_match
                    WHERE player_id IS NOT NULL) pom
@@ -4176,9 +4256,9 @@ def _ball_structural_gates(con, out_dir, q):
         gate(overlap == 0, f"[ball] row-group match_date non-overlap [{fname}]",
              f"{overlap} overlapping row-group boundaries")
 
-    dv = os.path.join(out_dir, "deliveries_*.parquet")
+    dv = delivery_files_sql(out_dir)  # explicit six-file list (see delivery_files_sql)
     # Super overs are INCLUDED + flagged, and match the source innings.super_over.
-    so_balls = q(f"SELECT COUNT(*) FROM read_parquet('{dv}') WHERE is_super_over")
+    so_balls = q(f"SELECT COUNT(*) FROM read_parquet({dv}) WHERE is_super_over")
     so_ref = q("""
         SELECT COUNT(*) FROM deliveries dv JOIN innings i
           ON i.match_id=dv.match_id AND i.innings_number=dv.innings_number
@@ -4186,10 +4266,11 @@ def _ball_structural_gates(con, out_dir, q):
     gate(so_balls == so_ref, "[ball] super-over rows included + flagged",
          f"{so_balls} vs source {so_ref}")
     # Phase is NULL for every super-over row (outside any phase, decision 67).
-    so_phase = q(f"SELECT COUNT(*) FROM read_parquet('{dv}') WHERE is_super_over AND phase IS NOT NULL")
+    so_phase = q(f"SELECT COUNT(*) FROM read_parquet({dv}) WHERE is_super_over AND phase IS NOT NULL")
     gate(so_phase == 0, "[ball] super-over phase always NULL", f"{so_phase} rows")
     # Red-ball files carry no phase; T20/ODI legal balls always do (non-super-over).
-    red_phase = q(f"""SELECT COUNT(*) FROM read_parquet('{os.path.join(out_dir, 'deliveries_*_red.parquet')}')
+    red_files = delivery_files_sql(out_dir, [f for f in DELIVERY_FILES if f.endswith("_red.parquet")])
+    red_phase = q(f"""SELECT COUNT(*) FROM read_parquet({red_files})
                       WHERE phase IS NOT NULL""")
     gate(red_phase == 0, "[ball] red-ball phase always NULL", f"{red_phase} rows")
 
@@ -4197,7 +4278,7 @@ def _ball_structural_gates(con, out_dir, q):
     # On a faced ball, bat_ball + bat_ball_rev = faced_total + 1; check the
     # identity holds and rev is never negative (unsigned-edge guard).
     bad_rev = q(f"""
-        SELECT COUNT(*) FROM read_parquet('{dv}')
+        SELECT COUNT(*) FROM read_parquet({dv})
         WHERE bat_ball_rev IS NULL OR bowl_ball_rev IS NULL""")
     gate(bad_rev == 0, "[ball] reverse clocks never NULL", f"{bad_rev} rows")
 
@@ -4453,6 +4534,450 @@ def write_manifest(con, out_dir):
 
 
 # ---------------------------------------------------------------------------
+# Speed build W1 — tiered files, their gates, options_v2.json, manifest_v2.json
+# (see the TIER_DATE_COLUMN block comment near the top for the tier rules).
+# ---------------------------------------------------------------------------
+
+def tier_bounds(ref_date):
+    """(Y, R) for the reference date: R = the 1st of the month BEFORE ref's
+    month; Y = 1 Jan of R's year. e.g. ref 2026-07-02 -> (2026-01-01,
+    2026-06-01); ref 2026-02-10 -> (2026-01-01, 2026-01-01) (year tier empty);
+    ref 2026-01-15 -> (2025-01-01, 2025-12-01)."""
+    if ref_date is None:
+        raise GateError("[tier] matches has no match dates — cannot place the tier boundaries")
+    if ref_date.month == 1:
+        r = _dt.date(ref_date.year - 1, 12, 1)
+    else:
+        r = _dt.date(ref_date.year, ref_date.month - 1, 1)
+    return _dt.date(r.year, 1, 1), r
+
+
+def tier_predicate(tier, y, r):
+    """SQL predicate for one tier over TIER_DATE_COLUMN. Half-open, disjoint,
+    and together covering every non-NULL date."""
+    col = TIER_DATE_COLUMN
+    if tier == "history":
+        return f"{col} < DATE '{y.isoformat()}'"
+    if tier == "year":
+        return f"{col} >= DATE '{y.isoformat()}' AND {col} < DATE '{r.isoformat()}'"
+    if tier == "recent":
+        return f"{col} >= DATE '{r.isoformat()}'"
+    raise ValueError(f"unknown tier {tier!r}")
+
+
+def tier_ranges(y, r):
+    """The tier date ranges as manifest_v2.json states them (from inclusive,
+    to_exclusive; None = unbounded)."""
+    return {
+        "history": {"from": None, "to_exclusive": y.isoformat()},
+        "year": {"from": y.isoformat(), "to_exclusive": r.isoformat()},
+        "recent": {"from": r.isoformat(), "to_exclusive": None},
+    }
+
+
+def _parquet_schema(con, path):
+    """[(column_name, column_type), ...] of a parquet file, in file order."""
+    return [(c[0], c[1]) for c in
+            con.execute(f"DESCRIBE SELECT * FROM read_parquet('{path}')").fetchall()]
+
+
+def write_tier_files(con, out_dir):
+    """Split every TIERED_TABLES single file into its three tier files. Returns
+    (reference_date, Y, R). Must run after the single files are written."""
+    ref = con.execute("SELECT MAX(match_date_1) FROM matches").fetchone()[0]
+    y, r = tier_bounds(ref)
+    log(f"Writing tiered files (reference {ref}, year tier from {y}, recent tier from {r}) ...")
+    for table in TIERED_TABLES:
+        src = os.path.join(out_dir, f"{table}.parquet")
+        cols = [c for c, _ in _parquet_schema(con, src)]
+        if TIER_DATE_COLUMN not in cols:
+            raise GateError(f"[tier] {table}.parquet has no {TIER_DATE_COLUMN} column")
+        if "file_row_number" in cols:  # would collide with read_parquet's virtual column
+            raise GateError(f"[tier] {table}.parquet has a real file_row_number column")
+        for tier in TIERS:
+            fn = tier_file(table, tier)
+            log(f"  Writing {fn} ...")
+            write_parquet(
+                con,
+                f"SELECT * EXCLUDE (file_row_number) "
+                f"FROM read_parquet('{src}', file_row_number=true) "
+                f"WHERE {tier_predicate(tier, y, r)} "
+                f"ORDER BY file_row_number",
+                os.path.join(out_dir, fn),
+            )
+    return ref, y, r
+
+
+def write_v2_untiered_files(out_dir):
+    """Write each V2_UNTIERED_FILES copy (byte-for-byte) and gate that it is
+    identical to its source single file."""
+    for fn, src_name in V2_UNTIERED_FILES.items():
+        src, dst = os.path.join(out_dir, src_name), os.path.join(out_dir, fn)
+        log(f"  Writing {fn} (copy of {src_name}) ...")
+        shutil.copyfile(src, dst)
+        same = _sha256_full(src) == _sha256_full(dst)
+        gate(same, f"[v2] {fn} byte-identical to {src_name}", "sha256 differs")
+
+
+def _sha256_full(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def run_tier_gates(con, out_dir, y, r):
+    """Prove, per tiered table, that history + year + recent is EXACTLY the
+    single file: identical schema, every row inside its tier's date range (so no
+    row can sit in two tiers), tier rows sum to the single file's, and the
+    multisets are equal both ways (EXCEPT ALL)."""
+    log("Running tier-split gates ...")
+
+    def q(sql):
+        return con.execute(sql).fetchone()[0]
+
+    for table in TIERED_TABLES:
+        src = os.path.join(out_dir, f"{table}.parquet")
+        paths = [os.path.join(out_dir, tier_file(table, k)) for k in TIERS]
+        base_schema = _parquet_schema(con, src)
+        gate(dict(base_schema).get(TIER_DATE_COLUMN) == "DATE",
+             f"[tier] {table}.{TIER_DATE_COLUMN} is a DATE",
+             f"got {dict(base_schema).get(TIER_DATE_COLUMN)}")
+        n_single = q(f"SELECT COUNT(*) FROM read_parquet('{src}')")
+        n_tiers = 0
+        for tier, p in zip(TIERS, paths):
+            fn = tier_file(table, tier)
+            got = _parquet_schema(con, p)
+            gate(got == base_schema, f"[tier] schema identical to {table}.parquet [{fn}]",
+                 f"{got} vs {base_schema}")
+            n, outside = con.execute(
+                f"SELECT COUNT(*), COUNT(*) FILTER (WHERE {TIER_DATE_COLUMN} IS NULL "
+                f"OR NOT ({tier_predicate(tier, y, r)})) FROM read_parquet('{p}')"
+            ).fetchone()
+            gate(outside == 0, f"[tier] every row inside the tier's date range [{fn}]",
+                 f"{outside} rows outside")
+            n_tiers += n
+        gate(n_tiers == n_single, f"[tier] tier rows sum to the single file [{table}]",
+             f"{n_tiers} vs {n_single}")
+        tiers_sql = "read_parquet([" + ", ".join(f"'{p}'" for p in paths) + "])"
+        missing = q(f"SELECT COUNT(*) FROM (SELECT * FROM read_parquet('{src}') "
+                    f"EXCEPT ALL SELECT * FROM {tiers_sql})")
+        extra = q(f"SELECT COUNT(*) FROM (SELECT * FROM {tiers_sql} "
+                  f"EXCEPT ALL SELECT * FROM read_parquet('{src}'))")
+        gate(missing == 0 and extra == 0,
+             f"[tier] history + year + recent == {table}.parquet row-for-row",
+             f"{missing} single-file rows missing from the tiers, {extra} extra tier rows")
+
+
+# ── options_v2.json: the data-only boot lookups, precomputed ────────────────
+#
+# The browser computes these at boot with DuckDB queries; the new site reads
+# them from this file instead. Each is a line-for-line port of the JS below —
+# same SQL (same views, filters, '(unmapped)' exclusion, LIMIT-1 existence
+# checks) and the same JS post-processing/ordering. Keep in step with the JS.
+#
+# options_v2.json shape (key order as written; deterministic — no timestamp,
+# so the file's hash changes only when its content does):
+# {
+#   "options_version": 2,
+#   "availability": {                       # per gender: "male", "female"
+#     "<gender>": {
+#       "data_avail": {                     # = src/dataAvailability.js resolveDataAvail(gender)
+#         "matchupBatting": bool,  "matchupBowling": bool, "profileRole": bool,
+#         "profileHand": bool,     "profileBowling": bool, "fielding": bool },
+#       "filter_avail": {                   # = src/filterAvailability.js ensureLoaded -> avail
+#         "vsBowlingStyle": bool,  "vsBattingHand": bool,  "profileRole": bool,
+#         "profileHand": bool,     "profileBowling": bool, "profileBowlingArm": bool }
+#     } },
+#   "vs_bowling_types": [str, ...],         # = src/drawer.js loadVsBowlingTypes() result
+#   "profile_options": {                    # = src/drawer.js loadProfileOptions() -> profileOptions
+#     "roleGroups": [str, ...], "subByGroup": {group: [str, ...]},
+#     "bowlingTypes": [str, ...], "battingHands": [str, ...], "bowlingHands": [str, ...] },
+#   "fielding_columns": {                   # = src/dataAvailability.js probeFieldingColumn
+#     "present": [str, ...],                #   every column of the `fielding` view, in order
+#     "probed": {column: bool}              #   the columns the site probes today
+#   }
+# }
+# vs_bowling_types and profile_options are NOT gender-scoped — neither JS
+# loader filters by gender (they read the whole matchup_batting / profiles
+# views). Every list is already in the drawer's display order; that ordering is
+# idempotent, so the site may also run the drawer's own ordering over them.
+
+# src/state.js FORMAT_BUCKETS order, as expandFormats(ALL_FORMATS) emits it.
+_BROWSER_ALL_MATCH_TYPES = ("Test", "MDM", "ODI", "ODM", "T20", "IT20")
+_OPTIONS_GENDERS = ("male", "female")
+# src/db.js VIEWS — only the plain views these lookups read.
+_OPTIONS_VIEWS = {
+    "player_matches": "player_matches.parquet",
+    "profiles": "player_profiles.parquet",
+    "fielding": "fielding_events.parquet",
+}
+# The two matchup views are NOT read from matchup_*.parquet (the new site never
+# downloads them). They are rebuilt from the six delivery files + `profiles`
+# EXACTLY as the ball engine the new site runs builds them (src/ballEngineMatchup.js
+# assemble()): base balls WHERE NOT is_super_over AND <involved id> IS NOT NULL,
+# LEFT JOIN profiles on the OPPONENT's id, and the same style key. Only the
+# columns the lookups read are projected, at ball grain: the lookups are LIMIT-1
+# existence checks and one DISTINCT, and a grouped matchup row exists iff at
+# least one of its balls does (gender / match_type are constant within an
+# innings), so the answers are the grouped view's answers.
+#   view -> (involved id, opponent id joined to profiles, style-key select)
+_OPTIONS_MATCHUP_VIEWS = {
+    "matchup_batting": (
+        "batter_id", "bowler_id",
+        "COALESCE(pp.bowling_type, pp.bowling_group, '(unmapped)') AS bowling_type"),
+    "matchup_bowling": (
+        "bowler_id", "batter_id",
+        "COALESCE(pp.batting_style, '(unmapped)') AS batting_hand"),
+}
+# src/drawer.js display orders.
+_DRAWER_ROLE_GROUP_ORDER = ["Batter", "Allrounder", "Bowler"]
+_DRAWER_ROLE_SUB_ORDER = ["Opening", "Top-order", "Middle-order", "Wicketkeeper",
+                          "Batting allrounder", "Bowling allrounder"]
+_DRAWER_BATTING_HAND_ORDER = ["Right-hand bat", "Left-hand bat"]
+_DRAWER_BOWLING_TYPE_ORDER = [
+    "Fast", "Fast-medium", "Medium-fast", "Medium", "Slow-medium",
+    "Off-spin", "Leg-spin", "Slow left-arm orthodox", "Left-arm wrist-spin",
+]
+_DRAWER_BOWLING_HAND_ORDER = ["Right", "Left"]
+# The fielding columns the site probes today (src/columnsPicker.js
+# ensureFieldingColumnProbed / getFieldingColumnPresent).
+_FIELDING_PROBED_COLUMNS = ("bowling_group",)
+
+
+def _js_sort(values):
+    """Array.prototype.sort() with no comparator: UTF-16 code-unit order."""
+    return sorted(values, key=lambda s: s.encode("utf-16-be"))
+
+
+def _drawer_order_by(present, order):
+    """src/drawer.js orderBy(present, order)."""
+    present_set = set(present)
+    ranked = [v for v in order if v in present_set]
+    rest = _js_sort([v for v in present if v not in order])
+    return ranked + rest
+
+
+def build_options_v2(out_dir):
+    """Compute the options_v2.json object from this run's single files, on a
+    private in-memory DuckDB whose views carry the browser's view names (the
+    matchup views rebuilt from the delivery files — see _OPTIONS_MATCHUP_VIEWS)."""
+    ocon = duckdb.connect()
+    try:
+        for view, fname in _OPTIONS_VIEWS.items():
+            ocon.execute(f"CREATE VIEW {view} AS SELECT * FROM "
+                         f"read_parquet('{os.path.join(out_dir, fname)}')")
+        balls = ", ".join(f"'{os.path.join(out_dir, f)}'" for f in DELIVERY_FILES)
+        for view, (involved, opponent, style) in _OPTIONS_MATCHUP_VIEWS.items():
+            ocon.execute(
+                f"CREATE VIEW {view} AS SELECT b0.gender, b0.match_type, {style} "
+                f"FROM read_parquet([{balls}]) b0 "
+                f"LEFT JOIN profiles pp ON pp.player_id = b0.{opponent} "
+                f"WHERE NOT b0.is_super_over AND b0.{involved} IS NOT NULL")
+
+        def exists(sql):
+            return len(ocon.execute(sql).fetchall()) > 0
+
+        def core_for(gender):  # filters.js buildCoreScopeClauses({gender, formats: ALL})
+            mts = ", ".join(f"'{t}'" for t in _BROWSER_ALL_MATCH_TYPES)
+            return f"gender = '{gender}' AND match_type IN ({mts})"
+
+        def probe_matchup(source, column, gender):  # dataAvailability.js probeMatchup
+            return exists(
+                f"SELECT 1 FROM {source} "
+                f"WHERE {core_for(gender)} AND {column} IS NOT NULL "
+                f"AND {column} <> '(unmapped)' LIMIT 1")
+
+        def probe_profile(column, gender):  # dataAvailability.js probeProfile
+            return exists(
+                f"SELECT 1 FROM profiles p "
+                f"WHERE p.{column} IS NOT NULL "
+                f"AND p.player_id IN (SELECT DISTINCT player_id FROM player_matches "
+                f"WHERE {core_for(gender)}) LIMIT 1")
+
+        def probe_fielding(gender):  # dataAvailability.js probeFielding
+            return exists(
+                f"SELECT 1 FROM fielding "
+                f"WHERE {core_for(gender)} AND substitute IS NOT TRUE LIMIT 1")
+
+        def probe_fielding_column(column):  # dataAvailability.js probeFieldingColumn
+            return exists(
+                f"SELECT 1 FROM information_schema.columns "
+                f"WHERE table_name = 'fielding' AND column_name = '{column}' LIMIT 1")
+
+        availability = {}
+        for g in _OPTIONS_GENDERS:
+            vs_b = probe_matchup("matchup_batting", "bowling_type", g)
+            vs_h = probe_matchup("matchup_bowling", "batting_hand", g)
+            p_role = probe_profile("role_group", g)
+            p_hand = probe_profile("batting_style", g)
+            p_bowl = probe_profile("bowling_type", g)
+            p_arm = probe_profile("bowling_arm", g)
+            fld = probe_fielding(g)
+            availability[g] = {
+                "data_avail": {
+                    "matchupBatting": vs_b, "matchupBowling": vs_h,
+                    "profileRole": p_role, "profileHand": p_hand,
+                    "profileBowling": p_bowl, "fielding": fld,
+                },
+                "filter_avail": {
+                    "vsBowlingStyle": vs_b, "vsBattingHand": vs_h,
+                    "profileRole": p_role, "profileHand": p_hand,
+                    "profileBowling": p_bowl, "profileBowlingArm": p_arm,
+                },
+            }
+
+        # drawer.js loadVsBowlingTypes: named fine styles first (drawer order),
+        # then any unlisted style sorted, then the bare Pace/Spin buckets last.
+        vals = [row[0] for row in ocon.execute(
+            "SELECT DISTINCT bowling_type AS v FROM matchup_batting "
+            "WHERE bowling_type <> '(unmapped)'").fetchall()]
+        present = set(vals)
+        known = [v for v in _DRAWER_BOWLING_TYPE_ORDER if v in present]
+        buckets = [v for v in ("Pace", "Spin") if v in present]
+        rest = _js_sort([v for v in vals if v not in known and v not in buckets])
+        vs_bowling_types = known + rest + buckets
+
+        # drawer.js loadProfileOptions.
+        role_rows = ocon.execute(
+            "SELECT DISTINCT role_group, role_subgroup FROM profiles "
+            "WHERE role_group IS NOT NULL").fetchall()
+        opt_row = ocon.execute("\n".join([
+            "SELECT",
+            "  (SELECT list(DISTINCT bowling_type) FROM profiles WHERE bowling_type IS NOT NULL) AS bowling_types,",
+            "  (SELECT list(DISTINCT batting_style) FROM profiles WHERE batting_style IS NOT NULL) AS batting_styles,",
+            "  (SELECT list(DISTINCT bowling_arm) FROM profiles WHERE bowling_arm IS NOT NULL) AS bowling_arms",
+        ])).fetchone()
+        groups = []
+        sub_by_group = {}
+        for role_group, role_subgroup in role_rows:
+            if role_group not in groups:
+                groups.append(role_group)
+            if role_subgroup:  # JS truthiness: skips NULL and ''
+                sub_by_group.setdefault(role_group, []).append(role_subgroup)
+        role_groups = _drawer_order_by(groups, _DRAWER_ROLE_GROUP_ORDER)
+        profile_options = {
+            "roleGroups": role_groups,
+            "subByGroup": {g: _drawer_order_by(sub_by_group[g], _DRAWER_ROLE_SUB_ORDER)
+                           for g in role_groups if g in sub_by_group},
+            "bowlingTypes": _drawer_order_by(list(opt_row[0] or []), _DRAWER_BOWLING_TYPE_ORDER),
+            "battingHands": _drawer_order_by(list(opt_row[1] or []), _DRAWER_BATTING_HAND_ORDER),
+            "bowlingHands": _drawer_order_by(list(opt_row[2] or []), _DRAWER_BOWLING_HAND_ORDER),
+        }
+
+        present_cols = [row[0] for row in ocon.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'fielding' ORDER BY ordinal_position").fetchall()]
+        fielding_columns = {
+            "present": present_cols,
+            "probed": {c: probe_fielding_column(c) for c in _FIELDING_PROBED_COLUMNS},
+        }
+    finally:
+        ocon.close()
+
+    return {
+        "options_version": 2,
+        "availability": availability,
+        "vs_bowling_types": vs_bowling_types,
+        "profile_options": profile_options,
+        "fielding_columns": fielding_columns,
+    }
+
+
+def write_options_v2(out_dir):
+    options = build_options_v2(out_dir)
+    opath = os.path.join(out_dir, OPTIONS_V2)
+    with open(opath, "w") as fh:
+        json.dump(options, fh, indent=2)
+    return options, opath
+
+
+# ── manifest_v2.json ─────────────────────────────────────────────────────────
+#
+# Separate from manifest.json (which stays exactly as it was: the live site and
+# main's daily pipeline own it). Shape:
+# {
+#   "manifest_version": 2,
+#   "generated_at": ISO-8601 UTC,
+#   "data": {"min_match_date", "max_match_date", "match_count"},   # same source as manifest.json
+#   "tiers": {
+#     "date_column": "match_date",
+#     "reference_date": "YYYY-MM-DD",      # the data's max match date
+#     "year_start": "YYYY-MM-DD",          # Y
+#     "recent_start": "YYYY-MM-DD",        # R
+#     "ranges": {"history": {"from": null, "to_exclusive": Y},
+#                "year":    {"from": Y,    "to_exclusive": R},
+#                "recent":  {"from": R,    "to_exclusive": null}} },
+#   "files": {                             # the 27 tier files + player_profiles__all.parquet
+#     "<file name>": {"table": "<single file stem, e.g. deliveries_m_t20 / player_profiles>",
+#                     "tier": "history" | "year" | "recent" | null (untiered),
+#                     "rows": int, "bytes": int, "sha256_12": str,
+#                     "min_match_date": "YYYY-MM-DD" | null,   # null for an empty tier
+#                     "max_match_date": "YYYY-MM-DD" | null}   #  or an untiered file
+#   },
+#   "options": {"file": "options_v2.json", "bytes": int, "sha256_12": str}
+# }
+
+def write_manifest_v2(con, out_dir, ref, y, r):
+    def iso(d):
+        return d.isoformat() if d else None
+
+    files_meta = {}
+    for table in TIERED_TABLES:
+        for tier in TIERS:
+            fn = tier_file(table, tier)
+            p = os.path.join(out_dir, fn)
+            n, dmn, dmx = con.execute(
+                f"SELECT COUNT(*), MIN({TIER_DATE_COLUMN}), MAX({TIER_DATE_COLUMN}) "
+                f"FROM read_parquet('{p}')").fetchone()
+            files_meta[fn] = {
+                "table": table, "tier": tier,
+                "rows": int(n), "bytes": os.path.getsize(p), "sha256_12": sha256_12(p),
+                "min_match_date": iso(dmn), "max_match_date": iso(dmx),
+            }
+    for fn, src_name in V2_UNTIERED_FILES.items():
+        p = os.path.join(out_dir, fn)
+        n = con.execute(f"SELECT COUNT(*) FROM read_parquet('{p}')").fetchone()[0]
+        files_meta[fn] = {
+            "table": src_name[: -len(".parquet")], "tier": None,
+            "rows": int(n), "bytes": os.path.getsize(p), "sha256_12": sha256_12(p),
+            "min_match_date": None, "max_match_date": None,
+        }
+
+    dmin, dmax, mcount = con.execute(
+        "SELECT MIN(match_date_1), MAX(match_date_1), COUNT(*) FROM matches"
+    ).fetchone()
+    opath = os.path.join(out_dir, OPTIONS_V2)
+    manifest = {
+        "manifest_version": 2,
+        "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "data": {
+            "min_match_date": iso(dmin),
+            "max_match_date": iso(dmax),
+            "match_count": int(mcount),
+        },
+        "tiers": {
+            "date_column": TIER_DATE_COLUMN,
+            "reference_date": iso(ref),
+            "year_start": y.isoformat(),
+            "recent_start": r.isoformat(),
+            "ranges": tier_ranges(y, r),
+        },
+        "files": files_meta,
+        "options": {
+            "file": OPTIONS_V2,
+            "bytes": os.path.getsize(opath),
+            "sha256_12": sha256_12(opath),
+        },
+    }
+    mpath = os.path.join(out_dir, MANIFEST_V2)
+    with open(mpath, "w") as fh:
+        json.dump(manifest, fh, indent=2)
+    return manifest, mpath
+
+
+# ---------------------------------------------------------------------------
 # R2 (boto3) — download / upload
 # ---------------------------------------------------------------------------
 
@@ -4501,9 +5026,11 @@ def _upload_one(client, out_dir, fname):
                     # manifest.json is the version POINTER (browser fetches it
                     # cache-busted, no-store); it must NEVER be edge-cached or clients
                     # would keep loading an old catalogue — always revalidate.
+                    # (Speed build W1: manifest_v2.json + options_v2.json join
+                    # manifest.json in NO_CACHE_FILES for the same reason.)
                     "CacheControl": (
                         "no-cache, max-age=0, must-revalidate"
-                        if fname == "manifest.json"
+                        if fname in NO_CACHE_FILES
                         else "public, max-age=31536000, immutable"
                     ),
                 },
@@ -4533,6 +5060,10 @@ def r2_upload(out_dir):
     summary of what uploaded and what didn't — never leaves the run looking
     green with a partial R2 state. manifest.json is only attempted if every
     data file succeeded.
+
+    Speed build W1: after manifest.json, the new site's files (TIER_FILES +
+    V2_UNTIERED_FILES + options_v2.json) upload, then manifest_v2.json strictly
+    last — attempted only if every one of them succeeded.
     """
     log(f"Uploading exports to s3://{R2_BUCKET}/{R2_EXPORT_PREFIX}")
     client = _r2_client()
@@ -4556,6 +5087,28 @@ def r2_upload(out_dir):
             "R2 upload FAILED for: " + ", ".join(failed) + ". "
             "Uploaded OK: " + (", ".join(succeeded) if succeeded else "(none)") + ". "
             "R2 explorer/ prefix is now in a PARTIAL state — do not treat this run as green."
+        )
+
+    # Speed build W1 (ADDITIVE): the new site's files — the tier files, the
+    # v2-only player_profiles__all.parquet and options_v2.json — then
+    # manifest_v2.json STRICTLY LAST (it names them). They go AFTER
+    # manifest.json, so a failure here can never hold back the live site's
+    # manifest; nothing is ever deleted or replaced under an old file's name.
+    v2_failed = []
+    for f in TIER_FILES + list(V2_UNTIERED_FILES) + [OPTIONS_V2]:
+        (succeeded if _upload_one(client, out_dir, f) else v2_failed).append(f)
+    if v2_failed:
+        log(f"  SKIPPED {MANIFEST_V2} — {len(v2_failed)} new-site file(s) failed to upload")
+    else:
+        (succeeded if _upload_one(client, out_dir, MANIFEST_V2) else v2_failed).append(
+            MANIFEST_V2
+        )
+    if v2_failed:
+        raise SystemExit(
+            "R2 upload FAILED for: " + ", ".join(v2_failed) + ". "
+            "Uploaded OK: " + ", ".join(succeeded) + ". "
+            "The live site's files and manifest.json uploaded; the new site's "
+            f"{MANIFEST_V2} set is PARTIAL — do not treat this run as green."
         )
     log("Upload complete.")
 
@@ -4643,6 +5196,11 @@ def main():
     try:
         run_gates(con, args.out)
         run_spot_checks(con, args.out)
+        # Speed build W1 (ADDITIVE): split the tiered tables' single files into
+        # history / year / recent copies and prove the split exact.
+        tier_ref, tier_y, tier_r = write_tier_files(con, args.out)
+        run_tier_gates(con, args.out, tier_y, tier_r)
+        write_v2_untiered_files(args.out)
     except GateError as e:
         log("=" * 60)
         log(f"VALIDATION FAILED: {e}")
@@ -4652,6 +5210,13 @@ def main():
     # Manifest.
     log("Writing manifest.json ...")
     manifest, _ = write_manifest(con, args.out)
+
+    # Speed build W1 (ADDITIVE): the new site's boot lookups, then its manifest
+    # (which records options_v2.json's hash, so it is written second).
+    log(f"Writing {OPTIONS_V2} ...")
+    write_options_v2(args.out)
+    log(f"Writing {MANIFEST_V2} ...")
+    manifest_v2, _ = write_manifest_v2(con, args.out, tier_ref, tier_y, tier_r)
 
     con.close()
 
@@ -4663,6 +5228,12 @@ def main():
             f"bytes={meta['bytes']:>12,d}  sha={meta['sha256_12']}")
     log(f"  data: {manifest['data']['min_match_date']} .. "
         f"{manifest['data']['max_match_date']}  matches={manifest['data']['match_count']:,}")
+    log(f"{MANIFEST_V2} (tiers: year from {manifest_v2['tiers']['year_start']}, "
+        f"recent from {manifest_v2['tiers']['recent_start']}):")
+    for f, meta in manifest_v2["files"].items():
+        log(f"  {f:40s} rows={meta['rows']:>9,d}  "
+            f"bytes={meta['bytes']:>12,d}  sha={meta['sha256_12']}  "
+            f"{meta['min_match_date']} .. {meta['max_match_date']}")
 
     if args.upload:
         r2_upload(args.out)
